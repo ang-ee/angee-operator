@@ -13,16 +13,16 @@ Templates declare those details. The Go CLI only understands generic concepts:
 - Ports: named by templates, allocated by Angee.
 - Sources: git worktrees, clones, archives, storage mounts, templates.
 - Process graphs: named commands with cwd, env, dependencies, and readiness checks.
-- Runtime outputs: rendered files, `.angee/stack.yaml`, `.angee/state/*`, `angee.yaml`, `docker-compose.yaml`.
+- Runtime outputs: rendered files, `.angee/angee.yaml`, `.angee/state/*`, `docker-compose.yaml`.
 
 ## Design Rules
 
 1. `angee init --dev` is shorthand for `angee init stack dev`.
 2. `angee update` is the template refresh command, matching Copier's vocabulary.
-3. `.angee/stack.yaml` is the only committed Angee marker. There is no separate `.angee/project.yaml`.
+3. `.angee/angee.yaml` is the only committed Angee marker. There is no separate `.angee/project.yaml`.
 4. Runtime-specific commands live in templates or runtime template fragments, not in Go code.
 5. Reasonable defaults live in templates. The CLI can auto-detect and allocate, but must not know what `web`, `ui`, or `worker` mean.
-6. Generated and derived secrets never go into `.copier-answers.yml`, `.angee/stack.yaml`, `angee.yaml`, or `docker-compose.yaml`.
+6. Generated and derived secrets never go into `.copier-answers.yml`, `.angee/angee.yaml`, or `docker-compose.yaml`.
 7. Named ports are stable within a template, but their numeric values are allocated per stack/workspace/agent to avoid collisions.
 8. A workspace without an agent renders under `.angee/workspaces/<name>/`; a workspace with an agent template renders under `.angee/agents/<name>/`.
 
@@ -69,7 +69,7 @@ What happens:
 5. Angee allocates named ports declared by the template, for example `web` and `ui`, and writes `.angee/state/ports.json`.
 6. Angee creates runtime data directories such as `.angee/data/` because the template declared them, not because the CLI knows the framework.
 7. Angee runs the template-declared post-init process graph, such as dependency sync, migration, and fixture/assets loading.
-8. Angee writes `.angee/stack.yaml` and `.copier-answers.yml`.
+8. Angee writes `.angee/angee.yaml` and `.copier-answers.yml`.
 
 Resulting tree:
 
@@ -77,7 +77,7 @@ Resulting tree:
 examples/angee-notes/
   .copier-answers.yml
   .angee/
-    stack.yaml
+    angee.yaml
     .env
     data/
       staticfiles/
@@ -94,9 +94,9 @@ Then the user starts the dev loop:
 angee dev
 ```
 
-`angee dev` does not know how to run Django or React. It loads `.angee/stack.yaml`, reads `dev.processes`, resolves `${ports.<name>}` and `${secret:<name>}` references, and runs the declared process graph.
+`angee dev` does not know how to run Django or React. It starts or reuses a local operator that loads `.angee/angee.yaml`, reads declared services and jobs, resolves `${ports.<name>}` and `${secret:<name>}` references, and reconciles the stack.
 
-Example rendered `.angee/stack.yaml` shape:
+Example rendered `.angee/angee.yaml` shape:
 
 ```yaml
 version: 1
@@ -151,7 +151,7 @@ angee init workspace feat-refactor-2 \
 
 What happens:
 
-1. Angee reads `.angee/stack.yaml` to find the default workspace template, for example `workspaces/feature-dev`.
+1. Angee reads `.angee/angee.yaml` to find the default workspace template, for example `workspaces/feature-dev`.
 2. The workspace template declares sources. For this example, it declares a git worktree for the app repo and optionally a companion framework repo using `same-name` branch strategy.
 3. Angee allocates a new port set for this workspace from template-declared bands.
 4. Copier renders workspace helper files such as `CLAUDE.md`, `.envrc`, and workspace-local `.gitignore`.
@@ -176,7 +176,7 @@ examples/angee-notes/
         code/
           .git/                  # git worktree metadata
           .angee/
-            stack.yaml           # dev stack for this worktree
+            angee.yaml           # dev stack for this worktree
             .env
             state/ports.json
             data/
@@ -251,7 +251,7 @@ examples/angee-notes/
           AGENTS.md
           code/
             .angee/
-              stack.yaml
+              angee.yaml
               .env
               state/ports.json
               data/
@@ -428,7 +428,7 @@ angee update
 
 What happens:
 
-1. Angee reads `.angee/stack.yaml.template.active`.
+1. Angee reads `.angee/angee.yaml.template.active`.
 2. Angee resolves the template and any `_angee.extends` chain.
 3. Copier runs its update algorithm against `.copier-answers.yml`.
 4. Angee re-runs post-render steps: secrets are preserved, new generated secrets are added, ports are preserved unless explicitly changed, compose is recompiled.
@@ -455,7 +455,7 @@ angee init stack staging-docker \
   --yes
 ```
 
-Avoid runtime-specific process flags. Put process overrides into a template or into `.angee/stack.yaml`:
+Avoid runtime-specific process flags. Put process overrides into a template or into `.angee/angee.yaml`:
 
 ```yaml
 dev:
@@ -478,7 +478,7 @@ The Go CLI must not contain knowledge like:
 - `.angee/data/staticfiles` is required for a specific framework.
 - `fixtures load` or `assets load` is the right post-init command.
 
-Those belong in templates, runtime template fragments, or the rendered `.angee/stack.yaml` process graph.
+Those belong in templates, runtime template fragments, or the rendered `.angee/angee.yaml` service/job declarations.
 
 The Go CLI may know how to:
 

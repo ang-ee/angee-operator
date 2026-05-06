@@ -72,14 +72,14 @@ Use the platform docs' vocabulary consistently.
 
 | Term | Meaning | State |
 |---|---|---|
-| Stack root | A project/deployment root that receives rendered stack files. | Contains `.angee/stack.yaml`. |
+| Stack root | A project/deployment root that receives rendered stack files. | Contains `.angee/angee.yaml`. |
 | Stack template | Template under `templates/stacks/<name>`. | Renders a stack root: `angee.yaml`, `.angee/`, `.gitignore`, compose files, app scaffolding, etc. |
 | Workspace template | Template under `templates/workspaces/<name>`. | Renders an isolated workspace tree under `.angee/workspaces/<name>` or an agent workspace under `.angee/agents/<name>`. |
 | Agent template | Template under `templates/agents/<name>`. | Renders agent persona/config scaffolding into a stack root. |
-| `.angee/stack.yaml` | The single committed Angee manifest. | Records active stack template, runtime adapter config, dev process config, and workspace defaults. |
+| `.angee/angee.yaml` | The single committed Angee manifest. | Records active stack template, runtime adapter config, dev process config, and workspace defaults. |
 | `.copier-answers.yml` | Copier state. | Records rendered answers and template metadata for Copier update. |
 
-Do not keep a separate `.angee/project.yaml`. It was useful as an implementation seam while project mode was added, but it is tech debt if we can break cleanly. The single parent-walk marker should be `.angee/stack.yaml`; runtime mode is just one section inside that stack manifest.
+Do not keep a separate `.angee/project.yaml`. It was useful as an implementation seam while project mode was added, but it is tech debt if we can break cleanly. The single parent-walk marker should be `.angee/angee.yaml`; runtime mode is just one section inside that manifest.
 
 ## Command Behavior
 
@@ -96,9 +96,9 @@ Behavior:
 3. Run Copier `Copy` into `[path]` or `.`.
 4. Read `_angee` metadata from the effective `copier.yml`.
 5. Run Angee post-render steps.
-6. Write `.angee/stack.yaml`.
+6. Write `.angee/angee.yaml`.
 7. If a rendered `angee.yaml` exists, compile it to `docker-compose.yaml`.
-8. If `.angee/stack.yaml` has a `runtime:` section, run runtime post-init: `migrate`, then framework fixture/assets loading.
+8. If `.angee/angee.yaml` has a `runtime:` section, run runtime post-init: `migrate`, then framework fixture/assets loading.
 
 `angee init --dev` should be exactly shorthand for `angee init stack dev`. It should not have a separate code path.
 
@@ -108,7 +108,7 @@ Behavior:
 
 Proposed detection order:
 
-1. If `.angee/stack.yaml` exists, run `angee update` against its active template.
+1. If `.angee/angee.yaml` exists, run `angee update` against its active template.
 2. If `templates/stacks/dev/` exists in the current root, use `angee init stack dev`.
 3. If `templates/stacks/default/` exists, use `angee init stack default`.
 4. Otherwise use the first-party default stack template, or fail with a clear "pass `angee init stack <name>` or `--template`" message.
@@ -122,7 +122,7 @@ angee update --ref v4
 
 Behavior:
 
-1. Read `.angee/stack.yaml`.
+1. Read `.angee/angee.yaml`.
 2. Resolve the active template.
 3. Run Copier `Update` with previous answers by default.
 4. Re-run Angee post-render steps.
@@ -138,7 +138,7 @@ angee stack switch staging
 
 Behavior:
 
-1. Change `.angee/stack.yaml.template.active` to `stacks/staging`.
+1. Change `.angee/angee.yaml.template.active` to `stacks/staging`.
 2. Run `angee update`.
 3. Surface Copier conflicts normally.
 
@@ -252,15 +252,15 @@ Post-render responsibilities:
 - Write `.angee/state/ports.json` for dev/agent workspaces.
 - Export declared port/env values into `.env`, `.envrc`, or both as declared by metadata.
 - Compile `angee.yaml` into `docker-compose.yaml` when present.
-- Initialize runtime data directories when `.angee/stack.yaml` has a `runtime:` section.
+- Initialize runtime data directories when `.angee/angee.yaml` has a `runtime:` section.
 - Run framework post-init through the existing adapter: `migrate` and then `fixtures load` now, later `assets load --include-demo` when django-angee lands that replacement.
-- Write `.angee/stack.yaml` after successful render and post-render.
+- Write `.angee/angee.yaml` after successful render and post-render.
 
 Avoid using Copier `_tasks` for Angee's own operations by default. Copier tasks are intentionally unsafe and require trust. Angee post-render steps are first-party orchestration and should stay explicit in Go.
 
 Copier `_tasks` can remain available for trusted user templates, but first-party templates should prefer `_angee.post_init` so the CLI can log, retry, and eventually run the same steps under the server-side platform Job model.
 
-## `.angee/stack.yaml`
+## `.angee/angee.yaml`
 
 Proposed shape:
 
@@ -296,7 +296,7 @@ workspaces:
 
 This file is committed. It intentionally contains no secret values and should not duplicate Copier answers. Copier answers stay in `.copier-answers.yml`; final runtime allocations such as ports stay in `.angee/state/`.
 
-Keep `.copier-answers.yml` as the Copier-owned file. Do not ask users to edit it manually. `.angee/stack.yaml` is Angee-owned configuration and provenance.
+Keep `.copier-answers.yml` as the Copier-owned file. Do not ask users to edit it manually. `.angee/angee.yaml` is Angee-owned configuration and provenance.
 
 ## Secret Handling
 
@@ -332,7 +332,7 @@ Rules:
 - `generated: true` fills missing values.
 - `derived` is recomputed if not explicitly supplied; derived values may reference other secrets and Copier answers.
 - `required: true` without a value prompts interactively unless `--yes`/`--defaults`, where it errors.
-- Secret values are never written to `.copier-answers.yml` or `.angee/stack.yaml`.
+- Secret values are never written to `.copier-answers.yml` or `.angee/angee.yaml`.
 
 ## Port Handling
 
@@ -396,7 +396,7 @@ Some gaps are acceptable for first-party templates, but should be tracked:
 | Unknown underscore keys are ignored but not exposed. | `_angee` is dropped by `copier-go` after config parse. | Angee should parse `copier.yml` itself before invoking Copier, or copier-go should expose raw config. |
 | No public `WithSource` option for update. | `worker.runUpdate` has `cfg.SrcPath`, but callers cannot set it through the public API. | Add `copier.WithSource(src)` so Angee can resolve `stacks/dev` itself and still use Copier update. |
 | Stored source metadata may be wrong for merged/inherited templates. | If Angee passes a temp merged template dir to Copier, `_src_path` points at a temp path. | Add a metadata override option or avoid temp dirs until source metadata is solved. |
-| Multi-template repos are not Copier's recommended model. | Platform docs want `templates/stacks/dev` inside application repos/packages. | Let Angee own template resolution and call Copier with a concrete directory; rely on `.angee/stack.yaml` for Angee refs. |
+| Multi-template repos are not Copier's recommended model. | Platform docs want `templates/stacks/dev` inside application repos/packages. | Let Angee own template resolution and call Copier with a concrete directory; rely on `.angee/angee.yaml` for Angee refs. |
 | YAML `!include` and multi-doc merge are not fully ported. | Shared template config reuse is limited. | Implement `_angee.extends` in Angee first; do not depend on Copier includes. |
 | Pattern matching is glob-based, not full PathSpec/gitignore. | Edge cases in `_exclude` / `_skip_if_exists`. | First-party templates should use simple patterns. |
 | Python Jinja extensions are not supported. | Templates cannot use Python-only extension packages. | First-party templates should use plain Jinja/pongo2-compatible syntax. |
@@ -410,7 +410,7 @@ func WithStoredSource(src string) Option          // optional, for answers metad
 func LoadConfig(path string) (*TemplateConfig, map[string]any, []QuestionDef, error) // optional
 ```
 
-If `WithStoredSource` feels too Copier-specific, Angee can write its own `.angee/stack.yaml` and use `WithSource` for `update`. The answers file can remain Copier-owned even if `_src_path` is less meaningful for Angee-managed templates.
+If `WithStoredSource` feels too Copier-specific, Angee can write its own `.angee/angee.yaml` and use `WithSource` for `update`. The answers file can remain Copier-owned even if `_src_path` is less meaningful for Angee-managed templates.
 
 ## Resolver Design
 
@@ -462,8 +462,8 @@ This refactor lets us delete or shrink a lot of custom code:
 - Replace `TemplateParams` with normal Copier questions.
 - Replace `.angee-template.yaml parameters` with `copier.yml` question definitions.
 - Replace `angee.dev.yaml.tmpl` special handling with a concrete `templates/stacks/dev` template.
-- Replace `.angee/project.yaml` and the `runtime != "" && services empty` sentinel with one `.angee/stack.yaml` manifest containing a `runtime:` section.
-- Move `[tool.angee.dev.*]` process configuration out of `pyproject.toml` and into `.angee/stack.yaml` unless a concrete language ecosystem use case proves otherwise.
+- Replace `.angee/project.yaml` and the `runtime != "" && services empty` sentinel with one `.angee/angee.yaml` manifest containing a `runtime:` section.
+- Move `[tool.angee.dev.*]` process configuration out of `pyproject.toml` and into `.angee/angee.yaml` unless a concrete language ecosystem use case proves otherwise.
 - Replace `CopyTemplateFiles` / `CopyAgentFiles` for init-time scaffolding with normal Copier-rendered files.
 - Keep only Angee-specific post-render code: secrets, ports, compose compilation, runtime adapter post-init.
 - Move fixture loading out of template metadata over time and into `angee fixtures load` / `angee assets load --include-demo`.
@@ -492,8 +492,8 @@ print next steps
 - Add `templates/stacks/dev/copier.yml` and `template/` tree.
 - Implement `angee init stack dev`.
 - Make `angee init --dev` call the same command path.
-- Change runtime parent-walk to look for `.angee/stack.yaml` with `runtime:` instead of `.angee/project.yaml`.
-- Keep the runtime adapter and `angee dev` orchestration behavior, but load their config from `.angee/stack.yaml`.
+- Change runtime parent-walk to look for `.angee/angee.yaml` with `runtime:` instead of `.angee/project.yaml`.
+- Keep the runtime adapter and `angee dev` orchestration behavior, but load their config from `.angee/angee.yaml`.
 
 ### Phase 2: Move current templates
 
@@ -534,9 +534,9 @@ print next steps
 
 Minimum tests for phase 1:
 
-- `angee init stack dev --yes` creates `.angee/stack.yaml`, `.angee/data/*`, `.angee/state/ports.json`, and `.copier-answers.yml`.
+- `angee init stack dev --yes` creates `.angee/angee.yaml`, `.angee/data/*`, `.angee/state/ports.json`, and `.copier-answers.yml`.
 - `angee init --dev --yes` produces the same files as `angee init stack dev --yes`.
-- Existing runtime commands can find `.angee/stack.yaml` after Copier-backed init.
+- Existing runtime commands can find `.angee/angee.yaml` after Copier-backed init.
 - Required secret without `--secret` fails in non-interactive mode.
 - Generated secret is preserved on update.
 - Existing `.gitignore` is not clobbered if template marks it skip/merge-safe.
@@ -551,7 +551,7 @@ Minimum tests for phase 1:
 - Should `angee init stack dev` run `uv sync` itself, or leave that as a declared `_angee.post_init` step in the template?
 - Should current deploy-time agent file rendering remain Go `text/template`, or should agent files become Jinja/Copier-rendered during `angee up` in a later pass?
 - Should `.copier-answers.yml` be committed for all stack roots? Copier recommends it for updates; Angee should follow that unless a secret leak risk appears.
-- Should the single manifest be named `.angee/stack.yaml` or `.angee/manifest.yaml`? Lean: keep `stack.yaml` because `angee init stack dev` makes the term concrete.
+- The single manifest should be named `.angee/angee.yaml` to match the existing operator/source-of-truth model. `stack` remains the concept; `angee.yaml` is the file.
 - How should Angee represent logical template refs in `.copier-answers.yml` when templates are resolved from package/embedded sources or merged through `_angee.extends`?
 
 ## Recommendation
@@ -561,4 +561,4 @@ Implement the refactor around this boundary:
 - Copier-go owns template rendering, answers, and update mechanics.
 - Angee owns template resolution, `_angee` metadata, secrets, ports, runtime post-init, compose compilation, and platform/workspace state.
 
-Do not teach Angee another general-purpose template engine. Do not encode runtime-only behavior through `services: []`. Do not keep a separate project-mode manifest. Make `.angee/stack.yaml` the single Angee marker, make `templates/stacks/dev` the concrete dev bootstrap, and make `angee init --dev` a plain alias for it.
+Do not teach Angee another general-purpose template engine. Do not encode runtime-only behavior through `services: []`. Do not keep a separate project-mode manifest. Make `.angee/angee.yaml` the single Angee marker, make `templates/stacks/dev` the concrete dev bootstrap, and make `angee init --dev` a plain alias for it.

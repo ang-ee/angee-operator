@@ -1,0 +1,55 @@
+version: 1
+kind: agent
+name: {{ agent_name }}
+
+template:
+  active: agents/personal-assistant
+  source: examples/templates/agents/personal-assistant
+  answers_file: .copier-answers.yml
+
+identity:
+  user_name: {{ user_name }}
+  user_email: {{ user_email }}
+  timezone: {{ timezone }}
+
+model:
+  provider: {{ provider }}
+  name: {{ model }}
+
+sources:
+  memory:
+    kind: volume
+    volume: {{ memory_volume }}
+    ref: current
+    tree: .
+    target: memory
+
+volumes:
+  {{ memory_volume }}:
+    driver: local-fs
+    path: state/memory
+
+secrets:
+  anthropic-api-key: { required: true }
+
+mcp_servers:
+  files:
+    transport: stdio
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+  angee:
+    transport: streamable-http
+    url: "${operator.url}/mcp/"
+  django:
+    transport: streamable-http
+    url: "${django.url}/mcp/"
+  memory:
+    transport: stdio
+    command: ["npx", "-y", "@modelcontextprotocol/server-memory"]
+
+services:
+  {{ agent_name }}:
+    runtime: docker
+    image: ghcr.io/fyltr/agent-opencode:latest
+    source: memory
+    env:
+      ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"

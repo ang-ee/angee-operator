@@ -1,0 +1,68 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+
+_angee:
+  schema: 1
+  kind: stack
+  name: staging-docker
+  description: Docker-backed staging stack based on fyltr-django compose files.
+
+  operator:
+    mode: service
+    manifest: .angee/angee.yaml
+    state_sources: [file, django-api]
+
+  sources:
+    - name: app
+      kind: local
+      ref: current
+      tree: .
+      target: .
+
+  compose:
+    output: docker-compose.yaml
+
+  port_leases:
+    - { name: web, default: 8000, band: web, export_env: DJANGO_PORT }
+    - { name: frontend, default: 3000, band: web, export_env: FRONTEND_PORT }
+    - { name: postgres, default: 5432, band: db, export_env: POSTGRES_PORT }
+    - { name: operator, default: 9000, band: system, export_env: ANGEE_OPERATOR_PORT }
+
+  secrets:
+    - { name: django-secret-key, generated: true, length: 50 }
+    - { name: django-sqids-salt, generated: true, length: 32 }
+    - { name: db-password, generated: true, length: 32 }
+    - { name: letta-db-user, default: letta }
+    - { name: letta-db-password, generated: true, length: 32 }
+    - { name: livekit-api-key, generated: true, length: 24 }
+    - { name: livekit-api-secret, generated: true, length: 48 }
+    - { name: anthropic-api-key, required: true }
+
+project_name:
+  type: str
+  default: fyltr-django
+
+domain:
+  type: str
+  default: staging.example.com
+
+livekit_domain:
+  type: str
+  default: livekit.staging.example.com
+
+django_settings:
+  type: str
+  default: config.settings.dev
+
+operator_state_sources:
+  type: str
+  default: file,django-api
+
+django_url:
+  type: str
+  default: http://django:8000
+
+image_tag:
+  type: str
+  default: latest

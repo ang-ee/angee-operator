@@ -1,0 +1,30 @@
+version: 1
+kind: workspace
+name: {{ workspace_name }}
+
+template:
+  active: workspaces/feature-dev
+  source: examples/templates/workspaces/feature-dev
+  answers_file: .copier-answers.yml
+
+sources:
+  app:
+    kind: {{ source_kind }}
+    repo: {{ source_repo }}
+    ref: {{ source_ref }}
+    tree: {{ source_tree }}
+    target: {{ code_target }}
+
+port_leases:
+  web: { default: 8120, band: django, export_env: DJANGO_PORT }
+  ui: { default: 5190, band: ui, export_env: UI_PORT }
+
+services:
+  web:
+    runtime: local
+    source: app
+    cwd: {{ code_target }}
+  ui:
+    runtime: local
+    source: app
+    cwd: {{ code_target }}/ui/react/web

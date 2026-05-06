@@ -1,0 +1,21 @@
+# Angee Dev Stack
+
+This project has been initialized with the example `stacks/dev` template.
+
+Start local dev:
+
+```sh
+angee dev
+```
+
+The CLI starts or reuses a local ad-hoc operator. The operator reads `.angee/angee.yaml`, leases ports, runs jobs, and supervises services.
+
+Useful commands:
+
+```sh
+angee stack show
+angee source list
+angee service list
+angee workflow show dev
+angee logs web --follow
+```

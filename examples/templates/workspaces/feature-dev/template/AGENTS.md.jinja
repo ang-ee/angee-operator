@@ -1,0 +1,17 @@
+# Feature Workspace: {{ workspace_name }}
+
+This workspace contains source `app` at `{{ code_target }}`.
+
+Source metadata:
+
+- kind: `{{ source_kind }}`
+- repo: `{{ source_repo }}`
+- ref: `{{ source_ref }}`
+- tree: `{{ source_tree }}`
+
+Start dev services from the source tree:
+
+```sh
+cd {{ code_target }}
+angee dev
+```

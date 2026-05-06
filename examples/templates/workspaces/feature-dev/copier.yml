@@ -1,0 +1,33 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+
+_angee:
+  schema: 1
+  kind: workspace
+  name: feature-dev
+  description: Feature workspace with source copy/worktree and dedicated port leases.
+
+workspace_name:
+  type: str
+  default: feature
+
+source_kind:
+  type: str
+  default: github
+
+source_repo:
+  type: str
+  default: fyltr/angee-notes
+
+source_ref:
+  type: str
+  default: same-name
+
+source_tree:
+  type: str
+  default: .
+
+code_target:
+  type: str
+  default: code

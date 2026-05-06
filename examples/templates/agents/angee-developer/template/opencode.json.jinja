@@ -1,0 +1,17 @@
+{
+  "model": "{{ provider }}/{{ model }}",
+  "mcp": {
+    "files": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    },
+    "angee": {
+      "type": "remote",
+      "url": "${ANGEE_OPERATOR_URL}/mcp/"
+    },
+    "django": {
+      "type": "remote",
+      "url": "${DJANGO_URL}/mcp/"
+    }
+  }
+}

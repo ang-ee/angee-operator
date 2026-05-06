@@ -1,0 +1,37 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+
+_angee:
+  schema: 1
+  kind: agent
+  name: personal-assistant
+  description: Personal assistant that knows the user and uses MCP tools.
+
+agent_name:
+  type: str
+  default: personal-assistant
+
+user_name:
+  type: str
+  default: Alexis
+
+user_email:
+  type: str
+  default: alexis@example.com
+
+timezone:
+  type: str
+  default: Europe/Paris
+
+provider:
+  type: str
+  default: anthropic
+
+model:
+  type: str
+  default: claude-sonnet-4-5
+
+memory_volume:
+  type: str
+  default: personal-assistant-memory

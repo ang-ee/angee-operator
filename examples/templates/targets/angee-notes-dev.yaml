@@ -1,0 +1,33 @@
+version: 1
+kind: angee-target
+name: angee-notes-dev
+description: Bootstrap the django-angee example app with the example dev stack.
+
+worktree: ../django-angee/examples/angee-notes
+root: ../django-angee/examples/angee-notes/.angee
+template: stacks/dev
+template_path: examples/templates/stacks/dev
+
+init:
+  command:
+    - angee
+    - init
+    - --dev
+    - --template
+    - examples/templates/stacks/dev
+    - --root
+    - ../django-angee/examples/angee-notes/.angee
+    - ../django-angee/examples/angee-notes
+    - --yes
+
+dev:
+  command:
+    - angee
+    - dev
+    - --root
+    - ../django-angee/examples/angee-notes/.angee
+
+notes:
+  - This target is documentation for the intended Angee workflow.
+  - It does not modify ../django-angee until the future target runner executes it.
+  - The expected sugar is running `angee init --dev --yes` from the worktree itself.

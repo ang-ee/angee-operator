@@ -1,0 +1,113 @@
+version: 1
+kind: stack
+name: {{ project_name }}
+
+template:
+  active: stacks/dev
+  source: examples/templates/stacks/dev
+  answers_file: .copier-answers.yml
+
+operator:
+  mode: adhoc
+  manifest: .angee/angee.yaml
+  state_sources:
+    - kind: file
+      path: .angee/state
+
+sources:
+  app:
+    kind: local
+    ref: current
+    tree: .
+    target: .
+
+volumes:
+  app-data:
+    driver: local-fs
+    path: .angee/data
+  logs:
+    driver: local-fs
+    path: .angee/data/logs
+
+secrets:
+  django-secret-key:
+    generated: true
+    length: 50
+
+port_leases:
+  web:
+    default: 8100
+    band: django
+    export_env: DJANGO_PORT
+  ui:
+    default: 5173
+    band: ui
+    export_env: UI_PORT
+
+runtime:
+  adapter: process-graph
+
+services:
+  web:
+    runtime: local
+    source: app
+    cwd: .
+    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:${ports.web}"]
+    env:
+      DJANGO_SETTINGS_MODULE: {{ django_settings }}
+      DJANGO_SECRET_KEY: "${secret:django-secret-key}"
+      DJANGO_DEBUG: "true"
+    ports:
+      - name: web
+        target: ${ports.web}
+    after: [migrate]
+
+  ui:
+    runtime: local
+    source: app
+    cwd: ui/react/web
+    command: ["pnpm", "dev", "--host", "127.0.0.1", "--port", "${ports.ui}"]
+    env:
+      VITE_PROXY_TARGET: "http://127.0.0.1:${ports.web}"
+    ports:
+      - name: ui
+        target: ${ports.ui}
+    after: [web]
+
+jobs:
+  migrate:
+    kind: process
+    source: app
+    cwd: .
+    command: ["uv", "run", "python", "manage.py", "migrate"]
+    env:
+      DJANGO_SETTINGS_MODULE: {{ django_settings }}
+      DJANGO_SECRET_KEY: "${secret:django-secret-key}"
+
+  fixtures:
+    kind: process
+    source: app
+    cwd: .
+    command: ["uv", "run", "python", "manage.py", "loaddata", "{{ fixture_path }}"]
+    env:
+      DJANGO_SETTINGS_MODULE: {{ django_settings }}
+      DJANGO_SECRET_KEY: "${secret:django-secret-key}"
+    after: [migrate]
+
+workflows:
+  dev:
+    backend: inline
+    activities:
+      - { run: materialize-source, source: app }
+      - { run: job, name: migrate }
+      - { run: job, name: fixtures }
+      - { run: service, name: web }
+      - { run: service, name: ui }
+
+workspaces:
+  default_template: workspaces/feature-dev
+  prefix: workspaces
+
+agents:
+  default_template: agents/angee-developer
+  prefix: agents

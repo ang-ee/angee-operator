@@ -1,0 +1,83 @@
+version: 1
+kind: stack
+name: {{ project_name }}-staging
+
+template:
+  active: stacks/staging-docker
+  source: examples/templates/stacks/staging-docker
+  answers_file: .copier-answers.yml
+
+operator:
+  mode: service
+  manifest: .angee/angee.yaml
+  state_sources:
+    - kind: file
+      path: .angee/state
+    - kind: django-api
+      url: {{ django_url }}
+    - kind: django-db
+      database_url_env: ANGEE_DATABASE_URL
+      optional: true
+
+deployment:
+  backend: compose
+  files:
+    - docker-compose.yaml
+
+sources:
+  app:
+    kind: local
+    ref: current
+    tree: .
+    target: .
+
+volumes:
+  postgres: { driver: local-fs, path: .angee/data/postgres }
+  redis: { driver: local-fs, path: .angee/data/redis }
+  hf-cache: { driver: local-fs, path: .angee/data/hf-cache }
+  media: { driver: local-fs, path: .angee/data/media }
+  staticfiles: { driver: local-fs, path: .angee/data/staticfiles }
+
+secrets:
+  django-secret-key: { generated: true, length: 50 }
+  django-sqids-salt: { generated: true, length: 32 }
+  db-password: { generated: true, length: 32 }
+  letta-db-user: { default: letta }
+  letta-db-password: { generated: true, length: 32 }
+  livekit-api-key: { generated: true, length: 24 }
+  livekit-api-secret: { generated: true, length: 48 }
+  anthropic-api-key: { required: true }
+
+port_leases:
+  web: { default: 8000, band: web, export_env: DJANGO_PORT }
+  frontend: { default: 3000, band: web, export_env: FRONTEND_PORT }
+  postgres: { default: 5432, band: db, export_env: POSTGRES_PORT }
+  operator: { default: 9000, band: system, export_env: ANGEE_OPERATOR_PORT }
+
+services:
+  operator: { runtime: docker, compose_service: operator }
+  django: { runtime: docker, compose_service: django }
+  frontend: { runtime: docker, compose_service: frontend }
+  postgres: { runtime: docker, compose_service: postgres }
+  redis: { runtime: docker, compose_service: redis }
+  celery: { runtime: docker, compose_service: celery }
+  celery-beat: { runtime: docker, compose_service: celery-beat }
+  mailhog: { runtime: docker, compose_service: mailhog }
+  letta: { runtime: docker, compose_service: letta_server }
+
+workflows:
+  deploy:
+    backend: inline
+    activities:
+      - { run: compile, backend: compose }
+      - { run: compose-up, services: [postgres, redis, mailhog, letta_server] }
+      - { run: compose-run, service: django, command: "uv run python manage.py migrate --noinput" }
+      - { run: compose-up, services: [django, frontend, celery, celery-beat, operator] }
+
+workspaces:
+  default_template: workspaces/feature-dev
+  prefix: workspaces
+
+agents:
+  default_template: agents/angee-developer
+  prefix: agents

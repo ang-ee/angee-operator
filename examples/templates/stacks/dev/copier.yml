@@ -1,0 +1,69 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+
+_angee:
+  schema: 1
+  kind: stack
+  name: dev
+  description: Local dev stack for a django-angee consumer.
+
+  operator:
+    mode: adhoc
+    manifest: .angee/angee.yaml
+    state_sources: [file]
+
+  sources:
+    - name: app
+      kind: local
+      ref: current
+      tree: .
+      target: .
+
+  volumes:
+    - { name: app-data, path: .angee/data }
+    - { name: logs, path: .angee/data/logs }
+
+  port_leases:
+    - { name: web, default: 8100, band: django, export_env: DJANGO_PORT }
+    - { name: ui, default: 5173, band: ui, export_env: UI_PORT }
+
+  services:
+    - name: web
+      runtime: local
+      source: app
+      ports: [web]
+    - name: ui
+      runtime: local
+      source: app
+      ports: [ui]
+
+  jobs:
+    - name: migrate
+      kind: process
+    - name: fixtures
+      kind: process
+
+  workflows:
+    post_init:
+      - { activity: materialize-source, source: app }
+      - { activity: run-job, job: migrate }
+      - { activity: run-job, job: fixtures }
+
+  workspaces:
+    default_template: workspaces/feature-dev
+
+  agents:
+    default_template: agents/angee-developer
+
+project_name:
+  type: str
+  default: angee-notes
+
+django_settings:
+  type: str
+  default: runtime.settings
+
+fixture_path:
+  type: str
+  default: fixtures/users.json

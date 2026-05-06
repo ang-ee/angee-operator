@@ -1,0 +1,24 @@
+# {{ project_name }} Staging
+
+This stack uses the example `stacks/staging-docker` template.
+
+Run through Angee:
+
+```sh
+angee up
+angee status
+angee logs django --follow
+```
+
+The operator can combine file, Django API, and direct Django DB state sources:
+
+```sh
+angee operator --file .angee/angee.yaml --state-source file --state-source django-api --django-url {{ django_url }}
+angee operator --state-source django-api --state-source django-db --django-url {{ django_url }} --database-url "$DATABASE_URL"
+```
+
+Direct Docker Compose is useful for debugging only:
+
+```sh
+docker compose -f docker-compose.yaml up --build
+```

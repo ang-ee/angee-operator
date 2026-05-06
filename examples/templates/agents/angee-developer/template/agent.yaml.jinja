@@ -1,0 +1,49 @@
+version: 1
+kind: agent
+name: {{ agent_name }}
+
+template:
+  active: agents/angee-developer
+  source: examples/templates/agents/angee-developer
+  answers_file: .copier-answers.yml
+
+model:
+  provider: {{ provider }}
+  name: {{ model }}
+
+sources:
+  app:
+    kind: {{ source_kind }}
+    repo: {{ source_repo }}
+    ref: {{ source_ref }}
+    tree: {{ source_tree }}
+    target: {{ code_target }}
+
+secrets:
+  anthropic-api-key: { required: true }
+
+mcp_servers:
+  files:
+    transport: stdio
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+  angee:
+    transport: streamable-http
+    url: "${operator.url}/mcp/"
+  django:
+    transport: streamable-http
+    url: "${django.url}/mcp/"
+
+services:
+  {{ agent_name }}:
+    runtime: docker
+    image: ghcr.io/fyltr/agent-opencode:latest
+    source: app
+    env:
+      ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
+
+workflows:
+  provision:
+    backend: inline
+    activities:
+      - { run: materialize-source, source: app }
+      - { run: render-agent-config, file: opencode.json }
