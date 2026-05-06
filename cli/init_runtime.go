@@ -241,7 +241,10 @@ func runFrameworkPostInit(projectRoot string, meta *tmpl.TemplateMeta) error {
 	}
 	printSuccess("Ran migrate")
 
-	// fixtures
+	// fixtures: declared template fixtures land first (the
+	// .angee-template/fixtures/*.json the scaffold ships) so the
+	// users / groups they create are present when each package's
+	// seed.apply() runs after.
 	for _, f := range meta.Fixtures {
 		fixturePath := f
 		if !filepath.IsAbs(fixturePath) {
@@ -257,6 +260,24 @@ func runFrameworkPostInit(projectRoot string, meta *tmpl.TemplateMeta) error {
 			return fmt.Errorf("loaddata %s: %w", f, err)
 		}
 		printSuccess(fmt.Sprintf("Loaded fixture: %s", f))
+	}
+
+	// `manage.py angee fixtures load` walks every installed angee
+	// package's `fixtures/` directory, applies the JSON files there,
+	// AND invokes each package's `fixtures.seed.apply()` post-hook
+	// (the idempotent helper that creates demo records, REBAC grants,
+	// etc.). Skipping this leaves a freshly-init'd project with the
+	// scaffold's user fixture loaded but no domain seed data — the
+	// user clicks "Notes" and lands on an empty list. The hook is
+	// idempotent by package contract (get_or_create everywhere) so
+	// re-running init is safe.
+	if err := runFrameworkSubcmd(ctx, adapter, "fixtures", []string{"load"}); err != nil {
+		// Best-effort — a package without a seed.py is normal. Surface
+		// any genuine failure as a warning so the user can re-run
+		// `angee fixtures load` manually after diagnosing.
+		fmt.Printf("  \033[33m!\033[0m  seed: %v\n", err)
+	} else {
+		printSuccess("Ran package seed hooks")
 	}
 	return nil
 }
