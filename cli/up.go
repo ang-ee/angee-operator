@@ -19,9 +19,6 @@ Example:
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
 	fmt.Printf("\n\033[1mangee up\033[0m\n\n")
 
 	printInfo("Starting stack...")
@@ -39,7 +36,6 @@ func printPlatformReady() {
 	fmt.Printf("\n\033[1mPlatform ready:\033[0m\n\n")
 	printInfo("UI        →  \033[4mhttp://localhost:3333\033[0m")
 	printInfo("API       →  \033[4mhttp://localhost:8000/api\033[0m")
-	printInfo("Operator  →  \033[4mhttp://localhost:9000\033[0m")
 	fmt.Println()
 	printInfo("angee ls          View agents and services")
 	printInfo("angee agent list  View declared agents")

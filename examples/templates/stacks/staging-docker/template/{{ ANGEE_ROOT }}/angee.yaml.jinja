@@ -9,10 +9,10 @@ template:
 
 operator:
   mode: service
-  manifest: .angee/angee.yaml
+  manifest: {{ ANGEE_ROOT }}/angee.yaml
   state_sources:
     - kind: file
-      path: .angee/state
+      path: {{ ANGEE_ROOT }}/state
     - kind: django-api
       url: {{ django_url }}
     - kind: django-db
@@ -32,11 +32,11 @@ sources:
     target: .
 
 volumes:
-  postgres: { driver: local-fs, path: .angee/data/postgres }
-  redis: { driver: local-fs, path: .angee/data/redis }
-  hf-cache: { driver: local-fs, path: .angee/data/hf-cache }
-  media: { driver: local-fs, path: .angee/data/media }
-  staticfiles: { driver: local-fs, path: .angee/data/staticfiles }
+  postgres: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/postgres }
+  redis: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/redis }
+  hf-cache: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/hf-cache }
+  media: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/media }
+  staticfiles: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/staticfiles }
 
 secrets:
   django-secret-key: { generated: true, length: 50 }

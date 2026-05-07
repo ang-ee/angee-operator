@@ -36,9 +36,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\n\033[1mangee destroy\033[0m\n\n")
 
 	printInfo("Stopping stack...")
-	if err := ensureLocalOperator(path); err != nil {
-		fmt.Printf("  \033[33m!\033[0m  Could not contact operator: %s\n", err)
-	} else if _, err := apiPost("/down", nil, nil); err != nil {
+	if _, err := apiPost("/down", nil, nil); err != nil {
 		fmt.Printf("  \033[33m!\033[0m  Could not stop stack (it may not be running): %s\n", err)
 	} else {
 		printSuccess("Stack stopped")

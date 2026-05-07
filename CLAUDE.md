@@ -29,10 +29,10 @@ Requirements: Go 1.25+, Docker, git, golangci-lint (for linting)
 ## Architecture
 
 **Operator embedding:**
-- `cmd/angee/` — CLI tool. Calls `cli.Execute()` which sets up Cobra commands and includes a hidden embedded `operator` subcommand for local operator processes.
+- `cmd/angee/` — CLI tool. Calls `cli.Execute()` which sets up Cobra commands and includes a hidden `operator` subcommand for explicitly requested operator services.
 - `cmd/operator/` — standalone daemon wrapper for the same operator package when a separate service binary is useful.
 
-**CLI → Operator → Backend flow:** The CLI never touches containers directly. For local commands it spawns or reuses its embedded operator process, then all mutations go through HTTP calls to the operator, which compiles `angee.yaml` into `docker-compose.yaml` and delegates to a `RuntimeBackend`.
+**CLI → Operator → Backend flow:** The CLI never touches containers directly. Local commands instantiate the operator runtime in-process and dispatch through shared API request/response types without opening ports. `--operator`/`ANGEE_OPERATOR_URL` are explicit remote-service opt-ins. The operator compiles `angee.yaml` into backend files and delegates to a `RuntimeBackend`.
 
 **Key packages:**
 
@@ -87,13 +87,13 @@ Target refactor rules:
 - No legacy template metadata file.
 - No framework-specific CLI dispatch for Django, React, Vite, uv, pnpm, or `manage.py`.
 - Unused commands, flags, adapters, and compatibility paths should be removed from active code. Reference-only material can live under `deferred/`, but not as buildable/imported Go code.
-- `angee dev` starts or reuses the embedded local operator process and reconciles declared services/jobs/workflows from `angee.yaml`.
+- `angee dev` runs the operator runtime for the lifetime of the dev command, reconciles declared services/jobs/workflows from `angee.yaml`, and stops local dev processes on exit.
 - `angee stack init`, `angee workspace init`, `angee agent init`, HTTP, MCP, and backend control planes must reuse the same operator provisioning code.
 
 ## Patterns
 
 - Config structs use `yaml:"field"` and `json:"field"` tags consistently
 - The compiler outputs `map[string]any` for docker-compose compatibility (not typed structs)
-- CLI commands follow the pattern: parse flags, start/reuse the embedded operator or contact a configured remote operator, submit an HTTP request, format response (or `--json` for raw)
+- CLI commands follow the pattern: parse flags, dispatch to the in-process operator runtime or an explicitly configured remote operator, format response (or `--json` for raw)
 - Operator handlers follow: parse request, load `angee.yaml`, resolve templates/sources/secrets/ports, reconcile through backend, respond
 - Templates use Copier with `copier.yml`; Angee-specific template metadata lives under `_angee`

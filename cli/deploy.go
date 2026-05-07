@@ -24,10 +24,6 @@ func init() {
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
-
 	var result api.ApplyResult
 	if _, err := apiPost("/deploy", api.DeployRequest{Message: deployMessage}, &result); err != nil {
 		return fmt.Errorf("deploying: %w", err)

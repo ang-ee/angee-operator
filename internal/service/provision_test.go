@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,6 +235,87 @@ services:
 	}
 	if len(secrets["token"].Value) != 10 {
 		t.Fatalf("token length = %d", len(secrets["token"].Value))
+	}
+}
+
+func TestReconcileDevRunsStackLocalRuntime(t *testing.T) {
+	worktree := t.TempDir()
+	rootPath := filepath.Join(worktree, ".angee")
+	if err := os.MkdirAll(rootPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `version: "1"
+kind: stack
+name: stack-local-test
+sources:
+  app: { kind: local, target: . }
+secrets:
+  token: { default: stack-secret }
+port_leases:
+  web: { default: 12356, export_env: APP_PORT }
+jobs:
+  prep:
+    kind: process
+    source: app
+    cwd: .
+    command: ["/bin/sh", "-c", "printf '%s:%s' \"$1\" \"$2\" > job-marker && printf 'job-log\\n'", "sh", "${ports.web}", "${secret:token}"]
+services:
+  web:
+    runtime: local
+    source: app
+    cwd: .
+    command: ["/bin/sh", "-c", "printf '%s:%s:%s' \"$APP_PORT\" \"$TOKEN\" \"$1\" > service-marker && printf 'service-log\\n' && sleep 60", "sh", "${ports.web}"]
+    env:
+      TOKEN: "${secret:token}"
+    after: [prep]
+`
+	if err := os.WriteFile(filepath.Join(rootPath, "angee.yaml"), []byte(manifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	platform, err := NewPlatform(rootPath, nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	fake := &fakeBackend{}
+	platform.Backend = fake
+	defer func() { _ = platform.cleanupStackLocalRuns(&config.AngeeConfig{}) }()
+
+	sink := &recordingSink{}
+	resp, err := platform.ReconcileWithOutput(context.Background(), api.ReconcileRequest{Root: rootPath, Mode: "dev"}, sink)
+	if err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q", resp.Status)
+	}
+	if fake.applied {
+		t.Fatal("did not expect Docker backend apply for local-only stack")
+	}
+	jobMarker := waitReadFile(t, filepath.Join(worktree, "job-marker"))
+	if string(jobMarker) != "12356:stack-secret" {
+		t.Fatalf("job marker = %q", jobMarker)
+	}
+	serviceMarker := waitReadFile(t, filepath.Join(worktree, "service-marker"))
+	if string(serviceMarker) != "12356:stack-secret:12356" {
+		t.Fatalf("service marker = %q", serviceMarker)
+	}
+	waitForString(t, sink.String, "prep:job-log")
+	waitForString(t, sink.String, "web:service-log")
+	record, err := os.ReadFile(filepath.Join(rootPath, "state", "runs", "stack-web.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(record), "stack-secret") {
+		t.Fatalf("local run record leaked secret: %s", record)
+	}
+	if err := os.Remove(filepath.Join(worktree, "service-marker")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.Reconcile(context.Background(), api.ReconcileRequest{Root: rootPath, Mode: "dev", Only: []string{"prep"}}); err != nil {
+		t.Fatalf("Reconcile() with --only error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "service-marker")); !os.IsNotExist(err) {
+		t.Fatalf("service should not have run with --only prep, got %v", err)
 	}
 }
 
@@ -1127,6 +1209,51 @@ func waitReadFile(t *testing.T, path string) []byte {
 	}
 	t.Fatalf("timed out waiting for %s: %v", path, lastErr)
 	return nil
+}
+
+func waitForString(t *testing.T, read func() string, want string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(read(), want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for output %q in %q", want, read())
+}
+
+type recordingSink struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *recordingSink) Writer(name string) io.Writer {
+	return recordingWriter{sink: s, name: name}
+}
+
+func (s *recordingSink) SystemLine(format string, args ...any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Fprintf(&s.b, "angee:"+format+"\n", args...)
+}
+
+func (s *recordingSink) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+type recordingWriter struct {
+	sink *recordingSink
+	name string
+}
+
+func (w recordingWriter) Write(data []byte) (int, error) {
+	w.sink.mu.Lock()
+	defer w.sink.mu.Unlock()
+	_, _ = fmt.Fprintf(&w.sink.b, "%s:%s", w.name, data)
+	return len(data), nil
 }
 
 type fakeBackend struct {

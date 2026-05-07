@@ -11,13 +11,14 @@ import (
 )
 
 func postProvision(path string, req any) error {
-	if err := ensureLocalOperator(rootFromRequest(req)); err != nil {
-		return err
-	}
 	var result api.ProvisionResponse
 	if _, err := apiPost(path, req, &result); err != nil {
 		return err
 	}
+	return printProvisionResult(&result)
+}
+
+func printProvisionResult(result *api.ProvisionResponse) error {
 	if outputJSON {
 		return nil
 	}

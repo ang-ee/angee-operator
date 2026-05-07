@@ -54,7 +54,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&angeeRoot, "root", "", "ANGEE_ROOT path (default: discovered .angee)")
-	rootCmd.PersistentFlags().StringVar(&operatorURL, "operator", "", "Operator URL (default: http://localhost:9000)")
+	rootCmd.PersistentFlags().StringVar(&operatorURL, "operator", "", "Remote operator URL (explicit only)")
 	rootCmd.PersistentFlags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "API key for operator authentication")
 

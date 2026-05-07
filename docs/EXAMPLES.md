@@ -94,7 +94,7 @@ Then the user starts the dev loop:
 angee dev
 ```
 
-`angee dev` does not know how to run Django or React. It starts or reuses a local operator that loads `.angee/angee.yaml`, reads declared services and jobs, resolves `${ports.<name>}` and `${secret:<name>}` references, and reconciles the stack.
+`angee dev` does not know how to run Django or React. It runs the operator runtime in-process, loads `.angee/angee.yaml`, reads declared services and jobs, resolves `${ports.<name>}` and `${secret:<name>}` references, and reconciles the stack.
 
 Example rendered `.angee/angee.yaml` shape:
 

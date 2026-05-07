@@ -8,8 +8,8 @@ Angee has one user model: templates create `angee.yaml`, and the operator reconc
 
 | Component | Responsibility |
 |---|---|
-| `angee` CLI | User interface. Has the operator compiled in, starts or reuses a local operator process, and submits HTTP requests. |
-| operator | Shared provisioning and reconciliation engine, runnable as an embedded local process or a standalone service. |
+| `angee` CLI | User interface. Has the operator compiled in and dispatches local commands to the in-process operator runtime. |
+| operator | Shared provisioning and reconciliation engine, callable in-process by the CLI or runnable as an explicitly started service. |
 | `angee.yaml` | Desired-state manifest under `$ANGEE_ROOT`. |
 | Copier templates | Render or update stack, workspace, and agent files. |
 | Deployment backend | Runs actual workloads. Docker Compose first, Kubernetes later. |
@@ -20,14 +20,14 @@ Angee has one user model: templates create `angee.yaml`, and the operator reconc
 ```text
 user
   -> angee CLI
-  -> embedded local operator process or running operator service
+  -> in-process operator runtime or explicitly configured operator service
   -> provisioning/reconcile pipeline
   -> deployment backend and state sources
 ```
 
 The CLI must not duplicate provisioning logic. Stack, workspace, agent, service, and MCP server provisioning all go through the operator path.
 
-Local commands use the same shape as remote control: the CLI spawns or reuses an operator process for the selected ANGEE_ROOT, waits for `/health`, then calls the operator API. This keeps `angee dev`, `angee up`, `angee deploy`, `angee stack init`, `angee workspace init`, and `angee agent init` DRY.
+Local commands instantiate the operator runtime for the selected ANGEE_ROOT and dispatch through the same API request/response types without binding a port. `--operator` or `ANGEE_OPERATOR_URL` explicitly selects a running remote operator service. This keeps `angee dev`, `angee up`, `angee deploy`, `angee stack init`, `angee workspace init`, and `angee agent init` DRY without creating background daemons.
 
 ## Manifest
 
@@ -110,7 +110,7 @@ Angee owns template resolution and `_angee` metadata. Copier owns rendering and 
 
 ## Development
 
-`angee dev` starts or reuses the embedded local operator process. The operator reads `.angee/angee.yaml`, reconciles sources, secrets, port leases, jobs, and services, and streams logs to the CLI.
+`angee dev` runs the operator runtime in the foreground for the lifetime of the dev command. It reads `.angee/angee.yaml`, reconciles sources, secrets, port leases, jobs, and services, and stops local dev processes when the command exits.
 
 ## Deployment
 

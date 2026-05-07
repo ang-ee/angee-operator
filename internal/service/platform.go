@@ -125,9 +125,6 @@ func (p *Platform) HealthCheck() *api.HealthResponse {
 // the on-disk angee.yaml/docker-compose.yaml pair. Compose itself serializes
 // per-project, but the in-process compile step is racy.
 func (p *Platform) Deploy(ctx context.Context, message string) (*api.ApplyResult, error) {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-
 	cfg, err := p.loadConfig()
 	if err != nil {
 		return nil, err
@@ -135,6 +132,13 @@ func (p *Platform) Deploy(ctx context.Context, message string) (*api.ApplyResult
 	if err := cfg.Validate(); err != nil {
 		return nil, BadRequest(err.Error())
 	}
+	return p.deployConfig(ctx, cfg)
+}
+
+func (p *Platform) deployConfig(ctx context.Context, cfg *config.AngeeConfig) (*api.ApplyResult, error) {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+
 	if err := p.prepareAndCompile(cfg); err != nil {
 		return nil, fmt.Errorf("preparing: %w", err)
 	}

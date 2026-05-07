@@ -199,7 +199,7 @@ angee stack init dev --root /tmp/notes-angee --yes
 | Variable | Default | Meaning |
 |---|---|---|
 | `ANGEE_ROOT` | Auto-detected; `./.angee` for new init; `~/.angee` fallback for existing stacks | Path to the Angee control directory. |
-| `ANGEE_OPERATOR_URL` | `http://localhost:9000` | Operator URL for operator-backed commands. |
+| `ANGEE_OPERATOR_URL` | unset | Explicit operator service URL for remote-backed commands. |
 | `ANGEE_API_KEY` | empty | Bearer token for operator API calls. |
 | `ANGEE_TEMPLATE_ROOT` | unset | Optional user template library searched before global templates. |
 | `ANGEE_STATE_SOURCES` | `file` | Comma-separated operator state sources, such as `file`, `file,django-api`, or `django-api,django-db`. |
@@ -311,9 +311,9 @@ angee operator --file ./angee.yaml --root /tmp/angee
 
 `--file` points at the YAML manifest. `--root` points at the state directory used for secrets, logs, leases, generated files, and runtime state.
 
-Most users do not run `angee operator` directly. Commands such as `angee init`, `angee stack init`, `angee workspace init`, `angee agent init`, `angee dev`, `angee up`, and `angee deploy` start, reuse, or contact an operator as needed.
+Most users do not run `angee operator` directly. Commands such as `angee init`, `angee stack init`, `angee workspace init`, `angee agent init`, `angee dev`, `angee up`, and `angee deploy` dispatch to the in-process operator runtime. `--operator` or `ANGEE_OPERATOR_URL` explicitly selects a running operator service.
 
-There is one provisioning path. The CLI does not have a separate implementation for stack, workspace, or agent initialization. It has the operator compiled in, starts or reuses a local operator process when needed, submits the request over HTTP, and the operator reuses the same provisioning code that HTTP, MCP, and a Django control plane can call.
+There is one provisioning path. The CLI does not have a separate implementation for stack, workspace, or agent initialization. It has the operator compiled in, dispatches through shared API request/response types without opening ports, and reuses the same provisioning code that HTTP, MCP, and a Django control plane can call.
 
 ### Control Plane And State Sources
 
@@ -321,7 +321,7 @@ The operator has separate desired-state and observed-state inputs. State sources
 
 | Axis | Local mode | Server-side mode |
 |---|---|---|
-| Control plane | CLI starts/reuses the embedded local operator and calls its API. | Django backend controls the operator through API calls, queued workflows, or direct deployment integration. |
+| Control plane | CLI dispatches to the in-process operator runtime. | Django backend controls the operator through API calls, queued workflows, or direct deployment integration. |
 | Desired state | `$ANGEE_ROOT/angee.yaml` or `--file PATH`. | Django DB rows can be the desired state, or Django can render/export YAML for the operator. |
 | State sources | Usually files under `$ANGEE_ROOT/state/`. | Any combination of Django API, Django database, file cache, and Temporal persistence for durable workflows. |
 
@@ -348,7 +348,7 @@ Global options:
 | Option | Meaning |
 |---|---|
 | `--root PATH` | Use this ANGEE_ROOT instead of auto-detecting. |
-| `--operator URL` | Use this operator URL. Default: `http://localhost:9000`. |
+| `--operator URL` | Use an explicitly running remote operator URL. |
 | `--api-key KEY` | Bearer token for operator API calls. |
 | `--json` | Print machine-readable JSON when supported. |
 | `--help` | Show help. |
@@ -417,7 +417,7 @@ angee agent init <agent> [options]
 
 `path` is the rendered stack worktree path when the template renders files outside ANGEE_ROOT. `--root` still controls ANGEE_ROOT.
 
-All init commands go through the operator provisioning path. If no operator is running, the CLI starts its embedded local operator for the request.
+All init commands go through the operator provisioning path in-process by default. They contact a service only when `--operator` or `ANGEE_OPERATOR_URL` is set.
 
 ### `angee init`
 
@@ -609,7 +609,7 @@ angee stack set-template gh:org/templates#templates/stacks/prod --ref v2.0.0
 
 Run the current stack's local dev services, prerequisite jobs, and optional dev workflow.
 
-`angee dev` starts or reuses the embedded local operator process for the selected ANGEE_ROOT. The CLI is the terminal UI and log client; the operator is the reconciler. This keeps dev mode on the same path as `up`, `deploy`, server-side Django control, and future Kubernetes/Temporal execution.
+`angee dev` runs the operator runtime for the selected ANGEE_ROOT in the foreground. The CLI is the terminal UI and lifecycle owner; the operator runtime is the reconciler. This keeps dev mode on the same path as `up`, `deploy`, server-side Django control, and future Kubernetes/Temporal execution without leaving a background daemon behind.
 
 ```sh
 angee dev [options]

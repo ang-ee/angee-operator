@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -58,8 +57,4 @@ func runEmbeddedOperator(cmd *cobra.Command, args []string) error {
 		port = 9000
 	}
 	return srv.Start(ctx, bind+":"+strconv.Itoa(port))
-}
-
-func operatorStartError(err error) error {
-	return fmt.Errorf("starting embedded operator: %w", err)
 }

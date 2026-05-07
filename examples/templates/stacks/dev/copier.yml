@@ -11,7 +11,7 @@ _angee:
 
   operator:
     mode: adhoc
-    manifest: .angee/angee.yaml
+    manifest: "{{ ANGEE_ROOT }}/angee.yaml"
     state_sources: [file]
 
   sources:
@@ -22,8 +22,8 @@ _angee:
       target: .
 
   volumes:
-    - { name: app-data, path: .angee/data }
-    - { name: logs, path: .angee/data/logs }
+    - { name: app-data, path: "{{ ANGEE_ROOT }}/data" }
+    - { name: logs, path: "{{ ANGEE_ROOT }}/data/logs" }
 
   port_leases:
     - { name: web, default: 8100, band: django, export_env: DJANGO_PORT }
@@ -61,10 +61,10 @@ project_name:
   type: str
   default: angee-notes
 
+ANGEE_ROOT:
+  type: str
+  default: ANGEE_ROOT
+
 django_settings:
   type: str
   default: runtime.settings
-
-fixture_path:
-  type: str
-  default: fixtures/users.json

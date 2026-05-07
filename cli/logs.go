@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 
@@ -33,10 +32,6 @@ func init() {
 }
 
 func runLogs(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
-
 	service := ""
 	if len(args) > 0 {
 		service = args[0]
@@ -54,17 +49,5 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		path = fmt.Sprintf("/logs/%s", service)
 	}
 
-	reqURL := fmt.Sprintf("%s%s?%s", resolveOperator(), path, params.Encode())
-	resp, err := doRequest("GET", reqURL, nil)
-	if err != nil {
-		return fmt.Errorf("fetching logs: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error fetching logs (status %d)", resp.StatusCode)
-	}
-
-	io.Copy(os.Stdout, resp.Body) //nolint:errcheck
-	return nil
+	return streamAPIGet(path, params, os.Stdout)
 }

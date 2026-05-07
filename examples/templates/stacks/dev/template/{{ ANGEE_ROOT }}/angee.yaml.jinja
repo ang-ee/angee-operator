@@ -9,10 +9,10 @@ template:
 
 operator:
   mode: adhoc
-  manifest: .angee/angee.yaml
+  manifest: {{ ANGEE_ROOT }}/angee.yaml
   state_sources:
     - kind: file
-      path: .angee/state
+      path: {{ ANGEE_ROOT }}/state
 
 sources:
   app:
@@ -24,10 +24,10 @@ sources:
 volumes:
   app-data:
     driver: local-fs
-    path: .angee/data
+    path: {{ ANGEE_ROOT }}/data
   logs:
     driver: local-fs
-    path: .angee/data/logs
+    path: {{ ANGEE_ROOT }}/data/logs
 
 secrets:
   django-secret-key:
@@ -57,6 +57,8 @@ services:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
       DJANGO_SECRET_KEY: "${secret:django-secret-key}"
       DJANGO_DEBUG: "true"
+      ANGEE_DATA: {{ ANGEE_ROOT }}/data
+      WORKSPACE_CSRF_TRUSTED_ORIGINS: "http://127.0.0.1:${ports.ui},http://localhost:${ports.ui}"
     ports:
       - name: web
         target: ${ports.web}
@@ -68,7 +70,9 @@ services:
     cwd: ui/react/web
     command: ["pnpm", "dev", "--host", "127.0.0.1", "--port", "${ports.ui}"]
     env:
-      VITE_PROXY_TARGET: "http://127.0.0.1:${ports.web}"
+      WORKSPACE_VITE_PORT: "${ports.ui}"
+      WORKSPACE_API_TARGET: "http://127.0.0.1:${ports.web}"
+      VITE_WS_TARGET: "ws://127.0.0.1:${ports.web}"
     ports:
       - name: ui
         target: ${ports.ui}
@@ -79,19 +83,21 @@ jobs:
     kind: process
     source: app
     cwd: .
-    command: ["uv", "run", "python", "manage.py", "migrate"]
+    command: ["uv", "run", "python", "manage.py", "angee", "migrate"]
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
       DJANGO_SECRET_KEY: "${secret:django-secret-key}"
+      ANGEE_DATA: {{ ANGEE_ROOT }}/data
 
   fixtures:
     kind: process
     source: app
     cwd: .
-    command: ["uv", "run", "python", "manage.py", "loaddata", "{{ fixture_path }}"]
+    command: ["uv", "run", "python", "manage.py", "angee", "fixtures", "load"]
     env:
       DJANGO_SETTINGS_MODULE: {{ django_settings }}
       DJANGO_SECRET_KEY: "${secret:django-secret-key}"
+      ANGEE_DATA: {{ ANGEE_ROOT }}/data
     after: [migrate]
 
 workflows:

@@ -20,10 +20,6 @@ Examples:
 }
 
 func runRollback(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
-
 	var result api.RollbackResponse
 	if _, err := apiPost("/rollback", api.RollbackRequest{SHA: args[0]}, &result); err != nil {
 		return fmt.Errorf("rollback: %w", err)

@@ -27,7 +27,7 @@ Target workflow for `django-angee/examples/angee-notes`:
 ```sh
 angee stack init dev ../django-angee/examples/angee-notes \
   --template ./examples/templates/stacks/dev \
-  --root ../django-angee/examples/angee-notes/.angee \
+  --root "$ANGEE_ROOT" \
   --yes
 
 cd ../django-angee/examples/angee-notes
@@ -42,7 +42,7 @@ angee init --template ../../../../angee-go/examples/templates/stacks/dev --yes
 angee dev
 ```
 
-`angee dev` should start or reuse the embedded local operator process that reconciles from `.angee/angee.yaml`.
+`angee dev` should run the operator runtime in the foreground and reconcile from `$ANGEE_ROOT/angee.yaml`.
 
 The same target is captured as data in:
 
@@ -59,7 +59,7 @@ angee stack init staging-docker ./staging-root \
   --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
   --yes
 
-angee up --root ./staging-root/.angee
+angee up --root "$ANGEE_ROOT"
 ```
 
 The staging template is based on the shape of the current local and staging Docker Compose workflows, expressed through the target `angee.yaml` model.

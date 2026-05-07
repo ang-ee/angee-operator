@@ -49,7 +49,7 @@ All of these entry points must call the same operator provisioning code:
 | `angee stack init` | Render a stack template and create/update `$ANGEE_ROOT/angee.yaml`. |
 | `angee workspace init` | Provision a workspace template, sources, port leases, services, jobs, and state. |
 | `angee agent init` | Provision an agent-backed workspace and render agent config/instructions. |
-| `angee dev` | Starts or reuses the embedded local operator process, then asks it to reconcile the dev stack. |
+| `angee dev` | Runs the in-process operator runtime for the lifetime of the dev command and reconciles the dev stack. |
 | HTTP API | Lets dashboards, CI, or apps call the same provisioning/reconcile path. |
 | MCP API | Lets agents provision and operate resources through the same operator path. |
 | Django backend | Can control the operator by API or colocated DB access, but should not duplicate provisioning logic. |
@@ -89,7 +89,7 @@ The shared pipeline is:
 
 ```text
 parse command or API request
-start/reuse/contact embedded or remote operator
+dispatch to in-process operator runtime or explicitly configured remote operator
 resolve template ref
 load _angee metadata
 render/update with Copier
@@ -140,9 +140,9 @@ angee operator --state-source django-api --state-source django-db
 ### Phase 3: Operator Provisioning
 
 - Move stack/workspace/agent init logic behind operator services.
-- Make CLI init commands start/reuse/contact the compiled-in operator instead of doing provisioning directly.
+- Make CLI init commands dispatch to the compiled-in operator runtime instead of doing provisioning directly.
 - Add HTTP/MCP surfaces for stack/workspace/agent init and update.
-- Make `angee dev` start an embedded local operator process and reconcile from `.angee/angee.yaml`.
+- Make `angee dev` run the in-process operator runtime and reconcile from `.angee/angee.yaml`.
 
 ### Phase 4: Sources, Secrets, And Ports
 
@@ -188,7 +188,7 @@ Do not keep unused options, arguments, Cobra commands, runtime adapters, framewo
 
 - `angee stack init dev --yes` creates `.angee/angee.yaml`, `.copier-answers.yml`, state dirs, secrets, and port leases.
 - `angee init --yes` resolves to the same default stack-init path.
-- `angee dev` starts/reuses the embedded local operator process and reconciles from `.angee/angee.yaml`.
+- `angee dev` runs the in-process operator runtime and reconciles from `.angee/angee.yaml`.
 - `angee workspace init <name>` provisions through the operator path.
 - `angee agent init <name>` provisions through the operator path.
 - The Django backend can trigger the same operator provisioning path by API or DB-backed state sources.

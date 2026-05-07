@@ -36,7 +36,7 @@ angee agent init feat-x --template agents/angee-developer --branch feat-x
 
 ## Architecture
 
-The CLI does not own provisioning logic. It starts or reuses the embedded local operator process, or contacts a configured operator service, and submits a request.
+The CLI does not own provisioning logic. It dispatches to the in-process operator runtime, or contacts an explicitly configured operator service, using the same API request/response types.
 
 The operator owns the provisioning and reconciliation path:
 
@@ -49,7 +49,7 @@ The operator owns the provisioning and reconciliation path:
 7. Compile deployment backend files such as `docker-compose.yaml` or Kubernetes manifests.
 8. Reconcile actual state.
 
-The same operator path is used by the CLI, HTTP API, MCP API, embedded local operator process, and a future Django control plane.
+The same operator path is used by the CLI, HTTP API, MCP API, explicit operator services, and a future Django control plane.
 
 ## Deployment Backends
 

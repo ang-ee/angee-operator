@@ -20,9 +20,6 @@ Usage:
 }
 
 func runPull(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
 	fmt.Printf("\n\033[1mangee pull\033[0m\n\n")
 
 	printInfo("Pulling latest images...")

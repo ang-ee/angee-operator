@@ -4,7 +4,7 @@ Status: target after template refactor
 
 Angee runs a stack from one manifest: `$ANGEE_ROOT/angee.yaml`.
 
-The CLI has the operator compiled in. Local commands start or reuse an embedded operator process, then call its HTTP API. The operator provisions templates, resolves sources, allocates ports, manages secrets, and reconciles services, jobs, workflows, workspaces, agents, and MCP servers.
+The CLI has the operator compiled in. Local commands dispatch to the in-process operator runtime without opening ports. The operator provisions templates, resolves sources, allocates ports, manages secrets, and reconciles services, jobs, workflows, workspaces, agents, and MCP servers.
 
 ## Install
 
@@ -29,7 +29,7 @@ angee dev
 
 `angee init --yes` is shorthand for the default stack init. In a project with a `stacks/dev` template, it resolves to `angee stack init dev --yes`.
 
-`angee dev` starts or reuses the embedded local operator process and reconciles from `.angee/angee.yaml`.
+`angee dev` runs the operator runtime for the lifetime of the command and reconciles from `.angee/angee.yaml`.
 
 ## Staging
 

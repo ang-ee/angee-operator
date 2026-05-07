@@ -8,8 +8,8 @@ It is like Docker Compose with first-class agents, workspaces, sources, secrets,
 
 | Piece | What it does |
 |---|---|
-| `angee` CLI | User interface for Angee. It has the operator compiled in, starts or reuses a local operator process when needed, and gives users commands such as `init`, `stack init`, `workspace init`, `agent init`, `dev`, `up`, `deploy`, and `logs`. |
-| operator | The shared reconciler and provisioner, available as an embedded local process or a long-running service. It reconciles desired state from `angee.yaml`, materializes sources, manages secrets and port leases, starts/stops services, runs jobs/workflows, provisions workspaces and agents, and exposes HTTP/MCP APIs. |
+| `angee` CLI | User interface for Angee. It has the operator compiled in, dispatches local commands to the in-process operator runtime, and gives users commands such as `init`, `stack init`, `workspace init`, `agent init`, `dev`, `up`, `deploy`, and `logs`. |
+| operator | The shared reconciler and provisioner, available in-process to the CLI or as an explicitly started service. It reconciles desired state from `angee.yaml`, materializes sources, manages secrets and port leases, starts/stops services, runs jobs/workflows, provisions workspaces and agents, and exposes HTTP/MCP APIs when run as a service. |
 | `angee.yaml` | The source-of-truth manifest under `$ANGEE_ROOT`. It describes sources, volumes, services, jobs, workflows, agents, MCP servers, secrets, and deployment backend settings. |
 | Copier template | A reusable scaffold that creates or updates `angee.yaml` plus any project files needed for a stack, workspace, or agent. |
 
@@ -29,7 +29,7 @@ The template can be local, bundled, or fetched from a Git URL. Angee renders it 
 
 The template does not keep running the stack. Once `angee.yaml` exists, the operator works from that manifest.
 
-The provisioning path belongs to the operator, not to a separate CLI implementation. The CLI starts or reuses its embedded operator process and calls the same HTTP API that a long-running operator, MCP client, or Django backend can call for stacks, workspaces, agents, services, and MCP servers.
+The provisioning path belongs to the operator, not to a separate CLI implementation. The CLI calls the same operator runtime that a long-running operator, MCP client, or Django backend can use for stacks, workspaces, agents, services, and MCP servers.
 
 ## How The Operator Works
 
@@ -61,7 +61,7 @@ angee dev
 
 `angee stack init dev` renders a dev stack template and writes `.angee/angee.yaml`.
 
-`angee dev` starts or reuses the embedded local operator process. The CLI is the terminal UI and log client; the operator is what reconciles the stack.
+`angee dev` runs the operator runtime in the foreground for the lifetime of the command. The CLI is the terminal UI and lifecycle owner; the operator runtime reconciles the stack.
 
 In dev, services can run as local processes, Docker containers, or a mix. Example services are a web server, UI dev server, database, Redis, MCP server, or agent runtime.
 

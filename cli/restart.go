@@ -21,9 +21,6 @@ Usage:
 }
 
 func runRestart(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
 	fmt.Printf("\n\033[1mangee restart\033[0m\n\n")
 
 	printInfo("Stopping stack...")

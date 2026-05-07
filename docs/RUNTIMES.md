@@ -44,4 +44,4 @@ All runtime work goes through the operator:
 CLI/API/MCP/Django -> operator -> backend
 ```
 
-`angee dev`, `angee up`, and `angee deploy` start or reuse the embedded local operator unless `--operator` points at a running operator service. The Django backend can also control the operator by API or direct DB-backed state sources.
+`angee dev`, `angee up`, and `angee deploy` dispatch to the in-process operator runtime unless `--operator` points at an explicitly running operator service. The Django backend can also control the operator by API or direct DB-backed state sources.

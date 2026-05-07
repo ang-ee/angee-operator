@@ -1,6 +1,6 @@
 # HTTP API
 
-The operator exposes an HTTP API for the CLI, dashboards, CI, agents, and backend control planes.
+When explicitly run as a service, the operator exposes an HTTP API for dashboards, CI, agents, backend control planes, and CLI commands that opt in with `--operator` or `ANGEE_OPERATOR_URL`.
 
 The API must call the same operator services used by CLI commands. It must not implement a separate provisioning path.
 

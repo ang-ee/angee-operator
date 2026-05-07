@@ -20,7 +20,7 @@ services:
       - "${ANGEE_OPERATOR_PORT:-9000}:9000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./.angee:/angee-root
+      - ./{{ ANGEE_ROOT }}:/angee-root
       - .:/stack
     environment:
       ANGEE_ROOT: /angee-root
@@ -44,7 +44,7 @@ services:
       LETTA_DB_USER: ${LETTA_DB_USER:-letta}
       LETTA_DB_PASSWORD: ${LETTA_DB_PASSWORD:-letta}
     volumes:
-      - .angee/data/postgres:/var/lib/postgresql/data
+      - {{ ANGEE_ROOT }}/data/postgres:/var/lib/postgresql/data
       - ./docker/postgres/ensure-letta-db.sh:/docker-entrypoint-initdb.d/20-ensure-letta-db.sh:ro
     networks: [angee-net]
 
@@ -53,7 +53,7 @@ services:
     command: redis-server --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     volumes:
-      - .angee/data/redis:/data
+      - {{ ANGEE_ROOT }}/data/redis:/data
     networks: [angee-net]
 
   mailhog:
@@ -103,7 +103,7 @@ services:
     ports:
       - "8880:8000"
     volumes:
-      - .angee/data/hf-cache:/home/ubuntu/.cache/huggingface/hub
+      - {{ ANGEE_ROOT }}/data/hf-cache:/home/ubuntu/.cache/huggingface/hub
     networks: [angee-net]
 
   django:
@@ -114,8 +114,8 @@ services:
       - "${DJANGO_PORT:-8000}:8000"
     volumes:
       - .:/app
-      - .angee/data/media:/app/media
-      - .angee/data/staticfiles:/app/staticfiles
+      - {{ ANGEE_ROOT }}/data/media:/app/media
+      - {{ ANGEE_ROOT }}/data/staticfiles:/app/staticfiles
     env_file: .env
     environment:
       <<: *app-env

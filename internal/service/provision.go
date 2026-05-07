@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,11 @@ import (
 	"github.com/fyltr/angee/internal/root"
 	"github.com/fyltr/angee/internal/state"
 )
+
+type LocalOutputSink interface {
+	Writer(name string) io.Writer
+	SystemLine(format string, args ...any)
+}
 
 func (p *Platform) StackInit(ctx context.Context, req api.StackInitRequest) (*api.ProvisionResponse, error) {
 	if req.Name == "" {
@@ -67,6 +73,9 @@ func (p *Platform) StackInit(ctx context.Context, req api.StackInitRequest) (*ap
 	}
 	if data["project_name"] == "" {
 		data["project_name"] = deriveStackName(worktree)
+	}
+	if err := setTemplateRootAnswer(data, worktree, p.Root.Path); err != nil {
+		return nil, err
 	}
 	if err := copier.Copy(ctx, tmpl, worktree, data, req.Force); err != nil {
 		return nil, err
@@ -123,6 +132,9 @@ func (p *Platform) StackUpdate(ctx context.Context, req api.StackUpdateRequest) 
 	data := map[string]string{}
 	for k, v := range req.Set {
 		data[k] = v
+	}
+	if err := setTemplateRootAnswer(data, worktree, p.Root.Path); err != nil {
+		return nil, err
 	}
 	if err := copier.Update(ctx, worktree, data); err != nil {
 		return nil, err
@@ -628,6 +640,10 @@ func (p *Platform) AgentAsk(ctx context.Context, req api.AgentAskRequest) (*api.
 }
 
 func (p *Platform) Reconcile(ctx context.Context, req api.ReconcileRequest) (*api.ProvisionResponse, error) {
+	return p.ReconcileWithOutput(ctx, req, nil)
+}
+
+func (p *Platform) ReconcileWithOutput(ctx context.Context, req api.ReconcileRequest, sink LocalOutputSink) (*api.ProvisionResponse, error) {
 	if req.Root != "" && !samePath(req.Root, p.Root.Path) {
 		return nil, BadRequest(fmt.Sprintf("operator is serving ANGEE_ROOT %s, not %s", p.Root.Path, req.Root))
 	}
@@ -638,12 +654,17 @@ func (p *Platform) Reconcile(ctx context.Context, req api.ReconcileRequest) (*ap
 	if err := cfg.Validate(); err != nil {
 		return nil, BadRequest(err.Error())
 	}
+	runCfg, err := filterReconcileConfig(cfg, req.Only, req.Except)
+	if err != nil {
+		return nil, err
+	}
 	changedSources, err := p.materializeStackSources(ctx, cfg, true)
 	if err != nil {
 		return nil, err
 	}
 	store := state.New(p.Root.Path)
-	if _, err := provision.ResolvePortLeases(store, cfg.PortLeases, nil, "reconcile:"+req.Mode); err != nil {
+	leases, err := provision.ResolvePortLeases(store, cfg.PortLeases, nil, "reconcile:"+req.Mode)
+	if err != nil {
 		return nil, err
 	}
 	secrets, err := provision.ResolveSecrets(store, cfg.Secrets, nil)
@@ -653,13 +674,28 @@ func (p *Platform) Reconcile(ctx context.Context, req api.ReconcileRequest) (*ap
 	if err := p.Root.WriteEnvFile(formatEnv(secrets)); err != nil {
 		return nil, err
 	}
-	result, err := p.Deploy(ctx, "")
-	if err != nil {
-		return nil, err
+	var changed []string
+	if req.Mode == "dev" {
+		localChanged, err := p.runStackLocalJobs(ctx, runCfg, leases, secrets, sink)
+		if err != nil {
+			return nil, err
+		}
+		changed = append(changed, localChanged...)
+		localChanged, err = p.startStackLocalServices(ctx, runCfg, leases, secrets, sink)
+		if err != nil {
+			return nil, err
+		}
+		changed = append(changed, localChanged...)
 	}
-	changed := append([]string{}, result.ServicesStarted...)
-	changed = append(changed, result.ServicesUpdated...)
-	changed = append(changed, result.ServicesRemoved...)
+	if hasDockerRuntime(runCfg) {
+		result, err := p.deployConfig(ctx, dockerRuntimeConfig(runCfg))
+		if err != nil {
+			return nil, err
+		}
+		changed = append(changed, result.ServicesStarted...)
+		changed = append(changed, result.ServicesUpdated...)
+		changed = append(changed, result.ServicesRemoved...)
+	}
 	changed = append(changed, changedSources...)
 	return &api.ProvisionResponse{
 		Status:   "ok",
@@ -679,6 +715,114 @@ func (p *Platform) requireRequestRoot(requestRoot string) error {
 
 func (p *Platform) materializeStackSources(ctx context.Context, cfg *config.AngeeConfig, sync bool) ([]string, error) {
 	return provision.MaterializeSources(ctx, filepath.Dir(p.Root.Path), cfg.Sources, sync)
+}
+
+func hasDockerRuntime(cfg *config.AngeeConfig) bool {
+	if cfg.Agents != nil && len(cfg.Agents.Items) > 0 {
+		return true
+	}
+	for _, svc := range cfg.Services {
+		if svc.Runtime != "local" {
+			return true
+		}
+	}
+	return false
+}
+
+func dockerRuntimeConfig(cfg *config.AngeeConfig) *config.AngeeConfig {
+	out := *cfg
+	if len(cfg.Services) == 0 {
+		return &out
+	}
+	out.Services = map[string]config.ServiceSpec{}
+	for name, svc := range cfg.Services {
+		if svc.Runtime != "local" {
+			out.Services[name] = svc
+		}
+	}
+	return &out
+}
+
+func filterReconcileConfig(cfg *config.AngeeConfig, only, except []string) (*config.AngeeConfig, error) {
+	if len(only) > 0 && len(except) > 0 {
+		return nil, BadRequest("--only and --except cannot be used together")
+	}
+	if len(only) == 0 && len(except) == 0 {
+		return cfg, nil
+	}
+	known := map[string]bool{}
+	for name := range cfg.Services {
+		known[name] = true
+	}
+	for name := range cfg.Jobs {
+		known[name] = true
+	}
+	selected := map[string]bool{}
+	for _, name := range append(append([]string{}, only...), except...) {
+		if !known[name] {
+			return nil, BadRequest(fmt.Sprintf("dev target %q is not a declared service or job", name))
+		}
+		selected[name] = true
+	}
+	include := func(name string) bool {
+		if len(only) > 0 {
+			return selected[name]
+		}
+		return !selected[name]
+	}
+	out := *cfg
+	out.Services = map[string]config.ServiceSpec{}
+	for name, svc := range cfg.Services {
+		if include(name) {
+			out.Services[name] = svc
+		}
+	}
+	out.Jobs = map[string]config.JobSpec{}
+	for name, job := range cfg.Jobs {
+		if include(name) {
+			out.Jobs[name] = job
+		}
+	}
+	for name, svc := range out.Services {
+		svc.After = filterRuntimeDeps(svc.After, out.Services, out.Jobs)
+		svc.DependsOn = filterServiceDeps(svc.DependsOn, out.Services)
+		out.Services[name] = svc
+	}
+	for name, job := range out.Jobs {
+		job.After = filterRuntimeDeps(job.After, out.Services, out.Jobs)
+		out.Jobs[name] = job
+	}
+	return &out, nil
+}
+
+func filterRuntimeDeps(deps []string, services map[string]config.ServiceSpec, jobs map[string]config.JobSpec) []string {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		if _, ok := services[dep]; ok {
+			out = append(out, dep)
+			continue
+		}
+		if _, ok := jobs[dep]; ok {
+			out = append(out, dep)
+		}
+	}
+	return out
+}
+
+func filterServiceDeps(deps []string, services map[string]config.ServiceSpec) []string {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		if _, ok := services[dep]; ok {
+			out = append(out, dep)
+		}
+	}
+	return out
 }
 
 func validateResourceName(kind, name string) error {
@@ -1289,6 +1433,31 @@ func deriveStackName(worktree string) string {
 	base = strings.ReplaceAll(base, " ", "-")
 	base = strings.ReplaceAll(base, "_", "-")
 	return base
+}
+
+func setTemplateRootAnswer(data map[string]string, worktree, rootPath string) error {
+	want := templateRootAnswer(worktree, rootPath)
+	if supplied := data["ANGEE_ROOT"]; supplied != "" {
+		resolved := supplied
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(worktree, filepath.FromSlash(resolved))
+		}
+		if !samePath(resolved, rootPath) {
+			return BadRequest(fmt.Sprintf("ANGEE_ROOT template value %q does not match operator root %s", supplied, rootPath))
+		}
+	}
+	data["ANGEE_ROOT"] = want
+	return nil
+}
+
+func templateRootAnswer(worktree, rootPath string) string {
+	if rel, err := filepath.Rel(worktree, rootPath); err == nil && rel != "" && !strings.HasPrefix(rel, "..") && rel != "." {
+		return filepath.ToSlash(rel)
+	}
+	if samePath(worktree, rootPath) {
+		return "."
+	}
+	return filepath.ToSlash(rootPath)
 }
 
 func expandPath(path string) string {

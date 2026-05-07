@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"regexp"
@@ -257,25 +255,12 @@ func validateAgentName(name string) error {
 }
 
 func runAgentList(cmd *cobra.Command, args []string) error {
-	resp, err := doRequest("GET", resolveOperator()+"/agents", nil)
-	if err != nil {
-		return fmt.Errorf("cannot reach operator at %s", resolveOperator())
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
+	var agents []api.AgentInfo
+	if _, err := apiGet("/agents", &agents); err != nil {
 		return err
 	}
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%s", body)
-	}
 	if outputJSON {
-		fmt.Println(string(body))
 		return nil
-	}
-	var agents []api.AgentInfo
-	if err := json.Unmarshal(body, &agents); err != nil {
-		return fmt.Errorf("parsing response: %w", err)
 	}
 	if len(agents) == 0 {
 		fmt.Println("No agents found.")
@@ -295,15 +280,5 @@ func streamAgentLogs(agent string) error {
 	if logsFollow {
 		params.Set("follow", "true")
 	}
-	reqURL := fmt.Sprintf("%s/agents/%s/logs?%s", resolveOperator(), agent, params.Encode())
-	resp, err := doRequest("GET", reqURL, nil)
-	if err != nil {
-		return fmt.Errorf("fetching agent logs: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error fetching agent logs (status %d)", resp.StatusCode)
-	}
-	_, _ = io.Copy(os.Stdout, resp.Body)
-	return nil
+	return streamAPIGet(fmt.Sprintf("/agents/%s/logs", agent), params, os.Stdout)
 }

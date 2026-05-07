@@ -9,7 +9,7 @@ It is like Docker Compose with first-class agents, workspaces, sources, secrets,
 - One manifest: `$ANGEE_ROOT/angee.yaml`.
 - Templates are Copier templates with Angee metadata under `_angee`.
 - The operator owns provisioning and reconciliation.
-- The `angee` CLI has the operator compiled in. Local commands spawn or reuse an embedded operator process, then call its HTTP API.
+- The `angee` CLI has the operator compiled in. Local commands dispatch to the in-process operator runtime without opening ports.
 - Framework details belong in templates and rendered manifests, not in the Go CLI.
 
 ## Quick Start

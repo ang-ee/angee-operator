@@ -41,13 +41,13 @@ The loop is:
 
 ## How It Runs
 
-Local development uses an embedded operator process started by the CLI:
+Local development uses the operator runtime inside the CLI process:
 
 ```sh
 angee dev
 ```
 
-The CLI starts or reuses a local operator for the selected ANGEE_ROOT, waits for `/health`, then calls the same HTTP API used by remote clients. It then streams logs and status.
+The CLI instantiates the operator runtime for the selected ANGEE_ROOT and dispatches through the same API request/response types used by remote clients, without opening a port. It then owns the dev lifecycle until interrupted.
 
 Staging or production can run the same operator code as a service:
 

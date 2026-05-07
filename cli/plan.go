@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 
 	"github.com/fyltr/angee/api"
 	"github.com/spf13/cobra"
@@ -33,25 +31,13 @@ Example:
 }
 
 func runPlan(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
+	var changeset api.ChangeSet
+	if _, err := apiGet("/plan", &changeset); err != nil {
 		return err
 	}
-
-	resp, err := doRequest("GET", resolveOperator()+"/plan", nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
 	if outputJSON {
-		fmt.Println(string(body))
 		return nil
 	}
-
-	var changeset api.ChangeSet
-	json.Unmarshal(body, &changeset) //nolint:errcheck
 
 	total := len(changeset.Add) + len(changeset.Update) + len(changeset.Remove)
 	if total == 0 {
@@ -78,10 +64,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
-	if err := ensureLocalOperator(resolveRoot()); err != nil {
-		return err
-	}
-
 	fmt.Printf("\n\033[1mangee down\033[0m\n\n")
 	var result api.DownResponse
 	if _, err := apiPost("/down", nil, &result); err != nil {

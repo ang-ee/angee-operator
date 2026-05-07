@@ -11,7 +11,7 @@ _angee:
 
   operator:
     mode: service
-    manifest: .angee/angee.yaml
+    manifest: "{{ ANGEE_ROOT }}/angee.yaml"
     state_sources: [file, django-api]
 
   sources:
@@ -43,6 +43,10 @@ _angee:
 project_name:
   type: str
   default: fyltr-django
+
+ANGEE_ROOT:
+  type: str
+  default: ANGEE_ROOT
 
 domain:
   type: str
