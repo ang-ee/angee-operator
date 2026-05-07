@@ -217,16 +217,29 @@ layer that already understands "agent" semantics composes the two steps.
 | Command | Container services | Local processes | Use |
 |---|---|---|---|
 | `angee up`  | `docker compose up -d` | **not started** | Production / staging / sidecars-only. |
-| `angee dev` | `docker compose up -d` | `process-compose up` (foreground) | Local development with the full stack alive. |
+| `angee dev` | `docker compose up -d` | `process-compose up -d` (daemon mode; CLI tails) | Local development with the full stack alive. |
 
 `angee up` is **compose-only**. It never starts host processes. If your
 `angee.yaml` has only `runtime: container` services, `up` brings up the
 whole stack. If it has `runtime: local` services, those are simply not
 started by `up` — use `dev` for that.
 
-`angee dev` is **compose + process-compose + in-process operator**. It
-runs the operator HTTP/MCP server on loopback for the lifetime of the
-session and starts both backends together.
+`angee dev` is **compose + process-compose + in-process operator**. The
+`angee dev` CLI command blocks (foreground), tailing logs and handling
+Ctrl+C; the underlying `process-compose` runs in **daemon mode** so its
+REST API is available for the operator to drive (start/stop/restart/logs
+on individual processes). The operator HTTP/MCP server runs in the same
+process as `angee dev` on loopback for the lifetime of the session.
+
+**Operator listener vs `StackDev` separation.** The HTTP/MCP listener is
+started **once** by `angee dev` (or by `cmd/operator`) before any
+`Stack*` call — it serves the configured ANGEE_ROOT and only that one.
+`StackDev(<root>)` is a **pure runtime** call: compose up + process-
+compose up. It never starts an HTTP/MCP listener. This is what lets the
+outer operator drive a chained inner stack via `StackDev(<inner-root>)`
+without violating the "one operator process serves HTTP/MCP for exactly
+one ANGEE_ROOT" invariant — the inner-root call is runtime-only; nobody
+serves HTTP for the inner root.
 
 `angee start/stop/restart/logs <name>` route by `runtime:` of the named
 service. `angee down` stops both backends.
@@ -416,21 +429,30 @@ Compilation pipeline on every `up` / `dev` / `build` / `start`:
    Generate any `generated: true` secrets that don't exist yet. Import
    `env:VAR` references from the host environment and persist into the
    backend.
-3. Resolve references. Non-secret refs become literals in the generated
+3. **Materialize any referenced source caches** that aren't yet on
+   disk. The compile pipeline scans every `mounts:` and `workdir:`
+   field in services and jobs for `source://<name>...` references. For
+   each referenced source whose cache is missing, fetch it now —
+   `git clone` (kind: git), download + checksum (kind: url/archive),
+   etc. — using the source's declared `auth:`. This applies whether
+   the source is mounted directly or via a workspace; the rule is "no
+   service starts against an absent source cache". Fail compilation
+   with a clear error if auth resolution fails.
+4. Resolve references. Non-secret refs become literals in the generated
    compose / process-compose files. `${secret.x}` refs are **rewritten as
    `${ENV_VAR}` env-var references** in the generated files; the resolved
    values land only in the gitignored `.env` (written `0600`) which
    compose / process-compose load at launch. Generated files never carry
    literal secret values.
-4. Split services by `runtime`:
+5. Split services by `runtime`:
    - `runtime: container` → emit `docker-compose.yaml`.
    - `runtime: local` → emit `process-compose.yaml`.
-5. For `angee up`: **compose-only.** Run `docker compose up -d` for
+6. For `angee up`: **compose-only.** Run `docker compose up -d` for
    `runtime: container` services. Local services are not started.
-6. For `angee dev`: **compose + process-compose.** Run `docker compose up
-   -d` for sidecars, then `process-compose up` for local services, with
-   cross-boundary `depends_on` resolved by readiness probes.
-7. For `angee down/stop/restart/logs <name>`: route by `runtime:`.
+7. For `angee dev`: **compose + process-compose.** Run `docker compose up
+   -d` for sidecars, then `process-compose up -d` for local services,
+   with cross-boundary `depends_on` resolved by readiness probes.
+8. For `angee down/stop/restart/logs <name>`: route by `runtime:`.
 
 ### Secrets backend interface
 
@@ -611,6 +633,19 @@ What `update` will **not** do:
   create.
 - Move the worktree branch. Use git directly inside the worktree, or
   `workspace destroy --purge` + create on a new branch.
+- Change inputs that feed into **identity or source materialization**.
+  These are *immutable after create* and `update --input k=v` rejects
+  them with a clear "use destroy + create" error. The operator
+  detects immutability automatically: an input is treated as immutable
+  if it appears in any of the following, evaluated against the
+  resolved workspace at create time —
+    - the entry-point template's `instance_naming.pattern`,
+    - any source's `branch:`, `ref:`, `mode:`, or `subpath:`,
+    - any `chain_root:` value.
+  Templates can also mark inputs immutable explicitly with
+  `_angee.inputs.<name>.immutable: true`. Mutable inputs (e.g., model
+  selection, log level, anything that only feeds into rendered
+  templates' content) update freely.
 
 The PATCH alias accepts the same body keys: `ttl`, `inputs`,
 `sync_sources` (boolean).
@@ -778,10 +813,22 @@ collision), and writes the union into `workspaces.<n>.resolved.persist_paths`.
 
 The operator:
 - **Creates the directory during `workspace create`** (after step 5,
-  before step 6's render pass) under `${workspace.<name>.path}/<subpath>`
-  for `scope: workspace`, or under a stack-scoped path for `scope:
-  stack`. The directory exists by the time any service mounts the
-  workspace, even if `workspace start` is never called.
+  before step 6's render pass). The exact location depends on `scope:`:
+  - `scope: workspace` → `${workspace.<name>.path}/<subpath>` (under
+    the workspace directory; removed on `workspace destroy --purge`).
+  - `scope: stack` → `$ANGEE_ROOT/persist/<key>` (under the **outer**
+    ANGEE_ROOT — the one that hosts the workspace, not any chained
+    inner root; removed only on `stack destroy --purge`). The `<key>`
+    in the path is the persist_paths map key, namespaced across all
+    workspaces sharing this stack: two workspaces declaring
+    `model-cache` with `scope: stack` resolve to the *same* directory
+    (intentional — that's the whole point of stack scope). The
+    operator warns at create time if two workspaces declare the same
+    `scope: stack` key with different `subpath:` values, since the
+    `subpath:` is ignored for stack scope (the path is `persist/<key>`
+    by convention, not derived from `subpath:`).
+  The directory exists by the time any service mounts the workspace,
+  even if `workspace start` is never called.
 - Exposes the absolute path as `${persist.<key>}` for use anywhere in
   the same template.
 - Preserves it across `workspace stop`/`workspace start` and `workspace
@@ -983,6 +1030,13 @@ POST   /stack/update                          # body: { inputs }; reruns copier 
 POST   /stack/{build|up|dev|down|destroy}     GET  /stack/status
 GET    /stack/logs                            # tails all services in the stack
 
+# Note: POST /stack/dev runs detached — docker compose up -d + process-compose up -d.
+# Returns 202 + operation_id like other async ops; clients tail /stack/logs or
+# /events for output. The "foreground TUI + Ctrl+C" flow is a CLI-only
+# affordance that exists because `angee dev` blocks the user's terminal;
+# over HTTP, `dev` is just "compose + process-compose up", same as `up`
+# but including local services.
+
 # Services
 POST   /services                              # body: full service spec; manifest edit + reconcile
 PATCH  /services/{n}                          # body: partial service spec; manifest edit + reconcile
@@ -1154,9 +1208,20 @@ parallel via SSE-driven orchestration). A future Phase 8 may add a
 declarative `lifecycle.destroy_with: workspace://<n>` link on a service
 entry — for v1, the caller composes the two operations.
 
-There is one safety guard: `workspace destroy` *does* refuse if any
-running service or job references the workspace by any of these
-mechanisms:
+**Inner-stack teardown is automatic.** `workspace destroy <n>` always
+runs `workspace stop <n>` first — that is, `StackDown(<inner-root>)` if
+the workspace has an inner stack. The workspace owns its inner stack,
+so destroy doesn't need a separate guard for it. The TTL sweep follows
+the same path (stop, then destroy); an expired workspace's inner stack
+is brought down before the directory is removed.
+
+The destroy safety guard below is *only* about **external** references
+— other services or jobs in the outer stack that mount the workspace.
+Those are the lifecycles the workspace doesn't own; they need explicit
+caller orchestration to tear down.
+
+`workspace destroy` refuses if any running service or job references
+the workspace by any of these mechanisms:
 
 - `mounts:` URI of the form `workspace://<name>...` (would yank a live
   bind-mount out from under a container).
@@ -1182,7 +1247,8 @@ things and keeps them running together for the lifetime of the session:
    secret).
 2. **Container sidecars** via `docker compose up -d` (postgres, redis,
    openbao, anything `runtime: container`).
-3. **Local processes** via `process-compose up` (anything `runtime:
+3. **Local processes** via `process-compose up -d` (daemon mode; the
+   `angee dev` CLI tails logs over its REST API) — anything `runtime:
    local`: Django, Vite, build watchers, etc.).
 
 Startup order:

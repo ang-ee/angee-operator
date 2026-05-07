@@ -165,7 +165,7 @@ angee workspace git  <name>                 # Phase 5b — status of every workt
 angee source list                           # Phase 5a
 angee source fetch  <name>                  # Phase 5a — git fetch on the cache
 angee source status <name>                  # Phase 5a — branch / dirty state (read-only)
-angee source pull   <name> [--ref <r>]      # Phase 5b — needs auth wiring
+angee source pull   <name> [--ref <r>]      # Phase 5b — adds pull semantics on the 5a auth machinery
 angee source push   <name> [--ref <r>]      # Phase 5b
 
 # Operator
@@ -338,10 +338,18 @@ addressability. Each step is testable in isolation.
 
 1. Validate that all referenced workspaces / sources / volumes / secrets /
    ports exist.
-2. Resolve substitutions for the service entry.
-3. Append to `docker-compose.yaml` (container) or `process-compose.yaml`
+2. **Materialize any referenced source caches that aren't yet on disk.**
+   A service that mounts `source://django-angee:/code:ro` against a
+   declared but un-fetched source triggers a `git clone` (kind: git) or
+   download (kind: archive/url) at this step. This is the same
+   fetch-on-use rule `StackPrepare` follows — services and workspaces
+   share one source-cache materialization path. If the source's `auth`
+   block can't be resolved (missing secret, wrong mode for the bind),
+   fail validation here with a clear error.
+3. Resolve substitutions for the service entry.
+4. Append to `docker-compose.yaml` (container) or `process-compose.yaml`
    (local).
-4. If `--start`, call the runtime backend's `Up(<service>)`.
+5. If `--start`, call the runtime backend's `Up(<service>)`.
 
 `service start/stop/restart/logs` route by `runtime:` to compose or
 process-compose. `service destroy` removes the entry from `angee.yaml` and
@@ -529,8 +537,12 @@ it into a service. Git **write** operations land in Phase 5b.
    a hard requirement for any private-repo workspace and ships with
    the read primitive, not after.
 3. `service.Platform.WorkspaceCreate / WorkspaceUpdate / WorkspaceStart /
-   WorkspaceStop / WorkspaceDestroy / WorkspaceList / WorkspaceGet` —
-   the eight-step sequence above.
+   WorkspaceStop / WorkspaceRestart / WorkspaceLogs / WorkspaceDestroy /
+   WorkspaceList / WorkspaceGet` — the eight-step create sequence above
+   plus the lifecycle methods. `WorkspaceRestart` is `Stop` + `Start` on
+   the inner stack (no-op if there is no inner stack); `WorkspaceLogs`
+   tails inner-stack logs (`StackLogs(<inner-root>)`; returns "no
+   inner stack" if the workspace has none).
 4. `service.Platform.SourceList / SourceFetch / SourceStatus` — read &
    refresh source caches; report branch + dirty state of every workspace
    worktree off a source.
@@ -591,8 +603,10 @@ opening a PR, this phase is mandatory.
      uncommitted changes, or if the branch has no upstream and the
      caller didn't pass `--set-upstream`.
 3. `service.Platform.SourcePull / SourcePush / WorkspacePush /
-   WorkspaceGitStatus`. (`SourceStatus` already shipped in Phase 5a as
-   a read-only no-auth operation.)
+   WorkspaceGitStatus`. (`SourceStatus` shipped in Phase 5a; it reads
+   only local repository state — `git rev-parse`, `git status` —
+   so it didn't need the auth machinery even though Phase 5a wired
+   it for clone/fetch.)
 4. CLI: `angee source pull|push`, `angee workspace push|git`.
 5. HTTP: `POST /sources/{n}/{pull|push}`, `GET /workspaces/{n}/git`,
    `POST /workspaces/{n}/push`. (`GET /sources/{n}/status` shipped in
@@ -743,4 +757,5 @@ refuses the mode at startup with a clear error pointing at the source's
 `auth.mode`. The in-process operator under `angee dev` (loopback by
 construction) accepts it. This gives developers the "uses my SSH key"
 ergonomics locally and refuses to surface the same hole on a hosted
-operator. Implementation lives in Phase 5b's auth wiring.
+operator. Implementation lives in Phase 5a's auth wiring — same
+machinery, gated by the listener's bind address.
