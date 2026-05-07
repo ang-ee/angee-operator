@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/fyltr/angee/api"
+	"github.com/fyltr/angee/internal/provision"
 	"github.com/fyltr/angee/internal/runtime"
 )
 
@@ -46,15 +47,42 @@ func (p *Platform) AgentList(ctx context.Context) ([]api.AgentInfo, error) {
 
 // AgentStart starts a stopped agent by recompiling and applying.
 func (p *Platform) AgentStart(ctx context.Context, name string) (*api.ApplyResult, error) {
+	if err := validateResourceName("agent", name); err != nil {
+		return nil, err
+	}
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+
 	cfg, err := p.loadConfig()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Agents == nil {
-		return nil, NotFound(fmt.Sprintf("agent %q not found in angee.yaml", name))
+	spec, err := agentSpec(cfg, name)
+	if err != nil {
+		return nil, err
 	}
-	if _, ok := cfg.Agents.Items[name]; !ok {
-		return nil, NotFound(fmt.Sprintf("agent %q not found in angee.yaml", name))
+	agentDir := p.agentDir(name)
+	agentCfg, _, err := loadAgentConfig(agentDir)
+	if err == nil {
+		if _, err := provision.MaterializeSources(ctx, filepath.Join(agentDir, "workspace"), agentCfg.Sources, false); err != nil {
+			return nil, err
+		}
+		if err := registerAgent(cfg, name, spec.Template, agentCfg); err != nil {
+			return nil, BadRequest(err.Error())
+		}
+	} else {
+		p.Log.Warn("agent manifest not loaded during start", "agent", name, "err", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, BadRequest(err.Error())
+	}
+	if err := p.resolveStackState(cfg, nil, nil); err != nil {
+		return nil, err
+	}
+	if agentCfg != nil {
+		if err := p.writeAgentEnv(name, agentCfg); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := p.prepareAndCompile(cfg); err != nil {
@@ -65,11 +93,22 @@ func (p *Platform) AgentStart(ctx context.Context, name string) (*api.ApplyResul
 	if err != nil {
 		return nil, err
 	}
+	p.RestartHealthProbes(ctx)
 	return toAPIResult(result), nil
 }
 
 // AgentStop stops a running agent.
 func (p *Platform) AgentStop(ctx context.Context, name string) error {
+	if err := validateResourceName("agent", name); err != nil {
+		return err
+	}
+	cfg, err := p.loadConfig()
+	if err != nil {
+		return err
+	}
+	if _, err := agentSpec(cfg, name); err != nil {
+		return err
+	}
 	return p.Backend.Stop(ctx, agentServiceName(name))
 }
 

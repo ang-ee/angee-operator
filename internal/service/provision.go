@@ -79,6 +79,10 @@ func (p *Platform) StackInit(ctx context.Context, req api.StackInitRequest) (*ap
 	if err := cfg.Validate(); err != nil {
 		return nil, BadRequest(err.Error())
 	}
+	changedSources, err := p.materializeStackSources(ctx, cfg, true)
+	if err != nil {
+		return nil, err
+	}
 
 	store := state.New(p.Root.Path)
 	if _, err := provision.ResolvePortLeases(store, cfg.PortLeases, req.Ports, "stack:"+req.Name); err != nil {
@@ -101,7 +105,7 @@ func (p *Platform) StackInit(ctx context.Context, req api.StackInitRequest) (*ap
 		Message:  fmt.Sprintf("Initialized stack %s", req.Name),
 		Root:     p.Root.Path,
 		Manifest: manifestPath,
-		Changed:  []string{manifestPath, filepath.Join(p.Root.Path, state.DirName)},
+		Changed:  append([]string{manifestPath, filepath.Join(p.Root.Path, state.DirName)}, changedSources...),
 	}, nil
 }
 
@@ -130,6 +134,10 @@ func (p *Platform) StackUpdate(ctx context.Context, req api.StackUpdateRequest) 
 	if err := cfg.Validate(); err != nil {
 		return nil, BadRequest(err.Error())
 	}
+	changedSources, err := p.materializeStackSources(ctx, cfg, false)
+	if err != nil {
+		return nil, err
+	}
 	store := state.New(p.Root.Path)
 	if _, err := provision.ResolvePortLeases(store, cfg.PortLeases, req.Ports, "stack:update"); err != nil {
 		return nil, err
@@ -149,7 +157,7 @@ func (p *Platform) StackUpdate(ctx context.Context, req api.StackUpdateRequest) 
 		Message:  "Updated stack",
 		Root:     p.Root.Path,
 		Manifest: p.Root.AngeeYAMLPath(),
-		Changed:  []string{p.Root.AngeeYAMLPath(), filepath.Join(p.Root.Path, state.DirName)},
+		Changed:  append([]string{p.Root.AngeeYAMLPath(), filepath.Join(p.Root.Path, state.DirName)}, changedSources...),
 	}, nil
 }
 
@@ -214,7 +222,14 @@ func (p *Platform) WorkspaceInit(ctx context.Context, req api.WorkspaceInitReque
 	if err := config.Write(workspaceCfg, manifestPath); err != nil {
 		return nil, err
 	}
+	changedSources, err := provision.MaterializeSources(ctx, workspaceDir, workspaceCfg.Sources, true)
+	if err != nil {
+		return nil, err
+	}
 	if err := p.resolveWorkspaceState(req.Name, workspaceCfg, req.Ports, req.Secrets); err != nil {
+		return nil, err
+	}
+	if err := p.cleanupWorkspaceState(req.Name, workspaceCfg); err != nil {
 		return nil, err
 	}
 
@@ -234,7 +249,7 @@ func (p *Platform) WorkspaceInit(ctx context.Context, req api.WorkspaceInitReque
 		Message:  fmt.Sprintf("Initialized workspace %s", req.Name),
 		Root:     p.Root.Path,
 		Manifest: manifestPath,
-		Changed:  []string{manifestPath, p.Root.AngeeYAMLPath()},
+		Changed:  append([]string{manifestPath, p.Root.AngeeYAMLPath()}, changedSources...),
 	}, nil
 }
 
@@ -284,7 +299,14 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, req api.WorkspaceUpdateR
 	if err := config.Write(workspaceCfg, manifestPath); err != nil {
 		return nil, err
 	}
+	changedSources, err := provision.MaterializeSources(ctx, workspaceDir, workspaceCfg.Sources, req.Sync)
+	if err != nil {
+		return nil, err
+	}
 	if err := p.resolveWorkspaceState(req.Name, workspaceCfg, req.Ports, req.Secrets); err != nil {
+		return nil, err
+	}
+	if err := p.cleanupWorkspaceState(req.Name, workspaceCfg); err != nil {
 		return nil, err
 	}
 
@@ -298,13 +320,17 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, req api.WorkspaceUpdateR
 	if err := p.commitProvision("angee: update workspace "+req.Name, root.AngeeYAML, filepath.Join(root.WorkspacesDir, req.Name)); err != nil {
 		p.Log.Warn("workspace update commit skipped", "err", err)
 	}
+	if req.Restart {
+		changedSources = append([]string{manifestPath, p.Root.AngeeYAMLPath()}, changedSources...)
+		return p.reconcileWorkspaceRuntimeLocked(ctx, stackCfg, req.Name, workspaceDir, manifestPath, workspaceCfg, changedSources)
+	}
 
 	return &api.ProvisionResponse{
 		Status:   "ok",
 		Message:  fmt.Sprintf("Updated workspace %s", req.Name),
 		Root:     p.Root.Path,
 		Manifest: manifestPath,
-		Changed:  []string{manifestPath, p.Root.AngeeYAMLPath()},
+		Changed:  append([]string{manifestPath, p.Root.AngeeYAMLPath()}, changedSources...),
 	}, nil
 }
 
@@ -325,7 +351,37 @@ func (p *Platform) WorkspaceList(ctx context.Context, req api.WorkspaceListReque
 }
 
 func (p *Platform) WorkspaceDev(ctx context.Context, req api.WorkspaceDevRequest) (*api.ProvisionResponse, error) {
-	return nil, NotImplemented("workspace dev reconciliation is not implemented yet")
+	if err := validateResourceName("workspace", req.Name); err != nil {
+		return nil, err
+	}
+	if err := p.requireRequestRoot(req.Root); err != nil {
+		return nil, err
+	}
+
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+
+	stackCfg, err := p.loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	spec, err := workspaceSpec(stackCfg, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	workspaceDir := p.workspaceDirFromSpec(req.Name, spec)
+	workspaceCfg, manifestPath, err := loadWorkspaceConfig(workspaceDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := workspaceCfg.Validate(); err != nil {
+		return nil, BadRequest(err.Error())
+	}
+	changedSources, err := provision.MaterializeSources(ctx, workspaceDir, workspaceCfg.Sources, true)
+	if err != nil {
+		return nil, err
+	}
+	return p.reconcileWorkspaceRuntimeLocked(ctx, stackCfg, req.Name, workspaceDir, manifestPath, workspaceCfg, changedSources)
 }
 
 func (p *Platform) AgentInit(ctx context.Context, req api.AgentInitRequest) (*api.ProvisionResponse, error) {
@@ -392,6 +448,10 @@ func (p *Platform) AgentInit(ctx context.Context, req api.AgentInitRequest) (*ap
 	if err := config.Write(agentCfg, manifestPath); err != nil {
 		return nil, err
 	}
+	changedSources, err := provision.MaterializeSources(ctx, filepath.Join(agentDir, "workspace"), agentCfg.Sources, true)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := registerAgent(stackCfg, req.Name, templateSource(templateRef, tmpl), agentCfg); err != nil {
 		return nil, BadRequest(err.Error())
@@ -417,7 +477,7 @@ func (p *Platform) AgentInit(ctx context.Context, req api.AgentInitRequest) (*ap
 		Message:  fmt.Sprintf("Initialized agent %s", req.Name),
 		Root:     p.Root.Path,
 		Manifest: manifestPath,
-		Changed:  []string{manifestPath, p.Root.AngeeYAMLPath()},
+		Changed:  append([]string{manifestPath, p.Root.AngeeYAMLPath()}, changedSources...),
 	}, nil
 }
 
@@ -470,6 +530,10 @@ func (p *Platform) AgentUpdate(ctx context.Context, req api.AgentUpdateRequest) 
 	if err := config.Write(agentCfg, manifestPath); err != nil {
 		return nil, err
 	}
+	changedSources, err := provision.MaterializeSources(ctx, filepath.Join(agentDir, "workspace"), agentCfg.Sources, false)
+	if err != nil {
+		return nil, err
+	}
 	if err := registerAgent(stackCfg, req.Name, spec.Template, agentCfg); err != nil {
 		return nil, BadRequest(err.Error())
 	}
@@ -494,7 +558,7 @@ func (p *Platform) AgentUpdate(ctx context.Context, req api.AgentUpdateRequest) 
 		Message:  fmt.Sprintf("Updated agent %s", req.Name),
 		Root:     p.Root.Path,
 		Manifest: manifestPath,
-		Changed:  []string{manifestPath, p.Root.AngeeYAMLPath()},
+		Changed:  append([]string{manifestPath, p.Root.AngeeYAMLPath()}, changedSources...),
 	}, nil
 }
 
@@ -515,7 +579,44 @@ func (p *Platform) AgentRestart(ctx context.Context, req api.AgentActionRequest)
 }
 
 func (p *Platform) AgentDestroy(ctx context.Context, req api.AgentActionRequest) (*api.ProvisionResponse, error) {
-	return nil, NotImplemented("agent destroy is not implemented yet")
+	if err := validateResourceName("agent", req.Name); err != nil {
+		return nil, err
+	}
+	if err := p.requireRequestRoot(req.Root); err != nil {
+		return nil, err
+	}
+
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+
+	cfg, err := p.loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := agentSpec(cfg, req.Name); err != nil {
+		return nil, err
+	}
+	if err := p.Backend.Stop(ctx, agentServiceName(req.Name)); err != nil {
+		p.Log.Warn("agent stop during destroy failed", "agent", req.Name, "err", err)
+	}
+	delete(cfg.Agents.Items, req.Name)
+	if err := config.Write(cfg, p.Root.AngeeYAMLPath()); err != nil {
+		return nil, err
+	}
+	agentDir := p.agentDir(req.Name)
+	if err := os.RemoveAll(agentDir); err != nil {
+		return nil, fmt.Errorf("removing agent directory: %w", err)
+	}
+	if err := p.commitProvision("angee: destroy agent "+req.Name, root.AngeeYAML, filepath.Join(root.AgentsDir, req.Name)); err != nil {
+		p.Log.Warn("agent destroy commit skipped", "err", err)
+	}
+	return &api.ProvisionResponse{
+		Status:   "ok",
+		Message:  fmt.Sprintf("Destroyed agent %s", req.Name),
+		Root:     p.Root.Path,
+		Manifest: p.Root.AngeeYAMLPath(),
+		Changed:  []string{p.Root.AngeeYAMLPath(), agentDir},
+	}, nil
 }
 
 func (p *Platform) AgentChat(ctx context.Context, req api.AgentChatRequest) (*api.ProvisionResponse, error) {
@@ -537,6 +638,10 @@ func (p *Platform) Reconcile(ctx context.Context, req api.ReconcileRequest) (*ap
 	if err := cfg.Validate(); err != nil {
 		return nil, BadRequest(err.Error())
 	}
+	changedSources, err := p.materializeStackSources(ctx, cfg, true)
+	if err != nil {
+		return nil, err
+	}
 	store := state.New(p.Root.Path)
 	if _, err := provision.ResolvePortLeases(store, cfg.PortLeases, nil, "reconcile:"+req.Mode); err != nil {
 		return nil, err
@@ -555,6 +660,7 @@ func (p *Platform) Reconcile(ctx context.Context, req api.ReconcileRequest) (*ap
 	changed := append([]string{}, result.ServicesStarted...)
 	changed = append(changed, result.ServicesUpdated...)
 	changed = append(changed, result.ServicesRemoved...)
+	changed = append(changed, changedSources...)
 	return &api.ProvisionResponse{
 		Status:   "ok",
 		Message:  "Reconciled stack",
@@ -571,13 +677,26 @@ func (p *Platform) requireRequestRoot(requestRoot string) error {
 	return nil
 }
 
+func (p *Platform) materializeStackSources(ctx context.Context, cfg *config.AngeeConfig, sync bool) ([]string, error) {
+	return provision.MaterializeSources(ctx, filepath.Dir(p.Root.Path), cfg.Sources, sync)
+}
+
 func validateResourceName(kind, name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
 		return BadRequest(kind + " name is required")
 	}
-	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
-		return BadRequest(fmt.Sprintf("%s name %q must not contain path separators", kind, name))
+	if trimmed != name {
+		return BadRequest(fmt.Sprintf("%s name %q must not contain surrounding whitespace", kind, name))
+	}
+	for i, r := range name {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+		if i == 0 {
+			valid = (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		}
+		if !valid {
+			return BadRequest(fmt.Sprintf("%s name %q must match [a-z0-9][a-z0-9_-]*", kind, name))
+		}
 	}
 	return nil
 }
@@ -727,6 +846,130 @@ func workspaceNames(cfg *config.AngeeConfig) []string {
 	return names
 }
 
+func (p *Platform) reconcileWorkspaceRuntimeLocked(ctx context.Context, stackCfg *config.AngeeConfig, workspaceName, workspaceDir, manifestPath string, workspaceCfg *config.AngeeConfig, initialChanged []string) (*api.ProvisionResponse, error) {
+	if err := p.resolveWorkspaceState(workspaceName, workspaceCfg, nil, nil); err != nil {
+		return nil, err
+	}
+	if err := p.cleanupWorkspaceState(workspaceName, workspaceCfg); err != nil {
+		return nil, err
+	}
+	leases, err := state.New(p.Root.Path).LoadPortLeases()
+	if err != nil {
+		return nil, err
+	}
+	runnable := addWorkspaceDevServices(stackCfg, p.Root.Path, workspaceName, workspaceDir, workspaceCfg, leases)
+	var runtimeChanged []string
+	if runnable > 0 {
+		if err := p.prepareAndCompile(stackCfg); err != nil {
+			return nil, err
+		}
+		result, err := p.Backend.Apply(ctx, p.Root.ComposePath())
+		if err != nil {
+			return nil, err
+		}
+		runtimeChanged = append(runtimeChanged, result.ServicesStarted...)
+		runtimeChanged = append(runtimeChanged, result.ServicesUpdated...)
+	}
+	localChanged, err := p.startWorkspaceLocalServices(ctx, workspaceName, workspaceDir, workspaceCfg, leases)
+	if err != nil {
+		return nil, err
+	}
+	runtimeChanged = append(runtimeChanged, localChanged...)
+	changed := append([]string{}, runtimeChanged...)
+	changed = append(changed, initialChanged...)
+	message := fmt.Sprintf("Prepared workspace %s", workspaceName)
+	if len(runtimeChanged) > 0 {
+		message = fmt.Sprintf("Started workspace %s", workspaceName)
+	}
+	return &api.ProvisionResponse{
+		Status:   "ok",
+		Message:  message,
+		Root:     p.Root.Path,
+		Manifest: manifestPath,
+		Changed:  changed,
+	}, nil
+}
+
+func addWorkspaceDevServices(stackCfg *config.AngeeConfig, rootPath, workspaceName, workspaceDir string, workspaceCfg *config.AngeeConfig, leases map[string]state.PortLease) int {
+	if stackCfg.Services == nil {
+		stackCfg.Services = map[string]config.ServiceSpec{}
+	}
+	if stackCfg.Volumes == nil && len(workspaceCfg.Volumes) > 0 {
+		stackCfg.Volumes = map[string]config.VolumeSpec{}
+	}
+	volumeNames := map[string]string{}
+	for name, volume := range workspaceCfg.Volumes {
+		mapped := workspaceRuntimeName(workspaceName, name)
+		volumeNames[name] = mapped
+		stackCfg.Volumes[mapped] = volume
+	}
+	serviceNames := map[string]string{}
+	for name := range workspaceCfg.Services {
+		serviceNames[name] = workspaceRuntimeName(workspaceName, name)
+	}
+	runnable := 0
+	for name, svc := range workspaceCfg.Services {
+		if svc.Runtime != "" && svc.Runtime != "docker" {
+			continue
+		}
+		mapped := serviceNames[name]
+		svc = rewriteWorkspaceDevService(rootPath, workspaceDir, workspaceName, svc, volumeNames, serviceNames, leases)
+		stackCfg.Services[mapped] = svc
+		runnable++
+	}
+	return runnable
+}
+
+func rewriteWorkspaceDevService(rootPath, workspaceDir, workspaceName string, svc config.ServiceSpec, volumeNames, serviceNames map[string]string, leases map[string]state.PortLease) config.ServiceSpec {
+	if svc.Build != nil && svc.Build.Context != "" {
+		build := *svc.Build
+		build.Context = workspaceComposePath(rootPath, workspaceDir, build.Context)
+		svc.Build = &build
+	}
+	for i := range svc.Volumes {
+		if mapped := volumeNames[svc.Volumes[i].Name]; mapped != "" {
+			svc.Volumes[i].Name = mapped
+		}
+		if svc.Volumes[i].Source != "" {
+			svc.Volumes[i].Source = workspaceComposePath(rootPath, workspaceDir, svc.Volumes[i].Source)
+		}
+	}
+	for i := range svc.Ports {
+		if svc.Ports[i].Name == "" || svc.Ports[i].Host != "" {
+			continue
+		}
+		if lease := leases[scopeName(workspaceScope(workspaceName), svc.Ports[i].Name)]; lease.Port > 0 {
+			svc.Ports[i].Host = fmt.Sprintf("%d", lease.Port)
+		}
+	}
+	for i, dep := range svc.DependsOn {
+		if mapped := serviceNames[dep]; mapped != "" {
+			svc.DependsOn[i] = mapped
+		}
+	}
+	for i, dep := range svc.After {
+		if mapped := serviceNames[dep]; mapped != "" {
+			svc.After[i] = mapped
+		}
+	}
+	return svc
+}
+
+func workspaceRuntimeName(workspaceName, name string) string {
+	return "workspace-" + workspaceName + "-" + name
+}
+
+func workspaceComposePath(rootPath, workspaceDir, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	abs := filepath.Join(workspaceDir, filepath.FromSlash(path))
+	if rel, err := filepath.Rel(rootPath, abs); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(abs)
+}
+
 func workspaceSourceRefs(cfg *config.AngeeConfig) map[string]string {
 	if len(cfg.Sources) == 0 {
 		return nil
@@ -755,6 +998,39 @@ func (p *Platform) resolveWorkspaceState(name string, cfg *config.AngeeConfig, p
 	}
 	workspaceSecrets := unscopedSecrets(scope, cfg.Secrets, resolvedSecrets)
 	return os.WriteFile(filepath.Join(p.workspaceDir(name), ".env"), []byte(formatEnv(workspaceSecrets)), 0600)
+}
+
+func (p *Platform) cleanupWorkspaceState(name string, cfg *config.AngeeConfig) error {
+	scope := workspaceScope(name)
+	store := state.New(p.Root.Path)
+	leases, err := store.LoadPortLeases()
+	if err != nil {
+		return err
+	}
+	for key := range leases {
+		if strings.HasPrefix(key, scope+"/") {
+			plain := strings.TrimPrefix(key, scope+"/")
+			if _, ok := cfg.PortLeases[plain]; !ok {
+				delete(leases, key)
+			}
+		}
+	}
+	if err := store.SavePortLeases(leases); err != nil {
+		return err
+	}
+	secrets, err := store.LoadSecrets()
+	if err != nil {
+		return err
+	}
+	for key := range secrets {
+		if strings.HasPrefix(key, scope+"/") {
+			plain := strings.TrimPrefix(key, scope+"/")
+			if _, ok := cfg.Secrets[plain]; !ok {
+				delete(secrets, key)
+			}
+		}
+	}
+	return store.SaveSecrets(secrets)
 }
 
 func registerAgent(stackCfg *config.AngeeConfig, name, templateRef string, agentCfg *config.AngeeConfig) error {
@@ -1062,10 +1338,15 @@ func shellQuote(value string) string {
 	if value == "" {
 		return "''"
 	}
-	if strings.IndexFunc(value, func(r rune) bool {
-		return !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' && r != '-' && r != '.' && r != '/' && r != ':'
-	}) == -1 {
+	if strings.IndexFunc(value, func(r rune) bool { return !isShellSafe(r) }) == -1 {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func isShellSafe(r rune) bool {
+	return (r >= 'A' && r <= 'Z') ||
+		(r >= 'a' && r <= 'z') ||
+		(r >= '0' && r <= '9') ||
+		r == '_' || r == '-' || r == '.' || r == '/' || r == ':'
 }

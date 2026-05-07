@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/config"
@@ -88,6 +89,20 @@ func TestStackInitRequiresYes(t *testing.T) {
 	_, err = platform.StackInit(context.Background(), api.StackInitRequest{Name: "dev", Path: worktree})
 	if err == nil || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("expected --yes error, got %v", err)
+	}
+}
+
+func TestProvisioningRejectsInvalidResourceNames(t *testing.T) {
+	worktree := t.TempDir()
+	platform, err := NewPlatform(filepath.Join(worktree, ".angee"), nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	for _, name := range []string{" bad", "Bad", "bad/name", "bad.name"} {
+		_, err := platform.WorkspaceInit(context.Background(), api.WorkspaceInitRequest{Name: name, Yes: true})
+		if err == nil {
+			t.Fatalf("expected invalid name error for %q", name)
+		}
 	}
 }
 
@@ -262,6 +277,9 @@ func TestWorkspaceInitRendersTemplateRegistersAndResolvesState(t *testing.T) {
 	if workspaceCfg.Sources["app"].Ref != "override-ref" {
 		t.Fatalf("source ref = %q", workspaceCfg.Sources["app"].Ref)
 	}
+	if _, err := os.Stat(filepath.Join(rootPath, "workspaces", "feat-x", "code")); err != nil {
+		t.Fatalf("workspace source not materialized: %v", err)
+	}
 
 	rootCfg, err := config.Load(filepath.Join(rootPath, "angee.yaml"))
 	if err != nil {
@@ -337,6 +355,20 @@ func TestWorkspaceUpdateUsesCopierAndPreservesState(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstToken := secrets["workspaces/feat-y/token"].Value
+	ports, err := store.LoadPortLeases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ports["workspaces/feat-y/old-port"] = state.PortLease{Name: "workspaces/feat-y/old-port", Port: 12353, UpdatedAt: time.Now().UTC()}
+	if err := store.SavePortLeases(ports); err != nil {
+		t.Fatal(err)
+	}
+	secrets["workspaces/feat-y/old-secret"] = state.Secret{Name: "workspaces/feat-y/old-secret", Value: "old", UpdatedAt: time.Now().UTC()}
+	if err := store.SaveSecrets(secrets); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeBackend{}
+	platform.Backend = fake
 
 	updatedManifest := `version: "1"
 kind: workspace
@@ -354,7 +386,8 @@ port_leases:
   web: { default: 0 }
 services:
   web:
-    runtime: local
+    runtime: docker
+    image: nginx:updated
     source: app
     cwd: code-updated
     ports:
@@ -363,8 +396,11 @@ services:
 	if err := os.WriteFile(filepath.Join(templateDir, "template", "workspace.yaml.jinja"), []byte(updatedManifest), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := platform.WorkspaceUpdate(context.Background(), api.WorkspaceUpdateRequest{Root: rootPath, Name: "feat-y", Yes: true}); err != nil {
+	if _, err := platform.WorkspaceUpdate(context.Background(), api.WorkspaceUpdateRequest{Root: rootPath, Name: "feat-y", Restart: true, Yes: true}); err != nil {
 		t.Fatalf("WorkspaceUpdate() error: %v", err)
+	}
+	if !fake.applied {
+		t.Fatal("expected restart to apply backend")
 	}
 
 	workspaceCfg, err := config.Load(filepath.Join(rootPath, "workspaces", "feat-y", "workspace.yaml"))
@@ -383,6 +419,206 @@ services:
 	}
 	if len(secrets["workspaces/feat-y/added"].Value) != 8 {
 		t.Fatalf("added secret length = %d", len(secrets["workspaces/feat-y/added"].Value))
+	}
+	if _, ok := secrets["workspaces/feat-y/old-secret"]; ok {
+		t.Fatal("expected stale workspace secret to be removed")
+	}
+	ports, err = store.LoadPortLeases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ports["workspaces/feat-y/old-port"]; ok {
+		t.Fatal("expected stale workspace port lease to be removed")
+	}
+}
+
+func TestWorkspaceDevMaterializesSourcesAndAppliesDockerServices(t *testing.T) {
+	worktree := t.TempDir()
+	rootPath := filepath.Join(worktree, ".angee")
+	r, err := root.Initialize(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.WriteGitignore(); err != nil {
+		t.Fatal(err)
+	}
+	workspaceDir := filepath.Join(rootPath, "workspaces", "feat-docker")
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	rootManifest := `version: "1"
+kind: stack
+name: workspace-dev-test
+workspaces:
+  items:
+    feat-docker:
+      path: workspaces/feat-docker
+`
+	if err := os.WriteFile(filepath.Join(rootPath, "angee.yaml"), []byte(rootManifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceManifest := `version: "1"
+kind: workspace
+name: feat-docker
+sources:
+  app:
+    kind: local
+    target: code
+port_leases:
+  web: { default: 12354 }
+services:
+  web:
+    runtime: docker
+    source: app
+    image: nginx
+    ports:
+      - { name: web, target: "80" }
+`
+	if err := os.WriteFile(filepath.Join(workspaceDir, "workspace.yaml"), []byte(workspaceManifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	platform, err := NewPlatform(rootPath, nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	fake := &fakeBackend{}
+	platform.Backend = fake
+
+	resp, err := platform.WorkspaceDev(context.Background(), api.WorkspaceDevRequest{Name: "feat-docker", Root: rootPath})
+	if err != nil {
+		t.Fatalf("WorkspaceDev() error: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q", resp.Status)
+	}
+	if !fake.applied {
+		t.Fatal("expected backend Apply to be called")
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, "code")); err != nil {
+		t.Fatalf("workspace source not materialized: %v", err)
+	}
+	compose, err := os.ReadFile(filepath.Join(rootPath, "docker-compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compose), "workspace-feat-docker-web:") {
+		t.Fatalf("compose missing workspace service:\n%s", compose)
+	}
+	if !strings.Contains(string(compose), "12354:80") {
+		t.Fatalf("compose missing leased port:\n%s", compose)
+	}
+}
+
+func TestWorkspaceDevStartsLocalServices(t *testing.T) {
+	worktree := t.TempDir()
+	rootPath := filepath.Join(worktree, ".angee")
+	r, err := root.Initialize(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.WriteGitignore(); err != nil {
+		t.Fatal(err)
+	}
+	workspaceDir := filepath.Join(rootPath, "workspaces", "feat-local")
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	rootManifest := `version: "1"
+kind: stack
+name: workspace-local-test
+workspaces:
+  items:
+    feat-local:
+      path: workspaces/feat-local
+`
+	if err := os.WriteFile(filepath.Join(rootPath, "angee.yaml"), []byte(rootManifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceManifest := `version: "1"
+kind: workspace
+name: feat-local
+sources:
+  app:
+    kind: local
+    target: code
+secrets:
+  token: { default: local-secret }
+port_leases:
+  web: { default: 12355, export_env: APP_PORT }
+services:
+  web:
+    runtime: local
+    source: app
+    cwd: code
+    command: ["/bin/sh", "-c", "printf '%s:%s' \"$APP_PORT\" \"$TOKEN\" > marker && sleep 60"]
+    env:
+      TOKEN: "${secret:token}"
+`
+	if err := os.WriteFile(filepath.Join(workspaceDir, "workspace.yaml"), []byte(workspaceManifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	platform, err := NewPlatform(rootPath, nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	fake := &fakeBackend{}
+	platform.Backend = fake
+	defer func() { _ = platform.stopWorkspaceLocalServices("feat-local") }()
+
+	resp, err := platform.WorkspaceDev(context.Background(), api.WorkspaceDevRequest{Name: "feat-local", Root: rootPath})
+	if err != nil {
+		t.Fatalf("WorkspaceDev() error: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q", resp.Status)
+	}
+	if fake.applied {
+		t.Fatal("did not expect Docker backend apply for local-only workspace")
+	}
+	marker := filepath.Join(workspaceDir, "code", "marker")
+	data := waitReadFile(t, marker)
+	if string(data) != "12355:local-secret" {
+		t.Fatalf("marker = %q", data)
+	}
+	recordPath := filepath.Join(rootPath, "state", "runs", "workspace-feat-local-web.json")
+	info, err := os.Stat(recordPath)
+	if err != nil {
+		t.Fatalf("local run record missing: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("local run record mode = %v", info.Mode().Perm())
+	}
+	record, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(record), "local-secret") {
+		t.Fatalf("local run record leaked secret: %s", record)
+	}
+
+	resp, err = platform.WorkspaceDev(context.Background(), api.WorkspaceDevRequest{Name: "feat-local", Root: rootPath})
+	if err != nil {
+		t.Fatalf("second WorkspaceDev() error: %v", err)
+	}
+	if resp.Message != "Prepared workspace feat-local" {
+		t.Fatalf("second message = %q", resp.Message)
+	}
+	withoutServices := `version: "1"
+kind: workspace
+name: feat-local
+sources:
+  app:
+    kind: local
+    target: code
+`
+	if err := os.WriteFile(filepath.Join(workspaceDir, "workspace.yaml"), []byte(withoutServices), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.WorkspaceDev(context.Background(), api.WorkspaceDevRequest{Name: "feat-local", Root: rootPath}); err != nil {
+		t.Fatalf("WorkspaceDev() after removing services error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, "state", "runs", "workspace-feat-local-web.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected stale local run record to be removed, got %v", err)
 	}
 }
 
@@ -424,6 +660,9 @@ func TestAgentInitRendersTemplateRegistersAndResolvesState(t *testing.T) {
 	}
 	if agentCfg.Sources["app"].Ref != "override-ref" {
 		t.Fatalf("source ref = %q", agentCfg.Sources["app"].Ref)
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, "agents", "devbot", "workspace", "code")); err != nil {
+		t.Fatalf("agent source not materialized: %v", err)
 	}
 
 	rootCfg, err := config.Load(filepath.Join(rootPath, "angee.yaml"))
@@ -545,6 +784,112 @@ services:
 	}
 	if len(secrets["added"].Value) != 8 {
 		t.Fatalf("added secret length = %d", len(secrets["added"].Value))
+	}
+}
+
+func TestAgentDestroyStopsUnregistersAndRemovesDirectory(t *testing.T) {
+	if _, err := exec.LookPath("copier"); err != nil {
+		t.Skip("copier executable not available")
+	}
+	worktree := t.TempDir()
+	templateDir := writeAgentTemplate(t)
+	rootPath := filepath.Join(worktree, ".angee")
+	initAgentStackManifest(t, rootPath, templateDir)
+	platform, err := NewPlatform(rootPath, nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	if _, err := platform.AgentInit(context.Background(), api.AgentInitRequest{
+		Name:    "destroybot",
+		Root:    rootPath,
+		Secrets: map[string]string{"api-key": "destroy-secret"},
+		Yes:     true,
+	}); err != nil {
+		t.Fatalf("AgentInit() error: %v", err)
+	}
+	fake := &fakeBackend{}
+	platform.Backend = fake
+
+	resp, err := platform.AgentDestroy(context.Background(), api.AgentActionRequest{Name: "destroybot", Root: rootPath})
+	if err != nil {
+		t.Fatalf("AgentDestroy() error: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q", resp.Status)
+	}
+	if len(fake.stopped) != 1 || fake.stopped[0] != "agent-destroybot" {
+		t.Fatalf("stopped services = %#v", fake.stopped)
+	}
+	rootCfg, err := config.Load(filepath.Join(rootPath, "angee.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rootCfg.Agents.Items["destroybot"]; ok {
+		t.Fatal("destroyed agent is still registered")
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, "agents", "destroybot")); !os.IsNotExist(err) {
+		t.Fatalf("expected agent directory to be removed, got %v", err)
+	}
+}
+
+func TestAgentStartMaterializesSourcesAndStopValidatesAgent(t *testing.T) {
+	if _, err := exec.LookPath("copier"); err != nil {
+		t.Skip("copier executable not available")
+	}
+	worktree := t.TempDir()
+	templateDir := writeAgentTemplate(t)
+	rootPath := filepath.Join(worktree, ".angee")
+	initAgentStackManifest(t, rootPath, templateDir)
+	platform, err := NewPlatform(rootPath, nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	if _, err := platform.AgentInit(context.Background(), api.AgentInitRequest{
+		Name:    "startbot",
+		Root:    rootPath,
+		Secrets: map[string]string{"api-key": "start-secret"},
+		Yes:     true,
+	}); err != nil {
+		t.Fatalf("AgentInit() error: %v", err)
+	}
+	codeDir := filepath.Join(rootPath, "agents", "startbot", "workspace", "code")
+	if err := os.RemoveAll(codeDir); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeBackend{}
+	platform.Backend = fake
+
+	if _, err := platform.AgentStart(context.Background(), "startbot"); err != nil {
+		t.Fatalf("AgentStart() error: %v", err)
+	}
+	if !fake.applied {
+		t.Fatal("expected backend Apply to be called")
+	}
+	if _, err := os.Stat(codeDir); err != nil {
+		t.Fatalf("agent source not materialized on start: %v", err)
+	}
+	agentEnv, err := os.ReadFile(filepath.Join(rootPath, "agents", "startbot", ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agentEnv), "API_KEY=start-secret") {
+		t.Fatalf("agent .env missing secret: %s", agentEnv)
+	}
+	compose, err := os.ReadFile(filepath.Join(rootPath, "docker-compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compose), "agent-startbot:") {
+		t.Fatalf("compose missing agent service:\n%s", compose)
+	}
+	if err := platform.AgentStop(context.Background(), "startbot"); err != nil {
+		t.Fatalf("AgentStop() error: %v", err)
+	}
+	if len(fake.stopped) != 1 || fake.stopped[0] != "agent-startbot" {
+		t.Fatalf("stopped services = %#v", fake.stopped)
+	}
+	if err := platform.AgentStop(context.Background(), "missing"); err == nil {
+		t.Fatal("expected missing agent stop error")
 	}
 }
 
@@ -768,8 +1113,25 @@ func initGitWorktree(t *testing.T, worktree string) {
 	runGit("commit", "-m", "initial")
 }
 
+func waitReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data
+		}
+		lastErr = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s: %v", path, lastErr)
+	return nil
+}
+
 type fakeBackend struct {
 	applied bool
+	stopped []string
 }
 
 func (f *fakeBackend) Diff(ctx context.Context, composeFile string) (*runtime.ChangeSet, error) {
@@ -791,6 +1153,9 @@ func (f *fakeBackend) Logs(ctx context.Context, service string, opts runtime.Log
 
 func (f *fakeBackend) Scale(ctx context.Context, service string, replicas int) error { return nil }
 
-func (f *fakeBackend) Stop(ctx context.Context, services ...string) error { return nil }
+func (f *fakeBackend) Stop(ctx context.Context, services ...string) error {
+	f.stopped = append(f.stopped, services...)
+	return nil
+}
 
 func (f *fakeBackend) Down(ctx context.Context) error { return nil }

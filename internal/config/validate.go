@@ -16,17 +16,13 @@ var validLifecycles = map[string]bool{
 }
 
 var validSourceKinds = map[string]bool{
-	"git":          true,
-	"github":       true,
-	"local":        true,
-	"archive":      true,
-	"template":     true,
-	"volume":       true,
-	"url":          true,
-	"s3":           true,
-	"gcs":          true,
-	"azure-blob":   true,
-	"google-drive": true,
+	"git":      true,
+	"github":   true,
+	"local":    true,
+	"archive":  true,
+	"template": true,
+	"volume":   true,
+	"url":      true,
 }
 
 var validMCPTransports = map[string]bool{

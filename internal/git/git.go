@@ -229,9 +229,9 @@ func (r *Repo) ResetHardCtx(ctx context.Context, ref string) error {
 // Clone clones a git repository into dest. If branch is non-empty, only that
 // branch is cloned (--branch). The dest directory must not already exist.
 //
-// `protocol.allow=https,file` restricts which transports git will follow,
-// limiting drive-by exposure if `url` ever flows from an untrusted source.
-// `--config` here applies only to this single invocation.
+// Per-protocol config restricts which transports git will follow, limiting
+// drive-by exposure if `url` ever flows from an untrusted source. These
+// `--config` values apply only to this single invocation.
 func Clone(url, dest, branch string) error {
 	return CloneCtx(context.Background(), url, dest, branch)
 }
@@ -239,7 +239,11 @@ func Clone(url, dest, branch string) error {
 // CloneCtx is Clone with a context for cancellation.
 func CloneCtx(ctx context.Context, url, dest, branch string) error {
 	args := []string{
-		"-c", "protocol.allow=https:always,file:user,http:user,git:never,ssh:user",
+		"-c", "protocol.https.allow=always",
+		"-c", "protocol.file.allow=user",
+		"-c", "protocol.http.allow=user",
+		"-c", "protocol.git.allow=never",
+		"-c", "protocol.ssh.allow=user",
 		"clone",
 	}
 	if branch != "" {
@@ -254,6 +258,31 @@ func CloneCtx(ctx context.Context, url, dest, branch string) error {
 		return fmt.Errorf("git clone %s: %w: %s", url, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+// SyncCtx fetches updates for an existing clone, optionally checks out ref,
+// and fast-forwards the current branch when attached to one.
+func (r *Repo) SyncCtx(ctx context.Context, ref string) error {
+	if _, err := r.run(ctx, "fetch", "--all", "--tags", "--prune"); err != nil {
+		return err
+	}
+	if ref != "" && ref != "current" {
+		if err := validateRef(ref); err != nil {
+			return err
+		}
+		if _, err := r.run(ctx, "checkout", ref); err != nil {
+			return err
+		}
+	}
+	branch, err := r.run(ctx, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return err
+	}
+	if branch == "HEAD" {
+		return nil
+	}
+	_, err = r.run(ctx, "pull", "--ff-only")
+	return err
 }
 
 // IsRepo returns true if the path is a git repository.
