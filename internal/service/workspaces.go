@@ -108,7 +108,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	ref := api.WorkspaceRef{Name: name, Path: workspacePath, Template: templateRef, TTL: workspace.TTL, TTLExpiresAt: workspace.TTLExpiresAt}
+	ref := workspaceRef(name, workspacePath, workspace)
 	if req.Start {
 		if err := p.WorkspaceStart(ctx, name); err != nil {
 			return ref, err
@@ -150,7 +150,7 @@ func (p *Platform) WorkspaceList(ctx context.Context) ([]api.WorkspaceRef, error
 	refs := make([]api.WorkspaceRef, 0, len(stack.Workspaces))
 	for _, name := range sortedKeys(stack.Workspaces) {
 		workspace := stack.Workspaces[name]
-		refs = append(refs, api.WorkspaceRef{Name: name, Path: filepath.Join(p.root, "workspaces", name), Template: workspace.Template, TTL: workspace.TTL, TTLExpiresAt: workspace.TTLExpiresAt})
+		refs = append(refs, workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace))
 	}
 	return refs, nil
 }
@@ -167,7 +167,7 @@ func (p *Platform) WorkspaceGet(ctx context.Context, name string) (api.Workspace
 	if !ok {
 		return api.WorkspaceRef{}, fmt.Errorf("workspace %q is not declared", name)
 	}
-	return api.WorkspaceRef{Name: name, Path: filepath.Join(p.root, "workspaces", name), Template: workspace.Template, TTL: workspace.TTL, TTLExpiresAt: workspace.TTLExpiresAt}, nil
+	return workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace), nil
 }
 
 func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool) error {
@@ -225,7 +225,7 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, inputs map[
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	return api.WorkspaceRef{Name: name, Path: filepath.Join(p.root, "workspaces", name), Template: workspace.Template, TTL: workspace.TTL, TTLExpiresAt: workspace.TTLExpiresAt}, nil
+	return workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace), nil
 }
 
 func (p *Platform) WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error) {
@@ -279,11 +279,10 @@ func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
 	}
-	workspacePath := filepath.Join(p.root, "workspaces", name)
 	if workspace.Resolved.ChainRoot == "" {
-		return runWorkspaceHooks(ctx, workspacePath, name, hookKindPostStart, workspace.Resolved.Allocations)
+		return nil
 	}
-	innerRoot := filepath.Join(workspacePath, workspace.Resolved.ChainRoot)
+	innerRoot := filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot)
 	if _, err := os.Stat(manifest.Path(innerRoot)); err != nil {
 		return err
 	}
@@ -295,10 +294,7 @@ func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := startInnerStack(ctx, inner, innerStack, workspace.Resolved.Lifecycle); err != nil {
-		return err
-	}
-	return runWorkspaceHooks(ctx, workspacePath, name, hookKindPostStart, workspace.Resolved.Allocations)
+	return startInnerStack(ctx, inner, innerStack, workspace.Resolved.Lifecycle)
 }
 
 func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
@@ -310,14 +306,10 @@ func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
 	}
-	workspacePath := filepath.Join(p.root, "workspaces", name)
-	if err := runWorkspaceHooks(ctx, workspacePath, name, hookKindPreStop, workspace.Resolved.Allocations); err != nil {
-		return err
-	}
 	if workspace.Resolved.ChainRoot == "" {
 		return nil
 	}
-	inner, err := New(filepath.Join(workspacePath, workspace.Resolved.ChainRoot))
+	inner, err := New(filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot))
 	if err != nil {
 		return err
 	}
@@ -362,6 +354,19 @@ func materializePersistPaths(workspacePath string, persist map[string]manifest.P
 		}
 	}
 	return nil
+}
+
+func workspaceRef(name, path string, ws manifest.Workspace) api.WorkspaceRef {
+	return api.WorkspaceRef{
+		Name:         name,
+		Path:         path,
+		Template:     ws.Template,
+		ChainRoot:    ws.Resolved.ChainRoot,
+		Lifecycle:    ws.Resolved.Lifecycle,
+		Allocations:  copyIntMap(ws.Resolved.Allocations),
+		TTL:          ws.TTL,
+		TTLExpiresAt: ws.TTLExpiresAt,
+	}
 }
 
 func copyIntMap(in map[string]int) map[string]int {

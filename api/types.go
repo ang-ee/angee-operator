@@ -56,11 +56,14 @@ type JobState struct {
 }
 
 type WorkspaceRef struct {
-	Name         string     `json:"name"`
-	Path         string     `json:"path"`
-	Template     string     `json:"template"`
-	TTL          string     `json:"ttl,omitempty"`
-	TTLExpiresAt *time.Time `json:"ttl_expires_at,omitempty"`
+	Name         string         `json:"name"`
+	Path         string         `json:"path"`
+	Template     string         `json:"template"`
+	ChainRoot    string         `json:"chain_root,omitempty"`
+	Lifecycle    string         `json:"lifecycle,omitempty"`
+	Allocations  map[string]int `json:"allocations,omitempty"`
+	TTL          string         `json:"ttl,omitempty"`
+	TTLExpiresAt *time.Time     `json:"ttl_expires_at,omitempty"`
 }
 
 type ServiceInitRequest struct {
