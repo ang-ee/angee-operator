@@ -100,6 +100,45 @@ func materialisedWorktrees(workspacePath string) ([]string, error) {
 	return repos, nil
 }
 
+func ensureWorkspaceOpenLocal(operatorURL *string) error {
+	if operatorURL != nil && *operatorURL != "" {
+		return fmt.Errorf("workspace open requires a local ANGEE_ROOT; remote operator mode via --operator/ANGEE_OPERATOR_URL is not supported")
+	}
+	return nil
+}
+
+func startDetachedCommand(c []string) error {
+	proc := exec.Command(c[0], c[1:]...)
+	if err := proc.Start(); err != nil {
+		return err
+	}
+	_ = proc.Process.Release()
+	return nil
+}
+
+func launchOpenCommands(
+	cmds [][]string,
+	stderr io.Writer,
+	lookPath func(string) (string, error),
+	start func([]string) error,
+) error {
+	launched := 0
+	for _, c := range cmds {
+		if _, err := lookPath(c[0]); err != nil {
+			fmt.Fprintf(stderr, "binary %q not found on PATH; skip: %s\n", c[0], strings.Join(c, " "))
+			continue
+		}
+		if err := start(c); err != nil {
+			return fmt.Errorf("launch %s: %w", strings.Join(c, " "), err)
+		}
+		launched++
+	}
+	if launched == 0 {
+		return fmt.Errorf("no editor command launched; no requested editor binaries were found on PATH")
+	}
+	return nil
+}
+
 func workspaceOpenCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var editor string
 	var printOnly bool
@@ -119,6 +158,9 @@ func workspaceOpenCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 			stderr := cmd.ErrOrStderr()
 			// Validate --with up-front so a typo doesn't trigger a platform RPC.
 			if err := validateEditorChoice(editor); err != nil {
+				return err
+			}
+			if err := ensureWorkspaceOpenLocal(operatorURL); err != nil {
 				return err
 			}
 			platform, err := localPlatform(root, operatorURL)
@@ -154,21 +196,7 @@ func workspaceOpenCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 				return nil
 			}
 
-			for _, c := range cmds {
-				if _, err := exec.LookPath(c[0]); err != nil {
-					fmt.Fprintf(stderr, "binary %q not found on PATH; skip: %s\n", c[0], strings.Join(c, " "))
-					continue
-				}
-				// Detach: we don't Wait, and we explicitly Release so the editor
-				// survives `angee` exiting and isn't subject to a Ctrl-C race
-				// on the root signal context.
-				proc := exec.Command(c[0], c[1:]...)
-				if err := proc.Start(); err != nil {
-					return fmt.Errorf("launch %s: %w", strings.Join(c, " "), err)
-				}
-				_ = proc.Process.Release()
-			}
-			return nil
+			return launchOpenCommands(cmds, stderr, exec.LookPath, startDetachedCommand)
 		},
 	}
 	cmd.Flags().StringVar(&editor, "with", "vscode", "editor: vscode | idea | gh-desktop")

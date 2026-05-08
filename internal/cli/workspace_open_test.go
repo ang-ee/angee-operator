@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -154,6 +156,74 @@ func TestValidateEditorChoice(t *testing.T) {
 		if (err != nil) != tc.wantErr {
 			t.Errorf("validateEditorChoice(%q) err=%v, wantErr=%v", tc.in, err, tc.wantErr)
 		}
+	}
+}
+
+func TestEnsureWorkspaceOpenLocalRejectsRemoteOperator(t *testing.T) {
+	operatorURL := "http://127.0.0.1:8080"
+	err := ensureWorkspaceOpenLocal(&operatorURL)
+	if err == nil {
+		t.Fatal("expected remote operator mode error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--operator/ANGEE_OPERATOR_URL") {
+		t.Fatalf("error %q does not mention remote operator configuration", err)
+	}
+}
+
+func TestLaunchOpenCommandsFailsWhenNoBinaryLaunched(t *testing.T) {
+	var stderr bytes.Buffer
+	startCalled := false
+	err := launchOpenCommands(
+		[][]string{{"missing-editor", "/ws/demo"}},
+		&stderr,
+		func(string) (string, error) { return "", errors.New("not found") },
+		func([]string) error {
+			startCalled = true
+			return nil
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error when all editor binaries are missing, got nil")
+	}
+	if startCalled {
+		t.Fatal("start should not be called for missing binaries")
+	}
+	if !strings.Contains(err.Error(), "no editor command launched") {
+		t.Fatalf("error %q does not mention missing launch", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, `binary "missing-editor" not found`) {
+		t.Fatalf("stderr = %q, want missing binary message", got)
+	}
+}
+
+func TestLaunchOpenCommandsSucceedsWhenAtLeastOneCommandLaunches(t *testing.T) {
+	var stderr bytes.Buffer
+	var launched []string
+	err := launchOpenCommands(
+		[][]string{
+			{"missing-editor", "/ws/demo"},
+			{"real-editor", "/ws/demo"},
+		},
+		&stderr,
+		func(name string) (string, error) {
+			if name == "missing-editor" {
+				return "", errors.New("not found")
+			}
+			return "/bin/" + name, nil
+		},
+		func(c []string) error {
+			launched = append(launched, c[0])
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("launchOpenCommands: %v", err)
+	}
+	if !reflect.DeepEqual(launched, []string{"real-editor"}) {
+		t.Fatalf("launched = %v, want [real-editor]", launched)
+	}
+	if got := stderr.String(); !strings.Contains(got, `binary "missing-editor" not found`) {
+		t.Fatalf("stderr = %q, want missing binary message", got)
 	}
 }
 
