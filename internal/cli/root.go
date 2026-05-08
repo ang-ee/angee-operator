@@ -868,6 +868,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspaceLogsCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceGitCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspacePushCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceOpenCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "start"))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "stop"))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "restart"))
