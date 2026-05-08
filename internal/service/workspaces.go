@@ -209,6 +209,10 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, inputs map[
 }
 
 func (p *Platform) WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error) {
+	return p.WorkspaceLogsLimited(ctx, name, follow, 0)
+}
+
+func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, follow bool, maxBytes int) (<-chan string, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -226,7 +230,7 @@ func (p *Platform) WorkspaceLogs(ctx context.Context, name string, follow bool) 
 	if err != nil {
 		return nil, err
 	}
-	return inner.StackLogs(ctx, nil, follow)
+	return inner.StackLogsLimited(ctx, nil, follow, maxBytes)
 }
 
 func releaseWorkspacePorts(stack *manifest.Stack, workspaceName string) {

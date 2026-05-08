@@ -105,7 +105,15 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 		args = append(args, "--follow")
 	}
 	args = append(args, req.Services...)
-	out, err := b.run(ctx, req.Root, args...)
+	var (
+		out []byte
+		err error
+	)
+	if req.MaxBytes > 0 {
+		out, err = b.runLimited(ctx, req.Root, req.MaxBytes, args...)
+	} else {
+		out, err = b.run(ctx, req.Root, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +138,23 @@ func (b Backend) run(ctx context.Context, root string, args ...string) ([]byte, 
 		b.Runner = ExecRunner{}
 	}
 	return b.Runner.Run(ctx, root, "docker", args...)
+}
+
+func (b Backend) runLimited(ctx context.Context, root string, maxBytes int, args ...string) ([]byte, error) {
+	if b.Runner != nil {
+		if !isExecRunner(b.Runner) {
+			return b.run(ctx, root, args...)
+		}
+	}
+	buf := &limitedBuffer{remaining: maxBytes}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = root
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+	if err := cmd.Run(); err != nil {
+		return buf.Bytes(), fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(buf.Bytes())))
+	}
+	return buf.Bytes(), nil
 }
 
 func (b Backend) runForeground(ctx context.Context, root string, stdout io.Writer, stderr io.Writer, args ...string) error {
@@ -180,3 +205,44 @@ func parsePS(data []byte) []runtime.ServiceStatus {
 }
 
 var ErrNoServices = errors.New("no container services selected")
+
+func isExecRunner(r Runner) bool {
+	switch r.(type) {
+	case ExecRunner, *ExecRunner:
+		return true
+	default:
+		return false
+	}
+}
+
+type limitedBuffer struct {
+	data      []byte
+	remaining int
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	accepted := len(p)
+	if b.remaining <= 0 {
+		b.truncated = true
+		return accepted, nil
+	}
+	if len(p) > b.remaining {
+		b.data = append(b.data, p[:b.remaining]...)
+		b.remaining = 0
+		b.truncated = true
+		return accepted, nil
+	}
+	b.data = append(b.data, p...)
+	b.remaining -= len(p)
+	return accepted, nil
+}
+
+func (b *limitedBuffer) Bytes() []byte {
+	if !b.truncated {
+		return b.data
+	}
+	out := append([]byte{}, b.data...)
+	out = append(out, []byte("\n[truncated]\n")...)
+	return out
+}

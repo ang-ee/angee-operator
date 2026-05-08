@@ -2,6 +2,8 @@ package operator
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fyltr/angee/api"
@@ -26,9 +29,10 @@ type Config struct {
 }
 
 type Server struct {
-	config   Config
-	platform *service.Platform
-	server   *http.Server
+	config         Config
+	platform       *service.Platform
+	graphqlHandler http.Handler
+	server         *http.Server
 }
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -78,8 +82,15 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{config: config, platform: platform}
+	graphqlHandler, err := newGraphQLHandler(s)
+	if err != nil {
+		return nil, err
+	}
+	s.graphqlHandler = graphqlHandler
+	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.Handle("POST /graphql", s.auth(cop.Handler(s.graphqlHandler)))
 	mux.Handle("GET /stack/status", s.auth(http.HandlerFunc(s.stackStatus)))
 	mux.Handle("POST /stack/init", s.auth(http.HandlerFunc(s.stackInit)))
 	mux.Handle("POST /stack/update", s.auth(http.HandlerFunc(s.stackUpdate)))
@@ -559,10 +570,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"name":  "angee-operator",
-		"tools": []string{"stack.status", "stack.up", "stack.down", "services.create", "workspaces.create", "sources.fetch"},
-	})
+	writeJSON(w, http.StatusOK, mcpDescriptor())
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
@@ -571,7 +579,10 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer "+s.config.Token {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		got := sha256.Sum256([]byte(token))
+		want := sha256.Sum256([]byte(s.config.Token))
+		if !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}

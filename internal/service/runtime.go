@@ -177,6 +177,10 @@ func (p *Platform) ServiceRestart(ctx context.Context, names []string) error {
 }
 
 func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error) {
+	return p.StackLogsLimited(ctx, services, follow, 0)
+}
+
+func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -204,14 +208,14 @@ func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool
 	}
 	var channels []<-chan string
 	if len(compiled.Compose.Services) > 0 && len(container) > 0 {
-		ch, err := p.composeBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack)})
+		ch, err := p.composeBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
 		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, ch)
 	}
 	if len(compiled.ProcessCompose.Processes) > 0 && len(local) > 0 {
-		ch, err := p.procBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow})
+		ch, err := p.procBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, MaxBytes: maxBytes})
 		if err != nil {
 			return nil, err
 		}

@@ -1,6 +1,6 @@
 # Angee
 
-Angee is a self-managed stack orchestration engine for agent-native applications. It compiles one declarative `angee.yaml` into runtime files, resolves secrets, manages services and jobs, provisions workspaces, and exposes the same control plane through the CLI and HTTP operator.
+Angee is a self-managed stack orchestration engine for agent-native applications. It compiles one declarative `angee.yaml` into runtime files, resolves secrets, manages services and jobs, provisions workspaces, and exposes the same control plane through the CLI plus REST and GraphQL operator APIs.
 
 This branch is the v1 prototype. The old v0 line is preserved on `main-v0`; the prototype history is preserved on `prototype-v1`.
 
@@ -59,6 +59,9 @@ angee workspace git <name>
 # Operator
 angee operator --root .angee --bind 127.0.0.1 --port 9000
 angee --operator http://127.0.0.1:9000 status
+curl -s http://127.0.0.1:9000/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"{ stackStatus { name services { name runtime status } } }"}'
 ```
 
 ## Architecture
@@ -104,3 +107,4 @@ Useful references:
 - `docs/OVERVIEW-v2.md`
 - `docs/PLAN.md`
 - `docs/DEFERRED.md`
+- `docs/API-GAPS.md`

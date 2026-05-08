@@ -17,6 +17,7 @@ type LogsRequest struct {
 	Services []string
 	Follow   bool
 	EnvFile  string
+	MaxBytes int
 }
 
 type ServiceStatus struct {
