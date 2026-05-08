@@ -60,6 +60,7 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(jobCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(sourceCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(workspaceCommand(stdout, &root, &operatorURL, &jsonOutput))
+	cmd.AddCommand(doctorCommand(stdout, &root, &jsonOutput))
 	cmd.AddCommand(internalCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(operatorCommand(stdout, stderr))
 	return cmd

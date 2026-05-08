@@ -21,16 +21,18 @@ make init
 ## Quick Start
 
 ```sh
+angee doctor
 angee init --dev --yes
 angee dev
 ```
 
-`angee init --dev` renders the local dev stack template into `.angee/`. `angee dev` prepares declared runtime files, starts container sidecars and local processes, and stays in the foreground.
+`angee doctor` checks local prerequisites, the selected `ANGEE_ROOT`, manifest validity, source paths, ports, git ignore hygiene, and nearby templates. `angee init --dev` renders the local dev stack template into `.angee/`. `angee dev` prepares declared runtime files, starts container sidecars and local processes, and stays in the foreground.
 
 ## Core Commands
 
 ```sh
 # Stack
+angee doctor
 angee init --dev [path]
 angee stack init <template> [path] [--input key=value ...]
 angee stack update
