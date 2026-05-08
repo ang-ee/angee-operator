@@ -16,6 +16,100 @@ import (
 
 type Inputs map[string]string
 
+// PathInputType is the copier.yml input type that opts an input into
+// angee's path resolution: the user supplies a logical path (relative
+// to the destination of the render, or absolute), and angee converts
+// it to ANGEE_ROOT-relative before handing it to the renderer. The
+// stored manifest path is therefore portable across machines.
+const PathInputType = "path"
+
+// ResolvePathInputs walks every `type: path` input declared in the
+// template (either under `_angee.inputs` or as top-level copier.yml
+// questions) and rewrites its value so that the rendered manifest
+// stores a path that works when resolved from ANGEE_ROOT.
+//
+// Resolution rules:
+//   - empty value → unchanged
+//   - absolute path → kept absolute (manifest.ResolvePath passes it through)
+//   - relative path → resolved against destDir (the render destination,
+//     i.e. the target stack root for `angee init` or the workspace
+//     dir for a chained workspace render), then re-expressed relative
+//     to <destDir>/<ANGEE_ROOT> via filepath.Rel — yielding the natural
+//     "../..." escape that ANGEE_ROOT introduces.
+//
+// destDir must be the dir copier renders into (the parent of ANGEE_ROOT).
+// angeeRoot must be the ANGEE_ROOT value as stored in inputs (e.g. ".angee");
+// it can also be an absolute path.
+func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot string) (Inputs, error) {
+	if len(inputs) == 0 {
+		return inputs, nil
+	}
+	cfg, err := readConfig(templatePath)
+	if err != nil {
+		return nil, err
+	}
+	defs := mergeInputDefs(cfg)
+	hasPathInput := false
+	for _, def := range defs {
+		if def.Type == PathInputType {
+			hasPathInput = true
+			break
+		}
+	}
+	if !hasPathInput {
+		return inputs, nil
+	}
+	absDest, err := filepath.Abs(destDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path inputs: abs(%q): %w", destDir, err)
+	}
+	if angeeRoot == "" {
+		angeeRoot = ".angee"
+	}
+	absAngeeRoot := angeeRoot
+	if !filepath.IsAbs(absAngeeRoot) {
+		absAngeeRoot = filepath.Join(absDest, angeeRoot)
+	}
+	out := make(Inputs, len(inputs))
+	for key, value := range inputs {
+		out[key] = value
+	}
+	for name, def := range defs {
+		if def.Type != PathInputType {
+			continue
+		}
+		value := out[name]
+		if value == "" {
+			continue
+		}
+		if filepath.IsAbs(value) {
+			continue
+		}
+		resolved := filepath.Join(absDest, value)
+		rel, err := filepath.Rel(absAngeeRoot, resolved)
+		if err != nil {
+			return nil, fmt.Errorf("resolve path input %q: %w", name, err)
+		}
+		out[name] = rel
+	}
+	return out, nil
+}
+
+// mergeInputDefs returns the union of top-level copier.yml questions
+// and `_angee.inputs` definitions. Top-level questions take precedence
+// when the same name is declared in both (matching the precedence
+// inside mergeInputs at render time).
+func mergeInputDefs(cfg config) map[string]Input {
+	defs := map[string]Input{}
+	for name, def := range cfg.Angee.Inputs {
+		defs[name] = def
+	}
+	for name, def := range cfg.Questions {
+		defs[name] = def
+	}
+	return defs
+}
+
 type CopyRequest struct {
 	Template string
 	Dest     string

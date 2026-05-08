@@ -57,7 +57,11 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		return StackInitResult{}, err
 	}
-	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: templatePath, Dest: targetPath, Inputs: copierx.Inputs(inputs)}); err != nil {
+	resolvedInputs, err := copierx.ResolvePathInputs(templatePath, mergedInputs, targetPath, mergedInputs["ANGEE_ROOT"])
+	if err != nil {
+		return StackInitResult{}, err
+	}
+	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: templatePath, Dest: targetPath, Inputs: resolvedInputs}); err != nil {
 		return StackInitResult{}, err
 	}
 	if _, err := os.Stat(manifest.Path(preparedRoot)); err != nil {

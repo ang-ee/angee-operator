@@ -53,7 +53,11 @@ func (b Backend) Build(context.Context, runtime.Target) error {
 
 func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 	args := b.baseArgs(target.Root)
-	args = append(args, "up", "-d")
+	// `-d` daemonises; `--tui=false` prevents the supervisor from trying
+	// to attach a TUI on a process that has no controlling terminal
+	// (which is the normal case for `angee workspace start` running
+	// from a non-interactive shell or under another supervisor).
+	args = append(args, "up", "-d", "--tui=false")
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err

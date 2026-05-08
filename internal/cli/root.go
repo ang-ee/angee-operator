@@ -689,7 +689,7 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform platformClient, tem
 
 func validateTemplateInputValue(key string, typ string, value string) error {
 	switch typ {
-	case "", "str", "string":
+	case "", "str", "string", "path":
 		return nil
 	case "int", "integer":
 		if _, err := strconv.Atoi(value); err != nil {

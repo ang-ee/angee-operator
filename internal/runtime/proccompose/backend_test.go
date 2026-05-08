@@ -80,7 +80,7 @@ func TestBackendUpCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := []string{"-f", "/stack/process-compose.yaml", "up", "-d", "web"}
+	want := []string{"-f", "/stack/process-compose.yaml", "up", "-d", "--tui=false", "web"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
 	}

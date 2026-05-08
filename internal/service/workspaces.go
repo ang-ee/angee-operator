@@ -653,7 +653,16 @@ func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath strin
 		if destRoot == "" {
 			return nil, "", fmt.Errorf("chain entry %q requires a root", entry.Template)
 		}
-		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: path, Dest: filepath.Join(workspacePath, destRoot), Inputs: renderInputs}); err != nil {
+		dest := filepath.Join(workspacePath, destRoot)
+		mergedInner, err := copierx.TemplateInputs(path, renderInputs)
+		if err != nil {
+			return nil, "", err
+		}
+		mergedInner, err = copierx.ResolvePathInputs(path, mergedInner, dest, mergedInner["ANGEE_ROOT"])
+		if err != nil {
+			return nil, "", err
+		}
+		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: path, Dest: dest, Inputs: mergedInner}); err != nil {
 			return nil, "", err
 		}
 		chain = append(chain, ref)
@@ -772,16 +781,46 @@ func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (strin
 		filepath.Join(p.root, kindRef),
 		filepath.Join(p.root, ref),
 	}
+	candidates = append(candidates, ancestorTemplatePaths(p.root, kindRef)...)
 	if cwd, err := os.Getwd(); err == nil && cwd != p.root {
 		candidates = append(candidates,
 			filepath.Join(cwd, ".templates", kindRef),
 			filepath.Join(cwd, "templates", kindRef),
 		)
+		candidates = append(candidates, ancestorTemplatePaths(cwd, kindRef)...)
 	}
+	seen := map[string]bool{}
 	for _, candidate := range candidates {
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
 		if _, err := os.Stat(filepath.Join(candidate, "copier.yml")); err == nil {
 			return candidate, kindRef, nil
 		}
 	}
 	return "", "", fmt.Errorf("template %q was not found", ref)
+}
+
+// ancestorTemplatePaths walks up from start (exclusive) and returns
+// "<ancestor>/.templates/<kindRef>" for each ancestor up to the
+// filesystem root, capped at 32 levels of nesting as a safety net.
+//
+// This lets `angee` find templates declared at a monorepo's root from
+// subdirectories — e.g. running from `<repo>/examples/foo/` finds
+// `<repo>/.templates/stacks/dev`. The first existing match wins,
+// preserving the legacy "p.root then cwd" precedence by virtue of the
+// caller-supplied ordering.
+func ancestorTemplatePaths(start, kindRef string) []string {
+	paths := []string{}
+	dir := start
+	for i := 0; i < 32; i++ {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		paths = append(paths, filepath.Join(parent, ".templates", kindRef))
+		dir = parent
+	}
+	return paths
 }
