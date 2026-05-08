@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -66,6 +68,11 @@ func NewServer(config Config) (*Server, error) {
 	if !isLoopback(config.Bind) && config.Token == "" {
 		return nil, errors.New("non-loopback operator binds require --token")
 	}
+	root, err := resolveRoot(config.Root)
+	if err != nil {
+		return nil, err
+	}
+	config.Root = root
 	platform, err := service.New(config.Root)
 	if err != nil {
 		return nil, err
@@ -612,4 +619,18 @@ func isLoopback(bind string) bool {
 		return bind == "localhost"
 	}
 	return ip.IsLoopback()
+}
+
+func resolveRoot(root string) (string, error) {
+	if root == "" {
+		root = "."
+	}
+	if _, err := os.Stat(filepath.Join(root, "angee.yaml")); err == nil {
+		return root, nil
+	}
+	control := filepath.Join(root, ".angee")
+	if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
+		return control, nil
+	}
+	return root, nil
 }

@@ -5,13 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/fyltr/angee/internal/manifest"
+	copier "github.com/fyltr/copier-go"
 	"gopkg.in/yaml.v3"
 )
 
@@ -102,15 +101,44 @@ func ReadMetadata(templatePath string) (Metadata, error) {
 }
 
 func (LocalRenderer) Copy(ctx context.Context, req CopyRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	cfg, err := readConfig(req.Template)
 	if err != nil {
 		return err
 	}
-	return render(ctx, req.Template, req.Dest, cfg, req.Inputs)
+	return copier.Copy(req.Template, req.Dest, copierOptions(cfg, req.Inputs)...)
 }
 
-func (r LocalRenderer) Update(ctx context.Context, req UpdateRequest) error {
-	return r.Copy(ctx, CopyRequest{Template: req.Template, Dest: req.Dest, Inputs: req.Inputs})
+func (LocalRenderer) Update(ctx context.Context, req UpdateRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cfg, err := readConfig(req.Template)
+	if err != nil {
+		return err
+	}
+	return copier.Update(req.Dest, copierOptions(cfg, req.Inputs)...)
+}
+
+func copierOptions(cfg config, inputs Inputs) []copier.Option {
+	return []copier.Option{
+		copier.WithAnswersFile(cfg.AnswersFile),
+		copier.WithData(inputsAsData(inputs)),
+		copier.WithDefaults(true),
+		copier.WithOverwrite(true),
+		copier.WithQuiet(true),
+		copier.WithSkipTasks(true),
+	}
+}
+
+func inputsAsData(inputs Inputs) map[string]any {
+	data := make(map[string]any, len(inputs))
+	for key, value := range inputs {
+		data[key] = value
+	}
+	return data
 }
 
 func TemplateInputs(templatePath string, inputs Inputs) (Inputs, error) {
@@ -178,52 +206,6 @@ func questionsFromRaw(raw map[string]any) map[string]Input {
 	return questions
 }
 
-func render(ctx context.Context, templatePath, dest string, cfg config, inputs Inputs) error {
-	mergedInputs := mergeInputs(cfg, inputs)
-	src := filepath.Join(templatePath, cfg.Subdirectory)
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	if err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		renderedRel := renderString(strings.TrimSuffix(rel, cfg.Suffix), mergedInputs)
-		target := filepath.Join(dest, renderedRel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if strings.HasSuffix(path, cfg.Suffix) {
-			data = []byte(renderString(string(data), mergedInputs))
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
-	}); err != nil {
-		return err
-	}
-	answers, err := yaml.Marshal(map[string]string(mergedInputs))
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dest, cfg.AnswersFile), answers, 0o644)
-}
-
 func mergeInputs(cfg config, inputs Inputs) Inputs {
 	mergedInputs := Inputs{}
 	for key, value := range cfg.Defaults {
@@ -277,34 +259,6 @@ func defaultsFromRaw(raw map[string]any) Inputs {
 		defaults[key] = fmt.Sprint(defaultValue)
 	}
 	return defaults
-}
-
-var expressionRE = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
-
-func renderString(input string, values Inputs) string {
-	return expressionRE.ReplaceAllStringFunc(input, func(match string) string {
-		expr := strings.TrimSpace(match[2 : len(match)-2])
-		name, filter, hasFilter := strings.Cut(expr, "|")
-		value := values[strings.TrimSpace(name)]
-		if hasFilter {
-			value = applyFilter(value, strings.TrimSpace(filter))
-		}
-		return value
-	})
-}
-
-func applyFilter(value, filter string) string {
-	if strings.HasPrefix(filter, "replace(") && strings.HasSuffix(filter, ")") {
-		args := strings.TrimSuffix(strings.TrimPrefix(filter, "replace("), ")")
-		from, to, ok := strings.Cut(args, ",")
-		if !ok {
-			return value
-		}
-		from = strings.Trim(strings.TrimSpace(from), "'\"")
-		to = strings.Trim(strings.TrimSpace(to), "'\"")
-		return strings.ReplaceAll(value, from, to)
-	}
-	return value
 }
 
 func ValidateMetadata(path string, wantKind string) (Metadata, error) {

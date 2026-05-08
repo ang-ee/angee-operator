@@ -2,10 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fyltr/angee/api"
 )
 
 func TestVersionFlag(t *testing.T) {
@@ -97,6 +102,65 @@ func TestInitStackTemplateInitializesNamedRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "angee-notes", ".angee", "angee.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected nested .angee manifest err = %v", err)
+	}
+}
+
+func TestOperatorCommandForwardsDaemonFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"operator", "--bind", "127.0.0.1", "--port", "19000", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Run the Angee operator") || !strings.Contains(output, "--bind") {
+		t.Fatalf("operator help output did not come from daemon parser:\n%s", output)
+	}
+}
+
+func TestStatusUsesOperatorURLFlag(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodGet || r.URL.Path != "/stack/status" {
+			t.Fatalf("request = %s %s, want GET /stack/status", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(api.StackStatusResponse{Name: "remote", Root: "/remote"})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--operator", server.URL, "--json", "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !called {
+		t.Fatal("operator endpoint was not called")
+	}
+	if got := stdout.String(); !strings.Contains(got, `"name": "remote"`) || !strings.Contains(got, `"root": "/remote"`) {
+		t.Fatalf("status output = %s", got)
+	}
+}
+
+func TestStatusUsesOperatorURLEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/stack/status" {
+			t.Fatalf("request = %s %s, want GET /stack/status", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(api.StackStatusResponse{Name: "env-remote", Root: "/env"})
+	}))
+	defer server.Close()
+	t.Setenv("ANGEE_OPERATOR_URL", server.URL)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--json", "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"name": "env-remote"`) {
+		t.Fatalf("status output = %s", got)
 	}
 }
 

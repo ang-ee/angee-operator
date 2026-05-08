@@ -626,7 +626,7 @@ func stackInitError(template string, err error) error {
 	return err
 }
 
-func resolveStackTemplateInputs(cmd *cobra.Command, platform *service.Platform, template string, provided map[string]string, yes bool) (map[string]string, error) {
+func resolveStackTemplateInputs(cmd *cobra.Command, platform platformClient, template string, provided map[string]string, yes bool) (map[string]string, error) {
 	if provided == nil {
 		provided = map[string]string{}
 	}
@@ -724,13 +724,13 @@ func displayPath(path string) string {
 	return rel
 }
 
-func localPlatform(root, operatorURL *string) (*service.Platform, error) {
+func localPlatform(root, operatorURL *string) (platformClient, error) {
 	return localPlatformForRoot(root, operatorURL, true)
 }
 
-func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (*service.Platform, error) {
+func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (platformClient, error) {
 	if operatorURL != nil && *operatorURL != "" {
-		return nil, fmt.Errorf("HTTP operator mode is not wired yet")
+		return newRemotePlatform(*operatorURL), nil
 	}
 	selected := *root
 	if resolveControlRoot {
@@ -1211,9 +1211,10 @@ func internalCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bo
 
 func operatorCommand(stdout, stderr io.Writer) *cobra.Command {
 	return &cobra.Command{
-		Use:   "operator",
-		Short: "Run the Angee operator",
-		Args:  cobra.ArbitraryArgs,
+		Use:                "operator",
+		Short:              "Run the Angee operator",
+		Args:               cobra.ArbitraryArgs,
+		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return operator.Execute(cmd.Context(), args, stdout, stderr)
 		},
