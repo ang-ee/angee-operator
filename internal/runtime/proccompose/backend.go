@@ -71,39 +71,37 @@ func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout
 }
 
 func (b Backend) Down(ctx context.Context, root string) error {
-	args := b.baseArgs(root)
-	args = append(args, "down")
-	_, err := b.run(ctx, root, "", args...)
+	// `down` is a CLIENT command in process-compose v2 — it connects to
+	// the running supervisor and asks it to terminate. Do NOT pass -f
+	// (config-file flag is for `up`, the server command); doing so makes
+	// process-compose print --help and exit 0.
+	_, err := b.run(ctx, root, "", "down")
 	return err
 }
 
 func (b Backend) Start(ctx context.Context, target runtime.Target) error {
-	args := b.baseArgs(target.Root)
-	args = append(args, "process", "start")
+	args := []string{"process", "start"}
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
-	args := b.baseArgs(target.Root)
-	args = append(args, "process", "stop")
+	args := []string{"process", "stop"}
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
 func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
-	args := b.baseArgs(target.Root)
-	args = append(args, "process", "restart")
+	args := []string{"process", "restart"}
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
-	args := b.baseArgs(req.Root)
-	args = append(args, "logs")
+	args := []string{"process", "logs"}
 	if req.Follow {
 		args = append(args, "--follow")
 	}
