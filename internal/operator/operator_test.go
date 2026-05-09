@@ -38,6 +38,29 @@ func TestNewServerResolvesProjectRootToControlRoot(t *testing.T) {
 	}
 }
 
+func TestNewServerDiscoversParentControlRoot(t *testing.T) {
+	projectRoot := t.TempDir()
+	controlRoot := filepath.Join(projectRoot, ".angee")
+	nested := filepath.Join(projectRoot, "app", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	if err := os.MkdirAll(controlRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.angee) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(controlRoot, "angee.yaml"), []byte("version: 1\nkind: stack\nname: test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(angee.yaml) error = %v", err)
+	}
+
+	server, err := NewServer(Config{Root: nested, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if server.config.Root != controlRoot {
+		t.Fatalf("server root = %q, want %q", server.config.Root, controlRoot)
+	}
+}
+
 func TestGraphQLStackStatus(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1

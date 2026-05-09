@@ -749,15 +749,27 @@ func resolveRoot(root string) (string, error) {
 	if root == "" {
 		root = "."
 	}
-	if _, err := os.Stat(filepath.Join(root, "angee.yaml")); err == nil {
-		return root, nil
+	start, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
 	}
-	control := filepath.Join(root, ".angee")
-	if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
-		return control, nil
-	}
-	if info, err := os.Stat(filepath.Join(root, ".templates", "workspaces")); err == nil && info.IsDir() {
-		return control, nil
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "angee.yaml")); err == nil {
+			return dir, nil
+		}
+		control := filepath.Join(dir, ".angee")
+		if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
+			return control, nil
+		}
+		if info, err := os.Stat(filepath.Join(dir, ".templates", "workspaces")); err == nil && info.IsDir() {
+			return control, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return root, nil
 }
@@ -1086,15 +1098,15 @@ func workspaceGetCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 
 func workspaceStatusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status <name>",
+		Use:   "status [name]",
 		Short: "Show full workspace status",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, err := localPlatform(root, operatorURL)
+			platform, name, err := workspaceStatusTarget(args, root, operatorURL)
 			if err != nil {
 				return err
 			}
-			status, err := platform.WorkspaceStatus(cmd.Context(), args[0])
+			status, err := platform.WorkspaceStatus(cmd.Context(), name)
 			if err != nil {
 				return err
 			}
@@ -1104,6 +1116,51 @@ func workspaceStatusCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			return writeWorkspaceStatus(stdout, status)
 		},
 	}
+}
+
+func workspaceStatusTarget(args []string, root, operatorURL *string) (platformClient, string, error) {
+	if len(args) == 1 {
+		platform, err := localPlatform(root, operatorURL)
+		return platform, args[0], err
+	}
+	if operatorURL != nil && *operatorURL != "" {
+		return nil, "", fmt.Errorf("workspace status requires a workspace name in remote operator mode")
+	}
+	currentRoot, name, ok, err := enclosingWorkspace()
+	if err != nil {
+		return nil, "", err
+	}
+	if ok {
+		platform, err := service.New(currentRoot)
+		return platform, name, err
+	}
+	return nil, "", fmt.Errorf("workspace status requires a workspace name unless run from inside ANGEE_ROOT/workspaces/<name>")
+}
+
+func enclosingWorkspace() (root string, name string, ok bool, err error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", false, err
+	}
+	dir, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", "", false, err
+	}
+	for {
+		parent := filepath.Dir(dir)
+		if filepath.Base(parent) == "workspaces" {
+			candidateRoot := filepath.Dir(parent)
+			if _, err := os.Stat(filepath.Join(candidateRoot, "angee.yaml")); err == nil {
+				return candidateRoot, filepath.Base(dir), true, nil
+			}
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			break
+		}
+		dir = next
+	}
+	return "", "", false, nil
 }
 
 func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) error {
