@@ -79,7 +79,7 @@ angee source push <name> [--ref ref]
 angee workspace create <template> [--name name] [--ttl duration] [--input key=value ...] [--start]
 angee workspace list
 angee workspace get <name>
-angee workspace status <name>
+angee workspace status [name]
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
 angee workspace destroy <name> [--purge]

@@ -98,7 +98,7 @@ angee workspace create <template> [--name name] [--ttl duration] [--input key=va
 angee workspace update <name> [--ttl duration] [--input key=value ...]
 angee workspace list
 angee workspace get <name>
-angee workspace status <name>
+angee workspace status [name]
 angee workspace logs <name> [--follow]
 angee workspace start <name>
 angee workspace stop <name>
@@ -111,7 +111,8 @@ angee workspace destroy <name> [--purge]
 
 Workspaces are rendered from Copier templates with `_angee` metadata. A
 workspace can also render and control an inner stack when the template declares
-a chain root.
+a chain root. When run from inside `$ANGEE_ROOT/workspaces/<name>/...`,
+`angee workspace status` may omit the name.
 
 ## Operator
 

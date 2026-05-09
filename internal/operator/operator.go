@@ -646,12 +646,24 @@ func resolveRoot(root string) (string, error) {
 	if root == "" {
 		root = "."
 	}
-	if _, err := os.Stat(filepath.Join(root, "angee.yaml")); err == nil {
-		return root, nil
+	start, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
 	}
-	control := filepath.Join(root, ".angee")
-	if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
-		return control, nil
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "angee.yaml")); err == nil {
+			return dir, nil
+		}
+		control := filepath.Join(dir, ".angee")
+		if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
+			return control, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return root, nil
 }

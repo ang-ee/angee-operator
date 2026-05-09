@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/fyltr/angee/api"
+	"github.com/fyltr/angee/internal/manifest"
 )
 
 func TestVersionFlag(t *testing.T) {
@@ -161,6 +162,65 @@ func TestStatusUsesOperatorURLEnv(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, `"name": "env-remote"`) {
 		t.Fatalf("status output = %s", got)
+	}
+}
+
+func TestStatusDiscoversParentAngeeRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	if err := os.MkdirAll(filepath.Join(base, "app", "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(nested) error = %v", err)
+	}
+	stack := &manifest.Stack{Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "parent-root"}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	t.Chdir(filepath.Join(base, "app", "nested"))
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "parent-root") || !strings.Contains(output, "root: "+root) {
+		t.Fatalf("status output = %q, want discovered parent root %s", output, root)
+	}
+}
+
+func TestWorkspaceStatusInfersCurrentWorkspace(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	workspaceName := "feature-a"
+	nested := filepath.Join(root, "workspaces", workspaceName, "angee-go", "internal")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "parent-root",
+		Workspaces: map[string]manifest.Workspace{
+			workspaceName: {Template: "workspaces/dev-pr"},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	t.Chdir(nested)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"workspace", "status"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "workspace\t"+workspaceName+"\tready") {
+		t.Fatalf("workspace status output = %q, want inferred workspace %q", got, workspaceName)
 	}
 }
 
