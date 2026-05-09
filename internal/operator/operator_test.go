@@ -73,6 +73,66 @@ services:
 	}
 }
 
+func TestGraphQLWorkspaceStatus(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+sources:
+  app:
+    kind: git
+    repo: https://example.invalid/app.git
+workspaces:
+  feat:
+    template: workspaces/dev-pr
+    inputs:
+      topic: feature
+    sources:
+      app:
+        source: app
+        mode: worktree
+        branch: workspace/feat
+        ref: main
+        subpath: app
+services:
+  worker:
+    runtime: local
+    command: ["true"]
+    mounts: ["workspace://feat:/workspace"]
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{ workspaceStatus(name: "feat") { name state exists inputs sources { slot source kind mode state pushed } mountedBy { kind name field } } }`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL errors = %#v", resp.Errors)
+	}
+	status := resp.Data["workspaceStatus"].(map[string]any)
+	if status["name"] != "feat" || status["state"] != "missing" || status["exists"] != false {
+		t.Fatalf("workspaceStatus = %#v, want missing feat", status)
+	}
+	sources := status["sources"].([]any)
+	if len(sources) != 1 {
+		t.Fatalf("sources length = %d, want 1", len(sources))
+	}
+	source := sources[0].(map[string]any)
+	if source["slot"] != "app" || source["source"] != "app" || source["kind"] != "git" || source["mode"] != "worktree" || source["state"] != "missing" {
+		t.Fatalf("source status = %#v, want missing app git worktree", source)
+	}
+	mountedBy := status["mountedBy"].([]any)
+	if len(mountedBy) != 1 {
+		t.Fatalf("mountedBy length = %d, want 1", len(mountedBy))
+	}
+	ref := mountedBy[0].(map[string]any)
+	if ref["kind"] != "service" || ref["name"] != "worker" || ref["field"] != "mounts" {
+		t.Fatalf("mountedBy = %#v, want worker mounts ref", ref)
+	}
+}
+
 func TestGraphQLServiceInit(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1

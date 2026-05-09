@@ -121,6 +121,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /workspaces", s.auth(http.HandlerFunc(s.workspaceCreate)))
 	mux.Handle("GET /workspaces/{name}", s.auth(http.HandlerFunc(s.workspaceGet)))
 	mux.Handle("PATCH /workspaces/{name}", s.auth(http.HandlerFunc(s.workspaceUpdate)))
+	mux.Handle("GET /workspaces/{name}/status", s.auth(http.HandlerFunc(s.workspaceStatus)))
 	mux.Handle("GET /workspaces/{name}/logs", s.auth(http.HandlerFunc(s.workspaceLogs)))
 	mux.Handle("POST /workspaces/{name}/start", s.auth(http.HandlerFunc(s.workspaceStart)))
 	mux.Handle("POST /workspaces/{name}/stop", s.auth(http.HandlerFunc(s.workspaceStop)))
@@ -469,6 +470,15 @@ func (s *Server) workspaceGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ref)
+}
+
+func (s *Server) workspaceStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := s.platform.WorkspaceStatus(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) workspaceUpdate(w http.ResponseWriter, r *http.Request) {

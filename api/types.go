@@ -66,6 +66,61 @@ type WorkspaceRef struct {
 	TTLExpiresAt *time.Time     `json:"ttl_expires_at,omitempty"`
 }
 
+type WorkspaceStatusResponse struct {
+	Name         string                          `json:"name"`
+	Path         string                          `json:"path"`
+	Exists       bool                            `json:"exists"`
+	State        string                          `json:"state"`
+	Error        string                          `json:"error,omitempty"`
+	Template     string                          `json:"template"`
+	Inputs       map[string]string               `json:"inputs,omitempty"`
+	Sources      []WorkspaceSourceStatus         `json:"sources,omitempty"`
+	Chain        []string                        `json:"chain,omitempty"`
+	ChainRoot    string                          `json:"chain_root,omitempty"`
+	Lifecycle    string                          `json:"lifecycle,omitempty"`
+	Allocations  map[string]int                  `json:"allocations,omitempty"`
+	PersistPaths map[string]WorkspacePersistPath `json:"persist_paths,omitempty"`
+	TTL          string                          `json:"ttl,omitempty"`
+	TTLExpiresAt *time.Time                      `json:"ttl_expires_at,omitempty"`
+	Expired      bool                            `json:"expired"`
+	MountedBy    []WorkspaceMountRef             `json:"mounted_by,omitempty"`
+	InnerStack   *StackStatusResponse            `json:"inner_stack,omitempty"`
+	InnerError   string                          `json:"inner_error,omitempty"`
+}
+
+type WorkspaceSourceStatus struct {
+	Slot           string `json:"slot"`
+	Source         string `json:"source"`
+	Kind           string `json:"kind"`
+	Mode           string `json:"mode,omitempty"`
+	Branch         string `json:"branch,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+	Subpath        string `json:"subpath,omitempty"`
+	Path           string `json:"path"`
+	Exists         bool   `json:"exists"`
+	State          string `json:"state"`
+	CurrentRef     string `json:"current_ref,omitempty"`
+	Dirty          bool   `json:"dirty"`
+	Upstream       string `json:"upstream,omitempty"`
+	Ahead          int    `json:"ahead,omitempty"`
+	Behind         int    `json:"behind,omitempty"`
+	Pushed         bool   `json:"pushed"`
+	UnpushedReason string `json:"unpushed_reason,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+type WorkspacePersistPath struct {
+	Subpath string `json:"subpath"`
+	Scope   string `json:"scope"`
+}
+
+type WorkspaceMountRef struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Field string `json:"field"`
+	Value string `json:"value"`
+}
+
 type ServiceInitRequest struct {
 	Name    string            `json:"name"`
 	Runtime string            `json:"runtime,omitempty"`

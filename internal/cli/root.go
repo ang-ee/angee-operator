@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/operator"
@@ -865,6 +866,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspaceUpdateCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceListCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceGetCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceStatusCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceDestroyCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceLogsCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceGitCommand(stdout, root, operatorURL, jsonOutput))
@@ -1080,6 +1082,107 @@ func workspaceGetCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 			return err
 		},
 	}
+}
+
+func workspaceStatusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <name>",
+		Short: "Show full workspace status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			platform, err := localPlatform(root, operatorURL)
+			if err != nil {
+				return err
+			}
+			status, err := platform.WorkspaceStatus(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				return writeJSON(stdout, status)
+			}
+			return writeWorkspaceStatus(stdout, status)
+		},
+	}
+}
+
+func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) error {
+	if _, err := fmt.Fprintf(stdout, "workspace\t%s\t%s\n", status.Name, status.State); err != nil {
+		return err
+	}
+	if status.Error != "" {
+		if _, err := fmt.Fprintf(stdout, "error\t%s\n", status.Error); err != nil {
+			return err
+		}
+	}
+	rows := []struct {
+		key   string
+		value string
+	}{
+		{key: "path", value: status.Path},
+		{key: "template", value: status.Template},
+		{key: "chain_root", value: status.ChainRoot},
+		{key: "lifecycle", value: status.Lifecycle},
+		{key: "ttl", value: status.TTL},
+	}
+	for _, row := range rows {
+		if row.value == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(stdout, "%s\t%s\n", row.key, row.value); err != nil {
+			return err
+		}
+	}
+	if status.TTLExpiresAt != nil {
+		if _, err := fmt.Fprintf(stdout, "ttl_expires_at\t%s\n", status.TTLExpiresAt.Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if len(status.Sources) > 0 {
+		if _, err := fmt.Fprintln(stdout, "sources"); err != nil {
+			return err
+		}
+		for _, source := range status.Sources {
+			ref := source.CurrentRef
+			if ref == "" {
+				ref = source.Ref
+			}
+			detail := source.State
+			if source.UnpushedReason != "" {
+				detail += " " + source.UnpushedReason
+			}
+			if source.Upstream != "" {
+				detail += " upstream=" + source.Upstream
+			}
+			if source.Ahead > 0 || source.Behind > 0 {
+				detail += fmt.Sprintf(" ahead=%d behind=%d", source.Ahead, source.Behind)
+			}
+			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n", source.Slot, source.Source, source.Kind, source.Mode, ref, detail, source.Path); err != nil {
+				return err
+			}
+		}
+	}
+	if len(status.MountedBy) > 0 {
+		if _, err := fmt.Fprintln(stdout, "mounted_by"); err != nil {
+			return err
+		}
+		for _, ref := range status.MountedBy {
+			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\n", ref.Kind, ref.Name, ref.Field, ref.Value); err != nil {
+				return err
+			}
+		}
+	}
+	if status.InnerStack != nil {
+		if _, err := fmt.Fprintf(stdout, "inner_stack\t%s\tservices=%d\tjobs=%d\tworkspaces=%d\n", status.InnerStack.Name, len(status.InnerStack.Services), len(status.InnerStack.Jobs), len(status.InnerStack.Workspaces)); err != nil {
+			return err
+		}
+	}
+	if status.InnerError != "" {
+		if _, err := fmt.Fprintf(stdout, "inner_error\t%s\n", status.InnerError); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {

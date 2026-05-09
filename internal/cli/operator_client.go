@@ -47,6 +47,7 @@ type platformClient interface {
 	WorkspaceCreate(context.Context, api.WorkspaceCreateRequest) (api.WorkspaceRef, error)
 	WorkspaceList(context.Context) ([]api.WorkspaceRef, error)
 	WorkspaceGet(context.Context, string) (api.WorkspaceRef, error)
+	WorkspaceStatus(context.Context, string) (api.WorkspaceStatusResponse, error)
 	WorkspaceUpdate(context.Context, string, map[string]string, string) (api.WorkspaceRef, error)
 	WorkspaceDestroy(context.Context, string, bool) error
 	WorkspaceLogs(context.Context, string, bool) (<-chan string, error)
@@ -255,6 +256,14 @@ func (p *remotePlatform) WorkspaceGet(ctx context.Context, name string) (api.Wor
 		return api.WorkspaceRef{}, err
 	}
 	return ref, nil
+}
+
+func (p *remotePlatform) WorkspaceStatus(ctx context.Context, name string) (api.WorkspaceStatusResponse, error) {
+	var status api.WorkspaceStatusResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(name)+"/status", nil, nil, &status); err != nil {
+		return api.WorkspaceStatusResponse{}, err
+	}
+	return status, nil
 }
 
 func (p *remotePlatform) WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error) {

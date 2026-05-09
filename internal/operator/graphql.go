@@ -105,6 +105,40 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 		},
 	})
 
+	workspaceSourceStatusType := gql.NewObject(gql.ObjectConfig{
+		Name: "WorkspaceSourceStatus",
+		Fields: gql.Fields{
+			"slot":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"source":         &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"kind":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"mode":           &gql.Field{Type: gql.String},
+			"branch":         &gql.Field{Type: gql.String},
+			"ref":            &gql.Field{Type: gql.String},
+			"subpath":        &gql.Field{Type: gql.String},
+			"path":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"exists":         &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"state":          &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"currentRef":     &gql.Field{Type: gql.String},
+			"dirty":          &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"upstream":       &gql.Field{Type: gql.String},
+			"ahead":          &gql.Field{Type: gql.Int},
+			"behind":         &gql.Field{Type: gql.Int},
+			"pushed":         &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"unpushedReason": &gql.Field{Type: gql.String},
+			"error":          &gql.Field{Type: gql.String},
+		},
+	})
+
+	workspaceMountRefType := gql.NewObject(gql.ObjectConfig{
+		Name: "WorkspaceMountRef",
+		Fields: gql.Fields{
+			"kind":  &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"name":  &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"field": &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"value": &gql.Field{Type: gql.NewNonNull(gql.String)},
+		},
+	})
+
 	stackStatusType := gql.NewObject(gql.ObjectConfig{
 		Name: "StackStatus",
 		Fields: gql.Fields{
@@ -140,6 +174,42 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 					return sortedWorkspaceRefs(status.Workspaces), nil
 				},
 			},
+		},
+	})
+
+	workspaceStatusType := gql.NewObject(gql.ObjectConfig{
+		Name: "WorkspaceStatus",
+		Fields: gql.Fields{
+			"name":        &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"path":        &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"exists":      &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"state":       &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"error":       &gql.Field{Type: gql.String},
+			"template":    &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"inputs":      &gql.Field{Type: jsonScalar},
+			"sources":     &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(workspaceSourceStatusType)))},
+			"chain":       &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(gql.String)))},
+			"chainRoot":   &gql.Field{Type: gql.String},
+			"lifecycle":   &gql.Field{Type: gql.String},
+			"allocations": &gql.Field{Type: jsonScalar},
+			"persistPaths": &gql.Field{
+				Type: jsonScalar,
+			},
+			"ttl": &gql.Field{Type: gql.String},
+			"ttlExpiresAt": &gql.Field{
+				Type: gql.String,
+				Resolve: func(p gql.ResolveParams) (any, error) {
+					status, ok := p.Source.(api.WorkspaceStatusResponse)
+					if !ok {
+						return nil, nil
+					}
+					return formatGraphQLTime(status.TTLExpiresAt), nil
+				},
+			},
+			"expired":    &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"mountedBy":  &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(workspaceMountRefType)))},
+			"innerStack": &gql.Field{Type: stackStatusType},
+			"innerError": &gql.Field{Type: gql.String},
 		},
 	})
 
@@ -312,6 +382,15 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 				},
 				Resolve: func(p gql.ResolveParams) (any, error) {
 					return s.platform.WorkspaceGet(p.Context, stringArg(p.Args, "name"))
+				},
+			},
+			"workspaceStatus": &gql.Field{
+				Type: workspaceStatusType,
+				Args: gql.FieldConfigArgument{
+					"name": &gql.ArgumentConfig{Type: gql.NewNonNull(gql.String)},
+				},
+				Resolve: func(p gql.ResolveParams) (any, error) {
+					return s.platform.WorkspaceStatus(p.Context, stringArg(p.Args, "name"))
 				},
 			},
 			"workspaceGit": &gql.Field{

@@ -13,6 +13,7 @@ import (
 	"github.com/fyltr/angee/internal/copierx"
 	"github.com/fyltr/angee/internal/git"
 	"github.com/fyltr/angee/internal/manifest"
+	mountx "github.com/fyltr/angee/internal/mount"
 	"github.com/fyltr/angee/internal/ports"
 	"github.com/fyltr/angee/internal/substitute"
 )
@@ -170,6 +171,186 @@ func (p *Platform) WorkspaceGet(ctx context.Context, name string) (api.Workspace
 	return workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace), nil
 }
 
+func (p *Platform) WorkspaceStatus(ctx context.Context, name string) (api.WorkspaceStatusResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return api.WorkspaceStatusResponse{}, err
+	}
+	stack, err := p.LoadStack()
+	if err != nil {
+		return api.WorkspaceStatusResponse{}, err
+	}
+	workspace, ok := stack.Workspaces[name]
+	if !ok {
+		return api.WorkspaceStatusResponse{}, fmt.Errorf("workspace %q is not declared", name)
+	}
+	return p.workspaceStatus(ctx, name, workspace, stack), nil
+}
+
+func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace manifest.Workspace, stack *manifest.Stack) api.WorkspaceStatusResponse {
+	path := filepath.Join(p.root, "workspaces", name)
+	_, statErr := os.Stat(path)
+	exists := statErr == nil
+	state := "ready"
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			state = "missing"
+		} else {
+			state = "error"
+		}
+	}
+	expired := workspace.TTLExpiresAt != nil && time.Now().After(*workspace.TTLExpiresAt)
+	if expired {
+		state = "expired"
+	}
+	status := api.WorkspaceStatusResponse{
+		Name:         name,
+		Path:         path,
+		Exists:       exists,
+		State:        state,
+		Template:     workspace.Template,
+		Inputs:       copyStringMap(workspace.Inputs),
+		Sources:      []api.WorkspaceSourceStatus{},
+		Chain:        append([]string{}, workspace.Resolved.Chain...),
+		ChainRoot:    workspace.Resolved.ChainRoot,
+		Lifecycle:    workspace.Resolved.Lifecycle,
+		Allocations:  copyIntMap(workspace.Resolved.Allocations),
+		PersistPaths: workspacePersistPaths(workspace.Resolved.PersistPaths),
+		TTL:          workspace.TTL,
+		TTLExpiresAt: workspace.TTLExpiresAt,
+		Expired:      expired,
+		MountedBy:    workspaceMountedBy(stack, name),
+	}
+	if statErr != nil && !os.IsNotExist(statErr) {
+		status.Error = statErr.Error()
+	}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		status.Sources = append(status.Sources, p.workspaceSourceStatus(ctx, name, slot, workspace.Sources[slot], stack))
+	}
+	if workspace.Resolved.ChainRoot != "" {
+		innerRoot := filepath.Join(path, workspace.Resolved.ChainRoot)
+		if _, err := os.Stat(manifest.Path(innerRoot)); err != nil {
+			status.InnerError = err.Error()
+		} else {
+			inner, err := New(innerRoot)
+			if err != nil {
+				status.InnerError = err.Error()
+			} else if innerStatus, err := inner.StackStatus(ctx); err != nil {
+				status.InnerError = err.Error()
+			} else {
+				status.InnerStack = &innerStatus
+			}
+		}
+	}
+	return status
+}
+
+func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slot string, wsSource manifest.WorkspaceSource, stack *manifest.Stack) api.WorkspaceSourceStatus {
+	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+	status := api.WorkspaceSourceStatus{
+		Slot:    slot,
+		Source:  wsSource.Source,
+		Mode:    wsSource.Mode,
+		Branch:  wsSource.Branch,
+		Ref:     wsSource.Ref,
+		Subpath: wsSource.Subpath,
+		Path:    path,
+		State:   "missing",
+		Pushed:  true,
+	}
+	source, ok := stack.Sources[wsSource.Source]
+	if !ok {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = fmt.Sprintf("source %q is not declared", wsSource.Source)
+		return status
+	}
+	status.Kind = source.Kind
+	if _, err := os.Stat(path); err != nil {
+		status.Exists = false
+		if !os.IsNotExist(err) {
+			status.State = "error"
+			status.Error = err.Error()
+		}
+		return status
+	}
+	status.Exists = true
+	if source.Kind != "git" {
+		status.State = "ready"
+		return status
+	}
+	client := git.New()
+	currentRef, err := client.CurrentRef(ctx, path)
+	if err != nil {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = err.Error()
+		return status
+	}
+	status.CurrentRef = currentRef
+	dirty, err := client.Dirty(ctx, path)
+	if err != nil {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = err.Error()
+		return status
+	}
+	status.Dirty = dirty
+	if dirty {
+		status.State = "dirty"
+		status.Pushed = false
+		status.UnpushedReason = "uncommitted changes"
+		return status
+	}
+	base, hasUpstream, err := client.Upstream(ctx, path)
+	if err != nil {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = err.Error()
+		return status
+	}
+	if hasUpstream {
+		status.Upstream = base
+	}
+	if base == "" {
+		base = wsSource.Ref
+	}
+	if base == "" {
+		base = source.DefaultRef
+	}
+	if base == "" {
+		status.State = "clean"
+		return status
+	}
+	ahead, behind, err := client.AheadBehind(ctx, path, base)
+	if err != nil {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = err.Error()
+		return status
+	}
+	status.Ahead = ahead
+	status.Behind = behind
+	switch {
+	case ahead > 0 && behind > 0:
+		status.State = "diverged"
+		status.Pushed = false
+		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
+	case ahead > 0:
+		status.State = "ahead"
+		status.Pushed = false
+		if hasUpstream {
+			status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
+		} else {
+			status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base)
+		}
+	case behind > 0:
+		status.State = "behind"
+	default:
+		status.State = "clean"
+	}
+	return status
+}
+
 func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -178,8 +359,12 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 	if err != nil {
 		return err
 	}
-	if _, ok := stack.Workspaces[name]; !ok {
+	workspace, ok := stack.Workspaces[name]
+	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
+	}
+	if err := p.ensureWorkspaceGitSourcesPushed(ctx, name, workspace, stack); err != nil {
+		return err
 	}
 	delete(stack.Workspaces, name)
 	releaseWorkspacePorts(stack, name)
@@ -190,6 +375,73 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 		return os.RemoveAll(filepath.Join(p.root, "workspaces", name))
 	}
 	return nil
+}
+
+func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
+	client := git.New()
+	unpushed := []string{}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		wsSource := workspace.Sources[slot]
+		source, ok := stack.Sources[wsSource.Source]
+		if !ok {
+			return fmt.Errorf("workspace %q source %q references undeclared source %q", workspaceName, slot, wsSource.Source)
+		}
+		if source.Kind != "git" {
+			continue
+		}
+		path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		reason, err := workspaceGitSourceUnpushedReason(ctx, client, path, source, wsSource)
+		if err != nil {
+			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		if reason != "" {
+			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, reason))
+		}
+	}
+	if len(unpushed) > 0 {
+		return fmt.Errorf("workspace %q has git sources that have not been pushed: %s", workspaceName, strings.Join(unpushed, ", "))
+	}
+	return nil
+}
+
+func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (string, error) {
+	dirty, err := client.Dirty(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if dirty {
+		return "uncommitted changes", nil
+	}
+	base, hasUpstream, err := client.Upstream(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if base == "" {
+		base = wsSource.Ref
+	}
+	if base == "" {
+		base = source.DefaultRef
+	}
+	if base == "" {
+		return "", nil
+	}
+	ahead, err := client.AheadCount(ctx, path, base)
+	if err != nil {
+		return "", err
+	}
+	if ahead == 0 {
+		return "", nil
+	}
+	if hasUpstream {
+		return fmt.Sprintf("%d commit(s) ahead of %s", ahead, base), nil
+	}
+	return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
 }
 
 func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error) {
@@ -380,6 +632,83 @@ func copyIntMap(in map[string]int) map[string]int {
 	return out
 }
 
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func workspacePersistPaths(in map[string]manifest.PersistPath) map[string]api.WorkspacePersistPath {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]api.WorkspacePersistPath, len(in))
+	for key, value := range in {
+		out[key] = api.WorkspacePersistPath{Subpath: value.Subpath, Scope: value.Scope}
+	}
+	return out
+}
+
+func workspaceMountedBy(stack *manifest.Stack, workspaceName string) []api.WorkspaceMountRef {
+	refs := []api.WorkspaceMountRef{}
+	for _, name := range sortedKeys(stack.Services) {
+		service := stack.Services[name]
+		refs = appendWorkspaceRunnableRefs(refs, "service", name, workspaceName, service.Mounts, service.Workdir, service.Env)
+	}
+	for _, name := range sortedKeys(stack.Jobs) {
+		job := stack.Jobs[name]
+		refs = appendWorkspaceRunnableRefs(refs, "job", name, workspaceName, job.Mounts, job.Workdir, job.Env)
+	}
+	return refs
+}
+
+func appendWorkspaceRunnableRefs(refs []api.WorkspaceMountRef, kind, name, workspaceName string, mounts manifest.StringList, workdir string, env map[string]string) []api.WorkspaceMountRef {
+	for _, raw := range mounts {
+		if mountReferencesWorkspace(raw, workspaceName) {
+			refs = append(refs, api.WorkspaceMountRef{Kind: kind, Name: name, Field: "mounts", Value: raw})
+		}
+	}
+	if workspaceURIReferences(workdir, workspaceName) {
+		refs = append(refs, api.WorkspaceMountRef{Kind: kind, Name: name, Field: "workdir", Value: workdir})
+	}
+	for _, key := range sortedKeys(env) {
+		value := env[key]
+		if workspaceStringReferences(value, workspaceName) {
+			refs = append(refs, api.WorkspaceMountRef{Kind: kind, Name: name, Field: "env." + key, Value: value})
+		}
+	}
+	return refs
+}
+
+func mountReferencesWorkspace(raw, workspaceName string) bool {
+	if !strings.Contains(raw, "://") {
+		return false
+	}
+	mount, err := mountx.Parse(raw)
+	return err == nil && mount.Scheme == "workspace" && mount.Name == workspaceName
+}
+
+func workspaceURIReferences(raw, workspaceName string) bool {
+	if !strings.Contains(raw, "://") {
+		return false
+	}
+	scheme, rest, _ := strings.Cut(raw, "://")
+	if scheme != "workspace" {
+		return false
+	}
+	name, _, _ := strings.Cut(rest, "/")
+	return name == workspaceName
+}
+
+func workspaceStringReferences(value, workspaceName string) bool {
+	return strings.Contains(value, "${workspace."+workspaceName+".") || strings.Contains(value, "workspace://"+workspaceName)
+}
+
 func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.SourceState, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
@@ -437,7 +766,22 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 		if pushRef == "" {
 			pushRef = wsSource.Branch
 		}
-		if err := client.Push(ctx, path, pushRef); err != nil {
+		if ref == "" {
+			_, hasUpstream, upstreamErr := client.Upstream(ctx, path)
+			if upstreamErr != nil {
+				return nil, upstreamErr
+			}
+			if hasUpstream {
+				err = client.Push(ctx, path, "")
+			} else if pushRef != "" && wsSource.Branch != "" {
+				err = client.PushSetUpstream(ctx, path, pushRef)
+			} else {
+				err = client.Push(ctx, path, pushRef)
+			}
+		} else {
+			err = client.Push(ctx, path, pushRef)
+		}
+		if err != nil {
 			return nil, err
 		}
 		state, err := p.workspaceSourceState(ctx, name, slot, source, wsSource)
