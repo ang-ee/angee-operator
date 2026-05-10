@@ -403,6 +403,31 @@ services:
 	}
 }
 
+func TestRESTStackInitConflictUsesTypedStatusCode(t *testing.T) {
+	root := t.TempDir()
+	writeOperatorStackTemplate(t, root)
+	writeTestFile(t, filepath.Join(root, ".angee", "existing.txt"), "present\n")
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/stack/init", strings.NewReader(`{"template":"dev","yes":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("stack init conflict status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var conflict api.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &conflict); err != nil {
+		t.Fatalf("Unmarshal stack init conflict = %v", err)
+	}
+	if conflict.Kind != "stack-root" || conflict.Name != filepath.Join(root, ".angee") || conflict.Reason == "" {
+		t.Fatalf("stack init conflict = %#v", conflict)
+	}
+}
+
 func TestGraphQLErrorsIncludeDomainExtensions(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1
@@ -635,6 +660,29 @@ func writeTestFile(t *testing.T, path string, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
+}
+
+func writeOperatorStackTemplate(t *testing.T, root string) {
+	t.Helper()
+	templateRoot := filepath.Join(root, ".templates", "stacks", "dev")
+	manifestDir := filepath.Join(templateRoot, "template", "{{ ANGEE_ROOT }}")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stack template) error = %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_angee:
+  kind: stack
+  name: dev
+ANGEE_ROOT:
+  default: .angee
+`
+	writeTestFile(t, filepath.Join(templateRoot, "copier.yml"), copierYAML)
+	manifestYAML := `version: 1
+kind: stack
+name: test
+`
+	writeTestFile(t, filepath.Join(manifestDir, "angee.yaml.jinja"), manifestYAML)
 }
 
 func setupOperatorGitWorkspace(t *testing.T) (string, string, string, string) {

@@ -183,7 +183,7 @@ separate handwritten code from generated code.
 | R3 | Promote inline request structs to `api/`                           | **DONE**   | High        | Low     | -20 / 0                       |
 | R4 | Hoist root discovery into `internal/stackroot`                     | **DONE**   | Medium-High | Low     | -25 / 0                       |
 | R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | **DONE**   | Medium-High | Low     | +200 / 0                      |
-| R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | Partial    | Medium      | Low     | +60 / 0                       |
+| R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | **DONE**   | Medium      | Low     | +60 / 0                       |
 | R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | Pending    | Low-Medium  | Medium  | varies                        |
 | R8 | Split defaulting from validation, then adopt `validator` + schema  | Partial    | Medium      | Low     | +50 / +1 schema file          |
 | R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | **DONE**   | Low         | Low     | -40 / 0                       |
@@ -468,7 +468,7 @@ A table in `docs/OPERATOR-API.md` (or a new `docs/SURFACES.md`) shaped like:
 ## R6. Typed domain errors + status preservation across CLI/REST/GraphQL
 
 **Status:** shipped for REST, remote CLI, and gqlgen GraphQL errors. Broader
-coverage of every possible domain error site can still improve incrementally.
+coverage of incidental free-form errors can still improve incrementally.
 
 **Goal:** stop string-matching error categories. Use typed domain errors that
 each surface maps consistently.
@@ -551,9 +551,8 @@ REST server, remote CLI client, doc examples, and integration tests must use
 
 ### Acceptance
 
-- [x] REST integration tests assert typed 404 and 400 responses. 409 mapping is
-  implemented via `ConflictError`; stack-root integration coverage remains to
-  add with the stack-init template fixture.
+- [x] REST integration tests assert typed 404, 400, and stack-root 409
+  responses.
 - [x] CLI tests assert: `errors.As(err, &cli.RemoteNotFound{})` works against
   a 404 from a remote operator.
 - [x] GraphQL tests assert domain fields are included in `errors[0].extensions`.
