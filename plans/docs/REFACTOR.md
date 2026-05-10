@@ -6,20 +6,23 @@ This document consolidates two audits performed against `angee-go`:
 2. **Build-vs-reuse audit** of in-house subsystems against current OSS.
 
 It enumerates concrete refactors, prioritized by payoff, with enough detail to
-execute each one as an isolated change.
+execute each one as an isolated change. Dependency claims carry a
+**Verified-on** date (today: 2026-05-10) so future readers know whether to
+re-check upstream activity.
 
 ## Audit summary
 
 ### DRY across CLI / REST / GraphQL
 
 The architecture stated in `CLAUDE.md` — CLI, REST, and GraphQL all dispatch
-through `service.Platform` — is genuinely realized. Business logic is centralized
-in `internal/service/`. Real but small violations exist:
+through `service.Platform` — is genuinely realized. Business logic is
+centralized in `internal/service/`. Real but small violations exist:
 
 - **Surface drift.** Several methods on `Platform` are exposed on only one
   surface. `gitOpsTopology` is GraphQL-only; workspace source `fetch`/`pull`/`push`
   are GraphQL-only; `WorkspaceLogsLimited` and `StackLogsLimited` are GraphQL-only.
-  The corresponding REST routes and CLI commands do not exist.
+  Some Platform methods are also legitimately CLI-local (foreground exec, internal
+  compile) — see the parity matrix in R5.
 - **`resolveRoot` duplicated.** `internal/operator/operator.go:660-684` and
   `internal/cli/root.go:748-775` reimplement the same walk-up algorithm with
   subtly different fallbacks (CLI also accepts `.templates/workspaces` and
@@ -27,75 +30,76 @@ in `internal/service/`. Real but small violations exist:
 - **Inline request structs that should live in `api/`.**
   `JobRunRequest`-shaped struct typed three times; `WorkspaceUpdateRequest`-shaped
   struct typed three times. Wire-contract drift risk.
-- **Three near-identical `sorted<Type>s` helpers** in `internal/operator/graphql.go:1199-1250`
-  duplicate what generic `sortedKeys` (`platform.go:549`) already does.
-- **Service-error → HTTP status mapping is ad-hoc.** Everything flattens to 500 or
-  400; `service.StackRootExistsError` and "not declared" errors are not mapped to
-  409 / 404. The CLI handles them specifically (`root.go:623-629`).
+- **Three near-identical `sorted<Type>s` helpers** in
+  `internal/operator/graphql.go:1199-1250` duplicate what generic `sortedKeys`
+  (`platform.go:549`) already does.
+- **Service-error → HTTP status mapping is ad-hoc.** Everything flattens to 500
+  or 400. CLI's `operatorHTTPError` (`internal/cli/operator_client.go:432`)
+  unmarshals an `error` field from the body and **discards the HTTP status code**,
+  so even if the operator returned 404/409 the CLI couldn't act on it.
 
 ### Build-vs-reuse
 
-Most of the codebase is correct about what to own vs. delegate. Three swaps are
-worth scheduling:
+Most of the codebase is correct about what to own vs. delegate. Two concrete
+swaps and one consolidation are worth scheduling:
 
-- **GraphQL library** (`graphql-go/graphql` v0.8.1) — last release **April 2018**,
+- **GraphQL library.** `graphql-go/graphql` v0.8.1 — last release **April 2018**,
   ~200 open issues, no maintainer activity. Single highest-urgency change.
-  `99designs/gqlgen` v0.17.90 (MIT, Apr 2026, 10.7k★) is the right replacement;
-  schema-first codegen maps directly onto angee's Platform-forwarding pattern.
-- **Compose YAML generation** — text-template strings in `service/templates.go`
-  are a spec-drift risk. `compose-spec/compose-go v2` (Apache-2.0, Docker-maintained)
-  provides typed structs. Worth ~15 direct deps.
-- **Manifest validation** — scattered `if`-block validation in
-  `internal/manifest/ensure.go` would consolidate behind `go-playground/validator`
-  struct tags. `invopop/jsonschema` then generates a JSON Schema for free → LSP
-  completion in `angee.yaml` and CI schema checks.
+  `99designs/gqlgen` v0.17.90 (MIT) is the right replacement; schema-first
+  codegen maps directly onto angee's Platform-forwarding pattern. **Verified-on
+  2026-05-10:** gqlgen v0.17.90 latest release; graphql-go/graphql v0.8.1 still
+  latest.
+- **Compose model coverage.** angee already uses local typed structs for compose
+  output (`internal/runtime/compose/doc.go:5`, used at
+  `internal/service/platform.go:183`); it is **not** a text-template generator.
+  The question is whether to keep the local minimal model or adopt
+  `compose-spec/compose-go v2`. Lower priority unless missing spec fields start
+  to bite. **Verified-on 2026-05-10:** compose-go v2.10.2 latest.
+- **Manifest validation consolidation.** `Validate()` at
+  `internal/manifest/manifest.go:292` mixes defaulting and validation. Splitting
+  the two and then introducing `go-playground/validator` for constraint checks
+  consolidates rules and unlocks JSON-Schema export via `invopop/jsonschema` for
+  free.
 
 Things to **definitely keep building**: `internal/substitute/` (domain-specific
 namespaced expression language), `fyltr/copier-go` (no Go-native template
-scaffolder with `copier update` semantics exists), `internal/ports/` (range-based
-named lease allocator; `phayes/freeport` is unmaintained and solves a different
-problem), `internal/runtime/compose/` and `internal/runtime/proccompose/` (correct
-to shell out to `docker compose` and `process-compose`).
-
-### Decision overrides
-
-The build-vs-reuse audit recommended **keeping** the git CLI wrapper for write
-operations because go-git v5 lacks parallel checkout (issue #1956 makes worktree
-creation slow on large repos). User decision: **proceed with go-git migration
-now** and accept the perf trade-off; revisit if workspace creation latency
-becomes a problem.
+scaffolder with `copier update` semantics exists), `internal/ports/`
+(range-based named lease allocator; `phayes/freeport` is unmaintained and
+solves a different problem), `internal/runtime/compose/` and
+`internal/runtime/proccompose/` (correct to shell out to `docker compose` and
+`process-compose` for execution).
 
 ---
 
 ## Refactor backlog
 
-Items are ranked by payoff. Each is independently shippable.
+Items are ranked by payoff. Each is independently shippable. LOC deltas
+separate handwritten code from generated code.
 
-| #   | Item                                            | Priority    | Risk   | Est. LOC delta |
-| --- | ----------------------------------------------- | ----------- | ------ | -------------- |
-| R1  | Migrate `internal/git/` read-only ops to go-git (DONE; write ops remain CLI) | High | Medium | ±0 |
-| R2  | Replace `graphql-go/graphql` with `gqlgen`      | High        | Medium | -800           |
-| R3  | Promote inline request structs to `api/`        | High        | Low    | -20            |
-| R4  | Hoist `resolveRoot` into shared package         | Medium-High | Low    | -25            |
-| R5  | Close REST/CLI parity gap with GraphQL          | Medium-High | Low    | +200           |
-| R6  | Centralize service-error → HTTP status mapping  | Medium      | Low    | +30            |
-| R7  | Adopt `compose-spec/compose-go v2` for compose  | Medium      | Medium | varies         |
-| R8  | Adopt `go-playground/validator` + JSON Schema   | Medium      | Low    | +50            |
-| R9  | Collapse `sorted*` helpers in `graphql.go`      | Low         | Low    | -40            |
+| #  | Item                                                              | Status     | Priority    | Risk    | LOC (handwritten / generated) |
+| -- | ----------------------------------------------------------------- | ---------- | ----------- | ------- | ----------------------------- |
+| R1a | Hybrid go-git for read-only ops in `internal/git/`               | **DONE**   | High        | Low     | ±0 / 0                        |
+| R1b | Full go-git migration (network/worktree/merge) — deferred         | Deferred   | Low         | High    | TBD                           |
+| R2 | Replace `graphql-go/graphql` with `gqlgen`                         | Pending    | High        | Medium  | -1100 / +1500                 |
+| R3 | Promote inline request structs to `api/`                           | Pending    | High        | Low     | -20 / 0                       |
+| R4 | Hoist root discovery into `internal/root` (or similar)             | Pending    | Medium-High | Low     | -25 / 0                       |
+| R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | Pending    | Medium-High | Low     | +200 / 0                      |
+| R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | Pending    | Medium      | Low     | +60 / 0                       |
+| R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | Pending    | Low-Medium  | Medium  | varies                        |
+| R8 | Split defaulting from validation, then adopt `validator` + schema  | Pending    | Medium      | Low     | +50 / +1 schema file          |
+| R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | Pending    | Low         | Low     | -40 / 0                       |
 
 ---
 
-## R1. Migrate `internal/git/` to go-git v5 — read-only done
+## R1a. Hybrid go-git for read-only ops — DONE
 
-**Status:** read-only queries migrated; write/network ops deliberately kept on
-CLI. See "What was done" below.
+**Status:** shipped in this session. Read-only queries migrated to go-git;
+write/network/worktree ops deliberately remain on the git CLI.
 
-**Goal:** replace the CLI wrapper at `internal/git/git.go` (313 LOC) with a
-go-git-backed implementation while preserving the existing `Client` API.
-
-### What was done (this PR)
+### What was done
 
 - `go.mod` now has a direct dep on `github.com/go-git/go-git/v5 v5.19.0`.
+  **Verified-on 2026-05-10:** v5.19.0 is the latest released tag.
 - `internal/git/git.go` rewritten as a hybrid: `openRepo` helper plus go-git
   implementations for `RefExists`, `CurrentBranch`, `CurrentRef`, `Upstream`,
   `AheadBehind`/`AheadCount`, `Config`, `Remotes`, `Dirty`. `SyncBaseRef` and
@@ -106,77 +110,19 @@ go-git-backed implementation while preserving the existing `Client` API.
 
 ### What was deliberately NOT migrated
 
-The following methods still shell out to `git` and that is intentional:
+The following methods still shell out to `git`:
 
-- `Clone`, `CloneRef`, `Fetch`, `Pull`, `Push`, `PushSetUpstream` — network
-  ops need credential helpers, SSH config, and submodule handling. go-git's
-  Auth model would force us to reimplement credential discovery.
+- `Clone`, `CloneRef`, `Fetch`, `Pull`, `Push`, `PushSetUpstream` — network ops
+  need credential helpers, SSH config, and submodule handling.
 - `Merge`, `Rebase` — go-git does not natively implement these.
 - `WorktreeAdd`, `WorktreeAddBranch` — go-git lacks parallel checkout
   (go-git/go-git#1956); workspace creation is a hot path.
-- `Run` — kept as an escape hatch (used by `templates.go` for `checkout`).
+- `Run` — escape hatch (used by `templates.go` for `checkout`).
 
-This split is documented in the package doc-comment of `internal/git/git.go`
+The split is documented in the package doc-comment of `internal/git/git.go`
 and is a defensible long-term boundary, not a stopgap.
 
-### Future migration steps (not this PR)
-
-**Why now:** the package already has a clean abstraction surface (`Client`
-struct with method receivers); call sites pass through `Client` instances. The
-swap is contained. go-git is already an indirect dep via `fyltr/copier-go`.
-
-**Trade-off accepted:** worktree creation may be slower on very large repos
-(go-git lacks parallel checkout, issue #1956). For typical workspace creation
-this is acceptable. We can fall back to CLI per-method if a hot path turns out
-to need it.
-
-### Steps
-
-1. Add direct dep: `go get github.com/go-git/go-git/v5@latest`.
-2. Rewrite `internal/git/git.go` keeping the same public surface — `Client`,
-   `New()`, and every existing method signature. Internally use go-git APIs:
-   - `Run`: keep as-is (some callers may want to invoke arbitrary git commands;
-     check call sites — if none, drop it).
-   - `Clone` / `CloneRef`: `git.PlainCloneContext` with `ReferenceName` for ref.
-   - `Fetch`: `repo.FetchContext` with `RefSpecs` covering all remotes.
-   - `Merge` / `Rebase`: **not natively supported by go-git.** Either keep a
-     CLI fallback for these two methods, or document that merge/rebase require
-     a clean working tree and use go-git's plumbing (low-level objects and
-     index manipulation). **Recommendation:** keep CLI fallback for `Merge`
-     and `Rebase` only; introduce `cliFallback` field on `Client` for those.
-   - `RefExists`: `repo.Reference(plumbing.ReferenceName(ref), true)`.
-   - `WorktreeAdd` / `WorktreeAddBranch`: go-git supports linked worktrees via
-     the `Worktree` API but the experience is rougher than the CLI. **First
-     pass: keep CLI fallback for worktree add.** Migrate later if/when go-git
-     parallel checkout lands.
-   - `CurrentBranch` / `CurrentRef`: `repo.Head()` + reference name parsing.
-   - `Upstream`: read `branch.<name>.remote` + `branch.<name>.merge` from
-     repo config (`repo.Config()`).
-   - `AheadBehind`: walk commits from base to HEAD via `repo.Log()` with
-     `Order: LogOrderCommitterTime`. Or use `Reference` + `Object` traversal.
-   - `Config`: `repo.Config()` → look up `Raw.Section(...).Option(...)`.
-   - `Remotes`: `repo.Remotes()`.
-   - `PushRemote`: same precedence chain (`branch.<n>.pushRemote` →
-     `remote.pushDefault` → `branch.<n>.remote` → `origin` → single remote).
-   - `Dirty`: `worktree.Status()` → check len.
-   - `Pull`: `worktree.PullContext` with `--ff-only` semantics (set
-     `Force: false`, ensure no merge commit is created — go-git's pull is
-     fast-forward by default if upstream tracks).
-   - `Push` / `PushSetUpstream`: `repo.PushContext` with `RefSpecs` and
-     `Auth`. Setting upstream requires writing to repo config after push.
-3. Auth: where the CLI wrapper relies on the user's `~/.ssh` config or
-   credential helper, go-git needs explicit auth. For SSH, use
-   `ssh.NewPublicKeysFromFile` defaulting to `~/.ssh/id_ed25519` /
-   `~/.ssh/id_rsa`. For HTTPS, fall back to git credential helper via a tiny
-   exec.
-4. Update `internal/git/git_test.go` (if present) and ensure
-   `internal/service/gitops*` tests still pass.
-5. Run `make check` and `go test -race ./...`.
-6. Smoke-test: from `~/Work/fyltr/angee-django`, run
-   `angee workspace create dev-pr-multi --name refactor-git --start` and
-   verify worktrees materialize and sync correctly.
-
-### Acceptance (read-only migration)
+### Acceptance (this PR)
 
 - [x] All callers of `internal/git/Client` compile unchanged.
 - [x] `make check` passes.
@@ -185,42 +131,98 @@ to need it.
 
 ---
 
+## R1b. Full go-git migration — deferred
+
+**Status:** not pursued. Tracked for future evaluation.
+
+Migrating the network/worktree/merge ops would require:
+
+- Implementing credential discovery: SSH key auto-detection from `~/.ssh/`,
+  HTTPS via `git credential` helper exec, GPG signing parity.
+- A custom rebase/merge implementation (go-git plumbing only).
+- Awaiting parallel-checkout support in go-git (#1956) before migrating
+  worktree creation, since workspace creation is on a critical path.
+
+The cost outweighs the benefit until either upstream lands the missing pieces
+or angee needs to drop the `git` binary as a runtime requirement. **Verified-on
+2026-05-10:** go-git/go-git#1956 still open; no parallel-checkout PR merged.
+
+### Acceptance (when revisited)
+
+- [ ] Workspace creation latency on a 100k-file repo is within 2× of CLI
+  baseline.
+- [ ] SSH and HTTPS auth work without a `git` binary on PATH.
+- [ ] Merge/rebase semantics match `git --ff-only` and standard rebase for the
+  test fixtures used in `internal/service/workspaces_test.go`.
+
+---
+
 ## R2. Replace `graphql-go/graphql` with `99designs/gqlgen`
 
-**Goal:** delete `internal/operator/graphql.go` (1271 LOC) and replace with a
-schema-first gqlgen-generated resolver layer that forwards to `service.Platform`.
+**Goal:** delete `internal/operator/graphql.go` (1271 LOC of handwritten Go)
+and replace with a schema-first gqlgen-generated resolver layer that forwards
+to `service.Platform`.
 
-**Why:** current lib's last release was 2018 (security exposure), and the
-hand-built schema is the largest single file in the repo.
+**Why:** current lib's last release was April 2018 (security exposure), and
+the hand-built schema is the largest single file in the repo. **Verified-on
+2026-05-10:** gqlgen v0.17.90 (MIT) latest; graphql-go/graphql v0.8.1 still
+latest.
+
+### Guardrails — must preserve current handler behavior
+
+The existing handler (around `internal/operator/graphql.go:758`) enforces:
+
+- **POST-only.**
+- **Content-type allowlist** with `errUnsupportedGraphQLMediaType` returning
+  HTTP 415.
+- **Body-size limit** via `http.MaxBytesReader(w, r.Body, maxGraphQLBodyBytes)`
+  returning HTTP 413 on overflow.
+- **Cross-origin protections** (verify the existing Origin/Referer or CSRF
+  checks before deleting the handler).
+- **JSON scalar handling** for variables.
+- **Log-output limiting** for log-related queries (`WorkspaceLogsLimited`,
+  `StackLogsLimited`).
+
+R2 must port each of these into the gqlgen handler before flipping the route.
 
 ### Steps
 
 1. Add deps: `go get github.com/99designs/gqlgen@latest` and
    `go get github.com/vektah/gqlparser/v2@latest`.
-2. Add `gqlgen` tool dep via `tools.go` pattern.
+2. Add `gqlgen` tool dep via the `tools.go` pattern.
 3. Define `internal/operator/schema.graphql` covering all currently-exposed
-   queries, mutations, and types. Reference the existing `graphql.go` to enumerate.
-4. Add `internal/operator/gqlgen.yml` configuring:
+   queries, mutations, scalars, and types. Reference the existing `graphql.go`
+   to enumerate.
+4. Add `internal/operator/gqlgen.yml`:
    - `model.bindings` → bind generated models to types in `api/` and
-     `internal/service/` where they already exist.
+     `internal/service/` where they exist.
    - `resolver.layout: follow-schema` → one file per top-level type.
-5. Run `go run github.com/99designs/gqlgen generate` to produce `generated/`.
+5. Run `go run github.com/99designs/gqlgen generate`. Generated files go under
+   `internal/operator/gql/` and should be marked with a `// Code generated`
+   header for review tooling.
 6. Implement `Resolver` methods. Each resolver should be a 3-line forward to
-   `Platform`: `return r.platform.X(ctx, args)`. No business logic.
-7. Wire the generated handler into `operator.go`'s mux at `POST /graphql`,
-   replacing the current handler.
-8. Delete `internal/operator/graphql.go`.
-9. Update `docs/OPERATOR-API.md` GraphQL section.
-10. Run query parity tests: hit each query/mutation against both the old and
-    new server (during migration) to confirm response shape matches.
+   `Platform`. No business logic.
+7. Build a transport wrapper that re-enforces the guardrails above
+   (`MaxBytesReader`, content-type, CORS, etc.).
+8. Wire the wrapper into `operator.go`'s mux at `POST /graphql`.
+9. **Capture a schema snapshot** (`gqlgen generate` produces an SDL; commit it
+   and add a CI check that diffs the generated SDL against the snapshot).
+10. **Query parity tests:** for every existing query and mutation, run the
+    same operation against both the old and new handler in tests; assert
+    response-shape equality (and error-shape equality after R6).
+11. Delete `internal/operator/graphql.go`.
+12. Update `docs/OPERATOR-API.md` GraphQL section.
 
 ### Acceptance
 
-- `internal/operator/graphql.go` deleted.
-- All existing GraphQL queries return identical shapes (verified by tests).
-- `go.mod` no longer requires `graphql-go/graphql`.
-- Subscription support is **out of scope** for this PR; track separately if
-  added later.
+- [ ] `internal/operator/graphql.go` deleted.
+- [ ] All existing GraphQL queries return identical shapes (verified by parity
+  tests).
+- [ ] Body-size limit (HTTP 413), content-type rejection (HTTP 415),
+  POST-only enforcement, and log-output limiting are reproduced and tested.
+- [ ] `go.mod` no longer requires `graphql-go/graphql`.
+- [ ] `internal/operator/schema.snapshot.graphql` committed and CI-diffed.
+- [ ] Subscription support is **out of scope**; track separately.
 
 ---
 
@@ -242,155 +244,258 @@ hand-built schema is the largest single file in the repo.
 
 ### Acceptance
 
-- `grep -n 'struct {' internal/operator/operator.go internal/cli/operator_client.go`
+- [ ] `rg --pcre2 'struct\s*\{' internal/operator/operator.go internal/cli/operator_client.go`
   shows no remaining inline request structs that mirror existing API types.
-- Tests pass.
+- [ ] Existing wire-format tests pass; new round-trip test covers
+  marshal/unmarshal symmetry for both new types.
 
 ---
 
-## R4. Hoist `resolveRoot` into a shared package
+## R4. Hoist root discovery into a shared package
 
-**Goal:** one `ResolveRoot` implementation used by both operator and CLI.
+**Goal:** one root-discovery implementation used by both operator and CLI.
+
+**Naming:** the function discovers `.angee` control roots and template
+directories — not just manifests. Place it in `internal/root` (or
+`internal/stackroot`) rather than `internal/manifest`, where it would imply
+that a root is defined solely by `angee.yaml`.
 
 ### Steps
 
-1. Add `internal/manifest.ResolveRoot(start string) (string, error)`.
-   Behavior: walk up from `start`, accept any directory containing `angee.yaml`
-   OR a directory that contains `templates/workspaces` or `.templates/workspaces`
-   (preserving CLI's broader detection).
-2. Replace `internal/operator/operator.go:660-684` with a call to
-   `manifest.ResolveRoot`.
-3. Replace `internal/cli/root.go:748-775` with a call to `manifest.ResolveRoot`.
-4. Add unit tests covering both stack-rooted and template-rooted detection.
+1. Create `internal/root/root.go` with `ResolveRoot(start string) (string, error)`.
+2. Behavior — preserve current CLI semantics from `internal/cli/root.go:765`:
+   walk up from `start`, accept any directory containing `angee.yaml` OR a
+   directory that contains `templates/workspaces` or `.templates/workspaces`
+   (the broader CLI fallback). Document the **template-only** behavior in the
+   function's doc comment.
+3. Replace `internal/operator/operator.go:660-684` with a call to
+   `root.ResolveRoot`.
+4. Replace `internal/cli/root.go:748-775` with a call to `root.ResolveRoot`.
+5. Add unit tests for: stack-rooted detection, template-only directory
+   detection, walk-up termination at filesystem root.
 
 ### Acceptance
 
-- Both call sites delegate to the shared function.
-- A directory containing only `templates/workspaces/` is accepted as a root by
-  both surfaces (matching current CLI behavior).
+- [ ] Both call sites delegate to the shared function.
+- [ ] A directory containing only `templates/workspaces/` is accepted as a
+  root by both surfaces.
+- [ ] Tests cover the three cases above plus failure when no root is found.
 
 ---
 
-## R5. Close REST/CLI parity gap with GraphQL
+## R5. Surface parity matrix (Platform × CLI/REST/GraphQL)
 
-**Goal:** every Platform method is reachable from all three surfaces, or
-explicitly documented as one-surface-only.
+**Goal:** enumerate every method on `service.Platform` and decide — explicitly
+— whether it is exposed on each surface. Some methods are legitimately
+CLI-local (foreground execution, internal compile flows) and should not be on
+REST or GraphQL.
 
-### Methods missing on REST + CLI
+### Deliverable
 
-- `Platform.GitOpsTopology` → `GET /gitops/topology` + `angee gitops topology`.
-- `Platform.WorkspaceSourceFetch/Pull/Push` →
-  `POST /workspaces/{name}/sources/{slot}/{op}` + `angee workspace source <op>`.
-- `Platform.WorkspaceLogsLimited` and `StackLogsLimited` →
-  `GET /workspaces/{name}/logs?limit=N` and `GET /stack/logs?limit=N` +
-  `--limit` flag on existing `angee logs` commands.
+A table in `docs/OPERATOR-API.md` (or a new `docs/SURFACES.md`) shaped like:
+
+| Platform method                | CLI | REST | GraphQL | Omit reason (if any) |
+| ------------------------------ | --- | ---- | ------- | -------------------- |
+| `StackStatus`                  | ✓   | ✓    | ✓       | —                    |
+| `GitOpsTopology`               | ✗   | ✗    | ✓       | (gap — to add)       |
+| `WorkspaceSourceFetch/Pull/Push` | ✗ | ✗    | ✓       | (gap — to add)       |
+| `WorkspaceLogsLimited`         | partial (`--limit`) | ✗ | ✓ | (gap — to add) |
+| `Compile` (internal)           | ✓   | ✗    | ✗       | Internal flow; no remote use case |
+| _foreground exec helpers_      | ✓   | ✗    | ✗       | Local-only; cannot stream over operator |
 
 ### Steps
 
-1. Add REST routes in `internal/operator/operator.go`.
-2. Add CLI commands and `platformClient` interface methods in
-   `internal/cli/operator_client.go` and `internal/cli/root.go`.
-3. Update `docs/COMMANDS.md` and `docs/OPERATOR-API.md`.
+1. Inventory: list every method on `Platform` (use `rg '^func \(p \*Platform\)'
+   internal/service/`).
+2. Fill out the table; for each gap, decide **expose** or **omit (with
+   reason)**.
+3. For each "expose" gap, add the REST route, the CLI command, and the
+   `platformClient` method.
+4. For each "omit" entry, add a one-line code comment near the method body
+   linking back to the matrix.
+5. Update `docs/COMMANDS.md` and `docs/OPERATOR-API.md`.
 
 ### Acceptance
 
-- For every method on the `platformClient` interface, there is a REST endpoint
-  and a CLI command (or a documented justification for the omission).
+- [ ] Matrix committed to docs.
+- [ ] No method appears on a surface without an explicit row in the matrix.
+- [ ] Doc tests (or a small static analyzer / one-shot script) verify the
+  matrix matches the actual route registry.
 
 ---
 
-## R6. Centralize service-error → HTTP status mapping
+## R6. Typed domain errors + status preservation across CLI/REST/GraphQL
 
-**Goal:** REST and GraphQL return meaningful status codes / error categories.
+**Goal:** stop string-matching error categories. Use typed domain errors that
+each surface maps consistently.
+
+### Domain error shape
+
+```go
+package service
+
+type NotFoundError struct{ Kind, Name string }
+func (e *NotFoundError) Error() string { ... }
+
+type ConflictError struct{ Kind, Name, Reason string }
+func (e *ConflictError) Error() string { ... }
+
+type InvalidInputError struct{ Field, Reason string }
+func (e *InvalidInputError) Error() string { ... }
+```
+
+These give surfaces structured fields (`Kind`, `Name`) instead of forcing them
+to parse free-form messages.
 
 ### Steps
 
-1. In `internal/service/`, ensure all sentinel errors are typed (or wrapped
-   with `errors.Is`-checkable values): e.g., `ErrStackRootExists`,
-   `ErrNotDeclared`, `ErrServiceNotFound`.
-2. Add `internal/operator/errs.go` with `writeServiceError(w, err)` mapping:
-   - `errors.Is(err, service.ErrStackRootExists)` → 409 Conflict.
-   - `errors.Is(err, service.ErrNotDeclared)` → 404 Not Found.
+1. Define the error types in `internal/service/errors.go`. Replace existing
+   `StackRootExistsError` with `*ConflictError{Kind: "stack-root", Name: path}`.
+2. Sweep `internal/service/` for `fmt.Errorf("... not declared ...")` and
+   similar; convert to `&NotFoundError{Kind, Name}`.
+3. Add `internal/operator/errs.go` with `writeServiceError(w, err)`:
+   - `*NotFoundError` → 404 + body `{kind, name, error}`.
+   - `*ConflictError` → 409 + body `{kind, name, reason, error}`.
+   - `*InvalidInputError` → 400 + body `{field, reason, error}`.
    - default → 500.
-3. Update REST handlers to call `writeServiceError` instead of `writeError`
-   when the error originates from `Platform`.
-4. Add a parallel `formatGraphQLError` for the gqlgen resolvers (after R2).
-5. Update CLI to surface specific errors uniformly via `errors.Is` rather than
-   string matching (replaces `root.go:623-629` ad-hoc handling).
+4. Add a parallel `formatGraphQLError` helper for the gqlgen handler (after
+   R2) that puts the same structured fields into `extensions`.
+5. **Fix `operatorHTTPError` (`internal/cli/operator_client.go:432`)** to:
+   - Decode the structured body (`kind`, `name`, etc.).
+   - **Preserve the HTTP status** by returning a typed CLI error
+     (`&remoteNotFound{Kind, Name}` etc.) instead of flattening to a single
+     `fmt.Errorf` string.
+   - Keep the human-readable message but include the status code.
+6. Update CLI command handlers to surface specific errors via `errors.As` /
+   `errors.Is` (replaces `internal/cli/root.go:623-629` ad-hoc string match).
 
 ### Acceptance
 
-- Existing CLI behavior unchanged.
-- REST returns 409 for stack-root-exists and 404 for not-declared.
+- [ ] REST integration tests assert: 404 for missing service/workspace, 409
+  for stack-root-exists, 400 for invalid manifest input, 500 only for true
+  internals.
+- [ ] CLI tests assert: `errors.As(err, &cli.RemoteNotFound{})` works against
+  a 404 from a remote operator.
+- [ ] GraphQL tests assert: `errors[0].extensions.kind == "service"` etc.
+- [ ] No remaining `strings.Contains(err.Error(), "...")` in CLI command code
+  (`rg "strings\.Contains\(err\.Error" internal/cli/`).
 
 ---
 
-## R7. Adopt `compose-spec/compose-go v2` for compose YAML generation
+## R7. Evaluate `compose-spec/compose-go v2` against local Compose model
 
-**Goal:** replace text-template-based compose generation with type-safe struct
-marshaling.
+**Goal:** decide whether the local typed Compose model
+(`internal/runtime/compose/doc.go`) should be replaced by upstream
+`compose-spec/compose-go v2`. **Lower priority than originally written** —
+angee already uses typed structs, not text templates.
 
-### Steps
+### Decision factors
+
+- **What's missing today?** Audit whether any Compose-spec field that
+  templates need is absent from `internal/runtime/compose/doc.go`. If yes,
+  list them.
+- **Dep weight.** compose-go v2 brings ~15 direct + ~20 indirect deps
+  (logrus, mapstructure, jsonschema). **Verified-on 2026-05-10:**
+  compose-go v2.10.2 (Apache-2.0).
+- **Validation benefit.** compose-go's validators run the Compose schema; the
+  local model's marshal-as-yaml does not.
+
+### Steps (only if decision is "swap")
 
 1. Add dep: `go get github.com/compose-spec/compose-go/v2@latest`.
-2. In `internal/service/templates.go` (or wherever `docker-compose.yaml` is
-   produced), construct `types.Project` and `types.ServiceConfig` from the
-   manifest, then marshal via `project.MarshalYAML()`.
-3. Remove the corresponding text template.
-4. Add a unit test that compares the generated compose YAML against a golden
-   file for a representative manifest.
-5. Audit dep weight: confirm the new transitive deps (logrus, mapstructure,
-   jsonschema) are acceptable.
+2. Replace `compose.File`/`compose.Service`/etc. constructions in
+   `internal/service/platform.go:183` and surrounding code with `types.Project`
+   / `types.ServiceConfig`.
+3. Marshal via `project.MarshalYAML()`.
+4. Add a golden-file test that diffs generated `docker-compose.yaml` against
+   committed fixtures for representative manifests.
+5. Re-run `internal/service/...` tests; expect output drift on whitespace and
+   key ordering — normalize via the golden test.
 
-### Acceptance
+### Acceptance (only if pursued)
 
-- `docker-compose.yaml` output is byte-for-byte equivalent (or
-  semantically equivalent and documented) for existing test fixtures.
-- All compose-related tests pass.
+- [ ] All compose-related tests pass against golden fixtures.
+- [ ] Dep policy review (this is the largest dep increase across all
+  refactors): confirmed acceptable by maintainer.
+- [ ] Process-compose generation **not** changed (process-compose has no
+  equivalent typed library).
 
-### Caveats
+### Default recommendation
 
-- compose-go v2 brings ~15 direct deps. Re-evaluate dep policy before merging.
-- Process-compose generation is **not** part of this swap; keep its
-  text-template generation (process-compose has no equivalent typed library).
+**Defer R7** unless an audit of missing Compose fields finds a real gap. The
+local minimal model is fit-for-purpose; replacing it is a dep weight increase
+without proportional benefit today.
 
 ---
 
-## R8. Adopt `go-playground/validator` + `invopop/jsonschema`
+## R8. Split defaulting from validation, then adopt `validator` + JSON Schema
 
-**Goal:** consolidate manifest validation into struct tags; emit a JSON Schema.
+**Goal:** consolidate manifest validation rules and emit a JSON Schema for
+editor LSP integration.
 
-### Steps
+### Step 0 — split defaulting from validation (precondition)
+
+`internal/manifest/manifest.go:292` defines `(s *Stack) Validate() error` that
+**mixes defaulting and validation**: it sets `s.Version = VersionCurrent`,
+`s.Kind = KindStack`, `s.SecretsBackend.Type = "env-file"`, etc. as side
+effects.
+
+Refactor to:
+
+```go
+func (s *Stack) Defaults()           // mutates: applies all defaults, no error
+func (s *Stack) Validate() error     // pure: returns error, never mutates
+```
+
+Call sites adopt the order `Defaults()` then `Validate()`. After this, R8
+proper can introduce struct-tag validation without entangling it with
+defaulting logic.
+
+### Steps (after Step 0)
 
 1. Add deps:
-   - `go get github.com/go-playground/validator/v10@latest`.
-   - `go get github.com/invopop/jsonschema@latest`.
-2. In `internal/manifest/`, annotate manifest types with `validate:"..."` tags
-   (e.g., `validate:"required,oneof=container local"` on `runtime`).
-3. Replace ad-hoc `if`-block validation in `internal/manifest/ensure.go` (or
-   wherever it lives) with `validator.Validate(m)`.
+   - `go get github.com/go-playground/validator/v10@latest`
+     **Verified-on 2026-05-10:** v10 line, MIT, actively maintained.
+   - `go get github.com/invopop/jsonschema@latest`
+     **Verified-on 2026-05-10:** MIT, actively maintained.
+2. Annotate manifest types in `internal/manifest/` with `validate:"..."` tags
+   (e.g., `validate:"required,oneof=container local"` on a service `runtime`
+   field).
+3. Replace remaining `if`-block validation in `internal/manifest/manifest.go`
+   (post Step 0) with `validator.Validate(m)`. Fold in any non-tag-expressible
+   rules behind a single `(s *Stack) ValidateExtended() error` for things
+   `validator` can't express (cross-field, set-uniqueness checks).
 4. Add `make schema` target that emits `docs/angee.schema.json` from the
    manifest types via `invopop/jsonschema`.
-5. Document the schema in `docs/MANIFEST.md` and reference it for editor LSP
-   integration (e.g., `# yaml-language-server: $schema=...`).
+5. Document the schema in `docs/MANIFEST.md`; reference it for editor
+   LSP integration via `# yaml-language-server: $schema=...`.
 
 ### Acceptance
 
-- Existing valid manifests still validate; existing invalid manifests still
-  fail with equivalent or better messages.
-- `docs/angee.schema.json` is generated and matches the structs.
-- Editors with `yaml-language-server` get autocompletion against the schema.
+- [ ] `Stack.Defaults()` and `Stack.Validate()` exist as separate functions;
+  `Validate()` does not mutate (verified by a test that compares pre/post
+  byte-equal serializations).
+- [ ] Existing valid manifests still validate; existing invalid manifests
+  still fail with equivalent or better messages.
+- [ ] `docs/angee.schema.json` is generated and matches the structs.
+- [ ] `make schema` target documented in `docs/DEVELOPMENT.md`.
+- [ ] Editors with `yaml-language-server` get autocompletion against the
+  schema (manual smoke test documented in `docs/MANIFEST.md`).
 
 ---
 
 ## R9. Collapse `sorted*` helpers in `graphql.go`
 
-If R2 (gqlgen migration) ships first, this becomes moot — gqlgen generates
-ordered fields. Otherwise:
+If R2 ships first, this is moot. Otherwise:
 
 - Replace `sortedServiceStates`, `sortedJobStates`, `sortedWorkspaceRefs`
-  (`internal/operator/graphql.go:1199-1250`) with a single generic helper using
-  `sortedKeys` from `platform.go:549`.
+  (`internal/operator/graphql.go:1199-1250`) with a single generic helper
+  using `sortedKeys` from `platform.go:549`.
+
+### Acceptance
+
+- [ ] Three helpers replaced by one generic.
+- [ ] `rg 'func sorted[A-Z]' internal/operator/graphql.go` returns one match.
 
 ---
 
@@ -398,37 +503,42 @@ ordered fields. Otherwise:
 
 Recommended order:
 
-1. **R1** (go-git) — isolated, exercise the abstraction.
+1. **R1a** (go-git read-only) — DONE.
 2. **R3** (api types) — trivial, removes drift risk.
-3. **R4** (resolveRoot) — trivial, removes duplication.
-4. **R5** (parity gap) — unblocks single-surface migrations.
-5. **R6** (error mapping) — improves UX, prereq for R2's GraphQL errors.
-6. **R2** (gqlgen) — large but well-bounded; consumes R6's error helpers.
-7. **R8** (validator + JSON Schema) — independent, ship anytime.
-8. **R7** (compose-go) — last, given dep weight needs deliberation.
+3. **R4** (root discovery) — trivial, removes duplication.
+4. **R5** (parity matrix) — unblocks single-surface migrations and informs R6.
+5. **R6** (typed errors + status preservation) — improves UX, prereq for R2's
+   GraphQL error parity.
+6. **R2** (gqlgen) — large but well-bounded; consumes R6's error helpers and
+   R5's matrix.
+7. **R8** (split defaulting + validator + JSON Schema) — independent.
+8. **R7** (compose-go) — only if an audit finds missing Compose fields.
 9. **R9** — only if R2 doesn't happen first.
 
-Ship each as its own PR. None of them require coordinated lockstep changes.
+Ship each as its own PR. None require coordinated lockstep changes.
 
 ## Out of scope
 
+- **R1b**: full go-git migration (network/worktree/merge) — deferred until
+  upstream parallel-checkout (#1956) lands and credential-helper parity is
+  designed.
 - Migrating to `openbao/api/v2` — defer until functionality exceeds the four
   KV ops the hand-rolled client supports.
 - Replacing `phayes/freeport` (unmaintained) — angee's port pool solves a
-  different problem (range-based named leases) and `phayes/freeport` is not a
-  candidate.
+  different problem (range-based named leases).
 - Replacing `internal/substitute/` — namespaced filter pipeline is core
   domain; no library models it.
 - Replacing `fyltr/copier-go` — no Go-native alternative exists.
 
 ## References
 
+All upstream-version claims **verified on 2026-05-10**.
+
 - DRY audit: this plan, "Audit summary" section above.
-- Build-vs-reuse audit sources:
-  - https://github.com/compose-spec/compose-go
-  - https://github.com/99designs/gqlgen
-  - https://github.com/graphql-go/graphql (last release Apr 2018)
-  - https://github.com/go-git/go-git
-  - https://github.com/go-git/go-git/issues/1956 (worktree perf)
-  - https://github.com/go-playground/validator
-  - https://github.com/invopop/jsonschema
+- https://github.com/compose-spec/compose-go (v2.10.2)
+- https://github.com/99designs/gqlgen (v0.17.90, MIT)
+- https://github.com/graphql-go/graphql (v0.8.1, last release Apr 2018)
+- https://github.com/go-git/go-git (v5.19.0)
+- https://github.com/go-git/go-git/issues/1956 (worktree perf — open)
+- https://github.com/go-playground/validator (v10 line, MIT)
+- https://github.com/invopop/jsonschema (MIT)
