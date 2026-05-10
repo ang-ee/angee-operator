@@ -15,6 +15,7 @@ import (
 
 	"github.com/fyltr/angee/internal/copierx"
 	"github.com/fyltr/angee/internal/manifest"
+	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +81,7 @@ func runDoctor(ctx context.Context, requestedRoot string) doctorReport {
 	if root == "" {
 		root = "."
 	}
-	resolvedRoot, err := resolveRoot(root)
+	resolvedRoot, err := stackroot.Resolve(root)
 	if err != nil {
 		runner.add("root", doctorError, err.Error(), "Pass --root with the ANGEE_ROOT containing angee.yaml.")
 		resolvedRoot = root

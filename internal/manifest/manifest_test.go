@@ -1,8 +1,11 @@
 package manifest
 
 import (
+	"bytes"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestManifestRoundTrip(t *testing.T) {
@@ -63,5 +66,33 @@ func TestManifestRejectsInvalidLocalService(t *testing.T) {
 	}
 	if err := stack.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want error")
+	}
+}
+
+func TestValidateDoesNotMutate(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "pure",
+		SecretsBackend: SecretsBackend{
+			Type: "env-file",
+		},
+		Services: map[string]Service{
+			"web": {Runtime: RuntimeContainer, Image: "nginx:latest"},
+		},
+	}
+	before, err := yaml.Marshal(stack)
+	if err != nil {
+		t.Fatalf("Marshal(before) error = %v", err)
+	}
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	after, err := yaml.Marshal(stack)
+	if err != nil {
+		t.Fatalf("Marshal(after) error = %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("Validate() mutated stack\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }

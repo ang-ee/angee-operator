@@ -19,6 +19,7 @@ import (
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/operator"
 	"github.com/fyltr/angee/internal/service"
+	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 
@@ -621,9 +622,12 @@ func parseKeyValues(values []string) (map[string]string, error) {
 }
 
 func stackInitError(template string, err error) error {
-	var exists *service.StackRootExistsError
-	if errors.As(err, &exists) {
-		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(exists.Root))
+	var conflict *service.ConflictError
+	if errors.As(err, &conflict) && conflict.Kind == "stack-root" {
+		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(conflict.Name))
+	}
+	if remote, ok := remoteConflict(err, "stack-root"); ok {
+		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(remote.Body.Name))
 	}
 	return err
 }
@@ -736,54 +740,13 @@ func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (p
 	}
 	selected := *root
 	if resolveControlRoot {
-		resolved, err := resolveRoot(selected)
+		resolved, err := stackroot.Resolve(selected)
 		if err != nil {
 			return nil, err
 		}
 		selected = resolved
 	}
 	return service.New(selected)
-}
-
-func resolveRoot(root string) (string, error) {
-	if root == "" {
-		root = "."
-	}
-	start, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	dir := start
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "angee.yaml")); err == nil {
-			return dir, nil
-		}
-		control := filepath.Join(dir, ".angee")
-		if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
-			return control, nil
-		}
-		if hasWorkspaceTemplates(dir) {
-			return control, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return root, nil
-}
-
-func hasWorkspaceTemplates(dir string) bool {
-	for _, rel := range []string{
-		filepath.Join(".templates", "workspaces"),
-		filepath.Join("templates", "workspaces"),
-	} {
-		if info, err := os.Stat(filepath.Join(dir, rel)); err == nil && info.IsDir() {
-			return true
-		}
-	}
-	return false
 }
 
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {

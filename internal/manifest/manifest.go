@@ -245,7 +245,7 @@ func LoadFile(path string) (*Stack, error) {
 	if err := dec.Decode(&stack); err != nil {
 		return nil, err
 	}
-	stack.initMaps()
+	stack.Defaults()
 	if err := stack.Validate(); err != nil {
 		return nil, err
 	}
@@ -256,7 +256,7 @@ func SaveFile(path string, stack *Stack) error {
 	if stack == nil {
 		return errors.New("manifest is nil")
 	}
-	stack.initMaps()
+	stack.Defaults()
 	if err := stack.Validate(); err != nil {
 		return err
 	}
@@ -289,24 +289,28 @@ func (s *Stack) EnvFilePath(root string) string {
 	return ResolvePath(root, path)
 }
 
-func (s *Stack) Validate() error {
+func (s *Stack) Defaults() {
 	if s.Version == 0 {
 		s.Version = VersionCurrent
 	}
-	if s.Version != VersionCurrent {
-		return fmt.Errorf("unsupported manifest version %d", s.Version)
-	}
 	if s.Kind == "" {
 		s.Kind = KindStack
+	}
+	if s.SecretsBackend.Type == "" {
+		s.SecretsBackend.Type = "env-file"
+	}
+	s.initMaps()
+}
+
+func (s *Stack) Validate() error {
+	if s.Version != VersionCurrent {
+		return fmt.Errorf("unsupported manifest version %d", s.Version)
 	}
 	if s.Kind != KindStack {
 		return fmt.Errorf("unsupported manifest kind %q", s.Kind)
 	}
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("manifest name is required")
-	}
-	if s.SecretsBackend.Type == "" {
-		s.SecretsBackend.Type = "env-file"
 	}
 	if s.SecretsBackend.Type != "env-file" && s.SecretsBackend.Type != "openbao" {
 		return fmt.Errorf("unsupported secrets backend %q", s.SecretsBackend.Type)

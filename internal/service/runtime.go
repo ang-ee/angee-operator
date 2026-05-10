@@ -298,7 +298,7 @@ func splitRuntimeServices(stack *manifest.Stack, names []string) ([]string, []st
 		name = strings.TrimSpace(name)
 		service, ok := stack.Services[name]
 		if !ok {
-			return nil, nil, fmt.Errorf("service %q is not declared", name)
+			return nil, nil, &NotFoundError{Kind: "service", Name: name}
 		}
 		switch service.Runtime {
 		case manifest.RuntimeContainer:
@@ -327,7 +327,7 @@ func selectRuntimeServices(stack *manifest.Stack, names []string, runtimeKind ma
 		name = strings.TrimSpace(name)
 		service, ok := stack.Services[name]
 		if !ok {
-			return nil, fmt.Errorf("service %q is not declared", name)
+			return nil, &NotFoundError{Kind: "service", Name: name}
 		}
 		if service.Runtime != runtimeKind {
 			return nil, fmt.Errorf("service %q uses runtime %q, not %q", name, service.Runtime, runtimeKind)

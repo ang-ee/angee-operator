@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -15,17 +14,9 @@ type StackInitResult struct {
 	Root     string `json:"root"`
 }
 
-type StackRootExistsError struct {
-	Root string
-}
-
-func (e *StackRootExistsError) Error() string {
-	return fmt.Sprintf("stack root %s already exists and is non-empty; use --force to overwrite or `angee stack update` to update", e.Root)
-}
-
 func (p *Platform) StackInit(ctx context.Context, template string, targetPath string, inputs map[string]string, force bool) (StackInitResult, error) {
 	if template == "" {
-		return StackInitResult{}, fmt.Errorf("stack template is required")
+		return StackInitResult{}, &InvalidInputError{Field: "template", Reason: "stack template is required"}
 	}
 	if targetPath == "" {
 		targetPath = p.root
@@ -51,7 +42,11 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 			return StackInitResult{}, err
 		}
 		if nonEmpty {
-			return StackInitResult{}, &StackRootExistsError{Root: preparedRoot}
+			return StackInitResult{}, &ConflictError{
+				Kind:   "stack-root",
+				Name:   preparedRoot,
+				Reason: "already exists and is non-empty; use --force to overwrite or `angee stack update` to update",
+			}
 		}
 	}
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {

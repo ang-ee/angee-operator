@@ -202,7 +202,7 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 					if !ok {
 						return []api.ServiceState{}, nil
 					}
-					return sortedServiceStates(status.Services), nil
+					return sortedMapValues(status.Services), nil
 				},
 			},
 			"jobs": &gql.Field{
@@ -212,7 +212,7 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 					if !ok {
 						return []api.JobState{}, nil
 					}
-					return sortedJobStates(status.Jobs), nil
+					return sortedMapValues(status.Jobs), nil
 				},
 			},
 			"workspaces": &gql.Field{
@@ -222,7 +222,7 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 					if !ok {
 						return []api.WorkspaceRef{}, nil
 					}
-					return sortedWorkspaceRefs(status.Workspaces), nil
+					return sortedMapValues(status.Workspaces), nil
 				},
 			},
 		},
@@ -1197,19 +1197,6 @@ func keyValueList(values map[string]string) []map[string]any {
 	return out
 }
 
-func sortedServiceStates(values map[string]api.ServiceState) []api.ServiceState {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := make([]api.ServiceState, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, values[key])
-	}
-	return out
-}
-
 func stackStatusSource(source any) (api.StackStatusResponse, bool) {
 	switch status := source.(type) {
 	case api.StackStatusResponse:
@@ -1224,26 +1211,13 @@ func stackStatusSource(source any) (api.StackStatusResponse, bool) {
 	}
 }
 
-func sortedJobStates(values map[string]api.JobState) []api.JobState {
+func sortedMapValues[T any](values map[string]T) []T {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]api.JobState, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, values[key])
-	}
-	return out
-}
-
-func sortedWorkspaceRefs(values map[string]api.WorkspaceRef) []api.WorkspaceRef {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := make([]api.WorkspaceRef, 0, len(keys))
+	out := make([]T, 0, len(keys))
 	for _, key := range keys {
 		out = append(out, values[key])
 	}

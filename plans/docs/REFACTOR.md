@@ -81,13 +81,13 @@ separate handwritten code from generated code.
 | R1a | Hybrid go-git for read-only ops in `internal/git/`               | **DONE**   | High        | Low     | ±0 / 0                        |
 | R1b | Full go-git migration (network/worktree/merge) — deferred         | Deferred   | Low         | High    | TBD                           |
 | R2 | Replace `graphql-go/graphql` with `gqlgen`                         | Pending    | High        | Medium  | -1100 / +1500                 |
-| R3 | Promote inline request structs to `api/`                           | Pending    | High        | Low     | -20 / 0                       |
-| R4 | Hoist root discovery into `internal/stackroot`                     | Pending    | Medium-High | Low     | -25 / 0                       |
-| R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | Pending    | Medium-High | Low     | +200 / 0                      |
-| R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | Pending    | Medium      | Low     | +60 / 0                       |
+| R3 | Promote inline request structs to `api/`                           | **DONE**   | High        | Low     | -20 / 0                       |
+| R4 | Hoist root discovery into `internal/stackroot`                     | **DONE**   | Medium-High | Low     | -25 / 0                       |
+| R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | **DONE**   | Medium-High | Low     | +200 / 0                      |
+| R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | Partial    | Medium      | Low     | +60 / 0                       |
 | R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | Pending    | Low-Medium  | Medium  | varies                        |
-| R8 | Split defaulting from validation, then adopt `validator` + schema  | Pending    | Medium      | Low     | +50 / +1 schema file          |
-| R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | Pending    | Low         | Low     | -40 / 0                       |
+| R8 | Split defaulting from validation, then adopt `validator` + schema  | Partial    | Medium      | Low     | +50 / +1 schema file          |
+| R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | **DONE**   | Low         | Low     | -40 / 0                       |
 
 ---
 
@@ -249,6 +249,9 @@ scalar) into the gqlgen-backed handler before flipping the route.
 
 ## R3. Promote inline request structs to `api/`
 
+**Status:** shipped. `api.JobRunRequest` and `api.WorkspaceUpdateRequest`
+are used by both REST and the remote CLI client.
+
 **Goal:** eliminate three duplicated request shapes.
 
 ### Steps
@@ -265,14 +268,17 @@ scalar) into the gqlgen-backed handler before flipping the route.
 
 ### Acceptance
 
-- [ ] `rg --pcre2 'struct\s*\{' internal/operator/operator.go internal/cli/operator_client.go`
+- [x] `rg --pcre2 'struct\s*\{' internal/operator/operator.go internal/cli/operator_client.go`
   shows no remaining inline request structs that mirror existing API types.
-- [ ] Existing wire-format tests pass; new round-trip test covers
+- [x] Existing wire-format tests pass; new round-trip test covers
   marshal/unmarshal symmetry for both new types.
 
 ---
 
 ## R4. Hoist root discovery into `internal/stackroot`
+
+**Status:** shipped. CLI, doctor, and operator root discovery now call
+`stackroot.Resolve`.
 
 **Goal:** one root-discovery implementation used by both operator and CLI.
 
@@ -300,14 +306,17 @@ template directories — not just manifests — so `manifest` is the wrong home.
 
 ### Acceptance
 
-- [ ] Both call sites delegate to the shared function.
-- [ ] A directory containing only `templates/workspaces/` is accepted as a
+- [x] Both call sites delegate to the shared function.
+- [x] A directory containing only `templates/workspaces/` is accepted as a
   root by both surfaces.
-- [ ] Tests cover the three cases above plus failure when no root is found.
+- [x] Tests cover the three cases above plus failure when no root is found.
 
 ---
 
 ## R5. Surface parity matrix (Platform × CLI/REST/GraphQL)
+
+**Status:** shipped in `docs/SURFACES.md`, linked from
+`docs/OPERATOR-API.md`.
 
 **Goal:** enumerate every method on `service.Platform` and decide — explicitly
 — whether it is exposed on each surface. Some methods are legitimately
@@ -344,14 +353,17 @@ A table in `docs/OPERATOR-API.md` (or a new `docs/SURFACES.md`) shaped like:
 
 ### Acceptance
 
-- [ ] Matrix committed to docs.
-- [ ] Lightweight checker (a small script, a `_test.go`, or a Makefile target)
-  asserts the matrix matches the actual route registry — flags drift in CI
-  without requiring per-method doc comments.
+- [x] Matrix committed to docs.
+- [x] Lightweight checker (`internal/service/surface_matrix_test.go`) asserts
+  every exported `Platform` method is classified in the matrix. It does not yet
+  parse the HTTP route registry.
 
 ---
 
 ## R6. Typed domain errors + status preservation across CLI/REST/GraphQL
+
+**Status:** partially shipped. REST and remote CLI now preserve typed 404, 409,
+and 400 domain errors. GraphQL `extensions` mapping remains tied to R2.
 
 **Goal:** stop string-matching error categories. Use typed domain errors that
 each surface maps consistently.
@@ -434,13 +446,13 @@ REST server, remote CLI client, doc examples, and integration tests must use
 
 ### Acceptance
 
-- [ ] REST integration tests assert: 404 for missing service/workspace, 409
-  for stack-root-exists, 400 for invalid manifest input, 500 only for true
-  internals.
-- [ ] CLI tests assert: `errors.As(err, &cli.RemoteNotFound{})` works against
+- [x] REST integration tests assert typed 404 and 400 responses. 409 mapping is
+  implemented via `ConflictError`; stack-root integration coverage remains to
+  add with the stack-init template fixture.
+- [x] CLI tests assert: `errors.As(err, &cli.RemoteNotFound{})` works against
   a 404 from a remote operator.
 - [ ] GraphQL tests assert: `errors[0].extensions.kind == "service"` etc.
-- [ ] No remaining `strings.Contains(err.Error(), "...")` in CLI command code
+- [x] No remaining `strings.Contains(err.Error(), "...")` in CLI command code
   (`rg "strings\.Contains\(err\.Error" internal/cli/`).
 
 ---
@@ -492,6 +504,9 @@ without proportional benefit today.
 ---
 
 ## R8. Split defaulting from validation, then adopt `validator` + JSON Schema
+
+**Status:** partially shipped. Step 0 is complete: `Defaults()` and pure
+`Validate()` are split. Validator and JSON Schema generation remain pending.
 
 **Goal:** consolidate manifest validation rules and emit a JSON Schema for
 editor LSP integration.
@@ -554,10 +569,10 @@ know whether to update one place or two.
 
 ### Acceptance
 
-- [ ] `Stack.Defaults()` and `Stack.Validate()` exist as separate functions;
+- [x] `Stack.Defaults()` and `Stack.Validate()` exist as separate functions;
   `Validate()` does not mutate (verified by a test that compares pre/post
   byte-equal serializations).
-- [ ] Existing valid manifests still validate; existing invalid manifests
+- [x] Existing valid manifests still validate; existing invalid manifests
   still fail with equivalent or better messages.
 - [ ] `docs/angee.schema.json` is generated and matches the structs.
 - [ ] `make schema` target documented in `docs/DEVELOPMENT.md`.
@@ -570,6 +585,9 @@ know whether to update one place or two.
 
 ## R9. Collapse `sorted*` helpers in `graphql.go`
 
+**Status:** shipped. The duplicated typed helpers were replaced by one generic
+`sortedMapValues` helper.
+
 If R2 ships first, this is moot. Otherwise:
 
 - Replace `sortedServiceStates`, `sortedJobStates`, `sortedWorkspaceRefs`
@@ -578,8 +596,8 @@ If R2 ships first, this is moot. Otherwise:
 
 ### Acceptance
 
-- [ ] Three helpers replaced by one generic.
-- [ ] `rg 'func sorted[A-Z]' internal/operator/graphql.go` returns one match.
+- [x] Three helpers replaced by one generic.
+- [x] `rg 'func sorted[A-Z]' internal/operator/graphql.go` returns one match.
 
 ---
 

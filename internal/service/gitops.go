@@ -219,15 +219,15 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, workspaceName, slo
 	}
 	workspace, ok := stack.Workspaces[workspaceName]
 	if !ok {
-		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q is not declared", workspaceName)
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", &NotFoundError{Kind: "workspace", Name: workspaceName}
 	}
 	wsSource, ok := workspace.Sources[slot]
 	if !ok {
-		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source slot %q is not declared", workspaceName, slot)
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", &NotFoundError{Kind: "workspace-source", Name: slot}
 	}
 	source, ok := stack.Sources[wsSource.Source]
 	if !ok {
-		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source %q references undeclared source %q", workspaceName, slot, wsSource.Source)
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", &NotFoundError{Kind: "source", Name: wsSource.Source}
 	}
 	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
 	return stack, wsSource, source, path, nil

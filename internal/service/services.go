@@ -10,14 +10,14 @@ import (
 
 func (p *Platform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) error {
 	if req.Name == "" {
-		return fmt.Errorf("service name is required")
+		return &InvalidInputError{Field: "name", Reason: "service name is required"}
 	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
 	}
 	if _, exists := stack.Services[req.Name]; exists {
-		return fmt.Errorf("service %q already exists", req.Name)
+		return &ConflictError{Kind: "service", Name: req.Name, Reason: "already exists"}
 	}
 	service, err := serviceFromRequest(req)
 	if err != nil {
@@ -38,7 +38,7 @@ func (p *Platform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) 
 
 func (p *Platform) ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error {
 	if req.Name == "" {
-		return fmt.Errorf("service name is required")
+		return &InvalidInputError{Field: "name", Reason: "service name is required"}
 	}
 	stack, err := p.LoadStack()
 	if err != nil {
@@ -46,7 +46,7 @@ func (p *Platform) ServiceUpdate(ctx context.Context, req api.ServiceInitRequest
 	}
 	current, exists := stack.Services[req.Name]
 	if !exists {
-		return fmt.Errorf("service %q is not declared", req.Name)
+		return &NotFoundError{Kind: "service", Name: req.Name}
 	}
 	updated := current
 	if req.Runtime != "" {
@@ -88,7 +88,7 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 	}
 	service, exists := stack.Services[name]
 	if !exists {
-		return fmt.Errorf("service %q is not declared", name)
+		return &NotFoundError{Kind: "service", Name: name}
 	}
 	if stop && service.Runtime == manifest.RuntimeContainer {
 		_ = p.ServiceStop(ctx, []string{name})
@@ -122,7 +122,7 @@ func serviceFromRequest(req api.ServiceInitRequest) (manifest.Service, error) {
 		case len(req.Command) > 0:
 			runtimeKind = manifest.RuntimeLocal
 		default:
-			return manifest.Service{}, fmt.Errorf("service %q requires --image or --command", req.Name)
+			return manifest.Service{}, &InvalidInputError{Field: "service", Reason: fmt.Sprintf("%q requires --image or --command", req.Name)}
 		}
 	}
 	service := manifest.Service{
@@ -147,5 +147,6 @@ func validateService(name string, service manifest.Service) error {
 		Name:     "validation",
 		Services: map[string]manifest.Service{name: service},
 	}
+	stack.Defaults()
 	return stack.Validate()
 }

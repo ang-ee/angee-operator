@@ -33,7 +33,7 @@ const (
 
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceRef, error) {
 	if req.Template == "" {
-		return api.WorkspaceRef{}, fmt.Errorf("workspace template is required")
+		return api.WorkspaceRef{}, &InvalidInputError{Field: "template", Reason: "workspace template is required"}
 	}
 	stack, err := p.loadOrCreateWorkspaceStack()
 	if err != nil {
@@ -56,7 +56,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		return api.WorkspaceRef{}, err
 	}
 	if _, exists := stack.Workspaces[name]; exists {
-		return api.WorkspaceRef{}, fmt.Errorf("workspace %q already exists", name)
+		return api.WorkspaceRef{}, &ConflictError{Kind: "workspace", Name: name, Reason: "already exists"}
 	}
 	allocations, err := allocateWorkspacePorts(stack, name)
 	if err != nil {
@@ -172,7 +172,7 @@ func (p *Platform) WorkspaceGet(ctx context.Context, name string) (api.Workspace
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return api.WorkspaceRef{}, fmt.Errorf("workspace %q is not declared", name)
+		return api.WorkspaceRef{}, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	return workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace), nil
 }
@@ -187,7 +187,7 @@ func (p *Platform) WorkspaceStatus(ctx context.Context, name string) (api.Worksp
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return api.WorkspaceStatusResponse{}, fmt.Errorf("workspace %q is not declared", name)
+		return api.WorkspaceStatusResponse{}, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	return p.workspaceStatus(ctx, name, workspace, stack), nil
 }
@@ -377,7 +377,7 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return fmt.Errorf("workspace %q is not declared", name)
+		return &NotFoundError{Kind: "workspace", Name: name}
 	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return err
@@ -519,7 +519,7 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, inputs map[
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return api.WorkspaceRef{}, fmt.Errorf("workspace %q is not declared", name)
+		return api.WorkspaceRef{}, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	if inputs != nil {
 		if workspace.Inputs == nil {
@@ -556,7 +556,7 @@ func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, follow
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return nil, fmt.Errorf("workspace %q is not declared", name)
+		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	if workspace.Resolved.ChainRoot == "" {
 		ch := make(chan string)
@@ -594,7 +594,7 @@ func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return fmt.Errorf("workspace %q is not declared", name)
+		return &NotFoundError{Kind: "workspace", Name: name}
 	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return err
@@ -624,7 +624,7 @@ func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return fmt.Errorf("workspace %q is not declared", name)
+		return &NotFoundError{Kind: "workspace", Name: name}
 	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return err
@@ -787,7 +787,7 @@ func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.S
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return nil, fmt.Errorf("workspace %q is not declared", name)
+		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	states := []api.SourceState{}
 	for _, slot := range sortedKeys(workspace.Sources) {
@@ -812,7 +812,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return nil, fmt.Errorf("workspace %q is not declared", name)
+		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
@@ -874,11 +874,11 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	}
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
-		return nil, fmt.Errorf("workspace %q is not declared", name)
+		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
 	method = normalizeWorkspaceSyncBaseMethod(method)
 	if method == "" {
-		return nil, fmt.Errorf("workspace sync-base method must be %q or %q", workspaceSyncBaseMerge, workspaceSyncBaseRebase)
+		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", workspaceSyncBaseMerge, workspaceSyncBaseRebase)}
 	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err

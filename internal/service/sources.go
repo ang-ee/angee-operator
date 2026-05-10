@@ -80,7 +80,7 @@ func (p *Platform) SourceFetch(ctx context.Context, name string) (api.SourceStat
 	}
 	source, ok := stack.Sources[name]
 	if !ok {
-		return api.SourceState{}, fmt.Errorf("source %q is not declared", name)
+		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
 	if err := p.materializeSource(ctx, name, source); err != nil {
 		return api.SourceState{}, err
@@ -95,7 +95,7 @@ func (p *Platform) SourceStatus(ctx context.Context, name string) (api.SourceSta
 	}
 	source, ok := stack.Sources[name]
 	if !ok {
-		return api.SourceState{}, fmt.Errorf("source %q is not declared", name)
+		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
 	return p.sourceState(ctx, name, source)
 }
@@ -107,7 +107,7 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState
 	}
 	source, ok := stack.Sources[name]
 	if !ok {
-		return api.SourceState{}, fmt.Errorf("source %q is not declared", name)
+		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
 	if source.Kind != "git" {
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
@@ -128,7 +128,7 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (api.Source
 	}
 	source, ok := stack.Sources[name]
 	if !ok {
-		return api.SourceState{}, fmt.Errorf("source %q is not declared", name)
+		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
 	if source.Kind != "git" {
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)

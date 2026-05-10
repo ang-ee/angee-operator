@@ -12,6 +12,9 @@ Non-loopback binds require `--token`. Protected endpoints use:
 Authorization: Bearer <token>
 ```
 
+Surface parity between `service.Platform`, CLI, REST, and GraphQL is tracked in
+[`SURFACES.md`](SURFACES.md).
+
 ## REST
 
 Health:

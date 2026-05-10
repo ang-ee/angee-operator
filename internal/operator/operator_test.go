@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/manifest"
 )
 
@@ -347,6 +348,51 @@ func TestOperatorWorkspaceBranchIdentityStatusAndSyncBase(t *testing.T) {
 	synced := resp.Data["workspaceSyncBase"].([]any)[0].(map[string]any)
 	if synced["slot"] != "app" || synced["branch"] != workspaceName || synced["currentRef"] != workspaceName || synced["state"] == "branch-mismatch" {
 		t.Fatalf("workspaceSyncBase = %#v, want synced source still on workspace branch", synced)
+	}
+}
+
+func TestRESTServiceErrorsUseTypedStatusCodes(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+services:
+  api:
+    runtime: container
+    image: nginx:latest
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/services/missing/start", nil)
+	rr := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing service status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var notFound api.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &notFound); err != nil {
+		t.Fatalf("Unmarshal missing service error = %v", err)
+	}
+	if notFound.Kind != "service" || notFound.Name != "missing" {
+		t.Fatalf("missing service error = %#v", notFound)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/services", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid service status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var invalid api.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &invalid); err != nil {
+		t.Fatalf("Unmarshal invalid service error = %v", err)
+	}
+	if invalid.Field != "name" || invalid.Reason == "" {
+		t.Fatalf("invalid service error = %#v", invalid)
 	}
 }
 

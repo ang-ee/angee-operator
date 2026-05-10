@@ -19,6 +19,14 @@ type Operation struct {
 	EndedAt   *time.Time      `json:"ended_at,omitempty"`
 }
 
+type ErrorResponse struct {
+	Kind   string `json:"kind,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Field  string `json:"field,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error"`
+}
+
 type StackInitRequest struct {
 	Template string            `json:"template"`
 	Path     string            `json:"path,omitempty"`
@@ -53,6 +61,10 @@ type ServiceState struct {
 type JobState struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
+}
+
+type JobRunRequest struct {
+	Inputs map[string]string `json:"inputs,omitempty"`
 }
 
 type WorkspaceRef struct {
@@ -185,6 +197,11 @@ type WorkspaceCreateRequest struct {
 	Inputs   map[string]string `json:"inputs,omitempty"`
 	TTL      string            `json:"ttl,omitempty"`
 	Start    bool              `json:"start,omitempty"`
+}
+
+type WorkspaceUpdateRequest struct {
+	Inputs map[string]string `json:"inputs,omitempty"`
+	TTL    string            `json:"ttl,omitempty"`
 }
 
 type SourceOperationRequest struct {

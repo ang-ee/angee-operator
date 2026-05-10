@@ -33,7 +33,7 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 	}
 	job, ok := stack.Jobs[name]
 	if !ok {
-		return nil, fmt.Errorf("job %q is not declared", name)
+		return nil, &NotFoundError{Kind: "job", Name: name}
 	}
 	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
 	if err != nil {
@@ -99,7 +99,7 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 
 func runLocalCommand(ctx context.Context, workdir string, command []string, env map[string]string) ([]byte, error) {
 	if len(command) == 0 {
-		return nil, fmt.Errorf("command is empty")
+		return nil, &InvalidInputError{Field: "command", Reason: "command is empty"}
 	}
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Dir = workdir

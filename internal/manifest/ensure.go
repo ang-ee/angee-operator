@@ -19,7 +19,7 @@ import (
 //   - present, different value  → error
 //
 // The merge is performed against a YAML map representation of the stack
-// and the result is unmarshalled back through Stack.Validate, so any
+// and the result is unmarshalled back through Stack.Defaults and Stack.Validate, so any
 // shape error surfaces immediately.
 func Ensure(stack *Stack, requirements map[string]any) error {
 	if len(requirements) == 0 {
@@ -51,7 +51,7 @@ func Ensure(stack *Stack, requirements map[string]any) error {
 	if err := dec.Decode(&next); err != nil {
 		return fmt.Errorf("ensure: decode merged: %w", err)
 	}
-	next.initMaps()
+	next.Defaults()
 	if err := next.Validate(); err != nil {
 		return fmt.Errorf("ensure: %w", err)
 	}
