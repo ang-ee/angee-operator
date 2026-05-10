@@ -18,7 +18,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Reference', link: '/reference/operator-api' },
       {
-        text: 'v0.4.6',
+        text: 'v0.4.7',
         items: [
           { text: 'Changelog', link: 'https://github.com/fyltr/angee/blob/main/CHANGELOG.md' },
           { text: 'Releases', link: 'https://github.com/fyltr/angee/releases' },
