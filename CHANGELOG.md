@@ -6,7 +6,20 @@ latest tag.
 
 ## Unreleased
 
+## v0.4.7 — 2026-05-10
+
 ### Documentation
+
+- Replaced the docs logo with the angee-django isometric cube SVG and
+  rendered it as the homepage hero image.
+- Reframed the homepage and `Concepts` page around the engine / Host
+  boundary: the `angee` CLI + operator is the stack manager; the Host
+  runtime (today [`angee-django`](https://github.com/fyltr/angee-django))
+  composes Blocks into a working app on top.
+- Added `docs/guide/concepts.md` covering Stack, Source, Workspace,
+  Service, Host, and how self-building works end-to-end.
+
+### Documentation (carried from prior Unreleased)
 
 - Stood up a VitePress site under `docs/` published at
   [docs.angee.ai](https://docs.angee.ai) via GitHub Pages
