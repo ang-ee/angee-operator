@@ -184,7 +184,7 @@ separate handwritten code from generated code.
 | R4 | Hoist root discovery into `internal/stackroot`                     | **DONE**   | Medium-High | Low     | -25 / 0                       |
 | R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | **DONE**   | Medium-High | Low     | +200 / 0                      |
 | R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | **DONE**   | Medium      | Low     | +60 / 0                       |
-| R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | Pending    | Low-Medium  | Medium  | varies                        |
+| R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | **DONE**   | Low-Medium  | Medium  | 0 / 0                         |
 | R8 | Split defaulting from validation, then adopt `validator` + schema  | **DONE**   | Medium      | Low     | +50 / +1 schema file          |
 | R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | **DONE**   | Low         | Low     | -40 / 0                       |
 | R10 | Workspace runtime/lifecycle isolation fixes                       | Partial    | High        | Medium  | TBD                           |
@@ -563,6 +563,9 @@ REST server, remote CLI client, doc examples, and integration tests must use
 
 ## R7. Evaluate `compose-spec/compose-go v2` against local Compose model
 
+**Status:** evaluated and deferred. No current manifest or template surface
+requires Compose fields beyond the local `compose.File` model.
+
 **Goal:** decide whether the local typed Compose model
 (`internal/runtime/compose/doc.go`) should be replaced by upstream
 `compose-spec/compose-go v2`. **Lower priority than originally written** —
@@ -604,6 +607,26 @@ angee already uses typed structs, not text templates.
 **Defer R7** unless an audit of missing Compose fields finds a real gap. The
 local minimal model is fit-for-purpose; replacing it is a dep weight increase
 without proportional benefit today.
+
+### Audit result
+
+The current container runtime surface renders exactly these Compose fields:
+
+- top-level `name`, `services`, and named `volumes`
+- service `image`, `build`, `command`, `environment`, `ports`, `volumes`,
+  `working_dir`, and `depends_on`
+- volume `driver` and `name`
+
+Those fields cover the current manifest service model and documented examples.
+The runtime already preserves arbitrary `build` values as YAML, so common
+Compose build subfields do not need a larger typed model. No current
+`angee.yaml`, template metadata, or docs require unsupported Compose features
+such as networks, healthcheck, labels, deploy, profiles, secrets/configs, or
+extra_hosts.
+
+Decision: keep the local minimal model for now. Revisit only when a concrete
+template needs an unsupported Compose field or when Angee starts validating
+full Compose semantics.
 
 ---
 
