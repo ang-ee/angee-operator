@@ -1198,7 +1198,11 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			if ref == "" {
 				ref = source.DefaultRef
 			}
-			return client.WorktreeAddBranch(ctx, p.sourcePath(sourceName, source), dest, ws.Branch, ref)
+			if ws.Branch != "" && client.RefExists(ctx, cachePath, "refs/heads/"+ws.Branch) {
+				fmt.Fprintf(os.Stderr, "warning: branch %q already exists in %s; checking it out into worktree without creating a new branch\n", ws.Branch, cachePath)
+				return client.WorktreeAdd(ctx, cachePath, dest, ws.Branch)
+			}
+			return client.WorktreeAddBranch(ctx, cachePath, dest, ws.Branch, ref)
 		}
 		ref := ws.Ref
 		if ref == "" {
