@@ -6,7 +6,7 @@ require (
 	github.com/fyltr/copier-go v0.0.0-20260506181622-12e6fe84de57
 	github.com/gosimple/slug v1.15.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/sys v0.43.0
+	golang.org/x/sys v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
