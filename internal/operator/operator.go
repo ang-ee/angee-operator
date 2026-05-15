@@ -10,8 +10,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fyltr/angee/api"
@@ -140,6 +143,13 @@ func NewServer(config Config) (*Server, error) {
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// Register SIGHUP before starting the listener so a hangup arriving in
+	// the brief startup window isn't delivered with its default disposition
+	// (process termination).
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	errCh := make(chan error, 1)
 	go func() {
 		err := s.server.ListenAndServe()
@@ -150,16 +160,42 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		errCh <- nil
 	}()
 
+	var tearDown bool
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.server.Shutdown(shutdownCtx); err != nil {
-			return err
-		}
-		return <-errCh
+	case <-hup:
+		tearDown = true
 	case err := <-errCh:
 		return err
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.server.Shutdown(shutdownCtx); err != nil {
+		<-errCh
+		return err
+	}
+	if tearDown {
+		s.tearDownStack()
+	}
+	return <-errCh
+}
+
+// tearDownStack brings the local stack down when the operator receives
+// SIGHUP. Errors are logged but do not fail the operator's exit — by the
+// time we get here the HTTP server is already closed and we want shutdown
+// to make best-effort progress. The fresh background context is intentional:
+// we want teardown to have its own deadline rather than inheriting one that
+// may already be cancelled or near-expired.
+func (s *Server) tearDownStack() {
+	if s.platform == nil {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "operator: tearing down stack on SIGHUP")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := s.platform.StackDown(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "operator:", err)
 	}
 }
 
