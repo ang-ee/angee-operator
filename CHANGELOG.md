@@ -6,6 +6,16 @@ latest tag.
 
 ## Unreleased
 
+## v0.4.11 — 2026-05-15
+
+### Operator
+
+- The operator now treats SIGHUP as "shut down and bring the local stack
+  down with you": after the HTTP server has shut down it runs
+  `platform.StackDown`, terminating docker-compose services and
+  process-compose-managed local processes. SIGINT and SIGTERM keep their
+  prior behavior of stopping only the HTTP server.
+
 ## v0.4.7 — 2026-05-10
 
 ### Documentation
