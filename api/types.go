@@ -265,6 +265,14 @@ type DiffHunk struct {
 	Body     string `json:"body"`
 }
 
+type GitOpResult struct {
+	OK            bool                   `json:"ok"`
+	Conflicted    bool                   `json:"conflicted"`
+	ConflictFiles []string               `json:"conflict_files"`
+	Message       string                 `json:"message"`
+	Source        *WorkspaceSourceStatus `json:"source,omitempty"`
+}
+
 type DiffFile struct {
 	OldPath   string     `json:"old_path,omitempty"`
 	NewPath   string     `json:"new_path,omitempty"`

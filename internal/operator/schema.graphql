@@ -76,6 +76,14 @@ type DiffFile {
   hunks: [DiffHunk!]!
 }
 
+type GitOpResult {
+  ok: Boolean!
+  conflicted: Boolean!
+  conflictFiles: [String!]!
+  message: String!
+  source: WorkspaceSourceStatus
+}
+
 type WorkspaceSourceStatus {
   slot: String!
   source: String!
@@ -297,6 +305,12 @@ type Mutation {
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
   workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
   mintConnectionToken(actor: String!, ttl: String): ConnectionToken!
+  workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
 }
 
 type Subscription {

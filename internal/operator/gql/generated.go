@@ -85,6 +85,14 @@ type ComplexityRoot struct {
 		OldStart func(childComplexity int) int
 	}
 
+	GitOpResult struct {
+		ConflictFiles func(childComplexity int) int
+		Conflicted    func(childComplexity int) int
+		Message       func(childComplexity int) int
+		OK            func(childComplexity int) int
+		Source        func(childComplexity int) int
+	}
+
 	GitOpsLink struct {
 		Ahead          func(childComplexity int) int
 		Behind         func(childComplexity int) int
@@ -142,37 +150,43 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		JobRun                   func(childComplexity int, name string, inputs []*model.KeyValueInput) int
-		MintConnectionToken      func(childComplexity int, actor string, ttl *string) int
-		ServiceDestroy           func(childComplexity int, name string) int
-		ServiceInit              func(childComplexity int, input model.ServiceInput) int
-		ServiceRestart           func(childComplexity int, name string) int
-		ServiceStart             func(childComplexity int, name string) int
-		ServiceStop              func(childComplexity int, name string) int
-		ServiceUpdate            func(childComplexity int, name string, input model.ServiceInput) int
-		SourceFetch              func(childComplexity int, name string) int
-		SourcePull               func(childComplexity int, name string) int
-		SourcePush               func(childComplexity int, name string, ref *string) int
-		StackBuild               func(childComplexity int, input *model.StackRuntimeInput) int
-		StackDestroy             func(childComplexity int, purge *bool) int
-		StackDev                 func(childComplexity int, input *model.StackRuntimeInput) int
-		StackDown                func(childComplexity int) int
-		StackInit                func(childComplexity int, input model.StackInitInput) int
-		StackPrepare             func(childComplexity int) int
-		StackUp                  func(childComplexity int, input *model.StackRuntimeInput) int
-		StackUpdate              func(childComplexity int) int
-		WorkspaceCreate          func(childComplexity int, input model.WorkspaceCreateInput) int
-		WorkspaceCreatePreflight func(childComplexity int, input model.WorkspaceCreateInput) int
-		WorkspaceDestroy         func(childComplexity int, name string, purge *bool) int
-		WorkspacePush            func(childComplexity int, name string, ref *string) int
-		WorkspaceRestart         func(childComplexity int, name string) int
-		WorkspaceSourceFetch     func(childComplexity int, workspace string, slot string) int
-		WorkspaceSourcePull      func(childComplexity int, workspace string, slot string) int
-		WorkspaceSourcePush      func(childComplexity int, workspace string, slot string, ref *string) int
-		WorkspaceStart           func(childComplexity int, name string) int
-		WorkspaceStop            func(childComplexity int, name string) int
-		WorkspaceSyncBase        func(childComplexity int, name string, method *string) int
-		WorkspaceUpdate          func(childComplexity int, name string, input model.WorkspaceUpdateInput) int
+		JobRun                        func(childComplexity int, name string, inputs []*model.KeyValueInput) int
+		MintConnectionToken           func(childComplexity int, actor string, ttl *string) int
+		ServiceDestroy                func(childComplexity int, name string) int
+		ServiceInit                   func(childComplexity int, input model.ServiceInput) int
+		ServiceRestart                func(childComplexity int, name string) int
+		ServiceStart                  func(childComplexity int, name string) int
+		ServiceStop                   func(childComplexity int, name string) int
+		ServiceUpdate                 func(childComplexity int, name string, input model.ServiceInput) int
+		SourceFetch                   func(childComplexity int, name string) int
+		SourcePull                    func(childComplexity int, name string) int
+		SourcePush                    func(childComplexity int, name string, ref *string) int
+		StackBuild                    func(childComplexity int, input *model.StackRuntimeInput) int
+		StackDestroy                  func(childComplexity int, purge *bool) int
+		StackDev                      func(childComplexity int, input *model.StackRuntimeInput) int
+		StackDown                     func(childComplexity int) int
+		StackInit                     func(childComplexity int, input model.StackInitInput) int
+		StackPrepare                  func(childComplexity int) int
+		StackUp                       func(childComplexity int, input *model.StackRuntimeInput) int
+		StackUpdate                   func(childComplexity int) int
+		WorkspaceCreate               func(childComplexity int, input model.WorkspaceCreateInput) int
+		WorkspaceCreatePreflight      func(childComplexity int, input model.WorkspaceCreateInput) int
+		WorkspaceDestroy              func(childComplexity int, name string, purge *bool) int
+		WorkspacePush                 func(childComplexity int, name string, ref *string) int
+		WorkspaceRestart              func(childComplexity int, name string) int
+		WorkspaceSourceFetch          func(childComplexity int, workspace string, slot string) int
+		WorkspaceSourceMerge          func(childComplexity int, workspace string, slot string, ref string) int
+		WorkspaceSourceMergeAbort     func(childComplexity int, workspace string, slot string) int
+		WorkspaceSourcePublish        func(childComplexity int, workspace string, slot string, remote *string, branch *string) int
+		WorkspaceSourcePull           func(childComplexity int, workspace string, slot string) int
+		WorkspaceSourcePush           func(childComplexity int, workspace string, slot string, ref *string) int
+		WorkspaceSourceRebase         func(childComplexity int, workspace string, slot string, ref string) int
+		WorkspaceSourceRebaseAbort    func(childComplexity int, workspace string, slot string) int
+		WorkspaceSourceRebaseContinue func(childComplexity int, workspace string, slot string) int
+		WorkspaceStart                func(childComplexity int, name string) int
+		WorkspaceStop                 func(childComplexity int, name string) int
+		WorkspaceSyncBase             func(childComplexity int, name string, method *string) int
+		WorkspaceUpdate               func(childComplexity int, name string, input model.WorkspaceUpdateInput) int
 	}
 
 	MutationResult struct {
@@ -383,6 +397,12 @@ type MutationResolver interface {
 	WorkspaceSourcePush(ctx context.Context, workspace string, slot string, ref *string) (*api.WorkspaceSourceStatus, error)
 	WorkspaceCreatePreflight(ctx context.Context, input model.WorkspaceCreateInput) (*api.WorkspaceCreatePreflightResponse, error)
 	MintConnectionToken(ctx context.Context, actor string, ttl *string) (*api.ConnectionTokenResponse, error)
+	WorkspaceSourceMerge(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error)
+	WorkspaceSourceRebase(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error)
+	WorkspaceSourceMergeAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error)
+	WorkspaceSourceRebaseAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error)
+	WorkspaceSourceRebaseContinue(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error)
+	WorkspaceSourcePublish(ctx context.Context, workspace string, slot string, remote *string, branch *string) (*api.GitOpResult, error)
 }
 type QueryResolver interface {
 	Health(ctx context.Context) (*model.MutationResult, error)
@@ -606,6 +626,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DiffHunk.OldStart(childComplexity), true
+
+	case "GitOpResult.conflictFiles":
+		if e.ComplexityRoot.GitOpResult.ConflictFiles == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpResult.ConflictFiles(childComplexity), true
+	case "GitOpResult.conflicted":
+		if e.ComplexityRoot.GitOpResult.Conflicted == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpResult.Conflicted(childComplexity), true
+	case "GitOpResult.message":
+		if e.ComplexityRoot.GitOpResult.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpResult.Message(childComplexity), true
+	case "GitOpResult.ok":
+		if e.ComplexityRoot.GitOpResult.OK == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpResult.OK(childComplexity), true
+	case "GitOpResult.source":
+		if e.ComplexityRoot.GitOpResult.Source == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpResult.Source(childComplexity), true
 
 	case "GitOpsLink.ahead":
 		if e.ComplexityRoot.GitOpsLink.Ahead == nil {
@@ -1118,6 +1169,39 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.WorkspaceSourceFetch(childComplexity, args["workspace"].(string), args["slot"].(string)), true
+	case "Mutation.workspaceSourceMerge":
+		if e.ComplexityRoot.Mutation.WorkspaceSourceMerge == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourceMerge_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourceMerge(childComplexity, args["workspace"].(string), args["slot"].(string), args["ref"].(string)), true
+	case "Mutation.workspaceSourceMergeAbort":
+		if e.ComplexityRoot.Mutation.WorkspaceSourceMergeAbort == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourceMergeAbort_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourceMergeAbort(childComplexity, args["workspace"].(string), args["slot"].(string)), true
+	case "Mutation.workspaceSourcePublish":
+		if e.ComplexityRoot.Mutation.WorkspaceSourcePublish == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourcePublish_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourcePublish(childComplexity, args["workspace"].(string), args["slot"].(string), args["remote"].(*string), args["branch"].(*string)), true
 	case "Mutation.workspaceSourcePull":
 		if e.ComplexityRoot.Mutation.WorkspaceSourcePull == nil {
 			break
@@ -1140,6 +1224,39 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.WorkspaceSourcePush(childComplexity, args["workspace"].(string), args["slot"].(string), args["ref"].(*string)), true
+	case "Mutation.workspaceSourceRebase":
+		if e.ComplexityRoot.Mutation.WorkspaceSourceRebase == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourceRebase_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourceRebase(childComplexity, args["workspace"].(string), args["slot"].(string), args["ref"].(string)), true
+	case "Mutation.workspaceSourceRebaseAbort":
+		if e.ComplexityRoot.Mutation.WorkspaceSourceRebaseAbort == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourceRebaseAbort_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourceRebaseAbort(childComplexity, args["workspace"].(string), args["slot"].(string)), true
+	case "Mutation.workspaceSourceRebaseContinue":
+		if e.ComplexityRoot.Mutation.WorkspaceSourceRebaseContinue == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourceRebaseContinue_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourceRebaseContinue(childComplexity, args["workspace"].(string), args["slot"].(string)), true
 	case "Mutation.workspaceStart":
 		if e.ComplexityRoot.Mutation.WorkspaceStart == nil {
 			break
@@ -2205,6 +2322,14 @@ type DiffFile {
   hunks: [DiffHunk!]!
 }
 
+type GitOpResult {
+  ok: Boolean!
+  conflicted: Boolean!
+  conflictFiles: [String!]!
+  message: String!
+  source: WorkspaceSourceStatus
+}
+
 type WorkspaceSourceStatus {
   slot: String!
   source: String!
@@ -2426,6 +2551,12 @@ type Mutation {
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
   workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
   mintConnectionToken(actor: String!, ttl: String): ConnectionToken!
+  workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
 }
 
 type Subscription {
@@ -2559,6 +2690,22 @@ func (ec *executionContext) childFields_DiffHunk(ctx context.Context, field grap
 		return ec.fieldContext_DiffHunk_body(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DiffHunk", field.Name)
+}
+
+func (ec *executionContext) childFields_GitOpResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ok":
+		return ec.fieldContext_GitOpResult_ok(ctx, field)
+	case "conflicted":
+		return ec.fieldContext_GitOpResult_conflicted(ctx, field)
+	case "conflictFiles":
+		return ec.fieldContext_GitOpResult_conflictFiles(ctx, field)
+	case "message":
+		return ec.fieldContext_GitOpResult_message(ctx, field)
+	case "source":
+		return ec.fieldContext_GitOpResult_source(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type GitOpResult", field.Name)
 }
 
 func (ec *executionContext) childFields_GitOpsLink(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -3435,6 +3582,96 @@ func (ec *executionContext) field_Mutation_workspaceSourceFetch_args(ctx context
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_workspaceSourceMergeAbort_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceSourceMerge_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "ref",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["ref"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceSourcePublish_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "remote",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["remote"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "branch",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["branch"] = arg3
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_workspaceSourcePull_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -3479,6 +3716,80 @@ func (ec *executionContext) field_Mutation_workspaceSourcePush_args(ctx context.
 	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "ref",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["ref"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceSourceRebaseAbort_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceSourceRebaseContinue_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceSourceRebase_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "ref",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4495,6 +4806,130 @@ func (ec *executionContext) _DiffHunk_body(ctx context.Context, field graphql.Co
 }
 func (ec *executionContext) fieldContext_DiffHunk_body(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("DiffHunk", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpResult_ok(ctx context.Context, field graphql.CollectedField, obj *api.GitOpResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpResult_ok(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OK, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpResult_ok(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpResult_conflicted(ctx context.Context, field graphql.CollectedField, obj *api.GitOpResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpResult_conflicted(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflicted, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpResult_conflicted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpResult_conflictFiles(ctx context.Context, field graphql.CollectedField, obj *api.GitOpResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpResult_conflictFiles(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConflictFiles, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpResult_conflictFiles(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpResult_message(ctx context.Context, field graphql.CollectedField, obj *api.GitOpResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpResult_message(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpResult_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpResult_source(ctx context.Context, field graphql.CollectedField, obj *api.GitOpResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpResult_source(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Source, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
+			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpResult_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GitOpResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceSourceStatus(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _GitOpsLink_id(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsLink) (ret graphql.Marshaler) {
@@ -6798,6 +7233,270 @@ func (ec *executionContext) fieldContext_Mutation_mintConnectionToken(ctx contex
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_mintConnectionToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourceMerge(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourceMerge(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourceMerge(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string), fc.Args["ref"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourceMerge(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourceMerge_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourceRebase(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourceRebase(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourceRebase(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string), fc.Args["ref"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourceRebase(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourceRebase_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourceMergeAbort(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourceMergeAbort(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourceMergeAbort(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourceMergeAbort(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourceMergeAbort_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourceRebaseAbort(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourceRebaseAbort(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourceRebaseAbort(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourceRebaseAbort(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourceRebaseAbort_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourceRebaseContinue(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourceRebaseContinue(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourceRebaseContinue(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourceRebaseContinue(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourceRebaseContinue_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourcePublish(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourcePublish(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourcePublish(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string), fc.Args["remote"].(*string), fc.Args["branch"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourcePublish(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourcePublish_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -11956,6 +12655,62 @@ func (ec *executionContext) _DiffHunk(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
+var gitOpResultImplementors = []string{"GitOpResult"}
+
+func (ec *executionContext) _GitOpResult(ctx context.Context, sel ast.SelectionSet, obj *api.GitOpResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, gitOpResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("GitOpResult")
+		case "ok":
+			out.Values[i] = ec._GitOpResult_ok(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "conflicted":
+			out.Values[i] = ec._GitOpResult_conflicted(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "conflictFiles":
+			out.Values[i] = ec._GitOpResult_conflictFiles(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._GitOpResult_message(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "source":
+			out.Values[i] = ec._GitOpResult_source(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var gitOpsLinkImplementors = []string{"GitOpsLink"}
 
 func (ec *executionContext) _GitOpsLink(ctx context.Context, sel ast.SelectionSet, obj *api.GitOpsLink) graphql.Marshaler {
@@ -12458,6 +13213,48 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "mintConnectionToken":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_mintConnectionToken(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourceMerge":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourceMerge(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourceRebase":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourceRebase(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourceMergeAbort":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourceMergeAbort(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourceRebaseAbort":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourceRebaseAbort(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourceRebaseContinue":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourceRebaseContinue(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourcePublish":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourcePublish(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -14461,6 +15258,20 @@ func (ec *executionContext) marshalNDiffHunk2ᚕgithubᚗcomᚋfyltrᚋangeeᚋa
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNGitOpResult2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v api.GitOpResult) graphql.Marshaler {
+	return ec._GitOpResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._GitOpResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNGitOpsLink2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsLink(ctx context.Context, sel ast.SelectionSet, v api.GitOpsLink) graphql.Marshaler {

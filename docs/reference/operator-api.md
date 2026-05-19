@@ -216,6 +216,36 @@ When `ref` is empty the diff is "working tree vs HEAD" (uncommitted
 changes); when set, it is "HEAD vs ref". Only git sources are
 diffable — local sources surface a typed `InvalidInputError`.
 
+### Convergence operations
+
+The operator exposes per-workspace-source convergence mutations beyond
+fetch/pull/push. Each returns a `GitOpResult`:
+
+```graphql
+type GitOpResult {
+  ok: Boolean!
+  conflicted: Boolean!
+  conflictFiles: [String!]!
+  message: String!
+}
+```
+
+Operations:
+
+| Mutation | Behaviour |
+| --- | --- |
+| `workspaceSourceMerge(workspace, slot, ref)` | `git merge --no-ff --no-edit ref`. On conflict the worktree is left conflicted and `conflictFiles` lists the affected paths. |
+| `workspaceSourceRebase(workspace, slot, ref)` | `git rebase ref`. Conflict semantics match merge; resolve and call `rebaseContinue`, or call `rebaseAbort`. |
+| `workspaceSourceMergeAbort(workspace, slot)` | `git merge --abort`. |
+| `workspaceSourceRebaseAbort(workspace, slot)` | `git rebase --abort`. |
+| `workspaceSourceRebaseContinue(workspace, slot)` | `git rebase --continue` with `core.editor=true` so it never opens an editor. |
+| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to `origin`; `branch` defaults to the workspace source's manifest branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. |
+
+Conflict files come from `git ls-files -u`, so the list is exact and
+reflects only paths the index reports as conflicted. The
+`message` field carries the combined stdout + stderr from git for
+diagnostic display.
+
 ### Template introspection
 
 `templates: [TemplateDescriptor!]!` enumerates every template under

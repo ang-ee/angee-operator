@@ -43,6 +43,14 @@ latest tag.
   payloads parsed via `bluekeyes/go-gitdiff`. `ref` empty means
   uncommitted (working-tree-vs-HEAD); otherwise it diffs against the
   named revision.
+- Added higher-level convergence mutations on workspace source slots:
+  `workspaceSourceMerge(ref)`, `workspaceSourceRebase(ref)`,
+  `workspaceSourceMergeAbort`, `workspaceSourceRebaseAbort`,
+  `workspaceSourceRebaseContinue`, and `workspaceSourcePublish(remote,
+  branch)`. Each returns a `GitOpResult` carrying `{ok, conflicted,
+  conflictFiles, message}`. On conflict the worktree is left in the
+  conflicted state for the caller to resolve; conflict files come from
+  `git ls-files -u` rather than parsing free-form stderr.
 
 ### Dependencies
 

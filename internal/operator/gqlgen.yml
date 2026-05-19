@@ -114,3 +114,6 @@ models:
   DiffHunk:
     model:
       - github.com/fyltr/angee/api.DiffHunk
+  GitOpResult:
+    model:
+      - github.com/fyltr/angee/api.GitOpResult

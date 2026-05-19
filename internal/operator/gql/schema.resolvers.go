@@ -278,6 +278,42 @@ func (r *mutationResolver) MintConnectionToken(ctx context.Context, actor string
 	return &resp, nil
 }
 
+// WorkspaceSourceMerge is the resolver for the workspaceSourceMerge field.
+func (r *mutationResolver) WorkspaceSourceMerge(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceMerge(ctx, workspace, slot, ref)
+	return &res, err
+}
+
+// WorkspaceSourceRebase is the resolver for the workspaceSourceRebase field.
+func (r *mutationResolver) WorkspaceSourceRebase(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceRebase(ctx, workspace, slot, ref)
+	return &res, err
+}
+
+// WorkspaceSourceMergeAbort is the resolver for the workspaceSourceMergeAbort field.
+func (r *mutationResolver) WorkspaceSourceMergeAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceMergeAbort(ctx, workspace, slot)
+	return &res, err
+}
+
+// WorkspaceSourceRebaseAbort is the resolver for the workspaceSourceRebaseAbort field.
+func (r *mutationResolver) WorkspaceSourceRebaseAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceRebaseAbort(ctx, workspace, slot)
+	return &res, err
+}
+
+// WorkspaceSourceRebaseContinue is the resolver for the workspaceSourceRebaseContinue field.
+func (r *mutationResolver) WorkspaceSourceRebaseContinue(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceRebaseContinue(ctx, workspace, slot)
+	return &res, err
+}
+
+// WorkspaceSourcePublish is the resolver for the workspaceSourcePublish field.
+func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace string, slot string, remote *string, branch *string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourcePublish(ctx, workspace, slot, stringPtrValue(remote), stringPtrValue(branch))
+	return &res, err
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (*model.MutationResult, error) {
 	return actionResult("ok"), nil

@@ -58,6 +58,12 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceSourceFetch` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
 | `WorkspaceSourcePull` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
 | `WorkspaceSourcePush` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
+| `WorkspaceSourceMerge` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
+| `WorkspaceSourceRebase` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
+| `WorkspaceSourceMergeAbort` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
+| `WorkspaceSourceRebaseAbort` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
+| `WorkspaceSourceRebaseContinue` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
+| `WorkspaceSourcePublish` | No | No | Yes | Gap: currently GraphQL-only branch publish. |
 | `WorkspaceCreatePreflight` | No | No | Yes | Gap: currently GraphQL-only stateless input validator. |
 | `Templates` | No | No | Yes | Gap: currently GraphQL-only template descriptor list. |
 | `Template` | No | No | Yes | Gap: currently GraphQL-only single template descriptor. |
