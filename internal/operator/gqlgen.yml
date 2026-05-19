@@ -87,3 +87,21 @@ models:
         resolver: true
       secretEnvVars:
         resolver: true
+  WorkspaceCreatePreflight:
+    model:
+      - github.com/fyltr/angee/api.WorkspaceCreatePreflightResponse
+    fields:
+      effectiveInputs:
+        resolver: true
+  PreflightFailure:
+    model:
+      - github.com/fyltr/angee/api.PreflightFailure
+  TemplateDescriptor:
+    model:
+      - github.com/fyltr/angee/api.TemplateDescriptor
+  TemplateInputDescriptor:
+    model:
+      - github.com/fyltr/angee/api.TemplateInputDescriptor
+  ConnectionToken:
+    model:
+      - github.com/fyltr/angee/api.ConnectionTokenResponse

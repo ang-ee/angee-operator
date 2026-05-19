@@ -24,16 +24,18 @@ import (
 )
 
 type Config struct {
-	Root  string
-	Bind  string
-	Port  int
-	Token string
+	Root      string
+	Bind      string
+	Port      int
+	Token     string
+	JWTSecret string
 }
 
 type Server struct {
 	config         Config
 	platform       *service.Platform
 	eventHub       *opgql.EventHub
+	tokens         *tokenMinter
 	graphqlHandler http.Handler
 	server         *http.Server
 }
@@ -62,6 +64,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	cmd.Flags().StringVar(&config.Bind, "bind", config.Bind, "listen address")
 	cmd.Flags().IntVar(&config.Port, "port", config.Port, "listen port")
 	cmd.Flags().StringVar(&config.Token, "token", config.Token, "bearer token for protected endpoints")
+	cmd.Flags().StringVar(&config.JWTSecret, "jwt-secret", config.JWTSecret, "explicit HS256 signing key for mintConnectionToken (default: env ANGEE_OPERATOR_JWT_SECRET, then HKDF-from-bearer, then per-process random)")
 	return cmd.ExecuteContext(ctx)
 }
 
@@ -84,8 +87,16 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	jwtSecret := config.JWTSecret
+	if jwtSecret == "" {
+		jwtSecret = os.Getenv("ANGEE_OPERATOR_JWT_SECRET")
+	}
+	minter, err := newTokenMinter(jwtSecret, config.Token)
+	if err != nil {
+		return nil, err
+	}
 	eventHub := opgql.NewEventHub(platform)
-	s := &Server{config: config, platform: platform, eventHub: eventHub}
+	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter}
 	graphqlHandler, err := newGraphQLHandler(s)
 	if err != nil {
 		return nil, err

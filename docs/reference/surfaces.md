@@ -55,6 +55,9 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceSourceFetch` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
 | `WorkspaceSourcePull` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
 | `WorkspaceSourcePush` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
+| `WorkspaceCreatePreflight` | No | No | Yes | Gap: currently GraphQL-only stateless input validator. |
+| `Templates` | No | No | Yes | Gap: currently GraphQL-only template descriptor list. |
+| `Template` | No | No | Yes | Gap: currently GraphQL-only single template descriptor. |
 
 When adding a new exported `Platform` method, update this table in the same
 change. `internal/service/surface_matrix_test.go` verifies that every exported

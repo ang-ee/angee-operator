@@ -210,6 +210,43 @@ type WorkspaceUpdateRequest struct {
 	TTL    string            `json:"ttl,omitempty"`
 }
 
+type PreflightFailure struct {
+	Field  string `json:"field"`
+	Reason string `json:"reason"`
+}
+
+type WorkspaceCreatePreflightResponse struct {
+	OK               bool               `json:"ok"`
+	Template         string             `json:"template"`
+	ResolvedTemplate string             `json:"resolved_template"`
+	EffectiveInputs  map[string]string  `json:"effective_inputs"`
+	MissingRequired  []string           `json:"missing_required,omitempty"`
+	InvalidInputs    []PreflightFailure `json:"invalid_inputs,omitempty"`
+}
+
+type TemplateInputDescriptor struct {
+	Name      string `json:"name"`
+	Type      string `json:"type,omitempty"`
+	Required  bool   `json:"required"`
+	Immutable bool   `json:"immutable"`
+	Generated bool   `json:"generated"`
+	Default   string `json:"default,omitempty"`
+}
+
+type TemplateDescriptor struct {
+	Ref    string                    `json:"ref"`
+	Kind   string                    `json:"kind"`
+	Name   string                    `json:"name,omitempty"`
+	Path   string                    `json:"path"`
+	Inputs []TemplateInputDescriptor `json:"inputs"`
+}
+
+type ConnectionTokenResponse struct {
+	Token     string `json:"token"`
+	Actor     string `json:"actor"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 type SourceOperationRequest struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref,omitempty"`

@@ -257,6 +257,27 @@ func (r *mutationResolver) WorkspaceSourcePush(ctx context.Context, workspace st
 	return &status, err
 }
 
+// WorkspaceCreatePreflight is the resolver for the workspaceCreatePreflight field.
+func (r *mutationResolver) WorkspaceCreatePreflight(ctx context.Context, input model.WorkspaceCreateInput) (*api.WorkspaceCreatePreflightResponse, error) {
+	resp, err := r.Platform.WorkspaceCreatePreflight(ctx, workspaceCreateRequestFrom(input))
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// MintConnectionToken is the resolver for the mintConnectionToken field.
+func (r *mutationResolver) MintConnectionToken(ctx context.Context, actor string, ttl *string) (*api.ConnectionTokenResponse, error) {
+	if r.Tokens == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	resp, err := r.Tokens.Mint(actor, stringPtrValue(ttl))
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (*model.MutationResult, error) {
 	return actionResult("ok"), nil
@@ -357,6 +378,28 @@ func (r *queryResolver) McpDescriptor(ctx context.Context) (map[string]any, erro
 	return mcpDescriptor(), nil
 }
 
+// Templates is the resolver for the templates field.
+func (r *queryResolver) Templates(ctx context.Context) ([]*api.TemplateDescriptor, error) {
+	descriptors, err := r.Platform.Templates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.TemplateDescriptor, len(descriptors))
+	for i := range descriptors {
+		out[i] = &descriptors[i]
+	}
+	return out, nil
+}
+
+// Template is the resolver for the template field.
+func (r *queryResolver) Template(ctx context.Context, ref string) (*api.TemplateDescriptor, error) {
+	desc, err := r.Platform.Template(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return &desc, nil
+}
+
 // Services is the resolver for the services field.
 func (r *stackStatusResolver) Services(ctx context.Context, obj *api.StackStatusResponse) ([]*api.ServiceState, error) {
 	if obj == nil {
@@ -411,6 +454,14 @@ func (r *subscriptionResolver) OnWorkspaceStatusChange(ctx context.Context, name
 		return nil, errSubscriptionsUnavailable
 	}
 	return r.Events.SubscribeWorkspaceStatus(ctx, name), nil
+}
+
+// EffectiveInputs is the resolver for the effectiveInputs field.
+func (r *workspaceCreatePreflightResolver) EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return keyValueList(obj.EffectiveInputs), nil
 }
 
 // TTLExpiresAt is the resolver for the ttlExpiresAt field.
@@ -468,6 +519,11 @@ func (r *Resolver) StackStatus() StackStatusResolver { return &stackStatusResolv
 // Subscription returns SubscriptionResolver implementation.
 func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
 
+// WorkspaceCreatePreflight returns WorkspaceCreatePreflightResolver implementation.
+func (r *Resolver) WorkspaceCreatePreflight() WorkspaceCreatePreflightResolver {
+	return &workspaceCreatePreflightResolver{r}
+}
+
 // WorkspaceRef returns WorkspaceRefResolver implementation.
 func (r *Resolver) WorkspaceRef() WorkspaceRefResolver { return &workspaceRefResolver{r} }
 
@@ -479,5 +535,6 @@ type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type stackStatusResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
+type workspaceCreatePreflightResolver struct{ *Resolver }
 type workspaceRefResolver struct{ *Resolver }
 type workspaceStatusResolver struct{ *Resolver }

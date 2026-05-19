@@ -18,6 +18,21 @@ latest tag.
 - Retired the unused `GET /events` SSE stub (only ever emitted a static
   `ready` event). Live event streaming is now exclusively via GraphQL
   subscriptions on `/graphql`.
+- Added `workspaceCreatePreflight(input)` mutation that validates a
+  `WorkspaceCreateInput` against the resolved template's input
+  declarations without materialising a workspace. Returns the effective
+  inputs (after defaults), a `missingRequired` list, and an
+  `invalidInputs` list of `{field, reason}` for type-mismatch failures.
+- Added `mintConnectionToken(actor, ttl)` mutation that issues an
+  HS256-signed JWT scoped to the supplied actor. Signing key resolves in
+  this order: explicit `--jwt-secret` / `ANGEE_OPERATOR_JWT_SECRET`,
+  then HKDF-derived from the admin `--token`, then a per-process random
+  fallback for loopback dev. TTL defaults to 1 h, capped at 24 h.
+- Added template-descriptor introspection: `templates: [TemplateDescriptor]!`
+  walks `<root>/.templates/<kind>/*` and `<root>/templates/<kind>/*` and
+  returns descriptors with `kind`, `name`, `path`, and per-input
+  metadata. `template(ref)` returns the single descriptor for an explicit
+  ref (relative path, absolute path, or supported remote URL).
 
 ## v0.4.12 — 2026-05-15
 

@@ -167,3 +167,41 @@ curl -N http://127.0.0.1:9000/graphql \
   -H 'Accept: text/event-stream' \
   -d '{"query":"subscription { onGitOpsTopologyChange { summary { sources workspaces dirty diverged } } }"}'
 ```
+
+### Workspace preflight
+
+`workspaceCreatePreflight(input: WorkspaceCreateInput!)` validates the
+caller's inputs against the resolved template's input declarations
+without touching the filesystem. The response carries the effective
+inputs (defaults plus caller-provided), a `missingRequired` list, and
+an `invalidInputs` list of `{field, reason}` for type-mismatch errors.
+Use this from any client that builds workspace-create forms before
+committing the irreversible-but-recoverable materialisation.
+
+### Connection tokens
+
+`mintConnectionToken(actor: String!, ttl: String): ConnectionToken!`
+returns an HS256-signed JWT carrying `sub=<actor>`, `iss=angee-operator`,
+plus `iat`/`exp`. TTL defaults to 1 h and is capped at 24 h. The signing
+key resolves in this precedence order:
+
+1. `--jwt-secret` flag on the operator command line.
+2. `ANGEE_OPERATOR_JWT_SECRET` env var.
+3. HKDF-derived from the admin `--token` (one-way; leaking JWT secret
+   does not reveal the admin bearer).
+4. Per-process random fallback when neither secret nor admin bearer is
+   set (loopback dev only — tokens won't survive an operator restart).
+
+The mutation itself is gated by the admin bearer (`Authorization: Bearer
+<admin-token>` on the request that mints the new token). Callers should
+treat the returned token as opaque.
+
+### Template introspection
+
+`templates: [TemplateDescriptor!]!` enumerates every template under
+`<root>/.templates/<kind>/<name>` and `<root>/templates/<kind>/<name>`.
+`template(ref: String!): TemplateDescriptor` resolves an explicit ref
+(`workspaces/dev-pr`, an absolute path, or a supported remote URL) and
+returns the same shape. Each descriptor carries `ref`, `kind`, `name`,
+`path`, and a sorted list of `TemplateInputDescriptor`
+(`name`, `type`, `required`, `immutable`, `generated`, `default`).
