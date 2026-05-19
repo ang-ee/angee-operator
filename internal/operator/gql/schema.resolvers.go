@@ -349,7 +349,7 @@ func (r *queryResolver) WorkspaceGit(ctx context.Context, name string) ([]*api.S
 // GitOpsTopology is the resolver for the gitOpsTopology field.
 func (r *queryResolver) GitOpsTopology(ctx context.Context, withCommits *int) (*api.GitOpsTopologyResponse, error) {
 	limit := 0
-	if withCommits != nil && *withCommits > 0 {
+	if withCommits != nil {
 		limit = *withCommits
 	}
 	topology, err := r.Platform.GitOpsTopologyWithCommits(ctx, limit)

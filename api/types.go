@@ -286,6 +286,23 @@ type SourceOperationRequest struct {
 	Ref  string `json:"ref,omitempty"`
 }
 
+// WorkspaceSourceGitOpRequest is the body for the REST convergence
+// endpoints (merge / rebase / publish). `Ref` is the merge/rebase
+// target; `Remote` and `Branch` only matter for `publish`.
+type WorkspaceSourceGitOpRequest struct {
+	Ref    string `json:"ref,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	Branch string `json:"branch,omitempty"`
+}
+
+// MintConnectionTokenRequest is the body for `POST /tokens/mint`.
+// `Actor` is required and becomes the `sub` claim; `TTL` is a Go
+// duration string capped at 24h.
+type MintConnectionTokenRequest struct {
+	Actor string `json:"actor"`
+	TTL   string `json:"ttl,omitempty"`
+}
+
 type WorkspaceSyncBaseRequest struct {
 	Method string `json:"method,omitempty"`
 }

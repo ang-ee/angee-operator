@@ -72,13 +72,27 @@ func (p *Platform) Templates(ctx context.Context) ([]api.TemplateDescriptor, err
 }
 
 // Template returns the descriptor for the template identified by ref.
-// ref is a relative path under `<root>/.templates/` or `<root>/templates/`
-// (e.g. `workspaces/dev-pr`), an absolute filesystem path, or a remote
-// reference accepted by resolveTemplate. Kind is inferred from the first
-// path segment when the ref is relative.
+// ref is a relative path under `<root>/.templates/<kind>/<name>` or
+// `<root>/templates/<kind>/<name>` (e.g. `workspaces/dev-pr`), or a
+// remote reference accepted by resolveTemplate. Kind is inferred from
+// the first path segment when the ref is relative.
+//
+// Absolute filesystem paths and refs containing `..` segments are
+// rejected: this is an introspection surface reachable from REST and
+// GraphQL with only the admin bearer, and the CLI's local-path
+// `--template /abs/path` flow does not go through here (it calls
+// WorkspaceCreate which uses resolveTemplate directly).
 func (p *Platform) Template(ctx context.Context, ref string) (api.TemplateDescriptor, error) {
 	if ref == "" {
 		return api.TemplateDescriptor{}, &InvalidInputError{Field: "ref", Reason: "template ref is required"}
+	}
+	if !isRemoteTemplateRef(ref) {
+		if filepath.IsAbs(ref) {
+			return api.TemplateDescriptor{}, &InvalidInputError{Field: "ref", Reason: "absolute paths are not allowed; use a relative ref under the stack root"}
+		}
+		if strings.Contains(ref, "..") {
+			return api.TemplateDescriptor{}, &InvalidInputError{Field: "ref", Reason: "ref must not contain `..` segments"}
+		}
 	}
 	kind := templateKindFromRef(ref)
 	templatePath, resolvedRef, err := p.resolveTemplate(ctx, ref, kind)

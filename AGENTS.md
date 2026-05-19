@@ -11,7 +11,7 @@ operator, and runtime backend implementation for Angee.
 >
 > ```sh
 > cd ~/Work/fyltr/angee-django
-> angee workspace create fix-issue-123 --template dev-pr-multi --start
+> angee workspace create fix-issue-123 --template dev-pr-multi
 > ```
 >
 > Shared slash commands and sub-agents live in `angee-django/.agents/` and

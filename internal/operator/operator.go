@@ -663,11 +663,21 @@ func writeBadRequest(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusBadRequest, api.ErrorResponse{Error: err.Error()})
 }
 
+// maxRESTBodyBytes caps the size of a REST request body to keep a hostile
+// or buggy client from OOM'ing the operator with a multi-gigabyte JSON
+// payload. Matches the graphql handler's body cap.
+const maxRESTBodyBytes = 1 << 20
+
 func decode[T any](r *http.Request) (T, error) {
 	var value T
 	if r.Body == nil {
 		return value, nil
 	}
+	// Passing a nil ResponseWriter is supported by MaxBytesReader (it only
+	// uses w to set Connection: close on overflow). Callers receive a
+	// *http.MaxBytesError that writeBadRequest renders as 400 — clients
+	// don't get to oversize a POST simply because decode is generic.
+	r.Body = http.MaxBytesReader(nil, r.Body, maxRESTBodyBytes)
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(&value); err != nil && !errors.Is(err, io.EOF) {
 		return value, err

@@ -16,8 +16,8 @@ func (s *Server) gitOpsTopology(w http.ResponseWriter, r *http.Request) {
 	withCommits := 0
 	if raw := r.URL.Query().Get("with_commits"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 {
-			writeBadRequest(w, errors.New("with_commits must be a non-negative integer"))
+		if err != nil {
+			writeBadRequest(w, errors.New("with_commits must be an integer"))
 			return
 		}
 		withCommits = parsed
@@ -96,17 +96,8 @@ func (s *Server) workspaceSourceDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, files)
 }
 
-// gitOpRequest is the JSON body accepted by merge/rebase REST endpoints.
-// `Ref` carries the merge/rebase target; `Remote` and `Branch` are only
-// used by `publish`.
-type gitOpRequest struct {
-	Ref    string `json:"ref,omitempty"`
-	Remote string `json:"remote,omitempty"`
-	Branch string `json:"branch,omitempty"`
-}
-
 func (s *Server) workspaceSourceMerge(w http.ResponseWriter, r *http.Request) {
-	req, err := decode[gitOpRequest](r)
+	req, err := decode[api.WorkspaceSourceGitOpRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return
@@ -120,7 +111,7 @@ func (s *Server) workspaceSourceMerge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceSourceRebase(w http.ResponseWriter, r *http.Request) {
-	req, err := decode[gitOpRequest](r)
+	req, err := decode[api.WorkspaceSourceGitOpRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return
@@ -161,7 +152,7 @@ func (s *Server) workspaceSourceRebaseContinue(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) workspaceSourcePublish(w http.ResponseWriter, r *http.Request) {
-	req, err := decode[gitOpRequest](r)
+	req, err := decode[api.WorkspaceSourceGitOpRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return
@@ -197,13 +188,8 @@ func (s *Server) template(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, desc)
 }
 
-type mintTokenRequest struct {
-	Actor string `json:"actor"`
-	TTL   string `json:"ttl,omitempty"`
-}
-
 func (s *Server) mintConnectionToken(w http.ResponseWriter, r *http.Request) {
-	req, err := decode[mintTokenRequest](r)
+	req, err := decode[api.MintConnectionTokenRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return
