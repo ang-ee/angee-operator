@@ -182,6 +182,23 @@ subcommands yet but are at full parity between REST and GraphQL:
 All of these are documented in detail in
 [Operator API](/reference/operator-api).
 
+## Secrets
+
+```sh
+angee secret list                       # alias: ls
+angee secret get <name>                 # metadata only
+angee secret reveal <name>              # prints the value
+angee secret set <name> --value=v       # or --stdin
+angee secret delete <name>
+```
+
+`list` returns only declared secrets (entries in `stack.secrets`).
+`set`/`delete`/`get` accept any valid name (declared or not). Names must
+match `^[A-Za-z0-9._-]{1,256}$`.
+
+The same operations are reachable over REST and GraphQL — see
+[Operator API](/reference/operator-api).
+
 ## Operator
 
 ```sh

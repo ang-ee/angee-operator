@@ -287,6 +287,23 @@ func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace
 	return &res, err
 }
 
+// SecretSet is the resolver for the secretSet field.
+func (r *mutationResolver) SecretSet(ctx context.Context, name string, value string) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretSet(ctx, name, value)
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+// SecretDelete is the resolver for the secretDelete field.
+func (r *mutationResolver) SecretDelete(ctx context.Context, name string) (*model.MutationResult, error) {
+	if err := r.Platform.SecretDelete(ctx, name); err != nil {
+		return nil, err
+	}
+	return namedActionResult("deleted", name), nil
+}
+
 // Health is the resolver for the health field.
 func (r *queryResolver) Health(ctx context.Context) (*model.MutationResult, error) {
 	return actionResult("ok"), nil
@@ -437,6 +454,37 @@ func (r *queryResolver) Template(ctx context.Context, ref string) (*api.Template
 		return nil, err
 	}
 	return &desc, nil
+}
+
+// Secrets is the resolver for the secrets field.
+func (r *queryResolver) Secrets(ctx context.Context) ([]*api.SecretRef, error) {
+	refs, err := r.Platform.SecretsList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.SecretRef, len(refs))
+	for i := range refs {
+		out[i] = &refs[i]
+	}
+	return out, nil
+}
+
+// Secret is the resolver for the secret field.
+func (r *queryResolver) Secret(ctx context.Context, name string) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretGet(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+// SecretValue is the resolver for the secretValue field.
+func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.SecretValueResponse, error) {
+	resp, err := r.Platform.SecretValue(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // Services is the resolver for the services field.

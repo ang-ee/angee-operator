@@ -163,6 +163,11 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /templates", s.auth(http.HandlerFunc(s.templates)))
 	mux.Handle("GET /templates/{ref...}", s.auth(http.HandlerFunc(s.template)))
 	mux.Handle("POST /tokens/mint", s.auth(http.HandlerFunc(s.mintConnectionToken)))
+	mux.Handle("GET /secrets", s.auth(http.HandlerFunc(s.secretsList)))
+	mux.Handle("GET /secrets/{name}", s.auth(http.HandlerFunc(s.secretGet)))
+	mux.Handle("GET /secrets/{name}/value", s.auth(http.HandlerFunc(s.secretValue)))
+	mux.Handle("POST /secrets/{name}", s.auth(http.HandlerFunc(s.secretSet)))
+	mux.Handle("DELETE /secrets/{name}", s.auth(http.HandlerFunc(s.secretDelete)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),

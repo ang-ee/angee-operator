@@ -32,6 +32,17 @@ latest tag.
 
 ### Operator
 
+- Added secret CRUD over REST + GraphQL + CLI. Five operations
+  (`secrets`, `secret(name)`, `secretValue(name)`, `secretSet`,
+  `secretDelete`) backed by the existing `secrets.Backend` interface so
+  both env-file and OpenBao deployments work without changes. The value
+  read (`secretValue` / `GET /secrets/{name}/value` / `angee secret
+  reveal`) is a dedicated endpoint so the privileged path is obvious in
+  audit logs and code review. `secrets` (list) only returns declared
+  secrets (entries in `stack.secrets`); set/delete accept any name
+  matching `^[A-Za-z0-9._-]{1,256}$`. Mutating calls log to operator
+  stderr (env-file's audit trail; OpenBao continues to own its own
+  audit log).
 - Closed the REST/GraphQL parity gap. Every operation added in this
   release now has a REST endpoint alongside the GraphQL surface, secured
   by the same admin-bearer middleware as the rest of the operator API.

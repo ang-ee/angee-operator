@@ -185,6 +185,27 @@ Connection tokens:
 POST /tokens/mint                                  body: {"actor":"...","ttl":"30m"}
 ```
 
+Secrets (CRUD against the configured secrets backend):
+
+```http
+GET    /secrets                                   list declared secrets (metadata only)
+GET    /secrets/{name}                            one secret's metadata
+GET    /secrets/{name}/value                      privileged read: returns the value
+POST   /secrets/{name}                            body: {"value":"..."}
+DELETE /secrets/{name}                            remove the backend entry
+```
+
+`GET /secrets` returns only the **declared** secrets (entries in
+`stack.secrets`). Set/delete/get accept any name matching
+`^[A-Za-z0-9._-]{1,256}$` — declared or not — so callers can provision
+values before adding the manifest declaration. The list will only show
+the secret once it's declared.
+
+Every mutating call (`POST`, `DELETE`) is logged to operator stderr with
+the secret name and the request's remote address. OpenBao keeps its own
+audit log on top of that; env-file deployments rely on the operator log
+as the only paper trail.
+
 Mints an HS256-signed JWT scoped to the supplied actor. TTL defaults to
 1h and is capped at 24h. The signing key resolves via
 `--jwt-secret` / `ANGEE_OPERATOR_JWT_SECRET` / HKDF-from-admin-bearer

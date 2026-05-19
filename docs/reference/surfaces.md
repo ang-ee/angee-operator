@@ -65,6 +65,11 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceCreatePreflight` | No | Yes | Yes | CLI gap; REST `POST /workspaces/preflight`. |
 | `Templates` | No | Yes | Yes | CLI gap; REST `GET /templates`. |
 | `Template` | No | Yes | Yes | CLI gap; REST `GET /templates/{ref...}`. |
+| `SecretsList` | Yes | Yes | Yes | CLI `angee secret list`; REST `GET /secrets`. |
+| `SecretGet` | Yes | Yes | Yes | CLI `angee secret get`; REST `GET /secrets/{name}`. |
+| `SecretValue` | Yes | Yes | Yes | CLI `angee secret reveal`; REST `GET /secrets/{name}/value`. Privileged value-read. |
+| `SecretSet` | Yes | Yes | Yes | CLI `angee secret set`; REST `POST /secrets/{name}`. |
+| `SecretDelete` | Yes | Yes | Yes | CLI `angee secret delete`; REST `DELETE /secrets/{name}`. |
 
 When adding a new exported `Platform` method, update this table in the same
 change. `internal/service/surface_matrix_test.go` verifies that every exported

@@ -24,6 +24,7 @@ REST + GraphQL:
 | **Workspace source slot** (one git materialization inside a workspace) | `workspaceSourceFetch`, **`workspaceSourcePull`** (= slot-level update), `workspaceSourcePush`, `workspaceSourceMerge`/`Rebase`/`MergeAbort`/`RebaseAbort`/`RebaseContinue`/`Publish`, `workspaceSourceDiff`. |
 | **GitOps topology** (derived view: sources × slots) | `gitOpsTopology(withCommits: Int)` snapshot; `onGitOpsTopologyChange` live. |
 | **Templates** (discoverable Copier templates) | `templates`, `template(ref)`. |
+| **Secrets** (env-file or OpenBao backend) | `secrets`, `secret(name)`, `secretValue(name)` (privileged value-read), `secretSet`, `secretDelete`. |
 | **Connection token** (per-actor scoped JWT) | `mintConnectionToken(actor, ttl)` (gated by admin bearer). |
 | **Subscriptions** (SSE, GraphQL-only) | `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
 

@@ -303,6 +303,34 @@ type MintConnectionTokenRequest struct {
 	TTL   string `json:"ttl,omitempty"`
 }
 
+// SecretRef is metadata about a secret — never includes the value.
+// `Declared` is true when the secret is declared in `stack.secrets`;
+// `HasValue` reflects whether the configured backend currently holds a
+// value for the name.
+type SecretRef struct {
+	Name      string `json:"name"`
+	Declared  bool   `json:"declared"`
+	HasValue  bool   `json:"has_value"`
+	Required  bool   `json:"required,omitempty"`
+	Generated bool   `json:"generated,omitempty"`
+	Import    string `json:"import,omitempty"`
+	EnvVar    string `json:"env_var,omitempty"`
+}
+
+// SecretValueResponse carries the resolved value. Returned only by the
+// dedicated value-read endpoint so the privileged read is obvious in
+// every audit trail and code review.
+type SecretValueResponse struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// SecretSetRequest is the body of `POST /secrets/{name}` and the
+// `secretSet` mutation. Value is required and stored verbatim.
+type SecretSetRequest struct {
+	Value string `json:"value"`
+}
+
 type WorkspaceSyncBaseRequest struct {
 	Method string `json:"method,omitempty"`
 }

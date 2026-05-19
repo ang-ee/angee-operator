@@ -55,6 +55,11 @@ type platformClient interface {
 	WorkspaceGitStatus(context.Context, string) ([]api.SourceState, error)
 	WorkspacePush(context.Context, string, string) ([]api.SourceState, error)
 	WorkspaceSyncBase(context.Context, string, string) ([]api.SourceState, error)
+	SecretsList(context.Context) ([]api.SecretRef, error)
+	SecretGet(context.Context, string) (api.SecretRef, error)
+	SecretValue(context.Context, string) (api.SecretValueResponse, error)
+	SecretSet(context.Context, string, string) (api.SecretRef, error)
+	SecretDelete(context.Context, string) error
 }
 
 type remotePlatform struct {
@@ -333,6 +338,43 @@ func (p *remotePlatform) WorkspaceSyncBase(ctx context.Context, name string, met
 		return nil, err
 	}
 	return states, nil
+}
+
+func (p *remotePlatform) SecretsList(ctx context.Context) ([]api.SecretRef, error) {
+	var refs []api.SecretRef
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets", nil, nil, &refs); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+func (p *remotePlatform) SecretGet(ctx context.Context, name string) (api.SecretRef, error) {
+	var ref api.SecretRef
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name), nil, nil, &ref); err != nil {
+		return api.SecretRef{}, err
+	}
+	return ref, nil
+}
+
+func (p *remotePlatform) SecretValue(ctx context.Context, name string) (api.SecretValueResponse, error) {
+	var resp api.SecretValueResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name)+"/value", nil, nil, &resp); err != nil {
+		return api.SecretValueResponse{}, err
+	}
+	return resp, nil
+}
+
+func (p *remotePlatform) SecretSet(ctx context.Context, name, value string) (api.SecretRef, error) {
+	var ref api.SecretRef
+	body := api.SecretSetRequest{Value: value}
+	if err := p.doJSON(ctx, http.MethodPost, "/secrets/"+url.PathEscape(name), nil, body, &ref); err != nil {
+		return api.SecretRef{}, err
+	}
+	return ref, nil
+}
+
+func (p *remotePlatform) SecretDelete(ctx context.Context, name string) error {
+	return p.doJSON(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil, nil)
 }
 
 func (p *remotePlatform) doJSON(ctx context.Context, method, path string, query url.Values, in any, out any) error {

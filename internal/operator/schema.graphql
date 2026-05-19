@@ -269,6 +269,9 @@ type Query {
   mcpDescriptor: JSON
   templates: [TemplateDescriptor!]!
   template(ref: String!): TemplateDescriptor
+  secrets: [SecretRef!]!
+  secret(name: String!): SecretRef
+  secretValue(name: String!): SecretValue
 }
 
 type Mutation {
@@ -306,6 +309,8 @@ type Mutation {
   workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
   workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
   workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
+  secretSet(name: String!, value: String!): SecretRef!
+  secretDelete(name: String!): MutationResult!
 }
 
 type Subscription {
@@ -350,4 +355,19 @@ type ConnectionToken {
   token: String!
   actor: String!
   expiresAt: String!
+}
+
+type SecretRef {
+  name: String!
+  declared: Boolean!
+  hasValue: Boolean!
+  required: Boolean
+  generated: Boolean
+  import: String
+  envVar: String
+}
+
+type SecretValue {
+  name: String!
+  value: String!
 }

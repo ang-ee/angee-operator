@@ -117,3 +117,9 @@ models:
   GitOpResult:
     model:
       - github.com/fyltr/angee/api.GitOpResult
+  SecretRef:
+    model:
+      - github.com/fyltr/angee/api.SecretRef
+  SecretValue:
+    model:
+      - github.com/fyltr/angee/api.SecretValueResponse
