@@ -12,6 +12,7 @@ import (
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/copierx"
+	"github.com/fyltr/angee/internal/fslock"
 	"github.com/fyltr/angee/internal/manifest"
 	"github.com/fyltr/angee/internal/ports"
 	"github.com/fyltr/angee/internal/substitute"
@@ -46,6 +47,39 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 	if req.Workspace == "" {
 		return api.ServiceState{}, &InvalidInputError{Field: "workspace", Reason: "target workspace is required"}
 	}
+	// Hold the root lock for the load → allocate → persist cycle so
+	// concurrent ServiceCreate calls don't race on port allocation or
+	// the Services[name] uniqueness check (TOCTOU). The lock is
+	// released BEFORE calling StackPrepare/ServiceStart because those
+	// take the same lock internally and the stdlib fslock is
+	// non-recursive.
+	lock := fslock.RootLock(p.root)
+	var state api.ServiceState
+	if err := lock.With(ctx, func() error {
+		s, err := p.serviceCreateLocked(ctx, req)
+		if err != nil {
+			return err
+		}
+		state = s
+		return nil
+	}); err != nil {
+		return api.ServiceState{}, err
+	}
+	// Out of the critical section now: compose re-render and optional
+	// start. If these fail the manifest entry persists; the caller can
+	// recover with `angee service destroy <name>`.
+	if _, err := p.StackPrepare(ctx); err != nil {
+		return api.ServiceState{}, fmt.Errorf("re-render compose after service create: %w", err)
+	}
+	if req.Start {
+		if err := p.ServiceStart(ctx, []string{state.Name}); err != nil {
+			return api.ServiceState{}, err
+		}
+	}
+	return state, nil
+}
+
+func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
 		return api.ServiceState{}, err
@@ -115,7 +149,7 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 	if err != nil {
 		return api.ServiceState{}, fmt.Errorf("create render scratch dir: %w", err)
 	}
-	defer os.RemoveAll(scratch)
+	defer func() { _ = os.RemoveAll(scratch) }()
 	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{
 		Template: templatePath,
 		Dest:     scratch,
@@ -151,16 +185,29 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 	if err := moveRenderedAssets(scratch, buildContext); err != nil {
 		return api.ServiceState{}, fmt.Errorf("install build context: %w", err)
 	}
-	// On failure after this point, also wipe the build context.
-	prevRollback := rollback
-	rollback = func() {
-		_ = os.RemoveAll(buildContext)
-		prevRollback()
+	// Validate the rendered service entry before installing the build
+	// context or registering it in the stack. Includes a containment
+	// check on `build.context` so a hostile template can't escape into
+	// the stack root.
+	if err := validateRenderedServiceBuildContext(renderedService, serviceName); err != nil {
+		return api.ServiceState{}, err
 	}
-
 	if err := validateService(serviceName, renderedService); err != nil {
 		return api.ServiceState{}, err
 	}
+
+	// On failure after this point, also wipe the build context and
+	// remove the in-memory service entry so the deferred rollback's
+	// SaveFile doesn't persist a half-installed service. Order matters:
+	// release leases → wipe build context → drop services map entry →
+	// persist clean state.
+	prevRollback := rollback
+	rollback = func() {
+		_ = os.RemoveAll(buildContext)
+		delete(stack.Services, serviceName)
+		prevRollback()
+	}
+
 	if stack.Services == nil {
 		stack.Services = map[string]manifest.Service{}
 	}
@@ -168,19 +215,11 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return api.ServiceState{}, err
 	}
-	// Past this point a failure leaves the manifest entry in place; the
-	// caller can recover with `angee service destroy`. Cancel the
-	// rollback since the leases are now committed.
+	// Past this point the manifest entry and leases are committed.
+	// Cancel the rollback; StackPrepare / ServiceStart run after the
+	// caller releases the lock (see ServiceCreate).
 	rollback = nil
 
-	if _, err := p.StackPrepare(ctx); err != nil {
-		return api.ServiceState{}, fmt.Errorf("re-render compose after service create: %w", err)
-	}
-	if req.Start {
-		if err := p.ServiceStart(ctx, []string{serviceName}); err != nil {
-			return api.ServiceState{}, err
-		}
-	}
 	// Keep workspace reference alive in the returned state via the
 	// existing ServiceState shape; full workspace mount details are
 	// reachable through StackStatus.
@@ -309,6 +348,15 @@ type partialServiceManifest struct {
 	Services map[string]manifest.Service `yaml:"services"`
 }
 
+// serviceManifestHeaderAllow lists the harmless manifest header keys a
+// template author might naturally include on the rendered service.yaml.
+// They're tolerated but ignored; only `services:` is consumed.
+var serviceManifestHeaderAllow = map[string]struct{}{
+	"version": {},
+	"kind":    {},
+	"name":    {},
+}
+
 func parsePartialServiceManifest(data []byte) (partialServiceManifest, error) {
 	// First pass: decode into a structured shape.
 	var parsed partialServiceManifest
@@ -316,8 +364,10 @@ func parsePartialServiceManifest(data []byte) (partialServiceManifest, error) {
 		return partialServiceManifest{}, err
 	}
 	// Second pass: re-decode into a generic map to enforce the
-	// allowlist. We accept only `services:` at the top level. Anything
-	// else means the template is emitting outside its blast radius.
+	// allowlist. We accept `services:` plus the standard header keys
+	// (version/kind/name). Anything else means the template is
+	// emitting outside its blast radius — jobs, sources, secrets,
+	// volumes, port_leases are all rejected.
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return partialServiceManifest{}, err
@@ -326,9 +376,65 @@ func parsePartialServiceManifest(data []byte) (partialServiceManifest, error) {
 		if key == "services" {
 			continue
 		}
-		return partialServiceManifest{}, &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service.yaml may only contain `services:`, found %q", key)}
+		if _, ok := serviceManifestHeaderAllow[key]; ok {
+			continue
+		}
+		return partialServiceManifest{}, &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service.yaml may only contain `services:` (with optional version/kind/name header keys); found %q", key)}
 	}
 	return parsed, nil
+}
+
+// validateRenderedServiceBuildContext ensures the rendered service's
+// `build.context`, if any, resolves inside the stack-owned build dir
+// at `.angee/services/<service_name>/`. A hostile template could
+// otherwise render `build.context: ../../../etc` and point compose at
+// arbitrary host paths.
+//
+// The manifest's Build field is untyped (`any`) — it can be a bare
+// string ("./docker") or a struct map ({context: "...", dockerfile:
+// "..."}). Handle both shapes.
+func validateRenderedServiceBuildContext(service manifest.Service, serviceName string) error {
+	if service.Build == nil {
+		return nil
+	}
+	context := ""
+	switch typed := service.Build.(type) {
+	case string:
+		context = typed
+	case map[string]any:
+		if raw, ok := typed["context"]; ok {
+			str, ok := raw.(string)
+			if !ok {
+				return &InvalidInputError{Field: "template", Reason: "rendered service build.context must be a string"}
+			}
+			context = str
+		}
+	case map[any]any:
+		// yaml.v3 may emit map[any]any for nested maps depending on
+		// decoding mode; cover both.
+		if raw, ok := typed["context"]; ok {
+			str, ok := raw.(string)
+			if !ok {
+				return &InvalidInputError{Field: "template", Reason: "rendered service build.context must be a string"}
+			}
+			context = str
+		}
+	}
+	if context == "" {
+		// Build with no context (image-only build, image: from build)
+		// is fine; nothing to validate.
+		return nil
+	}
+	// Canonical install location for template-rendered services.
+	expectedPrefix := filepath.ToSlash(filepath.Join(".angee", "services", serviceName)) + "/"
+	clean := filepath.ToSlash(filepath.Clean(strings.TrimPrefix(context, "./")))
+	if filepath.IsAbs(context) {
+		return &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service build.context %q must be relative to the stack root", context)}
+	}
+	if !strings.HasPrefix(clean, expectedPrefix) && clean != strings.TrimSuffix(expectedPrefix, "/") {
+		return &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service build.context %q must live under .angee/services/%s/", context, serviceName)}
+	}
+	return nil
 }
 
 func singleService(services map[string]manifest.Service) (manifest.Service, string) {
