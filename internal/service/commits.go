@@ -28,11 +28,9 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		return nil, nil
 	}
 	// Defense-in-depth: GitOpsTopologyWithCommits clamps the caller's
-	// withCommits to gitOpsTopologyCommitsMax before reaching here, but
-	// CodeQL's flow analysis can't see the upstream clamp and rightly
-	// flags `make([]..., 0, limit)` as user-controlled. Repeat the cap
-	// at the allocation boundary so the bound holds even if a future
-	// caller forgets.
+	// withCommits to gitOpsTopologyCommitsMax before reaching here.
+	// Repeat the cap at the allocation boundary so the bound holds
+	// even if a future caller forgets.
 	if limit > gitOpsTopologyCommitsMax {
 		limit = gitOpsTopologyCommitsMax
 	}
@@ -56,7 +54,14 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		return nil, fmt.Errorf("git log on %s: %w", repoPath, err)
 	}
 	defer walker.Close()
-	commits := make([]api.CommitRef, 0, limit)
+	// Allocate the slice empty rather than with cap=limit. Even though
+	// `limit` is clamped to gitOpsTopologyCommitsMax above, CodeQL's
+	// `go/uncontrolled-allocation-size` query traces user input from
+	// the HTTP layer down to the make() call and the local clamp isn't
+	// recognised as a sanitizer. `append` grows the slice as we walk;
+	// the loop body still respects the `count >= limit` break so the
+	// total allocation is bounded the same way.
+	var commits []api.CommitRef
 	count := 0
 	for {
 		if err := ctx.Err(); err != nil {
