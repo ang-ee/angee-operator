@@ -178,27 +178,68 @@ source is on the wrong branch. The operator also exposes `POST
 | One workspace slot | `POST /workspaces/{name}/sources/{slot}/pull` / GraphQL `workspaceSourcePull` | Fast-forward a single workspace slot's worktree from its tracking ref. No CLI subcommand yet. |
 | All slots of a workspace | `angee workspace sync-base [name] [--merge\|--rebase]` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch. |
 
-### Operations reachable only over REST + GraphQL
+### Per-workspace source slots
 
-Several operations from the recent surface expansion don't have CLI
-subcommands yet but are at full parity between REST and GraphQL:
+Slot-level git operations are reachable as `angee workspace source <op>`:
 
-- `workspaceCreatePreflight(input)` — validate workspace inputs without
-  rendering anything.
-- `workspaceSourceMerge` / `Rebase` / `MergeAbort` / `RebaseAbort` /
-  `RebaseContinue` / `Publish` — per-slot convergence operations
-  returning `GitOpResult{ok, conflicted, conflictFiles, message}`.
-- `workspaceSourceDiff(workspace, slot, ref)` — unified-diff hunks for
-  one slot.
-- `gitOpsTopology(withCommits)` snapshot. The live
-  `onGitOpsTopologyChange` subscription remains GraphQL-only (REST has
-  no native pubsub).
-- `templates` / `template(ref)` — template introspection.
-- `mintConnectionToken(actor, ttl)` — per-actor scoped JWT (admin
-  bearer required to mint).
+```sh
+angee workspace source fetch <workspace> <slot>
+angee workspace source pull <workspace> <slot>
+angee workspace source push <workspace> <slot> [--ref ref]
+angee workspace source diff <workspace> <slot> [--ref ref]
+angee workspace source merge <workspace> <slot> <ref>
+angee workspace source rebase <workspace> <slot> <ref>
+angee workspace source merge-abort <workspace> <slot>
+angee workspace source rebase-abort <workspace> <slot>
+angee workspace source rebase-continue <workspace> <slot>
+angee workspace source publish <workspace> <slot> [--remote origin] [--branch name]
+```
 
-All of these are documented in detail in
-[Operator API](/reference/operator-api).
+Convergence ops (`merge`/`rebase`/aborts/continue/publish) return a
+`GitOpResult{ok, conflicted, conflictFiles, message}` — print as text
+or `--json`.
+
+### Workspace preflight
+
+```sh
+angee workspace preflight --template <ref> [--input k=v] [--name <name>] [--ttl 1h]
+```
+
+Validates the inputs against the resolved template's `_angee.inputs`
+declarations without rendering anything. Useful for surfacing
+validation failures earlier in a UI.
+
+### GitOps topology
+
+```sh
+angee gitops topology [--with-commits N]
+```
+
+Prints the cross-source × workspace-slot topology snapshot. Pass
+`--with-commits N` to include up to N recent commits per git source.
+Subscriptions (`onGitOpsTopologyChange`) remain GraphQL-only — REST
+has no native pubsub.
+
+### Template introspection
+
+```sh
+angee template list
+angee template get <ref>
+```
+
+Walks `<root>/.templates/<kind>/<name>` and
+`<root>/templates/<kind>/<name>`, listing every discoverable Copier
+template plus its input schema.
+
+### Connection tokens
+
+```sh
+angee --operator <url> token mint <actor> [--ttl 30m]
+```
+
+Mints an HS256 JWT scoped to `<actor>`. Requires an admin-bearer-
+authenticated operator URL — the CLI does not access the operator's
+JWT signing material locally.
 
 ## Secrets
 

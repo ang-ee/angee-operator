@@ -32,6 +32,15 @@ latest tag.
 
 ### Operator
 
+- Closed the CLI parity gap for the operator surface. Every operation
+  that was REST + GraphQL-only now has a CLI subcommand: `angee
+  gitops topology [--with-commits N]`, `angee source diff <name>`,
+  `angee workspace preflight`, `angee workspace source
+  {fetch,pull,push,diff,merge,rebase,merge-abort,rebase-abort,rebase-continue,publish}`,
+  `angee template {list,get}`, `angee token mint`. The surface
+  matrix in `docs/reference/surfaces.md` now reads `Yes` in the CLI
+  column for every Platform method. Subscriptions remain GraphQL-only
+  by design (REST/CLI have no native pubsub).
 - Added template-based service creation. `angee service create
   --template <ref> --workspace <name>` (REST `POST /services/create`,
   GraphQL `serviceCreate(input)`) renders a Copier template with

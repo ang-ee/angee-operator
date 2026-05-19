@@ -50,22 +50,22 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceGitStatus` | Yes | Yes | Yes | - |
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |
-| `GitOpsTopology` | No | Yes | Yes | CLI gap; REST `GET /gitops/topology`. |
-| `GitOpsTopologyWithCommits` | No | Yes | Yes | CLI gap; REST `GET /gitops/topology?with_commits=N`. |
-| `SourceDiff` | No | Yes | Yes | CLI gap; REST `GET /sources/{name}/diff?ref=...`. |
-| `WorkspaceSourceDiff` | No | Yes | Yes | CLI gap; REST `GET /workspaces/{name}/sources/{slot}/diff?ref=...`. |
-| `WorkspaceSourceFetch` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/fetch`. |
-| `WorkspaceSourcePull` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/pull`. |
-| `WorkspaceSourcePush` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/push`. |
-| `WorkspaceSourceMerge` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/merge`. |
-| `WorkspaceSourceRebase` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/rebase`. |
-| `WorkspaceSourceMergeAbort` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/merge-abort`. |
-| `WorkspaceSourceRebaseAbort` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/rebase-abort`. |
-| `WorkspaceSourceRebaseContinue` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/rebase-continue`. |
-| `WorkspaceSourcePublish` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/publish`. |
-| `WorkspaceCreatePreflight` | No | Yes | Yes | CLI gap; REST `POST /workspaces/preflight`. |
-| `Templates` | No | Yes | Yes | CLI gap; REST `GET /templates`. |
-| `Template` | No | Yes | Yes | CLI gap; REST `GET /templates/{ref...}`. |
+| `GitOpsTopology` | Yes | Yes | Yes | `angee gitops topology`; REST `GET /gitops/topology`. |
+| `GitOpsTopologyWithCommits` | Yes | Yes | Yes | `angee gitops topology --with-commits N`; REST `GET /gitops/topology?with_commits=N`. |
+| `SourceDiff` | Yes | Yes | Yes | `angee source diff <name>`; REST `GET /sources/{name}/diff?ref=...`. |
+| `WorkspaceSourceDiff` | Yes | Yes | Yes | `angee workspace source diff <ws> <slot>`; REST `GET /workspaces/{name}/sources/{slot}/diff?ref=...`. |
+| `WorkspaceSourceFetch` | Yes | Yes | Yes | `angee workspace source fetch`; REST `POST /workspaces/{name}/sources/{slot}/fetch`. |
+| `WorkspaceSourcePull` | Yes | Yes | Yes | `angee workspace source pull`; REST `POST /workspaces/{name}/sources/{slot}/pull`. |
+| `WorkspaceSourcePush` | Yes | Yes | Yes | `angee workspace source push`; REST `POST /workspaces/{name}/sources/{slot}/push`. |
+| `WorkspaceSourceMerge` | Yes | Yes | Yes | `angee workspace source merge`; REST `POST /workspaces/{name}/sources/{slot}/merge`. |
+| `WorkspaceSourceRebase` | Yes | Yes | Yes | `angee workspace source rebase`; REST `POST /workspaces/{name}/sources/{slot}/rebase`. |
+| `WorkspaceSourceMergeAbort` | Yes | Yes | Yes | `angee workspace source merge-abort`; REST `POST /workspaces/{name}/sources/{slot}/merge-abort`. |
+| `WorkspaceSourceRebaseAbort` | Yes | Yes | Yes | `angee workspace source rebase-abort`; REST `POST /workspaces/{name}/sources/{slot}/rebase-abort`. |
+| `WorkspaceSourceRebaseContinue` | Yes | Yes | Yes | `angee workspace source rebase-continue`; REST `POST /workspaces/{name}/sources/{slot}/rebase-continue`. |
+| `WorkspaceSourcePublish` | Yes | Yes | Yes | `angee workspace source publish`; REST `POST /workspaces/{name}/sources/{slot}/publish`. |
+| `WorkspaceCreatePreflight` | Yes | Yes | Yes | `angee workspace preflight`; REST `POST /workspaces/preflight`. |
+| `Templates` | Yes | Yes | Yes | `angee template list`; REST `GET /templates`. |
+| `Template` | Yes | Yes | Yes | `angee template get`; REST `GET /templates/{ref...}`. |
 | `SecretsList` | Yes | Yes | Yes | CLI `angee secret list`; REST `GET /secrets`. |
 | `SecretGet` | Yes | Yes | Yes | CLI `angee secret get`; REST `GET /secrets/{name}`. |
 | `SecretValue` | Yes | Yes | Yes | CLI `angee secret reveal`; REST `GET /secrets/{name}/value`. Privileged value-read. |

@@ -62,6 +62,9 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(jobCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(sourceCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(workspaceCommand(stdout, &root, &operatorURL, &jsonOutput))
+	cmd.AddCommand(gitopsCommand(stdout, &root, &operatorURL, &jsonOutput))
+	cmd.AddCommand(templateCommand(stdout, &root, &operatorURL, &jsonOutput))
+	cmd.AddCommand(tokenCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(secretCommand(stdout, stderr, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(doctorCommand(stdout, &root, &jsonOutput))
 	cmd.AddCommand(internalCommand(stdout, &root, &operatorURL, &jsonOutput))
@@ -755,6 +758,7 @@ func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (p
 
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	cmd := &cobra.Command{Use: "source", Short: "Manage sources"}
+	cmd.AddCommand(sourceDiffCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(&cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -865,6 +869,8 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspacePushCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceSyncBaseCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceOpenCommand(stdout, root, operatorURL))
+	cmd.AddCommand(workspacePreflightCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceSourceCommand(stdout, root, operatorURL, jsonOutput))
 	return cmd
 }
 
