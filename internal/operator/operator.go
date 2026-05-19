@@ -141,9 +141,6 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("PATCH /workspaces/{name}", s.auth(http.HandlerFunc(s.workspaceUpdate)))
 	mux.Handle("GET /workspaces/{name}/status", s.auth(http.HandlerFunc(s.workspaceStatus)))
 	mux.Handle("GET /workspaces/{name}/logs", s.auth(http.HandlerFunc(s.workspaceLogs)))
-	mux.Handle("POST /workspaces/{name}/start", s.auth(http.HandlerFunc(s.workspaceStart)))
-	mux.Handle("POST /workspaces/{name}/stop", s.auth(http.HandlerFunc(s.workspaceStop)))
-	mux.Handle("POST /workspaces/{name}/restart", s.auth(http.HandlerFunc(s.workspaceRestart)))
 	mux.Handle("POST /workspaces/{name}/destroy", s.auth(http.HandlerFunc(s.workspaceDestroy)))
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
@@ -571,35 +568,6 @@ func (s *Server) workspaceLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeLogStream(w, logs)
-}
-
-func (s *Server) workspaceStart(w http.ResponseWriter, r *http.Request) {
-	if err := s.platform.WorkspaceStart(r.Context(), r.PathValue("name")); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
-}
-
-func (s *Server) workspaceStop(w http.ResponseWriter, r *http.Request) {
-	if err := s.platform.WorkspaceStop(r.Context(), r.PathValue("name")); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
-}
-
-func (s *Server) workspaceRestart(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := s.platform.WorkspaceStop(r.Context(), name); err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := s.platform.WorkspaceStart(r.Context(), name); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 }
 
 func (s *Server) workspaceDestroy(w http.ResponseWriter, r *http.Request) {

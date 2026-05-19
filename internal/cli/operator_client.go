@@ -52,8 +52,6 @@ type platformClient interface {
 	WorkspaceUpdate(context.Context, string, map[string]string, string) (api.WorkspaceRef, error)
 	WorkspaceDestroy(context.Context, string, bool) error
 	WorkspaceLogs(context.Context, string, bool) (<-chan string, error)
-	WorkspaceStart(context.Context, string) error
-	WorkspaceStop(context.Context, string) error
 	WorkspaceGitStatus(context.Context, string) ([]api.SourceState, error)
 	WorkspacePush(context.Context, string, string) ([]api.SourceState, error)
 	WorkspaceSyncBase(context.Context, string, string) ([]api.SourceState, error)
@@ -310,14 +308,6 @@ func (p *remotePlatform) WorkspaceDestroy(ctx context.Context, name string, purg
 
 func (p *remotePlatform) WorkspaceLogs(ctx context.Context, name string, _ bool) (<-chan string, error) {
 	return p.stream(ctx, "/workspaces/"+url.PathEscape(name)+"/logs", nil)
-}
-
-func (p *remotePlatform) WorkspaceStart(ctx context.Context, name string) error {
-	return p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/start", nil, nil, nil)
-}
-
-func (p *remotePlatform) WorkspaceStop(ctx context.Context, name string) error {
-	return p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/stop", nil, nil, nil)
 }
 
 func (p *remotePlatform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.SourceState, error) {

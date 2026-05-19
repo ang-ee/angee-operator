@@ -76,7 +76,7 @@ angee source fetch <name>
 angee source status <name>
 angee source pull <name>
 angee source push <name> [--ref ref]
-angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--start]
+angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...]
 angee workspace list  # or: angee ws ls
 angee workspace get <name>
 angee workspace status [name]

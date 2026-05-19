@@ -168,7 +168,6 @@ type WorkspaceStatus {
   sources: [WorkspaceSourceStatus!]!
   chain: [String!]!
   chainRoot: String
-  lifecycle: String
   allocations: JSON
   processComposePort: Int
   playwrightMcpName: String
@@ -243,7 +242,6 @@ input WorkspaceCreateInput {
   name: String
   inputs: [KeyValueInput!]
   ttl: String
-  start: Boolean
 }
 
 input WorkspaceUpdateInput {
@@ -294,9 +292,6 @@ type Mutation {
   sourcePush(name: String!, ref: String): SourceState
   workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
   workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
-  workspaceStart(name: String!): MutationResult
-  workspaceStop(name: String!): MutationResult
-  workspaceRestart(name: String!): MutationResult
   workspaceDestroy(name: String!, purge: Boolean): MutationResult
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!

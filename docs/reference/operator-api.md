@@ -79,14 +79,18 @@ GET   /workspaces/{name}
 PATCH /workspaces/{name}
 GET   /workspaces/{name}/status
 GET   /workspaces/{name}/logs
-POST  /workspaces/{name}/start
-POST  /workspaces/{name}/stop
-POST  /workspaces/{name}/restart
 POST  /workspaces/{name}/destroy?purge=true
 GET   /workspaces/{name}/git
 POST  /workspaces/{name}/push
 POST  /workspaces/{name}/sync-base
 ```
+
+Workspaces are a pure file primitive — `POST /workspaces` renders Copier
+output and materializes sources, but the operator never starts services
+on a workspace's behalf. If a workspace renders an inner stack and you want
+it running, drive it with `POST /stack/up` against the inner root (start a
+second operator with `--root workspaces/<name>/.angee`, or run `angee stack
+up --root workspaces/<name>/.angee` locally).
 
 Workspace status is the authoritative branch-identity surface for managed git
 worktrees. Each status source includes the manifest `branch`, actual

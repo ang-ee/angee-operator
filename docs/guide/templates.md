@@ -96,7 +96,6 @@ _angee:
       branch: "${inputs.branch}"
       subpath: app
   chain_root: stack
-  chain_lifecycle: auto
   chain:
     - template: stacks/dev
       root: stack
@@ -127,14 +126,18 @@ Putting templates and Sources together, the loop is:
    the rendered `angee.yaml`. Angee fetches and caches them.
 2. **A Workspace renders a development shape** — pick a Workspace
    template, supply the inputs (branch name, base ref, port ranges).
-   Angee materializes Sources on that branch and brings up the chained
-   inner Stack.
-3. **A production Stack runs the same Sources** — point the operator at
+   Angee materializes Sources on that branch and renders any chained
+   inner Stack template **as files** under the workspace tree.
+   Workspaces are a pure file primitive — they never start services.
+3. **An explicit stack command brings the inner stack up** — running
+   services is always a Stack concern, not a Workspace concern. Drive
+   it with `angee stack up --root workspaces/<name>/.angee` (or point a
+   second operator at that root). The same `stack up`/`stack down`/
+   `stack logs` commands work on a workspace's inner stack as on
+   production.
+4. **A production Stack runs the same Sources** — point the operator at
    a different root with the same `sources:` referring to release
    branches or tags.
-4. **The same operator drives both** — `stack up`, `stack down`, `stack
-   logs` (and the matching REST + GraphQL endpoints) work the same in a
-   workspace as in production.
 
 The templating system is therefore the only place where "what runs"
 needs to change. Promoting a feature to production does not rebuild any
@@ -191,13 +194,23 @@ mutation {
       {key: "MCP_URL", value: "https://mcp.internal/sse"}
       {key: "MCP_TOKEN", value: "..."}
     ]
-    start: true
   }) {
     name
     path
     processComposePort
   }
 }
+```
+
+`workspaceCreate` only renders the workspace's files (including the inner
+`angee.yaml`) and materializes its sources — it does not start the agent
+process. Bring the agent up explicitly with a stack operation against the
+workspace's inner root:
+
+```sh
+angee stack up --root workspaces/agent-claude-1/.angee
+# or run a per-workspace operator the host can talk to over HTTP:
+angee operator --root workspaces/agent-claude-1/.angee --port 9100
 ```
 
 Keep this contract in lockstep with

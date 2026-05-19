@@ -173,7 +173,6 @@ type ComplexityRoot struct {
 		WorkspaceCreatePreflight      func(childComplexity int, input model.WorkspaceCreateInput) int
 		WorkspaceDestroy              func(childComplexity int, name string, purge *bool) int
 		WorkspacePush                 func(childComplexity int, name string, ref *string) int
-		WorkspaceRestart              func(childComplexity int, name string) int
 		WorkspaceSourceFetch          func(childComplexity int, workspace string, slot string) int
 		WorkspaceSourceMerge          func(childComplexity int, workspace string, slot string, ref string) int
 		WorkspaceSourceMergeAbort     func(childComplexity int, workspace string, slot string) int
@@ -183,8 +182,6 @@ type ComplexityRoot struct {
 		WorkspaceSourceRebase         func(childComplexity int, workspace string, slot string, ref string) int
 		WorkspaceSourceRebaseAbort    func(childComplexity int, workspace string, slot string) int
 		WorkspaceSourceRebaseContinue func(childComplexity int, workspace string, slot string) int
-		WorkspaceStart                func(childComplexity int, name string) int
-		WorkspaceStop                 func(childComplexity int, name string) int
 		WorkspaceSyncBase             func(childComplexity int, name string, method *string) int
 		WorkspaceUpdate               func(childComplexity int, name string, input model.WorkspaceUpdateInput) int
 	}
@@ -344,7 +341,6 @@ type ComplexityRoot struct {
 		InnerError         func(childComplexity int) int
 		InnerStack         func(childComplexity int) int
 		Inputs             func(childComplexity int) int
-		Lifecycle          func(childComplexity int) int
 		MountedBy          func(childComplexity int) int
 		Name               func(childComplexity int) int
 		Path               func(childComplexity int) int
@@ -386,9 +382,6 @@ type MutationResolver interface {
 	SourcePush(ctx context.Context, name string, ref *string) (*api.SourceState, error)
 	WorkspaceCreate(ctx context.Context, input model.WorkspaceCreateInput) (*api.WorkspaceRef, error)
 	WorkspaceUpdate(ctx context.Context, name string, input model.WorkspaceUpdateInput) (*api.WorkspaceRef, error)
-	WorkspaceStart(ctx context.Context, name string) (*model.MutationResult, error)
-	WorkspaceStop(ctx context.Context, name string) (*model.MutationResult, error)
-	WorkspaceRestart(ctx context.Context, name string) (*model.MutationResult, error)
 	WorkspaceDestroy(ctx context.Context, name string, purge *bool) (*model.MutationResult, error)
 	WorkspacePush(ctx context.Context, name string, ref *string) ([]*api.SourceState, error)
 	WorkspaceSyncBase(ctx context.Context, name string, method *string) ([]*api.SourceState, error)
@@ -1147,17 +1140,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.WorkspacePush(childComplexity, args["name"].(string), args["ref"].(*string)), true
-	case "Mutation.workspaceRestart":
-		if e.ComplexityRoot.Mutation.WorkspaceRestart == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_workspaceRestart_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.WorkspaceRestart(childComplexity, args["name"].(string)), true
 	case "Mutation.workspaceSourceFetch":
 		if e.ComplexityRoot.Mutation.WorkspaceSourceFetch == nil {
 			break
@@ -1257,28 +1239,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.WorkspaceSourceRebaseContinue(childComplexity, args["workspace"].(string), args["slot"].(string)), true
-	case "Mutation.workspaceStart":
-		if e.ComplexityRoot.Mutation.WorkspaceStart == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_workspaceStart_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.WorkspaceStart(childComplexity, args["name"].(string)), true
-	case "Mutation.workspaceStop":
-		if e.ComplexityRoot.Mutation.WorkspaceStop == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_workspaceStop_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.WorkspaceStop(childComplexity, args["name"].(string)), true
 	case "Mutation.workspaceSyncBase":
 		if e.ComplexityRoot.Mutation.WorkspaceSyncBase == nil {
 			break
@@ -2059,12 +2019,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceStatus.Inputs(childComplexity), true
-	case "WorkspaceStatus.lifecycle":
-		if e.ComplexityRoot.WorkspaceStatus.Lifecycle == nil {
-			break
-		}
-
-		return e.ComplexityRoot.WorkspaceStatus.Lifecycle(childComplexity), true
 	case "WorkspaceStatus.mountedBy":
 		if e.ComplexityRoot.WorkspaceStatus.MountedBy == nil {
 			break
@@ -2414,7 +2368,6 @@ type WorkspaceStatus {
   sources: [WorkspaceSourceStatus!]!
   chain: [String!]!
   chainRoot: String
-  lifecycle: String
   allocations: JSON
   processComposePort: Int
   playwrightMcpName: String
@@ -2489,7 +2442,6 @@ input WorkspaceCreateInput {
   name: String
   inputs: [KeyValueInput!]
   ttl: String
-  start: Boolean
 }
 
 input WorkspaceUpdateInput {
@@ -2540,9 +2492,6 @@ type Mutation {
   sourcePush(name: String!, ref: String): SourceState
   workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
   workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
-  workspaceStart(name: String!): MutationResult
-  workspaceStop(name: String!): MutationResult
-  workspaceRestart(name: String!): MutationResult
   workspaceDestroy(name: String!, purge: Boolean): MutationResult
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!
@@ -3074,8 +3023,6 @@ func (ec *executionContext) childFields_WorkspaceStatus(ctx context.Context, fie
 		return ec.fieldContext_WorkspaceStatus_chain(ctx, field)
 	case "chainRoot":
 		return ec.fieldContext_WorkspaceStatus_chainRoot(ctx, field)
-	case "lifecycle":
-		return ec.fieldContext_WorkspaceStatus_lifecycle(ctx, field)
 	case "allocations":
 		return ec.fieldContext_WorkspaceStatus_allocations(ctx, field)
 	case "processComposePort":
@@ -3546,20 +3493,6 @@ func (ec *executionContext) field_Mutation_workspacePush_args(ctx context.Contex
 	return args, nil
 }
 
-func (ec *executionContext) field_Mutation_workspaceRestart_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["name"] = arg0
-	return args, nil
-}
-
 func (ec *executionContext) field_Mutation_workspaceSourceFetch_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -3795,34 +3728,6 @@ func (ec *executionContext) field_Mutation_workspaceSourceRebase_args(ctx contex
 		return nil, err
 	}
 	args["ref"] = arg2
-	return args, nil
-}
-
-func (ec *executionContext) field_Mutation_workspaceStart_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["name"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Mutation_workspaceStop_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["name"] = arg0
 	return args, nil
 }
 
@@ -6749,138 +6654,6 @@ func (ec *executionContext) fieldContext_Mutation_workspaceUpdate(ctx context.Co
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_workspaceUpdate_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_workspaceStart(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_workspaceStart(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().WorkspaceStart(ctx, fc.Args["name"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_workspaceStart(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_MutationResult(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_workspaceStart_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_workspaceStop(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_workspaceStop(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().WorkspaceStop(ctx, fc.Args["name"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_workspaceStop(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_MutationResult(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_workspaceStop_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_workspaceRestart(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_workspaceRestart(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().WorkspaceRestart(ctx, fc.Args["name"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_workspaceRestart(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_MutationResult(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_workspaceRestart_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -10616,29 +10389,6 @@ func (ec *executionContext) fieldContext_WorkspaceStatus_chainRoot(_ context.Con
 	return graphql.NewScalarFieldContext("WorkspaceStatus", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _WorkspaceStatus_lifecycle(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_WorkspaceStatus_lifecycle(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Lifecycle, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalOString2string(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_WorkspaceStatus_lifecycle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("WorkspaceStatus", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _WorkspaceStatus_allocations(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -12191,7 +11941,7 @@ func (ec *executionContext) unmarshalInputWorkspaceCreateInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"template", "name", "inputs", "ttl", "start"}
+	fieldsInOrder := [...]string{"template", "name", "inputs", "ttl"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -12226,13 +11976,6 @@ func (ec *executionContext) unmarshalInputWorkspaceCreateInput(ctx context.Conte
 				return it, err
 			}
 			it.TTL = data
-		case "start":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("start"))
-			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Start = data
 		}
 	}
 	return it, nil
@@ -13160,18 +12903,6 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "workspaceUpdate":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_workspaceUpdate(ctx, field)
-			})
-		case "workspaceStart":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_workspaceStart(ctx, field)
-			})
-		case "workspaceStop":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_workspaceStop(ctx, field)
-			})
-		case "workspaceRestart":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_workspaceRestart(ctx, field)
 			})
 		case "workspaceDestroy":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
@@ -14699,8 +14430,6 @@ func (ec *executionContext) _WorkspaceStatus(ctx context.Context, sel ast.Select
 			}
 		case "chainRoot":
 			out.Values[i] = ec._WorkspaceStatus_chainRoot(ctx, field, obj)
-		case "lifecycle":
-			out.Values[i] = ec._WorkspaceStatus_lifecycle(ctx, field, obj)
 		case "allocations":
 			field := field
 

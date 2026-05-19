@@ -863,9 +863,6 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspacePushCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceSyncBaseCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceOpenCommand(stdout, root, operatorURL))
-	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "start"))
-	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "stop"))
-	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "restart"))
 	return cmd
 }
 
@@ -1081,7 +1078,6 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
 	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "template ref, URL, or path")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
-	cmd.Flags().BoolVar(&req.Start, "start", false, "start workspace after creating it")
 	return cmd
 }
 
@@ -1223,7 +1219,6 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 		{key: "path", value: status.Path},
 		{key: "template", value: status.Template},
 		{key: "chain_root", value: status.ChainRoot},
-		{key: "lifecycle", value: status.Lifecycle},
 		{key: "ttl", value: status.TTL},
 	}
 	for _, row := range rows {
@@ -1321,35 +1316,6 @@ func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "remove workspace files")
 	return cmd
-}
-
-func workspaceLifecycleCommand(stdout io.Writer, root, operatorURL *string, action string) *cobra.Command {
-	return &cobra.Command{
-		Use:   action + " [name]",
-		Short: action + " workspace",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, name, err := workspaceTarget(args, root, operatorURL, action)
-			if err != nil {
-				return err
-			}
-			switch action {
-			case "start":
-				err = platform.WorkspaceStart(cmd.Context(), name)
-			case "stop":
-				err = platform.WorkspaceStop(cmd.Context(), name)
-			case "restart":
-				if err = platform.WorkspaceStop(cmd.Context(), name); err == nil {
-					err = platform.WorkspaceStart(cmd.Context(), name)
-				}
-			}
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(stdout, "workspace %s %s\n", name, actionPast(action))
-			return err
-		},
-	}
 }
 
 func statusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {

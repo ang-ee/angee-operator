@@ -192,33 +192,6 @@ func (r *mutationResolver) WorkspaceUpdate(ctx context.Context, name string, inp
 	return &ref, err
 }
 
-// WorkspaceStart is the resolver for the workspaceStart field.
-func (r *mutationResolver) WorkspaceStart(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceStart(ctx, name); err != nil {
-		return nil, err
-	}
-	return namedActionResult("started", name), nil
-}
-
-// WorkspaceStop is the resolver for the workspaceStop field.
-func (r *mutationResolver) WorkspaceStop(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceStop(ctx, name); err != nil {
-		return nil, err
-	}
-	return namedActionResult("stopped", name), nil
-}
-
-// WorkspaceRestart is the resolver for the workspaceRestart field.
-func (r *mutationResolver) WorkspaceRestart(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceStop(ctx, name); err != nil {
-		return nil, err
-	}
-	if err := r.Platform.WorkspaceStart(ctx, name); err != nil {
-		return nil, err
-	}
-	return namedActionResult("restarted", name), nil
-}
-
 // WorkspaceDestroy is the resolver for the workspaceDestroy field.
 func (r *mutationResolver) WorkspaceDestroy(ctx context.Context, name string, purge *bool) (*model.MutationResult, error) {
 	if err := r.Platform.WorkspaceDestroy(ctx, name, boolPtrValue(purge)); err != nil {

@@ -134,7 +134,6 @@ type Metadata struct {
 	Inputs         map[string]Input                `yaml:"inputs"`
 	Sources        map[string]TemplateSource       `yaml:"sources"`
 	ChainRoot      string                          `yaml:"chain_root"`
-	ChainLifecycle string                          `yaml:"chain_lifecycle"`
 	Chain          []ChainEntry                    `yaml:"chain"`
 	Ensure         map[string]any                  `yaml:"ensure"`
 	Persist        map[string]manifest.PersistPath `yaml:"persist"`

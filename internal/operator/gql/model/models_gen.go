@@ -62,7 +62,6 @@ type WorkspaceCreateInput struct {
 	Name     *string          `json:"name,omitempty"`
 	Inputs   []*KeyValueInput `json:"inputs,omitempty"`
 	TTL      *string          `json:"ttl,omitempty"`
-	Start    *bool            `json:"start,omitempty"`
 }
 
 type WorkspaceUpdateInput struct {

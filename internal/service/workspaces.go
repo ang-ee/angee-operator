@@ -18,13 +18,6 @@ import (
 	"github.com/fyltr/angee/internal/substitute"
 )
 
-// Resolved values for `_angee.chain_lifecycle`.
-const (
-	chainLifecycleAuto = "auto"
-	chainLifecycleDev  = "dev"
-	chainLifecycleUp   = "up"
-)
-
 const (
 	workspaceSourceStateBranchMismatch = "branch-mismatch"
 	workspaceSyncBaseMerge             = "merge"
@@ -86,7 +79,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := materializePersistPaths(workspacePath, metadata.Persist); err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	lifecycle := resolveChainLifecycle(metadata.ChainLifecycle)
 	workspace := manifest.Workspace{
 		Template: templateRef,
 		Inputs:   map[string]string(inputs),
@@ -94,7 +86,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		Resolved: manifest.WorkspaceResolved{
 			Chain:        resolvedChain,
 			ChainRoot:    chainRoot,
-			Lifecycle:    lifecycle,
 			Allocations:  copyIntMap(allocations),
 			PersistPaths: metadata.Persist,
 		},
@@ -115,13 +106,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	ref := workspaceRef(name, workspacePath, workspace)
-	if req.Start {
-		if err := p.WorkspaceStart(ctx, name); err != nil {
-			return ref, err
-		}
-	}
-	return ref, nil
+	return workspaceRef(name, workspacePath, workspace), nil
 }
 
 func (p *Platform) loadOrCreateWorkspaceStack() (*manifest.Stack, error) {
@@ -219,7 +204,6 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 		Sources:            []api.WorkspaceSourceStatus{},
 		Chain:              append([]string{}, workspace.Resolved.Chain...),
 		ChainRoot:          workspace.Resolved.ChainRoot,
-		Lifecycle:          workspace.Resolved.Lifecycle,
 		Allocations:        copyIntMap(workspace.Resolved.Allocations),
 		ProcessComposePort: processComposePort,
 		PlaywrightMCPName:  playwrightMCPName,
@@ -603,81 +587,6 @@ func releaseWorkspacePorts(stack *manifest.Stack, workspaceName string) {
 	}
 }
 
-func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
-	stack, err := p.LoadStack()
-	if err != nil {
-		return err
-	}
-	workspace, ok := stack.Workspaces[name]
-	if !ok {
-		return &NotFoundError{Kind: "workspace", Name: name}
-	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
-		return err
-	}
-	if workspace.Resolved.ChainRoot == "" {
-		return nil
-	}
-	innerRoot := filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot)
-	if _, err := os.Stat(manifest.Path(innerRoot)); err != nil {
-		return err
-	}
-	inner, err := New(innerRoot)
-	if err != nil {
-		return err
-	}
-	innerStack, err := inner.LoadStack()
-	if err != nil {
-		return err
-	}
-	return startInnerStack(ctx, inner, innerStack, workspace.Resolved.Lifecycle)
-}
-
-func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
-	stack, err := p.LoadStack()
-	if err != nil {
-		return err
-	}
-	workspace, ok := stack.Workspaces[name]
-	if !ok {
-		return &NotFoundError{Kind: "workspace", Name: name}
-	}
-	if workspace.Resolved.ChainRoot == "" {
-		return nil
-	}
-	inner, err := New(filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot))
-	if err != nil {
-		return err
-	}
-	return inner.StackDown(ctx)
-}
-
-func startInnerStack(ctx context.Context, inner *Platform, innerStack *manifest.Stack, lifecycle string) error {
-	switch resolveChainLifecycle(lifecycle) {
-	case chainLifecycleDev:
-		return inner.StackDev(ctx, false)
-	case chainLifecycleUp:
-		return inner.StackUp(ctx, nil, false)
-	}
-	for _, service := range innerStack.Services {
-		if service.Runtime == manifest.RuntimeLocal {
-			return inner.StackDev(ctx, false)
-		}
-	}
-	return inner.StackUp(ctx, nil, false)
-}
-
-func resolveChainLifecycle(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case chainLifecycleDev:
-		return chainLifecycleDev
-	case chainLifecycleUp:
-		return chainLifecycleUp
-	default:
-		return chainLifecycleAuto
-	}
-}
-
 func materializePersistPaths(workspacePath string, persist map[string]manifest.PersistPath) error {
 	for _, key := range sortedKeys(persist) {
 		entry := persist[key]
@@ -699,7 +608,6 @@ func workspaceRef(name, path string, ws manifest.Workspace) api.WorkspaceRef {
 		Path:               path,
 		Template:           ws.Template,
 		ChainRoot:          ws.Resolved.ChainRoot,
-		Lifecycle:          ws.Resolved.Lifecycle,
 		Allocations:        copyIntMap(ws.Resolved.Allocations),
 		ProcessComposePort: processComposePort,
 		PlaywrightMCPName:  playwrightMCPName,

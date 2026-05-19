@@ -72,7 +72,6 @@ type WorkspaceRef struct {
 	Path               string         `json:"path"`
 	Template           string         `json:"template"`
 	ChainRoot          string         `json:"chain_root,omitempty"`
-	Lifecycle          string         `json:"lifecycle,omitempty"`
 	Allocations        map[string]int `json:"allocations,omitempty"`
 	ProcessComposePort int            `json:"process_compose_port,omitempty"`
 	PlaywrightMCPName  string         `json:"playwright_mcp_name,omitempty"`
@@ -92,7 +91,6 @@ type WorkspaceStatusResponse struct {
 	Sources            []WorkspaceSourceStatus         `json:"sources,omitempty"`
 	Chain              []string                        `json:"chain,omitempty"`
 	ChainRoot          string                          `json:"chain_root,omitempty"`
-	Lifecycle          string                          `json:"lifecycle,omitempty"`
 	Allocations        map[string]int                  `json:"allocations,omitempty"`
 	ProcessComposePort int                             `json:"process_compose_port,omitempty"`
 	PlaywrightMCPName  string                          `json:"playwright_mcp_name,omitempty"`
@@ -202,7 +200,6 @@ type WorkspaceCreateRequest struct {
 	Name     string            `json:"name,omitempty"`
 	Inputs   map[string]string `json:"inputs,omitempty"`
 	TTL      string            `json:"ttl,omitempty"`
-	Start    bool              `json:"start,omitempty"`
 }
 
 type WorkspaceUpdateRequest struct {

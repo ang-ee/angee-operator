@@ -6,6 +6,30 @@ latest tag.
 
 ## Unreleased
 
+### Breaking
+
+- **Workspaces are now a pure file primitive.** The operator no longer
+  owns workspace service lifecycle; an `angee workspace` instance only
+  renders Copier output (including any chained inner-stack templates as
+  files) and materialises sources. Removed:
+  - `Platform.WorkspaceStart` / `WorkspaceStop`
+  - `angee workspace start|stop|restart` CLI subcommands
+  - `--start` flag on `angee workspace create`
+  - `POST /workspaces/{name}/start|stop|restart` REST endpoints
+  - `workspaceStart` / `workspaceStop` / `workspaceRestart` GraphQL mutations
+  - `start` field on the GraphQL `WorkspaceCreateInput` and on
+    `api.WorkspaceCreateRequest`
+  - `_angee.chain_lifecycle` template metadata field and the corresponding
+    `WorkspaceResolved.Lifecycle` / `api.WorkspaceRef.Lifecycle` /
+    `api.WorkspaceStatusResponse.Lifecycle` fields (and the
+    `WorkspaceStatus.lifecycle` GraphQL field)
+
+  If a workspace renders an inner stack and you want to bring it up, drive
+  it explicitly with `angee stack up --root workspaces/<name>/.angee` (or
+  point a second operator at that root with `--root` /
+  `--port`). `_angee.chain` and `_angee.chain_root` continue to work
+  exactly as before — they only describe what to render and where.
+
 ### Operator
 
 - Added a GraphQL `Subscription` root over Server-Sent Events. Four

@@ -134,7 +134,6 @@ type WorkspaceSource struct {
 type WorkspaceResolved struct {
 	Chain        []string               `yaml:"chain,omitempty" json:"chain,omitempty"`
 	ChainRoot    string                 `yaml:"chain_root,omitempty" json:"chain_root,omitempty"`
-	Lifecycle    string                 `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
 	Allocations  map[string]int         `yaml:"allocations,omitempty" json:"allocations,omitempty"`
 	PersistPaths map[string]PersistPath `yaml:"persist_paths,omitempty" json:"persist_paths,omitempty"`
 }

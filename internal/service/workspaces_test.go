@@ -290,9 +290,6 @@ func TestWorkspaceSourceStatusRejectsPersistedEscapingSubpath(t *testing.T) {
 	if len(status.Sources) != 1 || status.Sources[0].State != "error" || !strings.Contains(status.Sources[0].Error, "escapes") {
 		t.Fatalf("workspace source status = %#v, want escaping subpath error", status.Sources)
 	}
-	if err := platform.WorkspaceStart(ctx, "feature-a"); err == nil || !strings.Contains(err.Error(), "escapes") {
-		t.Fatalf("WorkspaceStart() error = %v, want escaping subpath error", err)
-	}
 }
 
 func TestWorkspaceCreateRejectsRootWorktreeCacheInsideDestination(t *testing.T) {
@@ -541,9 +538,6 @@ func TestWorkspaceStatusReportsBranchMismatchAndGuardsMutations(t *testing.T) {
 	if _, err := platform.WorkspacePush(ctx, workspaceName, ""); err == nil || !strings.Contains(err.Error(), "branch mismatch") {
 		t.Fatalf("WorkspacePush() error = %v, want branch mismatch", err)
 	}
-	if err := platform.WorkspaceStart(ctx, workspaceName); err == nil || !strings.Contains(err.Error(), "branch mismatch") {
-		t.Fatalf("WorkspaceStart() error = %v, want branch mismatch", err)
-	}
 	if err := platform.WorkspaceDestroy(ctx, workspaceName, true); err == nil || !strings.Contains(err.Error(), "branch mismatch") {
 		t.Fatalf("WorkspaceDestroy() error = %v, want branch mismatch", err)
 	}
@@ -559,64 +553,6 @@ func TestWorkspaceStatusReportsBranchMismatchAndGuardsMutations(t *testing.T) {
 	source = status.Sources[0]
 	if status.State != "discrepancy" || source.State != workspaceSourceStateBranchMismatch || source.CurrentRef != "main" {
 		t.Fatalf("workspace status on main = %#v source = %#v, want branch mismatch", status, source)
-	}
-}
-
-func TestWorkspaceStopAllowsBranchMismatchForCleanup(t *testing.T) {
-	ctx := context.Background()
-	platform, workspaceName, workspaceSourcePath, _ := setupGitWorkspace(t)
-
-	stack, err := manifest.LoadFile(manifest.Path(platform.Root()))
-	if err != nil {
-		t.Fatalf("LoadFile(angee.yaml) error = %v", err)
-	}
-	workspace := stack.Workspaces[workspaceName]
-	workspace.Resolved.ChainRoot = ".angee"
-	stack.Workspaces[workspaceName] = workspace
-	if err := manifest.SaveFile(manifest.Path(platform.Root()), stack); err != nil {
-		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
-	}
-
-	innerRoot := filepath.Join(platform.Root(), "workspaces", workspaceName, ".angee")
-	if err := os.MkdirAll(innerRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll(inner root) error = %v", err)
-	}
-	innerStack := &manifest.Stack{
-		Version: manifest.VersionCurrent,
-		Kind:    manifest.KindStack,
-		Name:    "inner",
-		Ports: map[string]manifest.Port{
-			"process-compose": {Value: 10007},
-		},
-		Services: map[string]manifest.Service{
-			"web": {Runtime: manifest.RuntimeLocal, Command: []string{"true"}},
-		},
-	}
-	if err := manifest.SaveFile(manifest.Path(innerRoot), innerStack); err != nil {
-		t.Fatalf("SaveFile(inner angee.yaml) error = %v", err)
-	}
-
-	binDir := t.TempDir()
-	recordPath := filepath.Join(t.TempDir(), "process-compose-args.txt")
-	fakeProcessCompose := filepath.Join(binDir, "process-compose")
-	if err := os.WriteFile(fakeProcessCompose, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PROCESS_COMPOSE_RECORD\"\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake process-compose) error = %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("PROCESS_COMPOSE_RECORD", recordPath)
-
-	runGit(t, workspaceSourcePath, "switch", "-c", "codex/feature-a")
-
-	if err := platform.WorkspaceStop(ctx, workspaceName); err != nil {
-		t.Fatalf("WorkspaceStop() with branch mismatch error = %v", err)
-	}
-	data, err := os.ReadFile(recordPath)
-	if err != nil {
-		t.Fatalf("ReadFile(process-compose args) error = %v", err)
-	}
-	got := string(data)
-	if !strings.Contains(got, "--port\n10007\n") || !strings.Contains(got, "down\n") {
-		t.Fatalf("process-compose args = %q, want isolated port and down command", got)
 	}
 }
 

@@ -99,15 +99,12 @@ Implemented source materialization is `git` and `local`.
 ## Workspaces
 
 ```sh
-angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--start]
+angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...]
 angee workspace update <name> [--ttl duration] [--input key=value ...]
 angee workspace list  # alias: ls
 angee workspace get <name>
 angee workspace status [name]
 angee workspace logs <name> [--follow]
-angee workspace start <name>
-angee workspace stop <name>
-angee workspace restart <name>
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
 angee workspace sync-base [name] [--merge|--rebase]
@@ -118,15 +115,25 @@ angee workspace destroy <name> [--purge]
 `angee ws` is an alias for `angee workspace`, so `angee ws ls` and
 `angee ws status <name>` are equivalent to their long forms.
 
-Workspaces are rendered from Copier templates with `_angee` metadata. A
-workspace can also render and control an inner stack when the template declares
-a chain root. When run from inside `$ANGEE_ROOT/workspaces/<name>/...`,
+Workspaces are a **pure file primitive**: `create`/`update` render Copier
+templates (including any chained inner-stack templates) and materialize git
+or local sources. They do **not** own service lifecycle. If a workspace
+renders an inner stack and you want to bring it up, run a stack operation
+against the inner root explicitly:
+
+```sh
+angee stack up --root workspaces/<name>/.angee
+# or point a second operator at it for HTTP/GraphQL access:
+angee operator --root workspaces/<name>/.angee --port 9100
+```
+
+When run from inside `$ANGEE_ROOT/workspaces/<name>/...`,
 `angee workspace status` and `angee workspace sync-base` may omit the name.
 
 For git worktree sources, the branch recorded in the workspace manifest is the
 workspace identity. `sync-base` updates that branch from its base ref (normally
-`origin/main`) without switching to another branch; workspace lifecycle and push
-commands refuse sources whose current branch does not match the manifest branch.
+`origin/main`) without switching to another branch; push commands refuse
+sources whose current branch does not match the manifest branch.
 The same contract is exposed through the operator REST and GraphQL APIs:
 workspace status includes `sources[].branch`, `sources[].current_ref` /
 `currentRef`, `sources[].state`, and top-level `state: discrepancy` when any
