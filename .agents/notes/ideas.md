@@ -189,8 +189,8 @@ gap.
 
 **Refactor describes it.** Substitution grammar lists `${persist.<key>}`;
 GAPS.md item 10 commits to template-declared `persist:` blocks that
-survive workspace start/stop/update and are removed only on
-`workspace destroy --purge`.
+survive workspace updates (and the lifecycle of any inner stack the
+workspace renders) and are removed only on `workspace destroy --purge`.
 
 **What v2 has.** `manifest.PersistPath` struct exists in
 `WorkspaceResolved`; `substitute.Context.Persist` exists; but

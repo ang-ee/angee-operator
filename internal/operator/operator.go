@@ -17,21 +17,25 @@ import (
 	"time"
 
 	"github.com/fyltr/angee/api"
+	opgql "github.com/fyltr/angee/internal/operator/gql"
 	"github.com/fyltr/angee/internal/service"
 	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 
 type Config struct {
-	Root  string
-	Bind  string
-	Port  int
-	Token string
+	Root      string
+	Bind      string
+	Port      int
+	Token     string
+	JWTSecret string
 }
 
 type Server struct {
 	config         Config
 	platform       *service.Platform
+	eventHub       *opgql.EventHub
+	tokens         *tokenMinter
 	graphqlHandler http.Handler
 	server         *http.Server
 }
@@ -60,6 +64,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	cmd.Flags().StringVar(&config.Bind, "bind", config.Bind, "listen address")
 	cmd.Flags().IntVar(&config.Port, "port", config.Port, "listen port")
 	cmd.Flags().StringVar(&config.Token, "token", config.Token, "bearer token for protected endpoints")
+	cmd.Flags().StringVar(&config.JWTSecret, "jwt-secret", config.JWTSecret, "explicit HS256 signing key for mintConnectionToken (default: env ANGEE_OPERATOR_JWT_SECRET, then HKDF-from-bearer, then per-process random)")
 	return cmd.ExecuteContext(ctx)
 }
 
@@ -82,7 +87,17 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{config: config, platform: platform}
+	jwtSecret := config.JWTSecret
+	if jwtSecret == "" {
+		jwtSecret = os.Getenv("ANGEE_OPERATOR_JWT_SECRET")
+	}
+	minter, err := newTokenMinter(jwtSecret, config.Token)
+	if err != nil {
+		return nil, err
+	}
+	eventHub := opgql.NewEventHub(platform)
+	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter}
+	fmt.Fprintf(os.Stderr, "operator: jwt signing key fingerprint=%s\n", minter.Fingerprint())
 	graphqlHandler, err := newGraphQLHandler(s)
 	if err != nil {
 		return nil, err
@@ -91,6 +106,8 @@ func NewServer(config Config) (*Server, error) {
 	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	// gqlgen 0.17 dispatches subscriptions over SSE as POST with
+	// Accept: text/event-stream — same route, same wrapper.
 	mux.Handle("POST /graphql", s.auth(cop.Handler(s.graphqlHandler)))
 	mux.Handle("GET /stack/status", s.auth(http.HandlerFunc(s.stackStatus)))
 	mux.Handle("POST /stack/init", s.auth(http.HandlerFunc(s.stackInit)))
@@ -107,6 +124,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /jobs/{name}/logs", s.auth(http.HandlerFunc(s.jobLogs)))
 	mux.Handle("GET /services", s.auth(http.HandlerFunc(s.serviceList)))
 	mux.Handle("POST /services", s.auth(http.HandlerFunc(s.serviceInit)))
+	mux.Handle("POST /services/create", s.auth(http.HandlerFunc(s.serviceCreate)))
 	mux.Handle("PATCH /services/{name}", s.auth(http.HandlerFunc(s.serviceUpdate)))
 	mux.Handle("POST /services/{name}/start", s.auth(http.HandlerFunc(s.serviceStart)))
 	mux.Handle("POST /services/{name}/stop", s.auth(http.HandlerFunc(s.serviceStop)))
@@ -124,14 +142,33 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("PATCH /workspaces/{name}", s.auth(http.HandlerFunc(s.workspaceUpdate)))
 	mux.Handle("GET /workspaces/{name}/status", s.auth(http.HandlerFunc(s.workspaceStatus)))
 	mux.Handle("GET /workspaces/{name}/logs", s.auth(http.HandlerFunc(s.workspaceLogs)))
-	mux.Handle("POST /workspaces/{name}/start", s.auth(http.HandlerFunc(s.workspaceStart)))
-	mux.Handle("POST /workspaces/{name}/stop", s.auth(http.HandlerFunc(s.workspaceStop)))
-	mux.Handle("POST /workspaces/{name}/restart", s.auth(http.HandlerFunc(s.workspaceRestart)))
 	mux.Handle("POST /workspaces/{name}/destroy", s.auth(http.HandlerFunc(s.workspaceDestroy)))
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
 	mux.Handle("POST /workspaces/{name}/sync-base", s.auth(http.HandlerFunc(s.workspaceSyncBase)))
-	mux.Handle("GET /events", s.auth(http.HandlerFunc(s.events)))
+	// REST parity for GraphQL-only operations. Every route here is auth()-wrapped
+	// just like the rest of the operator surface.
+	mux.Handle("GET /gitops/topology", s.auth(http.HandlerFunc(s.gitOpsTopology)))
+	mux.Handle("GET /sources/{name}/diff", s.auth(http.HandlerFunc(s.sourceDiff)))
+	mux.Handle("POST /workspaces/preflight", s.auth(http.HandlerFunc(s.workspaceCreatePreflight)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/fetch", s.auth(http.HandlerFunc(s.workspaceSourceFetch)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/pull", s.auth(http.HandlerFunc(s.workspaceSourcePull)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/push", s.auth(http.HandlerFunc(s.workspaceSourcePush)))
+	mux.Handle("GET /workspaces/{name}/sources/{slot}/diff", s.auth(http.HandlerFunc(s.workspaceSourceDiff)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/merge", s.auth(http.HandlerFunc(s.workspaceSourceMerge)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase", s.auth(http.HandlerFunc(s.workspaceSourceRebase)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/merge-abort", s.auth(http.HandlerFunc(s.workspaceSourceMergeAbort)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase-abort", s.auth(http.HandlerFunc(s.workspaceSourceRebaseAbort)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase-continue", s.auth(http.HandlerFunc(s.workspaceSourceRebaseContinue)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/publish", s.auth(http.HandlerFunc(s.workspaceSourcePublish)))
+	mux.Handle("GET /templates", s.auth(http.HandlerFunc(s.templates)))
+	mux.Handle("GET /templates/{ref...}", s.auth(http.HandlerFunc(s.template)))
+	mux.Handle("POST /tokens/mint", s.auth(http.HandlerFunc(s.mintConnectionToken)))
+	mux.Handle("GET /secrets", s.auth(http.HandlerFunc(s.secretsList)))
+	mux.Handle("GET /secrets/{name}", s.auth(http.HandlerFunc(s.secretGet)))
+	mux.Handle("GET /secrets/{name}/value", s.auth(http.HandlerFunc(s.secretValue)))
+	mux.Handle("POST /secrets/{name}", s.auth(http.HandlerFunc(s.secretSet)))
+	mux.Handle("DELETE /secrets/{name}", s.auth(http.HandlerFunc(s.secretDelete)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),
@@ -141,6 +178,15 @@ func NewServer(config Config) (*Server, error) {
 	return s, nil
 }
 
+// Close releases server-owned resources. It is automatically invoked by
+// ListenAndServe on shutdown; tests that construct a Server without serving
+// can call Close directly to tear down background goroutines.
+func (s *Server) Close() {
+	if s.eventHub != nil {
+		s.eventHub.Stop()
+	}
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Register SIGINT before starting the listener so a Ctrl-C arriving in
 	// the brief startup window isn't delivered with its default disposition
@@ -148,6 +194,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	sigint := make(chan os.Signal, 1)
 	signal.Notify(sigint, os.Interrupt)
 	defer signal.Stop(sigint)
+
+	s.eventHub.Start()
+	defer s.eventHub.Stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -370,6 +419,20 @@ func (s *Server) serviceInit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "name": req.Name})
 }
 
+func (s *Server) serviceCreate(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[api.ServiceCreateRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	state, err := s.platform.ServiceCreate(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, state)
+}
+
 func (s *Server) serviceUpdate(w http.ResponseWriter, r *http.Request) {
 	req, err := decode[api.ServiceInitRequest](r)
 	if err != nil {
@@ -545,35 +608,6 @@ func (s *Server) workspaceLogs(w http.ResponseWriter, r *http.Request) {
 	writeLogStream(w, logs)
 }
 
-func (s *Server) workspaceStart(w http.ResponseWriter, r *http.Request) {
-	if err := s.platform.WorkspaceStart(r.Context(), r.PathValue("name")); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
-}
-
-func (s *Server) workspaceStop(w http.ResponseWriter, r *http.Request) {
-	if err := s.platform.WorkspaceStop(r.Context(), r.PathValue("name")); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
-}
-
-func (s *Server) workspaceRestart(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := s.platform.WorkspaceStop(r.Context(), name); err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := s.platform.WorkspaceStart(r.Context(), name); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
-}
-
 func (s *Server) workspaceDestroy(w http.ResponseWriter, r *http.Request) {
 	purge := r.URL.Query().Get("purge") == "true"
 	if err := s.platform.WorkspaceDestroy(r.Context(), r.PathValue("name"), purge); err != nil {
@@ -620,12 +654,6 @@ func (s *Server) workspaceSyncBase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, states)
 }
 
-func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = fmt.Fprint(w, "event: ready\ndata: {}\n\n")
-}
-
 func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mcpDescriptor())
 }
@@ -655,11 +683,21 @@ func writeBadRequest(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusBadRequest, api.ErrorResponse{Error: err.Error()})
 }
 
+// maxRESTBodyBytes caps the size of a REST request body to keep a hostile
+// or buggy client from OOM'ing the operator with a multi-gigabyte JSON
+// payload. Matches the graphql handler's body cap.
+const maxRESTBodyBytes = 1 << 20
+
 func decode[T any](r *http.Request) (T, error) {
 	var value T
 	if r.Body == nil {
 		return value, nil
 	}
+	// Passing a nil ResponseWriter is supported by MaxBytesReader (it only
+	// uses w to set Connection: close on overflow). Callers receive a
+	// *http.MaxBytesError that writeBadRequest renders as 400 — clients
+	// don't get to oversize a POST simply because decode is generic.
+	r.Body = http.MaxBytesReader(nil, r.Body, maxRESTBodyBytes)
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(&value); err != nil && !errors.Is(err, io.EOF) {
 		return value, err

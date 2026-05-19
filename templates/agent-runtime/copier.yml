@@ -1,0 +1,47 @@
+_subdirectory: template
+_templates_suffix: .jinja
+
+_angee:
+  kind: workspace
+  name: agent-runtime
+  instance_naming:
+    pattern: "${inputs.AGENT_ID | slug}"
+    fallback: agent
+    max_length: 48
+  inputs:
+    AGENT_ID:
+      required: true
+      type: string
+    MCP_URL:
+      required: false
+      type: string
+    MCP_TOKEN:
+      required: false
+      type: string
+
+# Top-level Copier questions. These are answered by callers of
+# workspaceCreate(template="agent-runtime", inputs=...). Each one
+# corresponds to an env var the materialised process receives — see
+# docs/reference/templates.md#agent-runtime for the contract.
+
+AGENT_ID:
+  type: str
+  help: >-
+    Identifier for this agent runtime instance. Used as the workspace
+    name slug, in log lines, and as the AGENT_ID env var inside the
+    spawned process.
+
+MCP_URL:
+  type: str
+  default: ""
+  help: >-
+    URL of the MCP server this agent should connect to. Empty by
+    default; the agent runtime treats unset / empty as "no MCP".
+
+MCP_TOKEN:
+  type: str
+  default: ""
+  help: >-
+    Bearer token for MCP_URL. Stored in the workspace env file rather
+    than as a secret in v1; rotate by re-running the workspace with
+    updated inputs.

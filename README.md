@@ -8,6 +8,50 @@ APIs.
 
 This repository contains the current Go prototype.
 
+## What the operator owns
+
+One operator runs against exactly one Stack root. Everything below is what
+a client (CLI, Django host, agent, custom UI) can read and drive over
+REST + GraphQL:
+
+| Primitive | Operations |
+| --- | --- |
+| **Stack** | `stackInit`, `stackPrepare` (compiled view, no run), `stackUp`/`Dev`/`Down`/`Build`/`Update`/`Destroy`, `stackStatus`, `stackLogs`. |
+| **Service** | `services`, `serviceInit`/`Update`/`Start`/`Stop`/`Restart`/`Destroy`, `serviceLogs`. |
+| **Job** | `jobs`, `jobRun`. |
+| **Source** | `sources`, `sourceFetch`, **`sourcePull`** (= update from upstream), `sourcePush`, `sourceDiff`. |
+| **Workspace** (file primitive — never starts services) | `workspaces`, `workspaceCreate`, `workspaceCreatePreflight` (validate without rendering), `workspaceUpdate`, `workspaceStatus`, `workspaceLogs`, `workspaceDestroy`, `workspaceGit`, `workspacePush`, **`workspaceSyncBase`** (= multi-slot update against base). |
+| **Workspace source slot** (one git materialization inside a workspace) | `workspaceSourceFetch`, **`workspaceSourcePull`** (= slot-level update), `workspaceSourcePush`, `workspaceSourceMerge`/`Rebase`/`MergeAbort`/`RebaseAbort`/`RebaseContinue`/`Publish`, `workspaceSourceDiff`. |
+| **GitOps topology** (derived view: sources × slots) | `gitOpsTopology(withCommits: Int)` snapshot; `onGitOpsTopologyChange` live. |
+| **Templates** (discoverable Copier templates) | `templates`, `template(ref)`. |
+| **Secrets** (env-file or OpenBao backend) | `secrets`, `secret(name)`, `secretValue(name)` (privileged value-read), `secretSet`, `secretDelete`. |
+| **Connection token** (per-actor scoped JWT) | `mintConnectionToken(actor, ttl)` (gated by admin bearer). |
+| **Subscriptions** (SSE, GraphQL-only) | `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
+
+Every operation above is reachable over both REST (`POST /...` /
+`GET /...`) and GraphQL — subscriptions are the one deliberate split
+(REST has no native pubsub). The operator's admin bearer token guards
+the entire surface; `mintConnectionToken` issues short-lived per-actor
+JWTs for finer-grained scoping.
+
+"Update" has three scopes: `sourcePull` (whole source), `workspaceSourcePull`
+(one slot), `workspaceSyncBase` (every slot's workspace branch against its
+base ref — typically `origin/main`).
+
+Workspaces materialize files — including any chained inner-stack template
+as files. They never start services. If a workspace renders an inner stack
+and you want it running, drive it explicitly:
+
+```sh
+angee stack up --root workspaces/<name>/.angee
+# or run a second operator pointed at that root:
+angee operator --root workspaces/<name>/.angee --port 9100
+```
+
+See [docs/guide/concepts.md](docs/guide/concepts.md) for the full
+mental model and [docs/reference/operator-api.md](docs/reference/operator-api.md)
+for the REST + GraphQL contract.
+
 ## Install
 
 From a release:
@@ -76,7 +120,7 @@ angee source fetch <name>
 angee source status <name>
 angee source pull <name>
 angee source push <name> [--ref ref]
-angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--start]
+angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...]
 angee workspace list  # or: angee ws ls
 angee workspace get <name>
 angee workspace status [name]

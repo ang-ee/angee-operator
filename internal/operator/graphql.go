@@ -26,8 +26,11 @@ var errUnsupportedGraphQLMediaType = errors.New("unsupported GraphQL content typ
 
 func newGraphQLHandler(s *Server) (http.Handler, error) {
 	gqlServer := handler.New(opgql.NewExecutableSchema(opgql.Config{
-		Resolvers: &opgql.Resolver{Platform: s.platform},
+		Resolvers: &opgql.Resolver{Platform: s.platform, Events: s.eventHub, Tokens: s.tokens},
 	}))
+	// SSE must be registered before POST so the Accept-based dispatch picks
+	// it up for `text/event-stream` requests (see gqlgen issue #3275).
+	gqlServer.AddTransport(transport.SSE{})
 	gqlServer.AddTransport(transport.POST{})
 	gqlServer.AddTransport(transport.GRAPHQL{})
 	gqlServer.SetQueryCache(lru.New[*ast.QueryDocument](1000))

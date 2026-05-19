@@ -25,6 +25,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `StackLogs` | Yes | Yes | No | GraphQL uses bounded `StackLogsLimited`. |
 | `StackLogsLimited` | No | No | Yes | GraphQL snapshot guardrail. |
 | `ServiceInit` | Yes | Yes | Yes | - |
+| `ServiceCreate` | Yes | Yes | Yes | Template-based: `angee service create`; REST `POST /services/create`; GraphQL `serviceCreate`. |
 | `ServiceUpdate` | Yes | Yes | Yes | - |
 | `ServiceDestroy` | Yes | Yes | Yes | - |
 | `ServiceList` | Yes | Yes | Yes | - |
@@ -46,15 +47,30 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceDestroy` | Yes | Yes | Yes | - |
 | `WorkspaceLogs` | Yes | Yes | No | GraphQL uses bounded `WorkspaceLogsLimited`. |
 | `WorkspaceLogsLimited` | No | No | Yes | GraphQL snapshot guardrail. |
-| `WorkspaceStart` | Yes | Yes | Yes | - |
-| `WorkspaceStop` | Yes | Yes | Yes | - |
 | `WorkspaceGitStatus` | Yes | Yes | Yes | - |
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |
-| `GitOpsTopology` | No | No | Yes | Gap: currently GraphQL-only topology view. |
-| `WorkspaceSourceFetch` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
-| `WorkspaceSourcePull` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
-| `WorkspaceSourcePush` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
+| `GitOpsTopology` | Yes | Yes | Yes | `angee gitops topology`; REST `GET /gitops/topology`. |
+| `GitOpsTopologyWithCommits` | Yes | Yes | Yes | `angee gitops topology --with-commits N`; REST `GET /gitops/topology?with_commits=N`. |
+| `SourceDiff` | Yes | Yes | Yes | `angee source diff <name>`; REST `GET /sources/{name}/diff?ref=...`. |
+| `WorkspaceSourceDiff` | Yes | Yes | Yes | `angee workspace source diff <ws> <slot>`; REST `GET /workspaces/{name}/sources/{slot}/diff?ref=...`. |
+| `WorkspaceSourceFetch` | Yes | Yes | Yes | `angee workspace source fetch`; REST `POST /workspaces/{name}/sources/{slot}/fetch`. |
+| `WorkspaceSourcePull` | Yes | Yes | Yes | `angee workspace source pull`; REST `POST /workspaces/{name}/sources/{slot}/pull`. |
+| `WorkspaceSourcePush` | Yes | Yes | Yes | `angee workspace source push`; REST `POST /workspaces/{name}/sources/{slot}/push`. |
+| `WorkspaceSourceMerge` | Yes | Yes | Yes | `angee workspace source merge`; REST `POST /workspaces/{name}/sources/{slot}/merge`. |
+| `WorkspaceSourceRebase` | Yes | Yes | Yes | `angee workspace source rebase`; REST `POST /workspaces/{name}/sources/{slot}/rebase`. |
+| `WorkspaceSourceMergeAbort` | Yes | Yes | Yes | `angee workspace source merge-abort`; REST `POST /workspaces/{name}/sources/{slot}/merge-abort`. |
+| `WorkspaceSourceRebaseAbort` | Yes | Yes | Yes | `angee workspace source rebase-abort`; REST `POST /workspaces/{name}/sources/{slot}/rebase-abort`. |
+| `WorkspaceSourceRebaseContinue` | Yes | Yes | Yes | `angee workspace source rebase-continue`; REST `POST /workspaces/{name}/sources/{slot}/rebase-continue`. |
+| `WorkspaceSourcePublish` | Yes | Yes | Yes | `angee workspace source publish`; REST `POST /workspaces/{name}/sources/{slot}/publish`. |
+| `WorkspaceCreatePreflight` | Yes | Yes | Yes | `angee workspace preflight`; REST `POST /workspaces/preflight`. |
+| `Templates` | Yes | Yes | Yes | `angee template list`; REST `GET /templates`. |
+| `Template` | Yes | Yes | Yes | `angee template get`; REST `GET /templates/{ref...}`. |
+| `SecretsList` | Yes | Yes | Yes | CLI `angee secret list`; REST `GET /secrets`. |
+| `SecretGet` | Yes | Yes | Yes | CLI `angee secret get`; REST `GET /secrets/{name}`. |
+| `SecretValue` | Yes | Yes | Yes | CLI `angee secret reveal`; REST `GET /secrets/{name}/value`. Privileged value-read. |
+| `SecretSet` | Yes | Yes | Yes | CLI `angee secret set`; REST `POST /secrets/{name}`. |
+| `SecretDelete` | Yes | Yes | Yes | CLI `angee secret delete`; REST `DELETE /secrets/{name}`. |
 
 When adding a new exported `Platform` method, update this table in the same
 change. `internal/service/surface_matrix_test.go` verifies that every exported

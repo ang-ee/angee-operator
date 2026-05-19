@@ -12,8 +12,10 @@ require (
 
 require (
 	github.com/99designs/gqlgen v0.17.90
+	github.com/bluekeyes/go-gitdiff v0.8.1
 	github.com/go-git/go-git/v5 v5.19.0
 	github.com/go-playground/validator/v10 v10.30.2
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/invopop/jsonschema v0.14.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 )

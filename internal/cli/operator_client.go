@@ -32,6 +32,7 @@ type platformClient interface {
 	StackCompile(context.Context) (*service.CompiledStack, error)
 	StackPrepare(context.Context) (*service.CompiledStack, error)
 	ServiceInit(context.Context, api.ServiceInitRequest) error
+	ServiceCreate(context.Context, api.ServiceCreateRequest) (api.ServiceState, error)
 	ServiceUpdate(context.Context, api.ServiceInitRequest) error
 	ServiceDestroy(context.Context, string, bool) error
 	ServiceList(context.Context) ([]api.ServiceState, error)
@@ -52,11 +53,30 @@ type platformClient interface {
 	WorkspaceUpdate(context.Context, string, map[string]string, string) (api.WorkspaceRef, error)
 	WorkspaceDestroy(context.Context, string, bool) error
 	WorkspaceLogs(context.Context, string, bool) (<-chan string, error)
-	WorkspaceStart(context.Context, string) error
-	WorkspaceStop(context.Context, string) error
 	WorkspaceGitStatus(context.Context, string) ([]api.SourceState, error)
 	WorkspacePush(context.Context, string, string) ([]api.SourceState, error)
 	WorkspaceSyncBase(context.Context, string, string) ([]api.SourceState, error)
+	SecretsList(context.Context) ([]api.SecretRef, error)
+	SecretGet(context.Context, string) (api.SecretRef, error)
+	SecretValue(context.Context, string) (api.SecretValueResponse, error)
+	SecretSet(context.Context, string, string) (api.SecretRef, error)
+	SecretDelete(context.Context, string) error
+	WorkspaceCreatePreflight(context.Context, api.WorkspaceCreateRequest) (api.WorkspaceCreatePreflightResponse, error)
+	WorkspaceSourceFetch(context.Context, string, string) (api.WorkspaceSourceStatus, error)
+	WorkspaceSourcePull(context.Context, string, string) (api.WorkspaceSourceStatus, error)
+	WorkspaceSourcePush(context.Context, string, string, string) (api.WorkspaceSourceStatus, error)
+	WorkspaceSourceDiff(context.Context, string, string, string) ([]api.DiffFile, error)
+	WorkspaceSourceMerge(context.Context, string, string, string) (api.GitOpResult, error)
+	WorkspaceSourceRebase(context.Context, string, string, string) (api.GitOpResult, error)
+	WorkspaceSourceMergeAbort(context.Context, string, string) (api.GitOpResult, error)
+	WorkspaceSourceRebaseAbort(context.Context, string, string) (api.GitOpResult, error)
+	WorkspaceSourceRebaseContinue(context.Context, string, string) (api.GitOpResult, error)
+	WorkspaceSourcePublish(context.Context, string, string, string, string) (api.GitOpResult, error)
+	SourceDiff(context.Context, string, string) ([]api.DiffFile, error)
+	GitOpsTopology(context.Context) (api.GitOpsTopologyResponse, error)
+	GitOpsTopologyWithCommits(context.Context, int) (api.GitOpsTopologyResponse, error)
+	Templates(context.Context) ([]api.TemplateDescriptor, error)
+	Template(context.Context, string) (api.TemplateDescriptor, error)
 }
 
 type remotePlatform struct {
@@ -168,6 +188,14 @@ func (p *remotePlatform) StackPrepare(ctx context.Context) (*service.CompiledSta
 
 func (p *remotePlatform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) error {
 	return p.doJSON(ctx, http.MethodPost, "/services", nil, req, nil)
+}
+
+func (p *remotePlatform) ServiceCreate(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error) {
+	var state api.ServiceState
+	if err := p.doJSON(ctx, http.MethodPost, "/services/create", nil, req, &state); err != nil {
+		return api.ServiceState{}, err
+	}
+	return state, nil
 }
 
 func (p *remotePlatform) ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error {
@@ -312,14 +340,6 @@ func (p *remotePlatform) WorkspaceLogs(ctx context.Context, name string, _ bool)
 	return p.stream(ctx, "/workspaces/"+url.PathEscape(name)+"/logs", nil)
 }
 
-func (p *remotePlatform) WorkspaceStart(ctx context.Context, name string) error {
-	return p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/start", nil, nil, nil)
-}
-
-func (p *remotePlatform) WorkspaceStop(ctx context.Context, name string) error {
-	return p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/stop", nil, nil, nil)
-}
-
 func (p *remotePlatform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.SourceState, error) {
 	var states []api.SourceState
 	if err := p.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(name)+"/git", nil, nil, &states); err != nil {
@@ -343,6 +363,180 @@ func (p *remotePlatform) WorkspaceSyncBase(ctx context.Context, name string, met
 		return nil, err
 	}
 	return states, nil
+}
+
+func (p *remotePlatform) SecretsList(ctx context.Context) ([]api.SecretRef, error) {
+	var refs []api.SecretRef
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets", nil, nil, &refs); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+func (p *remotePlatform) SecretGet(ctx context.Context, name string) (api.SecretRef, error) {
+	var ref api.SecretRef
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name), nil, nil, &ref); err != nil {
+		return api.SecretRef{}, err
+	}
+	return ref, nil
+}
+
+func (p *remotePlatform) SecretValue(ctx context.Context, name string) (api.SecretValueResponse, error) {
+	var resp api.SecretValueResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name)+"/value", nil, nil, &resp); err != nil {
+		return api.SecretValueResponse{}, err
+	}
+	return resp, nil
+}
+
+func (p *remotePlatform) SecretSet(ctx context.Context, name, value string) (api.SecretRef, error) {
+	var ref api.SecretRef
+	body := api.SecretSetRequest{Value: value}
+	if err := p.doJSON(ctx, http.MethodPost, "/secrets/"+url.PathEscape(name), nil, body, &ref); err != nil {
+		return api.SecretRef{}, err
+	}
+	return ref, nil
+}
+
+func (p *remotePlatform) SecretDelete(ctx context.Context, name string) error {
+	return p.doJSON(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil, nil)
+}
+
+func (p *remotePlatform) WorkspaceCreatePreflight(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceCreatePreflightResponse, error) {
+	var resp api.WorkspaceCreatePreflightResponse
+	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/preflight", nil, req, &resp); err != nil {
+		return api.WorkspaceCreatePreflightResponse{}, err
+	}
+	return resp, nil
+}
+
+func (p *remotePlatform) WorkspaceSourceFetch(ctx context.Context, workspace, slot string) (api.WorkspaceSourceStatus, error) {
+	var state api.WorkspaceSourceStatus
+	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, "fetch"), nil, nil, &state); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	return state, nil
+}
+
+func (p *remotePlatform) WorkspaceSourcePull(ctx context.Context, workspace, slot string) (api.WorkspaceSourceStatus, error) {
+	var state api.WorkspaceSourceStatus
+	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, "pull"), nil, nil, &state); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	return state, nil
+}
+
+func (p *remotePlatform) WorkspaceSourcePush(ctx context.Context, workspace, slot, ref string) (api.WorkspaceSourceStatus, error) {
+	var state api.WorkspaceSourceStatus
+	body := api.SourceOperationRequest{Ref: ref}
+	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, "push"), nil, body, &state); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	return state, nil
+}
+
+func (p *remotePlatform) WorkspaceSourceDiff(ctx context.Context, workspace, slot, ref string) ([]api.DiffFile, error) {
+	var files []api.DiffFile
+	query := refQuery(ref)
+	if err := p.doJSON(ctx, http.MethodGet, slotPath(workspace, slot, "diff"), query, nil, &files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (p *remotePlatform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, ref string) (api.GitOpResult, error) {
+	return p.gitOp(ctx, workspace, slot, "merge", api.WorkspaceSourceGitOpRequest{Ref: ref})
+}
+
+func (p *remotePlatform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, ref string) (api.GitOpResult, error) {
+	return p.gitOp(ctx, workspace, slot, "rebase", api.WorkspaceSourceGitOpRequest{Ref: ref})
+}
+
+func (p *remotePlatform) WorkspaceSourceMergeAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
+	return p.gitOp(ctx, workspace, slot, "merge-abort", api.WorkspaceSourceGitOpRequest{})
+}
+
+func (p *remotePlatform) WorkspaceSourceRebaseAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
+	return p.gitOp(ctx, workspace, slot, "rebase-abort", api.WorkspaceSourceGitOpRequest{})
+}
+
+func (p *remotePlatform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
+	return p.gitOp(ctx, workspace, slot, "rebase-continue", api.WorkspaceSourceGitOpRequest{})
+}
+
+func (p *remotePlatform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error) {
+	return p.gitOp(ctx, workspace, slot, "publish", api.WorkspaceSourceGitOpRequest{Remote: remote, Branch: branch})
+}
+
+func (p *remotePlatform) gitOp(ctx context.Context, workspace, slot, op string, body api.WorkspaceSourceGitOpRequest) (api.GitOpResult, error) {
+	var result api.GitOpResult
+	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, op), nil, body, &result); err != nil {
+		return api.GitOpResult{}, err
+	}
+	return result, nil
+}
+
+func (p *remotePlatform) SourceDiff(ctx context.Context, name, ref string) ([]api.DiffFile, error) {
+	var files []api.DiffFile
+	query := refQuery(ref)
+	if err := p.doJSON(ctx, http.MethodGet, "/sources/"+url.PathEscape(name)+"/diff", query, nil, &files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (p *remotePlatform) GitOpsTopology(ctx context.Context) (api.GitOpsTopologyResponse, error) {
+	return p.GitOpsTopologyWithCommits(ctx, 0)
+}
+
+func (p *remotePlatform) GitOpsTopologyWithCommits(ctx context.Context, withCommits int) (api.GitOpsTopologyResponse, error) {
+	var topo api.GitOpsTopologyResponse
+	var query url.Values
+	if withCommits > 0 {
+		query = url.Values{"with_commits": []string{fmt.Sprintf("%d", withCommits)}}
+	}
+	if err := p.doJSON(ctx, http.MethodGet, "/gitops/topology", query, nil, &topo); err != nil {
+		return api.GitOpsTopologyResponse{}, err
+	}
+	return topo, nil
+}
+
+func (p *remotePlatform) Templates(ctx context.Context) ([]api.TemplateDescriptor, error) {
+	var refs []api.TemplateDescriptor
+	if err := p.doJSON(ctx, http.MethodGet, "/templates", nil, nil, &refs); err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+func (p *remotePlatform) MintConnectionToken(ctx context.Context, req api.MintConnectionTokenRequest) (api.ConnectionTokenResponse, error) {
+	var resp api.ConnectionTokenResponse
+	if err := p.doJSON(ctx, http.MethodPost, "/tokens/mint", nil, req, &resp); err != nil {
+		return api.ConnectionTokenResponse{}, err
+	}
+	return resp, nil
+}
+
+func (p *remotePlatform) Template(ctx context.Context, ref string) (api.TemplateDescriptor, error) {
+	var desc api.TemplateDescriptor
+	// `ref` may contain slashes (e.g. workspaces/dev-pr); the REST route
+	// accepts the full ref as a path suffix, so concatenate without
+	// path-escaping the slash separators.
+	if err := p.doJSON(ctx, http.MethodGet, "/templates/"+strings.TrimPrefix(ref, "/"), nil, nil, &desc); err != nil {
+		return api.TemplateDescriptor{}, err
+	}
+	return desc, nil
+}
+
+func slotPath(workspace, slot, op string) string {
+	return "/workspaces/" + url.PathEscape(workspace) + "/sources/" + url.PathEscape(slot) + "/" + op
+}
+
+func refQuery(ref string) url.Values {
+	if ref == "" {
+		return nil
+	}
+	return url.Values{"ref": []string{ref}}
 }
 
 func (p *remotePlatform) doJSON(ctx context.Context, method, path string, query url.Values, in any, out any) error {

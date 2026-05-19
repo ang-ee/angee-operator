@@ -134,9 +134,16 @@ type WorkspaceSource struct {
 type WorkspaceResolved struct {
 	Chain        []string               `yaml:"chain,omitempty" json:"chain,omitempty"`
 	ChainRoot    string                 `yaml:"chain_root,omitempty" json:"chain_root,omitempty"`
-	Lifecycle    string                 `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
 	Allocations  map[string]int         `yaml:"allocations,omitempty" json:"allocations,omitempty"`
 	PersistPaths map[string]PersistPath `yaml:"persist_paths,omitempty" json:"persist_paths,omitempty"`
+
+	// LegacyLifecycle accepts the `lifecycle:` field that older
+	// manifests (pre-workspace-pure-file-primitive refactor in commit
+	// f48784c) persisted under workspaces[*].resolved. The strict YAML
+	// decoder would otherwise reject the file on load. The value is
+	// ignored and never re-emitted (no json tag, `omitempty`), so a
+	// `stack update` round-trip silently drops it from the file.
+	LegacyLifecycle string `yaml:"lifecycle,omitempty" json:"-"`
 }
 
 type PersistPath struct {
@@ -245,6 +252,15 @@ func LoadFile(path string) (*Stack, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&stack); err != nil {
 		return nil, err
+	}
+	// Drop legacy compat fields so SaveFile doesn't re-emit them.
+	// LegacyLifecycle is the only such field today; if more appear,
+	// keep them clustered here.
+	for name, ws := range stack.Workspaces {
+		if ws.Resolved.LegacyLifecycle != "" {
+			ws.Resolved.LegacyLifecycle = ""
+			stack.Workspaces[name] = ws
+		}
 	}
 	stack.Defaults()
 	if err := stack.Validate(); err != nil {

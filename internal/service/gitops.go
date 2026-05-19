@@ -11,7 +11,31 @@ import (
 	"github.com/fyltr/angee/internal/manifest"
 )
 
+// gitOpsTopologyCommitsMax caps the per-source commit window the topology
+// query is willing to walk. Clients passing a higher value have it clamped
+// silently so a hostile or buggy `withCommits=1e9` doesn't fan out a long
+// git-log walk per git source.
+const gitOpsTopologyCommitsMax = 1000
+
 func (p *Platform) GitOpsTopology(ctx context.Context) (api.GitOpsTopologyResponse, error) {
+	return p.GitOpsTopologyWithCommits(ctx, 0)
+}
+
+// GitOpsTopologyWithCommits returns the same topology as GitOpsTopology
+// plus per-source commit history capped at `withCommits` per source.
+// Pass 0 to skip commit population — that path matches the cheap default
+// the polling subscription relies on.
+//
+// Negative values are rejected (the caller is asking for nonsense); the
+// upper bound is clamped to gitOpsTopologyCommitsMax so a hostile
+// `withCommits=1e9` doesn't fan out a long git-log walk per source.
+func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits int) (api.GitOpsTopologyResponse, error) {
+	if withCommits < 0 {
+		return api.GitOpsTopologyResponse{}, &InvalidInputError{Field: "withCommits", Reason: "must be non-negative"}
+	}
+	if withCommits > gitOpsTopologyCommitsMax {
+		withCommits = gitOpsTopologyCommitsMax
+	}
 	if err := ctx.Err(); err != nil {
 		return api.GitOpsTopologyResponse{}, err
 	}
@@ -34,6 +58,11 @@ func (p *Platform) GitOpsTopology(ctx context.Context) (api.GitOpsTopologyRespon
 				State:  "error",
 				Pushed: true,
 				Error:  err.Error(),
+			}
+		}
+		if withCommits > 0 && source.Kind == "git" && state.Exists {
+			if commits, cerr := p.sourceCommits(ctx, state.Path, withCommits); cerr == nil {
+				state.Commits = commits
 			}
 		}
 		sources = append(sources, state)

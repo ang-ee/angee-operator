@@ -1,0 +1,18 @@
+_subdirectory: template
+_templates_suffix: .jinja
+_angee:
+  kind: service
+  name: claude-code
+  name_pattern: "agent-${workspace.name}"
+  inputs:
+    auth_mode:
+      type: string
+      default: api_key
+  ensure:
+    operator.port_pool.acp:
+      range: "3000-3999"
+
+auth_mode:
+  type: str
+  default: api_key
+  help: "api_key or oauth"

@@ -65,9 +65,14 @@ Host that ships a `dev` Stack template is
 ## A typical development loop
 
 ```sh
-# Develop a feature in an isolated Workspace
-angee workspace create fix-issue-123 --template dev-pr --start
+# Develop a feature in an isolated Workspace — this renders files only.
+angee workspace create fix-issue-123 --template dev-pr
 angee workspace status fix-issue-123
+
+# Bring up the workspace's inner stack explicitly (workspaces don't manage
+# services). Use the second form to expose an HTTP operator against it.
+angee stack up --root workspaces/fix-issue-123/.angee
+# angee operator --root workspaces/fix-issue-123/.angee --port 9100
 
 # Iterate. Each Source is a git worktree on workspace/fix-issue-123.
 angee dev

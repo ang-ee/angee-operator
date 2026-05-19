@@ -24,6 +24,14 @@ type MutationResult struct {
 type Query struct {
 }
 
+type ServiceCreateInput struct {
+	Template  string           `json:"template"`
+	Workspace string           `json:"workspace"`
+	Inputs    []*KeyValueInput `json:"inputs,omitempty"`
+	Name      *string          `json:"name,omitempty"`
+	Start     *bool            `json:"start,omitempty"`
+}
+
 type ServiceInput struct {
 	Name    *string          `json:"name,omitempty"`
 	Runtime *string          `json:"runtime,omitempty"`
@@ -54,12 +62,14 @@ type StackRuntimeInput struct {
 	Build    *bool    `json:"build,omitempty"`
 }
 
+type Subscription struct {
+}
+
 type WorkspaceCreateInput struct {
 	Template string           `json:"template"`
 	Name     *string          `json:"name,omitempty"`
 	Inputs   []*KeyValueInput `json:"inputs,omitempty"`
 	TTL      *string          `json:"ttl,omitempty"`
-	Start    *bool            `json:"start,omitempty"`
 }
 
 type WorkspaceUpdateInput struct {

@@ -39,7 +39,16 @@ func workspaceCreateRequestFrom(input model.WorkspaceCreateInput) api.WorkspaceC
 		Name:     stringPtrValue(input.Name),
 		Inputs:   keyValuesFrom(input.Inputs),
 		TTL:      stringPtrValue(input.TTL),
-		Start:    boolPtrValue(input.Start),
+	}
+}
+
+func serviceCreateRequestFrom(input model.ServiceCreateInput) api.ServiceCreateRequest {
+	return api.ServiceCreateRequest{
+		Template:  input.Template,
+		Workspace: input.Workspace,
+		Name:      stringPtrValue(input.Name),
+		Inputs:    keyValuesFrom(input.Inputs),
+		Start:     boolPtrValue(input.Start),
 	}
 }
 

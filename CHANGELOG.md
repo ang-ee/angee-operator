@@ -6,6 +6,139 @@ latest tag.
 
 ## Unreleased
 
+### Breaking
+
+- **Workspaces are now a pure file primitive.** The operator no longer
+  owns workspace service lifecycle; an `angee workspace` instance only
+  renders Copier output (including any chained inner-stack templates as
+  files) and materialises sources. Removed:
+  - `Platform.WorkspaceStart` / `WorkspaceStop`
+  - `angee workspace start|stop|restart` CLI subcommands
+  - `--start` flag on `angee workspace create`
+  - `POST /workspaces/{name}/start|stop|restart` REST endpoints
+  - `workspaceStart` / `workspaceStop` / `workspaceRestart` GraphQL mutations
+  - `start` field on the GraphQL `WorkspaceCreateInput` and on
+    `api.WorkspaceCreateRequest`
+  - `_angee.chain_lifecycle` template metadata field and the corresponding
+    `WorkspaceResolved.Lifecycle` / `api.WorkspaceRef.Lifecycle` /
+    `api.WorkspaceStatusResponse.Lifecycle` fields (and the
+    `WorkspaceStatus.lifecycle` GraphQL field)
+
+  If a workspace renders an inner stack and you want to bring it up, drive
+  it explicitly with `angee stack up --root workspaces/<name>/.angee` (or
+  point a second operator at that root with `--root` /
+  `--port`). `_angee.chain` and `_angee.chain_root` continue to work
+  exactly as before — they only describe what to render and where.
+
+### Operator
+
+- Closed the CLI parity gap for the operator surface. Every operation
+  that was REST + GraphQL-only now has a CLI subcommand: `angee
+  gitops topology [--with-commits N]`, `angee source diff <name>`,
+  `angee workspace preflight`, `angee workspace source
+  {fetch,pull,push,diff,merge,rebase,merge-abort,rebase-abort,rebase-continue,publish}`,
+  `angee template {list,get}`, `angee token mint`. The surface
+  matrix in `docs/reference/surfaces.md` now reads `Yes` in the CLI
+  column for every Platform method. Subscriptions remain GraphQL-only
+  by design (REST/CLI have no native pubsub).
+- Added template-based service creation. `angee service create
+  --template <ref> --workspace <name>` (REST `POST /services/create`,
+  GraphQL `serviceCreate(input)`) renders a Copier template with
+  `_angee.kind: service` into the outer stack as one
+  `manifest.Service` entry. Templates declare `name_pattern` and
+  `ensure` port pools; the operator resolves the service name from
+  the workspace name + caller inputs, allocates ports under owner
+  `service/<name>/<pool>`, installs other rendered files (typically
+  `docker/`) at `<root>/.angee/services/<service_name>/`, and strictly
+  rejects anything outside `services:` in the rendered output. On
+  render failure the port leases are released and the build context
+  is removed. `service destroy` is updated to release the
+  service-prefixed leases and delete the build-context dir.
+- Added secret CRUD over REST + GraphQL + CLI. Five operations
+  (`secrets`, `secret(name)`, `secretValue(name)`, `secretSet`,
+  `secretDelete`) backed by the existing `secrets.Backend` interface so
+  both env-file and OpenBao deployments work without changes. The value
+  read (`secretValue` / `GET /secrets/{name}/value` / `angee secret
+  reveal`) is a dedicated endpoint so the privileged path is obvious in
+  audit logs and code review. `secrets` (list) only returns declared
+  secrets (entries in `stack.secrets`); set/delete accept any name
+  matching `^[A-Za-z0-9._-]{1,256}$`. Mutating calls log to operator
+  stderr (env-file's audit trail; OpenBao continues to own its own
+  audit log).
+- Closed the REST/GraphQL parity gap. Every operation added in this
+  release now has a REST endpoint alongside the GraphQL surface, secured
+  by the same admin-bearer middleware as the rest of the operator API.
+  New endpoints: `GET /gitops/topology[?with_commits=N]`,
+  `GET /sources/{name}/diff[?ref=...]`,
+  `GET /workspaces/{name}/sources/{slot}/diff[?ref=...]`,
+  `POST /workspaces/{name}/sources/{slot}/{fetch,pull,push,merge,rebase,merge-abort,rebase-abort,rebase-continue,publish}`,
+  `POST /workspaces/preflight`,
+  `GET /templates`, `GET /templates/{ref...}`,
+  `POST /tokens/mint`. Subscriptions remain GraphQL-only by design
+  (REST has no native pubsub).
+- Added a GraphQL `Subscription` root over Server-Sent Events. Four
+  operations are live: `onGitOpsTopologyChange`, `onWorkspaceStatusChange`,
+  `onServiceLogs`, `onWorkspaceLogs`. Snapshot subscriptions poll the
+  underlying query on a 2 s tick and publish only when the result hash
+  changes; log subscriptions ride the existing runtime-backend follow
+  channel. The transport is `POST /graphql` with
+  `Accept: text/event-stream` per gqlgen 0.17.
+- Retired the unused `GET /events` SSE stub (only ever emitted a static
+  `ready` event). Live event streaming is now exclusively via GraphQL
+  subscriptions on `/graphql`.
+- Added `workspaceCreatePreflight(input)` mutation that validates a
+  `WorkspaceCreateInput` against the resolved template's input
+  declarations without materialising a workspace. Returns the effective
+  inputs (after defaults), a `missingRequired` list, and an
+  `invalidInputs` list of `{field, reason}` for type-mismatch failures.
+- Added `mintConnectionToken(actor, ttl)` mutation that issues an
+  HS256-signed JWT scoped to the supplied actor. Signing key resolves in
+  this order: explicit `--jwt-secret` / `ANGEE_OPERATOR_JWT_SECRET`,
+  then HKDF-derived from the admin `--token`, then a per-process random
+  fallback for loopback dev. TTL defaults to 1 h, capped at 24 h.
+- Added template-descriptor introspection: `templates: [TemplateDescriptor]!`
+  walks `<root>/.templates/<kind>/*` and `<root>/templates/<kind>/*` and
+  returns descriptors with `kind`, `name`, `path`, and per-input
+  metadata. `template(ref)` returns the single descriptor for an explicit
+  ref (relative path, absolute path, or supported remote URL).
+- Added commit-DAG fields on `GitOpsTopology`: `gitOpsTopology(withCommits: Int)`
+  populates `sources[].commits` with `{sha, parents, refs, time, summary,
+  author}` for each git source, capped at `withCommits`. Default value
+  is 0 so the polling subscription stays cheap; clients opt in for the
+  DAG renderer view.
+- Added `sourceDiff(name, ref)` and `workspaceSourceDiff(workspace, slot, ref)`
+  queries that return unified-diff `[DiffFile{hunks: [DiffHunk]}]`
+  payloads parsed via `bluekeyes/go-gitdiff`. `ref` empty means
+  uncommitted (working-tree-vs-HEAD); otherwise it diffs against the
+  named revision.
+- Added higher-level convergence mutations on workspace source slots:
+  `workspaceSourceMerge(ref)`, `workspaceSourceRebase(ref)`,
+  `workspaceSourceMergeAbort`, `workspaceSourceRebaseAbort`,
+  `workspaceSourceRebaseContinue`, and `workspaceSourcePublish(remote,
+  branch)`. Each returns a `GitOpResult` carrying `{ok, conflicted,
+  conflictFiles, message}`. On conflict the worktree is left in the
+  conflicted state for the caller to resolve; conflict files come from
+  `git ls-files -u` rather than parsing free-form stderr.
+- Added integration tests covering behind/diverged worktrees, dirty
+  worktrees blocking pull/push, missing workspace-source paths, and
+  undeclared source references in `gitOpsTopology`.
+
+### Templates
+
+- Added the bundled `templates/agent-runtime/` workspace template with
+  a documented env-var contract: `AGENT_ID` (required), `MCP_URL` /
+  `MCP_TOKEN` (optional, caller-supplied), `ACP_PORT` (allocated from
+  the host stack's `acp` port pool), `ACP_TOKEN` (resolved via
+  `${secret:acp_token}`). v1 ships a placeholder service that prints
+  the contract and sleeps; downstream consumers (e.g. the angee-django
+  `agents` addon) replace the command block with a real runtime
+  invocation. Contract documented in `docs/guide/templates.md`.
+
+### Dependencies
+
+- `github.com/golang-jwt/jwt/v5@v5.3.1` (MIT) for `mintConnectionToken`.
+- `github.com/bluekeyes/go-gitdiff@v0.8.1` (MIT) for the diff queries.
+
 ## v0.4.12 — 2026-05-15
 
 ### Operator

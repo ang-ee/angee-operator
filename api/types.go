@@ -72,7 +72,6 @@ type WorkspaceRef struct {
 	Path               string         `json:"path"`
 	Template           string         `json:"template"`
 	ChainRoot          string         `json:"chain_root,omitempty"`
-	Lifecycle          string         `json:"lifecycle,omitempty"`
 	Allocations        map[string]int `json:"allocations,omitempty"`
 	ProcessComposePort int            `json:"process_compose_port,omitempty"`
 	PlaywrightMCPName  string         `json:"playwright_mcp_name,omitempty"`
@@ -92,7 +91,6 @@ type WorkspaceStatusResponse struct {
 	Sources            []WorkspaceSourceStatus         `json:"sources,omitempty"`
 	Chain              []string                        `json:"chain,omitempty"`
 	ChainRoot          string                          `json:"chain_root,omitempty"`
-	Lifecycle          string                          `json:"lifecycle,omitempty"`
 	Allocations        map[string]int                  `json:"allocations,omitempty"`
 	ProcessComposePort int                             `json:"process_compose_port,omitempty"`
 	PlaywrightMCPName  string                          `json:"playwright_mcp_name,omitempty"`
@@ -202,7 +200,18 @@ type WorkspaceCreateRequest struct {
 	Name     string            `json:"name,omitempty"`
 	Inputs   map[string]string `json:"inputs,omitempty"`
 	TTL      string            `json:"ttl,omitempty"`
-	Start    bool              `json:"start,omitempty"`
+}
+
+// ServiceCreateRequest renders a single manifest.Service into the
+// outer stack via a Copier template with `_angee.kind: service`.
+// Workspace is required because service templates mount
+// `workspace://<name>` paths from the named workspace.
+type ServiceCreateRequest struct {
+	Template  string            `json:"template"`
+	Workspace string            `json:"workspace"`
+	Inputs    map[string]string `json:"inputs,omitempty"`
+	Name      string            `json:"name,omitempty"`
+	Start     bool              `json:"start,omitempty"`
 }
 
 type WorkspaceUpdateRequest struct {
@@ -210,9 +219,128 @@ type WorkspaceUpdateRequest struct {
 	TTL    string            `json:"ttl,omitempty"`
 }
 
+type PreflightFailure struct {
+	Field  string `json:"field"`
+	Reason string `json:"reason"`
+}
+
+type WorkspaceCreatePreflightResponse struct {
+	OK               bool               `json:"ok"`
+	Template         string             `json:"template"`
+	ResolvedTemplate string             `json:"resolved_template"`
+	EffectiveInputs  map[string]string  `json:"effective_inputs"`
+	MissingRequired  []string           `json:"missing_required,omitempty"`
+	InvalidInputs    []PreflightFailure `json:"invalid_inputs,omitempty"`
+}
+
+type TemplateInputDescriptor struct {
+	Name      string `json:"name"`
+	Type      string `json:"type,omitempty"`
+	Required  bool   `json:"required"`
+	Immutable bool   `json:"immutable"`
+	Generated bool   `json:"generated"`
+	Default   string `json:"default,omitempty"`
+}
+
+type TemplateDescriptor struct {
+	Ref    string                    `json:"ref"`
+	Kind   string                    `json:"kind"`
+	Name   string                    `json:"name,omitempty"`
+	Path   string                    `json:"path"`
+	Inputs []TemplateInputDescriptor `json:"inputs"`
+}
+
+type ConnectionTokenResponse struct {
+	Token     string `json:"token"`
+	Actor     string `json:"actor"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+type CommitRef struct {
+	SHA     string   `json:"sha"`
+	Parents []string `json:"parents"`
+	Refs    []string `json:"refs"`
+	Time    string   `json:"time"`
+	Summary string   `json:"summary"`
+	Author  string   `json:"author,omitempty"`
+}
+
+type DiffHunk struct {
+	OldStart int    `json:"old_start"`
+	OldLines int    `json:"old_lines"`
+	NewStart int    `json:"new_start"`
+	NewLines int    `json:"new_lines"`
+	Header   string `json:"header,omitempty"`
+	Body     string `json:"body"`
+}
+
+type GitOpResult struct {
+	OK            bool                   `json:"ok"`
+	Conflicted    bool                   `json:"conflicted"`
+	ConflictFiles []string               `json:"conflict_files"`
+	Message       string                 `json:"message"`
+	Source        *WorkspaceSourceStatus `json:"source,omitempty"`
+}
+
+type DiffFile struct {
+	OldPath   string     `json:"old_path,omitempty"`
+	NewPath   string     `json:"new_path,omitempty"`
+	Mode      string     `json:"mode,omitempty"`
+	IsBinary  bool       `json:"is_binary"`
+	IsNew     bool       `json:"is_new"`
+	IsDeleted bool       `json:"is_deleted"`
+	IsRename  bool       `json:"is_rename"`
+	Hunks     []DiffHunk `json:"hunks"`
+}
+
 type SourceOperationRequest struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref,omitempty"`
+}
+
+// WorkspaceSourceGitOpRequest is the body for the REST convergence
+// endpoints (merge / rebase / publish). `Ref` is the merge/rebase
+// target; `Remote` and `Branch` only matter for `publish`.
+type WorkspaceSourceGitOpRequest struct {
+	Ref    string `json:"ref,omitempty"`
+	Remote string `json:"remote,omitempty"`
+	Branch string `json:"branch,omitempty"`
+}
+
+// MintConnectionTokenRequest is the body for `POST /tokens/mint`.
+// `Actor` is required and becomes the `sub` claim; `TTL` is a Go
+// duration string capped at 24h.
+type MintConnectionTokenRequest struct {
+	Actor string `json:"actor"`
+	TTL   string `json:"ttl,omitempty"`
+}
+
+// SecretRef is metadata about a secret — never includes the value.
+// `Declared` is true when the secret is declared in `stack.secrets`;
+// `HasValue` reflects whether the configured backend currently holds a
+// value for the name.
+type SecretRef struct {
+	Name      string `json:"name"`
+	Declared  bool   `json:"declared"`
+	HasValue  bool   `json:"has_value"`
+	Required  bool   `json:"required,omitempty"`
+	Generated bool   `json:"generated,omitempty"`
+	Import    string `json:"import,omitempty"`
+	EnvVar    string `json:"env_var,omitempty"`
+}
+
+// SecretValueResponse carries the resolved value. Returned only by the
+// dedicated value-read endpoint so the privileged read is obvious in
+// every audit trail and code review.
+type SecretValueResponse struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// SecretSetRequest is the body of `POST /secrets/{name}` and the
+// `secretSet` mutation. Value is required and stored verbatim.
+type SecretSetRequest struct {
+	Value string `json:"value"`
 }
 
 type WorkspaceSyncBaseRequest struct {
@@ -220,20 +348,21 @@ type WorkspaceSyncBaseRequest struct {
 }
 
 type SourceState struct {
-	Name           string `json:"name"`
-	Slot           string `json:"slot,omitempty"`
-	Kind           string `json:"kind"`
-	Path           string `json:"path"`
-	Exists         bool   `json:"exists"`
-	State          string `json:"state,omitempty"`
-	Branch         string `json:"branch,omitempty"`
-	Ref            string `json:"ref,omitempty"`
-	CurrentRef     string `json:"current_ref,omitempty"`
-	Dirty          bool   `json:"dirty,omitempty"`
-	Upstream       string `json:"upstream,omitempty"`
-	Ahead          int    `json:"ahead,omitempty"`
-	Behind         int    `json:"behind,omitempty"`
-	Pushed         bool   `json:"pushed"`
-	UnpushedReason string `json:"unpushed_reason,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Name           string      `json:"name"`
+	Slot           string      `json:"slot,omitempty"`
+	Kind           string      `json:"kind"`
+	Path           string      `json:"path"`
+	Exists         bool        `json:"exists"`
+	State          string      `json:"state,omitempty"`
+	Branch         string      `json:"branch,omitempty"`
+	Ref            string      `json:"ref,omitempty"`
+	CurrentRef     string      `json:"current_ref,omitempty"`
+	Dirty          bool        `json:"dirty,omitempty"`
+	Upstream       string      `json:"upstream,omitempty"`
+	Ahead          int         `json:"ahead,omitempty"`
+	Commits        []CommitRef `json:"commits,omitempty"`
+	Behind         int         `json:"behind,omitempty"`
+	Pushed         bool        `json:"pushed"`
+	UnpushedReason string      `json:"unpushed_reason,omitempty"`
+	Error          string      `json:"error,omitempty"`
 }

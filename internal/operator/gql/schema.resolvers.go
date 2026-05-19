@@ -120,6 +120,15 @@ func (r *mutationResolver) ServiceInit(ctx context.Context, input model.ServiceI
 	return namedActionResult("created", req.Name), nil
 }
 
+// ServiceCreate is the resolver for the serviceCreate field.
+func (r *mutationResolver) ServiceCreate(ctx context.Context, input model.ServiceCreateInput) (*api.ServiceState, error) {
+	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(input))
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
 // ServiceUpdate is the resolver for the serviceUpdate field.
 func (r *mutationResolver) ServiceUpdate(ctx context.Context, name string, input model.ServiceInput) (*model.MutationResult, error) {
 	req := serviceRequestFrom(input)
@@ -192,33 +201,6 @@ func (r *mutationResolver) WorkspaceUpdate(ctx context.Context, name string, inp
 	return &ref, err
 }
 
-// WorkspaceStart is the resolver for the workspaceStart field.
-func (r *mutationResolver) WorkspaceStart(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceStart(ctx, name); err != nil {
-		return nil, err
-	}
-	return namedActionResult("started", name), nil
-}
-
-// WorkspaceStop is the resolver for the workspaceStop field.
-func (r *mutationResolver) WorkspaceStop(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceStop(ctx, name); err != nil {
-		return nil, err
-	}
-	return namedActionResult("stopped", name), nil
-}
-
-// WorkspaceRestart is the resolver for the workspaceRestart field.
-func (r *mutationResolver) WorkspaceRestart(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceStop(ctx, name); err != nil {
-		return nil, err
-	}
-	if err := r.Platform.WorkspaceStart(ctx, name); err != nil {
-		return nil, err
-	}
-	return namedActionResult("restarted", name), nil
-}
-
 // WorkspaceDestroy is the resolver for the workspaceDestroy field.
 func (r *mutationResolver) WorkspaceDestroy(ctx context.Context, name string, purge *bool) (*model.MutationResult, error) {
 	if err := r.Platform.WorkspaceDestroy(ctx, name, boolPtrValue(purge)); err != nil {
@@ -255,6 +237,80 @@ func (r *mutationResolver) WorkspaceSourcePull(ctx context.Context, workspace st
 func (r *mutationResolver) WorkspaceSourcePush(ctx context.Context, workspace string, slot string, ref *string) (*api.WorkspaceSourceStatus, error) {
 	status, err := r.Platform.WorkspaceSourcePush(ctx, workspace, slot, stringPtrValue(ref))
 	return &status, err
+}
+
+// WorkspaceCreatePreflight is the resolver for the workspaceCreatePreflight field.
+func (r *mutationResolver) WorkspaceCreatePreflight(ctx context.Context, input model.WorkspaceCreateInput) (*api.WorkspaceCreatePreflightResponse, error) {
+	resp, err := r.Platform.WorkspaceCreatePreflight(ctx, workspaceCreateRequestFrom(input))
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// MintConnectionToken is the resolver for the mintConnectionToken field.
+func (r *mutationResolver) MintConnectionToken(ctx context.Context, actor string, ttl *string) (*api.ConnectionTokenResponse, error) {
+	if r.Tokens == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	resp, err := r.Tokens.Mint(actor, stringPtrValue(ttl))
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// WorkspaceSourceMerge is the resolver for the workspaceSourceMerge field.
+func (r *mutationResolver) WorkspaceSourceMerge(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceMerge(ctx, workspace, slot, ref)
+	return &res, err
+}
+
+// WorkspaceSourceRebase is the resolver for the workspaceSourceRebase field.
+func (r *mutationResolver) WorkspaceSourceRebase(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceRebase(ctx, workspace, slot, ref)
+	return &res, err
+}
+
+// WorkspaceSourceMergeAbort is the resolver for the workspaceSourceMergeAbort field.
+func (r *mutationResolver) WorkspaceSourceMergeAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceMergeAbort(ctx, workspace, slot)
+	return &res, err
+}
+
+// WorkspaceSourceRebaseAbort is the resolver for the workspaceSourceRebaseAbort field.
+func (r *mutationResolver) WorkspaceSourceRebaseAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceRebaseAbort(ctx, workspace, slot)
+	return &res, err
+}
+
+// WorkspaceSourceRebaseContinue is the resolver for the workspaceSourceRebaseContinue field.
+func (r *mutationResolver) WorkspaceSourceRebaseContinue(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceRebaseContinue(ctx, workspace, slot)
+	return &res, err
+}
+
+// WorkspaceSourcePublish is the resolver for the workspaceSourcePublish field.
+func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace string, slot string, remote *string, branch *string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourcePublish(ctx, workspace, slot, stringPtrValue(remote), stringPtrValue(branch))
+	return &res, err
+}
+
+// SecretSet is the resolver for the secretSet field.
+func (r *mutationResolver) SecretSet(ctx context.Context, name string, value string) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretSet(ctx, name, value)
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+// SecretDelete is the resolver for the secretDelete field.
+func (r *mutationResolver) SecretDelete(ctx context.Context, name string) (*model.MutationResult, error) {
+	if err := r.Platform.SecretDelete(ctx, name); err != nil {
+		return nil, err
+	}
+	return namedActionResult("deleted", name), nil
 }
 
 // Health is the resolver for the health field.
@@ -317,9 +373,39 @@ func (r *queryResolver) WorkspaceGit(ctx context.Context, name string) ([]*api.S
 }
 
 // GitOpsTopology is the resolver for the gitOpsTopology field.
-func (r *queryResolver) GitOpsTopology(ctx context.Context) (*api.GitOpsTopologyResponse, error) {
-	topology, err := r.Platform.GitOpsTopology(ctx)
+func (r *queryResolver) GitOpsTopology(ctx context.Context, withCommits *int) (*api.GitOpsTopologyResponse, error) {
+	limit := 0
+	if withCommits != nil {
+		limit = *withCommits
+	}
+	topology, err := r.Platform.GitOpsTopologyWithCommits(ctx, limit)
 	return &topology, err
+}
+
+// SourceDiff is the resolver for the sourceDiff field.
+func (r *queryResolver) SourceDiff(ctx context.Context, name string, ref *string) ([]*api.DiffFile, error) {
+	files, err := r.Platform.SourceDiff(ctx, name, stringPtrValue(ref))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.DiffFile, len(files))
+	for i := range files {
+		out[i] = &files[i]
+	}
+	return out, nil
+}
+
+// WorkspaceSourceDiff is the resolver for the workspaceSourceDiff field.
+func (r *queryResolver) WorkspaceSourceDiff(ctx context.Context, workspace string, slot string, ref *string) ([]*api.DiffFile, error) {
+	files, err := r.Platform.WorkspaceSourceDiff(ctx, workspace, slot, stringPtrValue(ref))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.DiffFile, len(files))
+	for i := range files {
+		out[i] = &files[i]
+	}
+	return out, nil
 }
 
 // StackLogs is the resolver for the stackLogs field.
@@ -357,6 +443,59 @@ func (r *queryResolver) McpDescriptor(ctx context.Context) (map[string]any, erro
 	return mcpDescriptor(), nil
 }
 
+// Templates is the resolver for the templates field.
+func (r *queryResolver) Templates(ctx context.Context) ([]*api.TemplateDescriptor, error) {
+	descriptors, err := r.Platform.Templates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.TemplateDescriptor, len(descriptors))
+	for i := range descriptors {
+		out[i] = &descriptors[i]
+	}
+	return out, nil
+}
+
+// Template is the resolver for the template field.
+func (r *queryResolver) Template(ctx context.Context, ref string) (*api.TemplateDescriptor, error) {
+	desc, err := r.Platform.Template(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return &desc, nil
+}
+
+// Secrets is the resolver for the secrets field.
+func (r *queryResolver) Secrets(ctx context.Context) ([]*api.SecretRef, error) {
+	refs, err := r.Platform.SecretsList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.SecretRef, len(refs))
+	for i := range refs {
+		out[i] = &refs[i]
+	}
+	return out, nil
+}
+
+// Secret is the resolver for the secret field.
+func (r *queryResolver) Secret(ctx context.Context, name string) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretGet(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+// SecretValue is the resolver for the secretValue field.
+func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.SecretValueResponse, error) {
+	resp, err := r.Platform.SecretValue(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // Services is the resolver for the services field.
 func (r *stackStatusResolver) Services(ctx context.Context, obj *api.StackStatusResponse) ([]*api.ServiceState, error) {
 	if obj == nil {
@@ -379,6 +518,46 @@ func (r *stackStatusResolver) Workspaces(ctx context.Context, obj *api.StackStat
 		return nil, nil
 	}
 	return ptrSlice(sortedMapValues(obj.Workspaces)), nil
+}
+
+// OnGitOpsTopologyChange is the resolver for the onGitOpsTopologyChange field.
+func (r *subscriptionResolver) OnGitOpsTopologyChange(ctx context.Context) (<-chan *api.GitOpsTopologyResponse, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeTopology(ctx), nil
+}
+
+// OnServiceLogs is the resolver for the onServiceLogs field.
+func (r *subscriptionResolver) OnServiceLogs(ctx context.Context, name string) (<-chan string, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeServiceLogs(ctx, name)
+}
+
+// OnWorkspaceLogs is the resolver for the onWorkspaceLogs field.
+func (r *subscriptionResolver) OnWorkspaceLogs(ctx context.Context, name string) (<-chan string, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeWorkspaceLogs(ctx, name)
+}
+
+// OnWorkspaceStatusChange is the resolver for the onWorkspaceStatusChange field.
+func (r *subscriptionResolver) OnWorkspaceStatusChange(ctx context.Context, name string) (<-chan *api.WorkspaceStatusResponse, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeWorkspaceStatus(ctx, name), nil
+}
+
+// EffectiveInputs is the resolver for the effectiveInputs field.
+func (r *workspaceCreatePreflightResolver) EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return keyValueList(obj.EffectiveInputs), nil
 }
 
 // TTLExpiresAt is the resolver for the ttlExpiresAt field.
@@ -433,6 +612,14 @@ func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 // StackStatus returns StackStatusResolver implementation.
 func (r *Resolver) StackStatus() StackStatusResolver { return &stackStatusResolver{r} }
 
+// Subscription returns SubscriptionResolver implementation.
+func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
+
+// WorkspaceCreatePreflight returns WorkspaceCreatePreflightResolver implementation.
+func (r *Resolver) WorkspaceCreatePreflight() WorkspaceCreatePreflightResolver {
+	return &workspaceCreatePreflightResolver{r}
+}
+
 // WorkspaceRef returns WorkspaceRefResolver implementation.
 func (r *Resolver) WorkspaceRef() WorkspaceRefResolver { return &workspaceRefResolver{r} }
 
@@ -443,5 +630,7 @@ type compiledStackResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type stackStatusResolver struct{ *Resolver }
+type subscriptionResolver struct{ *Resolver }
+type workspaceCreatePreflightResolver struct{ *Resolver }
 type workspaceRefResolver struct{ *Resolver }
 type workspaceStatusResolver struct{ *Resolver }

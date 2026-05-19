@@ -44,6 +44,44 @@ type SourceState {
   pushed: Boolean
   unpushedReason: String
   error: String
+  commits: [CommitRef!]
+}
+
+type CommitRef {
+  sha: String!
+  parents: [String!]!
+  refs: [String!]!
+  time: String!
+  summary: String!
+  author: String
+}
+
+type DiffHunk {
+  oldStart: Int!
+  oldLines: Int!
+  newStart: Int!
+  newLines: Int!
+  header: String
+  body: String!
+}
+
+type DiffFile {
+  oldPath: String
+  newPath: String
+  mode: String
+  isBinary: Boolean!
+  isNew: Boolean!
+  isDeleted: Boolean!
+  isRename: Boolean!
+  hunks: [DiffHunk!]!
+}
+
+type GitOpResult {
+  ok: Boolean!
+  conflicted: Boolean!
+  conflictFiles: [String!]!
+  message: String!
+  source: WorkspaceSourceStatus
 }
 
 type WorkspaceSourceStatus {
@@ -130,7 +168,6 @@ type WorkspaceStatus {
   sources: [WorkspaceSourceStatus!]!
   chain: [String!]!
   chainRoot: String
-  lifecycle: String
   allocations: JSON
   processComposePort: Int
   playwrightMcpName: String
@@ -205,6 +242,13 @@ input WorkspaceCreateInput {
   name: String
   inputs: [KeyValueInput!]
   ttl: String
+}
+
+input ServiceCreateInput {
+  template: String!
+  workspace: String!
+  inputs: [KeyValueInput!]
+  name: String
   start: Boolean
 }
 
@@ -224,11 +268,18 @@ type Query {
   workspace(name: String!): WorkspaceRef
   workspaceStatus(name: String!): WorkspaceStatus
   workspaceGit(name: String!): [SourceState!]!
-  gitOpsTopology: GitOpsTopology
+  gitOpsTopology(withCommits: Int): GitOpsTopology
+  sourceDiff(name: String!, ref: String): [DiffFile!]!
+  workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
   stackLogs(services: [String!], limit: Int): String!
   serviceLogs(name: String!, limit: Int): String!
   workspaceLogs(name: String!, limit: Int): String!
   mcpDescriptor: JSON
+  templates: [TemplateDescriptor!]!
+  template(ref: String!): TemplateDescriptor
+  secrets: [SecretRef!]!
+  secret(name: String!): SecretRef
+  secretValue(name: String!): SecretValue
 }
 
 type Mutation {
@@ -242,6 +293,7 @@ type Mutation {
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
   serviceInit(input: ServiceInput!): MutationResult
+  serviceCreate(input: ServiceCreateInput!): ServiceState
   serviceUpdate(name: String!, input: ServiceInput!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult
@@ -252,13 +304,79 @@ type Mutation {
   sourcePush(name: String!, ref: String): SourceState
   workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
   workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
-  workspaceStart(name: String!): MutationResult
-  workspaceStop(name: String!): MutationResult
-  workspaceRestart(name: String!): MutationResult
   workspaceDestroy(name: String!, purge: Boolean): MutationResult
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!
   workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
+  workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
+  mintConnectionToken(actor: String!, ttl: String): ConnectionToken!
+  workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
+  workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
+  workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
+  secretSet(name: String!, value: String!): SecretRef!
+  secretDelete(name: String!): MutationResult!
+}
+
+type Subscription {
+  onGitOpsTopologyChange: GitOpsTopology!
+  onServiceLogs(name: String!): String!
+  onWorkspaceLogs(name: String!): String!
+  onWorkspaceStatusChange(name: String!): WorkspaceStatus!
+}
+
+type PreflightFailure {
+  field: String!
+  reason: String!
+}
+
+type WorkspaceCreatePreflight {
+  ok: Boolean!
+  template: String!
+  resolvedTemplate: String!
+  effectiveInputs: [KeyValue!]!
+  missingRequired: [String!]!
+  invalidInputs: [PreflightFailure!]!
+}
+
+type TemplateInputDescriptor {
+  name: String!
+  type: String
+  required: Boolean!
+  immutable: Boolean!
+  generated: Boolean!
+  default: String
+}
+
+type TemplateDescriptor {
+  ref: String!
+  kind: String!
+  name: String
+  path: String!
+  inputs: [TemplateInputDescriptor!]!
+}
+
+type ConnectionToken {
+  token: String!
+  actor: String!
+  expiresAt: String!
+}
+
+type SecretRef {
+  name: String!
+  declared: Boolean!
+  hasValue: Boolean!
+  required: Boolean
+  generated: Boolean
+  import: String
+  envVar: String
+}
+
+type SecretValue {
+  name: String!
+  value: String!
 }
