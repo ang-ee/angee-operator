@@ -25,7 +25,13 @@ REST + GraphQL:
 | **GitOps topology** (derived view: sources × slots) | `gitOpsTopology(withCommits: Int)` snapshot; `onGitOpsTopologyChange` live. |
 | **Templates** (discoverable Copier templates) | `templates`, `template(ref)`. |
 | **Connection token** (per-actor scoped JWT) | `mintConnectionToken(actor, ttl)` (gated by admin bearer). |
-| **Subscriptions** (SSE, `POST /graphql` + `Accept: text/event-stream`) | `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
+| **Subscriptions** (SSE, GraphQL-only) | `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
+
+Every operation above is reachable over both REST (`POST /...` /
+`GET /...`) and GraphQL — subscriptions are the one deliberate split
+(REST has no native pubsub). The operator's admin bearer token guards
+the entire surface; `mintConnectionToken` issues short-lived per-actor
+JWTs for finer-grained scoping.
 
 "Update" has three scopes: `sourcePull` (whole source), `workspaceSourcePull`
 (one slot), `workspaceSyncBase` (every slot's workspace branch against its

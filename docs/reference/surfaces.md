@@ -49,22 +49,22 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceGitStatus` | Yes | Yes | Yes | - |
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |
-| `GitOpsTopology` | No | No | Yes | Gap: currently GraphQL-only topology view. |
-| `GitOpsTopologyWithCommits` | No | No | Yes | Gap: currently GraphQL-only topology view with commit-DAG window. |
-| `SourceDiff` | No | No | Yes | Gap: currently GraphQL-only source diff. |
-| `WorkspaceSourceDiff` | No | No | Yes | Gap: currently GraphQL-only per-workspace source diff. |
-| `WorkspaceSourceFetch` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
-| `WorkspaceSourcePull` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
-| `WorkspaceSourcePush` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
-| `WorkspaceSourceMerge` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
-| `WorkspaceSourceRebase` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
-| `WorkspaceSourceMergeAbort` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
-| `WorkspaceSourceRebaseAbort` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
-| `WorkspaceSourceRebaseContinue` | No | No | Yes | Gap: currently GraphQL-only convergence operation. |
-| `WorkspaceSourcePublish` | No | No | Yes | Gap: currently GraphQL-only branch publish. |
-| `WorkspaceCreatePreflight` | No | No | Yes | Gap: currently GraphQL-only stateless input validator. |
-| `Templates` | No | No | Yes | Gap: currently GraphQL-only template descriptor list. |
-| `Template` | No | No | Yes | Gap: currently GraphQL-only single template descriptor. |
+| `GitOpsTopology` | No | Yes | Yes | CLI gap; REST `GET /gitops/topology`. |
+| `GitOpsTopologyWithCommits` | No | Yes | Yes | CLI gap; REST `GET /gitops/topology?with_commits=N`. |
+| `SourceDiff` | No | Yes | Yes | CLI gap; REST `GET /sources/{name}/diff?ref=...`. |
+| `WorkspaceSourceDiff` | No | Yes | Yes | CLI gap; REST `GET /workspaces/{name}/sources/{slot}/diff?ref=...`. |
+| `WorkspaceSourceFetch` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/fetch`. |
+| `WorkspaceSourcePull` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/pull`. |
+| `WorkspaceSourcePush` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/push`. |
+| `WorkspaceSourceMerge` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/merge`. |
+| `WorkspaceSourceRebase` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/rebase`. |
+| `WorkspaceSourceMergeAbort` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/merge-abort`. |
+| `WorkspaceSourceRebaseAbort` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/rebase-abort`. |
+| `WorkspaceSourceRebaseContinue` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/rebase-continue`. |
+| `WorkspaceSourcePublish` | No | Yes | Yes | CLI gap; REST `POST /workspaces/{name}/sources/{slot}/publish`. |
+| `WorkspaceCreatePreflight` | No | Yes | Yes | CLI gap; REST `POST /workspaces/preflight`. |
+| `Templates` | No | Yes | Yes | CLI gap; REST `GET /templates`. |
+| `Template` | No | Yes | Yes | CLI gap; REST `GET /templates/{ref...}`. |
 
 When adding a new exported `Platform` method, update this table in the same
 change. `internal/service/surface_matrix_test.go` verifies that every exported

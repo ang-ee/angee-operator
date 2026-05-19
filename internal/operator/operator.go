@@ -145,6 +145,24 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
 	mux.Handle("POST /workspaces/{name}/sync-base", s.auth(http.HandlerFunc(s.workspaceSyncBase)))
+	// REST parity for GraphQL-only operations. Every route here is auth()-wrapped
+	// just like the rest of the operator surface.
+	mux.Handle("GET /gitops/topology", s.auth(http.HandlerFunc(s.gitOpsTopology)))
+	mux.Handle("GET /sources/{name}/diff", s.auth(http.HandlerFunc(s.sourceDiff)))
+	mux.Handle("POST /workspaces/preflight", s.auth(http.HandlerFunc(s.workspaceCreatePreflight)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/fetch", s.auth(http.HandlerFunc(s.workspaceSourceFetch)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/pull", s.auth(http.HandlerFunc(s.workspaceSourcePull)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/push", s.auth(http.HandlerFunc(s.workspaceSourcePush)))
+	mux.Handle("GET /workspaces/{name}/sources/{slot}/diff", s.auth(http.HandlerFunc(s.workspaceSourceDiff)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/merge", s.auth(http.HandlerFunc(s.workspaceSourceMerge)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase", s.auth(http.HandlerFunc(s.workspaceSourceRebase)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/merge-abort", s.auth(http.HandlerFunc(s.workspaceSourceMergeAbort)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase-abort", s.auth(http.HandlerFunc(s.workspaceSourceRebaseAbort)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase-continue", s.auth(http.HandlerFunc(s.workspaceSourceRebaseContinue)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/publish", s.auth(http.HandlerFunc(s.workspaceSourcePublish)))
+	mux.Handle("GET /templates", s.auth(http.HandlerFunc(s.templates)))
+	mux.Handle("GET /templates/{ref...}", s.auth(http.HandlerFunc(s.template)))
+	mux.Handle("POST /tokens/mint", s.auth(http.HandlerFunc(s.mintConnectionToken)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),

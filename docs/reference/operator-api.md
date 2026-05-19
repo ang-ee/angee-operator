@@ -115,6 +115,82 @@ The operator exposes three "update" operations, distinguished by scope:
 | **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. |
 | **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch — this is "stay current with `main`". |
 
+GitOps topology (derived view across sources × workspace slots):
+
+```http
+GET /gitops/topology[?with_commits=N]
+```
+
+Returns the full topology snapshot. `with_commits` opts in to populating
+each git source's recent commit history (`sources[].commits`); omit or
+set to 0 to keep the response cheap.
+
+Source diffs:
+
+```http
+GET /sources/{name}/diff[?ref=...]
+```
+
+`ref` empty → working tree vs HEAD (uncommitted changes); set → HEAD vs
+ref. Returns `[]DiffFile`.
+
+Per-workspace-source slot operations (slot lives at
+`workspace.sources.<slot>` in the manifest):
+
+```http
+POST /workspaces/{name}/sources/{slot}/fetch
+POST /workspaces/{name}/sources/{slot}/pull
+POST /workspaces/{name}/sources/{slot}/push        body: {"ref":"..."}    (optional)
+GET  /workspaces/{name}/sources/{slot}/diff[?ref=...]
+POST /workspaces/{name}/sources/{slot}/merge       body: {"ref":"..."}
+POST /workspaces/{name}/sources/{slot}/rebase      body: {"ref":"..."}
+POST /workspaces/{name}/sources/{slot}/merge-abort
+POST /workspaces/{name}/sources/{slot}/rebase-abort
+POST /workspaces/{name}/sources/{slot}/rebase-continue
+POST /workspaces/{name}/sources/{slot}/publish     body: {"remote":"...","branch":"..."}
+```
+
+The convergence endpoints (`merge`, `rebase`, `merge-abort`,
+`rebase-abort`, `rebase-continue`, `publish`) return a `GitOpResult`
+with `{ok, conflicted, conflictFiles, message}`. On conflict the
+worktree is left in the conflicted state; `conflictFiles` lists the
+affected paths.
+
+Workspace preflight:
+
+```http
+POST /workspaces/preflight                          body: WorkspaceCreateRequest
+```
+
+Validates the request against the resolved template's input
+declarations without rendering anything. Returns
+`WorkspaceCreatePreflightResponse` with `ok`, `missingRequired`,
+`invalidInputs`, and the effective input map.
+
+Template introspection:
+
+```http
+GET /templates
+GET /templates/{ref...}
+```
+
+`GET /templates` enumerates every template under `<root>/.templates/<kind>/<name>`
+and `<root>/templates/<kind>/<name>`. `GET /templates/{ref...}` resolves a
+specific ref (relative path, absolute path, or supported remote URL) and
+returns a single descriptor with the input schema.
+
+Connection tokens:
+
+```http
+POST /tokens/mint                                  body: {"actor":"...","ttl":"30m"}
+```
+
+Mints an HS256-signed JWT scoped to the supplied actor. TTL defaults to
+1h and is capped at 24h. The signing key resolves via
+`--jwt-secret` / `ANGEE_OPERATOR_JWT_SECRET` / HKDF-from-admin-bearer
+/ per-process random (loopback dev only). The endpoint itself is gated
+by the admin bearer.
+
 MCP descriptor:
 
 ```http
@@ -122,8 +198,8 @@ GET /mcp
 ```
 
 `/mcp` currently returns a static descriptor; it is not a JSON-RPC MCP server.
-Live event streaming has moved to GraphQL subscriptions on `/graphql` (see
-below).
+Live event streaming is GraphQL subscriptions on `/graphql` (see below) —
+SSE has no REST equivalent today.
 
 ## GraphQL
 

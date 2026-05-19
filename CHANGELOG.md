@@ -32,6 +32,17 @@ latest tag.
 
 ### Operator
 
+- Closed the REST/GraphQL parity gap. Every operation added in this
+  release now has a REST endpoint alongside the GraphQL surface, secured
+  by the same admin-bearer middleware as the rest of the operator API.
+  New endpoints: `GET /gitops/topology[?with_commits=N]`,
+  `GET /sources/{name}/diff[?ref=...]`,
+  `GET /workspaces/{name}/sources/{slot}/diff[?ref=...]`,
+  `POST /workspaces/{name}/sources/{slot}/{fetch,pull,push,merge,rebase,merge-abort,rebase-abort,rebase-continue,publish}`,
+  `POST /workspaces/preflight`,
+  `GET /templates`, `GET /templates/{ref...}`,
+  `POST /tokens/mint`. Subscriptions remain GraphQL-only by design
+  (REST has no native pubsub).
 - Added a GraphQL `Subscription` root over Server-Sent Events. Four
   operations are live: `onGitOpsTopologyChange`, `onWorkspaceStatusChange`,
   `onServiceLogs`, `onWorkspaceLogs`. Snapshot subscriptions poll the

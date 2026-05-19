@@ -101,7 +101,9 @@ fast-forwards the cached source's tracking ref.
 The per-source `diff` and per-slot convergence operations (`merge`,
 `rebase`, `merge-abort`, `rebase-abort`, `rebase-continue`, `publish`)
 do not yet have CLI subcommands — they're reachable via the operator's
-GraphQL `sourceDiff` / `workspaceSource*` mutations. See
+REST + GraphQL surfaces (`GET /sources/{name}/diff`,
+`POST /workspaces/{name}/sources/{slot}/{merge,rebase,...}` and the
+matching `sourceDiff` / `workspaceSource*` GraphQL mutations). See
 [Operator API](/reference/operator-api).
 
 ## Workspaces
@@ -158,10 +160,10 @@ source is on the wrong branch. The operator also exposes `POST
 | One workspace slot | (GraphQL only: `workspaceSourcePull`) | Fast-forward a single workspace slot's worktree from its tracking ref. |
 | All slots of a workspace | `angee workspace sync-base [name] [--merge\|--rebase]` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch. |
 
-### GraphQL-only workspace operations
+### Operations reachable only over REST + GraphQL
 
-Several workspace operations from the recent surface expansion are
-GraphQL-only today (no dedicated CLI subcommand):
+Several operations from the recent surface expansion don't have CLI
+subcommands yet but are at full parity between REST and GraphQL:
 
 - `workspaceCreatePreflight(input)` — validate workspace inputs without
   rendering anything.
@@ -170,10 +172,12 @@ GraphQL-only today (no dedicated CLI subcommand):
   returning `GitOpResult{ok, conflicted, conflictFiles, message}`.
 - `workspaceSourceDiff(workspace, slot, ref)` — unified-diff hunks for
   one slot.
-- `gitOpsTopology(withCommits)` / `onGitOpsTopologyChange` —
-  topology snapshot and subscription.
+- `gitOpsTopology(withCommits)` snapshot. The live
+  `onGitOpsTopologyChange` subscription remains GraphQL-only (REST has
+  no native pubsub).
 - `templates` / `template(ref)` — template introspection.
-- `mintConnectionToken(actor, ttl)` — per-actor scoped JWT.
+- `mintConnectionToken(actor, ttl)` — per-actor scoped JWT (admin
+  bearer required to mint).
 
 All of these are documented in detail in
 [Operator API](/reference/operator-api).
