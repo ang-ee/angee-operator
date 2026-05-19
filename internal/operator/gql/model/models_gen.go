@@ -54,6 +54,9 @@ type StackRuntimeInput struct {
 	Build    *bool    `json:"build,omitempty"`
 }
 
+type Subscription struct {
+}
+
 type WorkspaceCreateInput struct {
 	Template string           `json:"template"`
 	Name     *string          `json:"name,omitempty"`

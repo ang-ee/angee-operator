@@ -34,6 +34,7 @@ type ResolverRoot interface {
 	Mutation() MutationResolver
 	Query() QueryResolver
 	StackStatus() StackStatusResolver
+	Subscription() SubscriptionResolver
 	WorkspaceRef() WorkspaceRefResolver
 	WorkspaceStatus() WorkspaceStatusResolver
 }
@@ -199,6 +200,13 @@ type ComplexityRoot struct {
 		Workspaces func(childComplexity int) int
 	}
 
+	Subscription struct {
+		OnGitOpsTopologyChange  func(childComplexity int) int
+		OnServiceLogs           func(childComplexity int, name string) int
+		OnWorkspaceLogs         func(childComplexity int, name string) int
+		OnWorkspaceStatusChange func(childComplexity int, name string) int
+	}
+
 	WorkspaceMountRef struct {
 		Field func(childComplexity int) int
 		Kind  func(childComplexity int) int
@@ -321,6 +329,12 @@ type StackStatusResolver interface {
 	Services(ctx context.Context, obj *api.StackStatusResponse) ([]*api.ServiceState, error)
 	Jobs(ctx context.Context, obj *api.StackStatusResponse) ([]*api.JobState, error)
 	Workspaces(ctx context.Context, obj *api.StackStatusResponse) ([]*api.WorkspaceRef, error)
+}
+type SubscriptionResolver interface {
+	OnGitOpsTopologyChange(ctx context.Context) (<-chan *api.GitOpsTopologyResponse, error)
+	OnServiceLogs(ctx context.Context, name string) (<-chan string, error)
+	OnWorkspaceLogs(ctx context.Context, name string) (<-chan string, error)
+	OnWorkspaceStatusChange(ctx context.Context, name string) (<-chan *api.WorkspaceStatusResponse, error)
 }
 type WorkspaceRefResolver interface {
 	TTLExpiresAt(ctx context.Context, obj *api.WorkspaceRef) (*string, error)
@@ -1236,6 +1250,46 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StackStatus.Workspaces(childComplexity), true
 
+	case "Subscription.onGitOpsTopologyChange":
+		if e.ComplexityRoot.Subscription.OnGitOpsTopologyChange == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Subscription.OnGitOpsTopologyChange(childComplexity), true
+	case "Subscription.onServiceLogs":
+		if e.ComplexityRoot.Subscription.OnServiceLogs == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_onServiceLogs_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.OnServiceLogs(childComplexity, args["name"].(string)), true
+	case "Subscription.onWorkspaceLogs":
+		if e.ComplexityRoot.Subscription.OnWorkspaceLogs == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_onWorkspaceLogs_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.OnWorkspaceLogs(childComplexity, args["name"].(string)), true
+	case "Subscription.onWorkspaceStatusChange":
+		if e.ComplexityRoot.Subscription.OnWorkspaceStatusChange == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_onWorkspaceStatusChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.OnWorkspaceStatusChange(childComplexity, args["name"].(string)), true
+
 	case "WorkspaceMountRef.field":
 		if e.ComplexityRoot.WorkspaceMountRef.Field == nil {
 			break
@@ -1615,6 +1669,23 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 				Data: buf.Bytes(),
 			}
 		}
+	case ast.Subscription:
+		next := ec._Subscription(ctx, opCtx.Operation.SelectionSet)
+
+		var buf bytes.Buffer
+		return func(ctx context.Context) *graphql.Response {
+			buf.Reset()
+			data := next(ctx)
+
+			if data == nil {
+				return nil
+			}
+			data.MarshalGQL(&buf)
+
+			return &graphql.Response{
+				Data: buf.Bytes(),
+			}
+		}
 
 	default:
 		return graphql.OneShot(graphql.ErrorResponse(ctx, "unsupported GraphQL operation"))
@@ -1904,6 +1975,13 @@ type Mutation {
   workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
+}
+
+type Subscription {
+  onGitOpsTopologyChange: GitOpsTopology!
+  onServiceLogs(name: String!): String!
+  onWorkspaceLogs(name: String!): String!
+  onWorkspaceStatusChange(name: String!): WorkspaceStatus!
 }
 `, BuiltIn: false},
 }
@@ -2946,6 +3024,48 @@ func (ec *executionContext) field_Query_workspaceStatus_args(ctx context.Context
 }
 
 func (ec *executionContext) field_Query_workspace_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_onServiceLogs_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_onWorkspaceLogs_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_onWorkspaceStatusChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
@@ -6664,6 +6784,170 @@ func (ec *executionContext) fieldContext_StackStatus_workspaces(_ context.Contex
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_WorkspaceRef(ctx, field)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_onGitOpsTopologyChange(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_onGitOpsTopologyChange(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Subscription().OnGitOpsTopologyChange(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
+			return ec.marshalNGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_onGitOpsTopologyChange(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpsTopology(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_onServiceLogs(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_onServiceLogs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().OnServiceLogs(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_onServiceLogs(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_onServiceLogs_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_onWorkspaceLogs(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_onWorkspaceLogs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().OnWorkspaceLogs(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_onWorkspaceLogs(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_onWorkspaceLogs_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_onWorkspaceStatusChange(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_onWorkspaceStatusChange(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().OnWorkspaceStatusChange(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
+			return ec.marshalNWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_onWorkspaceStatusChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceStatus(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_onWorkspaceStatusChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -10645,6 +10929,32 @@ func (ec *executionContext) _StackStatus(ctx context.Context, sel ast.SelectionS
 	return out
 }
 
+var subscriptionImplementors = []string{"Subscription"}
+
+func (ec *executionContext) _Subscription(ctx context.Context, sel ast.SelectionSet) func(ctx context.Context) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, subscriptionImplementors)
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+	})
+	if len(fields) != 1 {
+		graphql.AddErrorf(ctx, "must subscribe to exactly one stream")
+		return nil
+	}
+
+	switch fields[0].Name {
+	case "onGitOpsTopologyChange":
+		return ec._Subscription_onGitOpsTopologyChange(ctx, fields[0])
+	case "onServiceLogs":
+		return ec._Subscription_onServiceLogs(ctx, fields[0])
+	case "onWorkspaceLogs":
+		return ec._Subscription_onWorkspaceLogs(ctx, fields[0])
+	case "onWorkspaceStatusChange":
+		return ec._Subscription_onWorkspaceStatusChange(ctx, fields[0])
+	default:
+		panic("unknown field " + strconv.Quote(fields[0].Name))
+	}
+}
+
 var workspaceMountRefImplementors = []string{"WorkspaceMountRef"}
 
 func (ec *executionContext) _WorkspaceMountRef(ctx context.Context, sel ast.SelectionSet, obj *api.WorkspaceMountRef) graphql.Marshaler {
@@ -11487,6 +11797,20 @@ func (ec *executionContext) marshalNGitOpsSummary2githubᚗcomᚋfyltrᚋangee�
 	return ec._GitOpsSummary(ctx, sel, &v)
 }
 
+func (ec *executionContext) marshalNGitOpsTopology2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v api.GitOpsTopologyResponse) graphql.Marshaler {
+	return ec._GitOpsTopology(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._GitOpsTopology(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNInt2int(ctx context.Context, v any) (int, error) {
 	res, err := graphql.UnmarshalInt(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -11777,6 +12101,16 @@ func (ec *executionContext) marshalNWorkspaceStatus2ᚕgithubᚗcomᚋfyltrᚋan
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceStatus(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNWorkspaceUpdateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceUpdateInput(ctx context.Context, v any) (model.WorkspaceUpdateInput, error) {

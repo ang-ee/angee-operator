@@ -9,4 +9,5 @@ import "github.com/fyltr/angee/internal/service"
 
 type Resolver struct {
 	Platform *service.Platform
+	Events   *EventHub
 }

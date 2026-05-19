@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fyltr/angee/api"
+	opgql "github.com/fyltr/angee/internal/operator/gql"
 	"github.com/fyltr/angee/internal/service"
 	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
@@ -32,6 +33,7 @@ type Config struct {
 type Server struct {
 	config         Config
 	platform       *service.Platform
+	eventHub       *opgql.EventHub
 	graphqlHandler http.Handler
 	server         *http.Server
 }
@@ -82,7 +84,8 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{config: config, platform: platform}
+	eventHub := opgql.NewEventHub(platform)
+	s := &Server{config: config, platform: platform, eventHub: eventHub}
 	graphqlHandler, err := newGraphQLHandler(s)
 	if err != nil {
 		return nil, err
@@ -91,6 +94,8 @@ func NewServer(config Config) (*Server, error) {
 	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	// gqlgen 0.17 dispatches subscriptions over SSE as POST with
+	// Accept: text/event-stream — same route, same wrapper.
 	mux.Handle("POST /graphql", s.auth(cop.Handler(s.graphqlHandler)))
 	mux.Handle("GET /stack/status", s.auth(http.HandlerFunc(s.stackStatus)))
 	mux.Handle("POST /stack/init", s.auth(http.HandlerFunc(s.stackInit)))
@@ -131,7 +136,6 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
 	mux.Handle("POST /workspaces/{name}/sync-base", s.auth(http.HandlerFunc(s.workspaceSyncBase)))
-	mux.Handle("GET /events", s.auth(http.HandlerFunc(s.events)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),
@@ -141,6 +145,15 @@ func NewServer(config Config) (*Server, error) {
 	return s, nil
 }
 
+// Close releases server-owned resources. It is automatically invoked by
+// ListenAndServe on shutdown; tests that construct a Server without serving
+// can call Close directly to tear down background goroutines.
+func (s *Server) Close() {
+	if s.eventHub != nil {
+		s.eventHub.Stop()
+	}
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Register SIGINT before starting the listener so a Ctrl-C arriving in
 	// the brief startup window isn't delivered with its default disposition
@@ -148,6 +161,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	sigint := make(chan os.Signal, 1)
 	signal.Notify(sigint, os.Interrupt)
 	defer signal.Stop(sigint)
+
+	s.eventHub.Start()
+	defer s.eventHub.Stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -618,12 +634,6 @@ func (s *Server) workspaceSyncBase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, states)
-}
-
-func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = fmt.Fprint(w, "event: ready\ndata: {}\n\n")
 }
 
 func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {

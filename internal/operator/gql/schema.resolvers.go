@@ -381,6 +381,38 @@ func (r *stackStatusResolver) Workspaces(ctx context.Context, obj *api.StackStat
 	return ptrSlice(sortedMapValues(obj.Workspaces)), nil
 }
 
+// OnGitOpsTopologyChange is the resolver for the onGitOpsTopologyChange field.
+func (r *subscriptionResolver) OnGitOpsTopologyChange(ctx context.Context) (<-chan *api.GitOpsTopologyResponse, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeTopology(ctx), nil
+}
+
+// OnServiceLogs is the resolver for the onServiceLogs field.
+func (r *subscriptionResolver) OnServiceLogs(ctx context.Context, name string) (<-chan string, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeServiceLogs(ctx, name)
+}
+
+// OnWorkspaceLogs is the resolver for the onWorkspaceLogs field.
+func (r *subscriptionResolver) OnWorkspaceLogs(ctx context.Context, name string) (<-chan string, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeWorkspaceLogs(ctx, name)
+}
+
+// OnWorkspaceStatusChange is the resolver for the onWorkspaceStatusChange field.
+func (r *subscriptionResolver) OnWorkspaceStatusChange(ctx context.Context, name string) (<-chan *api.WorkspaceStatusResponse, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeWorkspaceStatus(ctx, name), nil
+}
+
 // TTLExpiresAt is the resolver for the ttlExpiresAt field.
 func (r *workspaceRefResolver) TTLExpiresAt(ctx context.Context, obj *api.WorkspaceRef) (*string, error) {
 	if obj == nil {
@@ -433,6 +465,9 @@ func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 // StackStatus returns StackStatusResolver implementation.
 func (r *Resolver) StackStatus() StackStatusResolver { return &stackStatusResolver{r} }
 
+// Subscription returns SubscriptionResolver implementation.
+func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
+
 // WorkspaceRef returns WorkspaceRefResolver implementation.
 func (r *Resolver) WorkspaceRef() WorkspaceRefResolver { return &workspaceRefResolver{r} }
 
@@ -443,5 +478,6 @@ type compiledStackResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type stackStatusResolver struct{ *Resolver }
+type subscriptionResolver struct{ *Resolver }
 type workspaceRefResolver struct{ *Resolver }
 type workspaceStatusResolver struct{ *Resolver }

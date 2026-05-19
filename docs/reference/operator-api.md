@@ -95,15 +95,15 @@ on its manifest branch, and the workspace top-level state is `discrepancy`.
 `sync-base` updates each workspace branch from its base ref without switching
 branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
 
-Events and MCP descriptor:
+MCP descriptor:
 
 ```http
-GET /events
 GET /mcp
 ```
 
-`/events` currently emits a single `ready` SSE event. `/mcp` currently returns a
-static descriptor; it is not a JSON-RPC MCP server.
+`/mcp` currently returns a static descriptor; it is not a JSON-RPC MCP server.
+Live event streaming has moved to GraphQL subscriptions on `/graphql` (see
+below).
 
 ## GraphQL
 
@@ -129,3 +129,41 @@ and `workspaceSyncBase(name:, method:)` mirrors the REST `sync-base` endpoint.
 
 The schema source lives at `internal/operator/schema.graphql`; generated gqlgen
 runtime files live under `internal/operator/gql/`.
+
+### Subscriptions
+
+The operator exposes a `Subscription` root over Server-Sent Events. The
+gqlgen SSE transport dispatches on `POST /graphql` with
+`Accept: text/event-stream`; the response is a `text/event-stream` body
+that emits one `data:` frame per change.
+
+Available subscription operations:
+
+| Operation | Argument | Payload |
+| --- | --- | --- |
+| `onGitOpsTopologyChange` | — | `GitOpsTopology` snapshot, emitted when the polled topology hash changes. |
+| `onWorkspaceStatusChange` | `name: String!` | `WorkspaceStatus` snapshot for that workspace, emitted on change. |
+| `onServiceLogs` | `name: String!` | Service log lines, follow-tailed from the runtime backend. |
+| `onWorkspaceLogs` | `name: String!` | Workspace log lines, follow-tailed from the runtime backend. |
+
+Snapshot subscriptions (`onGitOpsTopologyChange`,
+`onWorkspaceStatusChange`) poll their underlying query on a 2 s tick and
+publish only when the result hash changes. **No initial snapshot is
+emitted on connect** — issue a one-shot `gitOpsTopology` /
+`workspaceStatus` query alongside the subscription if you need the
+current state at startup. Log subscriptions stream directly from the
+runtime backend's follow channel; cancelling the subscription tears down
+the underlying `logs --follow` process.
+
+Slow subscribers have their per-subscription buffer dropped rather than
+slowing the producer — clients should treat snapshot subscriptions as
+"latest known" rather than guaranteed-delivery.
+
+Example (curl, line-buffered):
+
+```sh
+curl -N http://127.0.0.1:9000/graphql \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"query":"subscription { onGitOpsTopologyChange { summary { sources workspaces dirty diverged } } }"}'
+```

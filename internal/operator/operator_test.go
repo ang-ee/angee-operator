@@ -1,8 +1,12 @@
 package operator
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/manifest"
@@ -552,6 +557,7 @@ name: test
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
+	t.Cleanup(server.Close)
 
 	req := httptest.NewRequest(http.MethodGet, "/graphql?query={health{status}}", nil)
 	rr := httptest.NewRecorder()
@@ -559,6 +565,73 @@ name: test
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /graphql status = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
 	}
+}
+
+func TestGraphQLSubscriptionOverSSEDeliversTopology(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	// Use a short tick so the first change-detection iteration runs well within
+	// the test deadline.
+	server.eventHub.SetPollInterval(20 * time.Millisecond)
+	server.eventHub.Start()
+	t.Cleanup(server.Close)
+
+	ts := httptest.NewServer(server.server.Handler)
+	t.Cleanup(ts.Close)
+
+	// gqlgen's SSE transport dispatches on POST + Accept: text/event-stream.
+	// The JSON body carries the subscription query.
+	body, err := json.Marshal(map[string]any{
+		"query": `subscription { onGitOpsTopologyChange { summary { sources workspaces } } }`,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/graphql", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext() error = %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, respBody)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		if strings.Contains(line, "onGitOpsTopologyChange") {
+			return
+		}
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("scanner.Err() = %v", err)
+	}
+	t.Fatal("SSE stream closed without a topology event")
 }
 
 func TestGraphQLRejectsSimpleBrowserContentTypes(t *testing.T) {

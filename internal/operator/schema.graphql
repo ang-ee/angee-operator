@@ -262,3 +262,10 @@ type Mutation {
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
 }
+
+type Subscription {
+  onGitOpsTopologyChange: GitOpsTopology!
+  onServiceLogs(name: String!): String!
+  onWorkspaceLogs(name: String!): String!
+  onWorkspaceStatusChange(name: String!): WorkspaceStatus!
+}

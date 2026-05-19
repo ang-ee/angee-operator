@@ -6,6 +6,19 @@ latest tag.
 
 ## Unreleased
 
+### Operator
+
+- Added a GraphQL `Subscription` root over Server-Sent Events. Four
+  operations are live: `onGitOpsTopologyChange`, `onWorkspaceStatusChange`,
+  `onServiceLogs`, `onWorkspaceLogs`. Snapshot subscriptions poll the
+  underlying query on a 2 s tick and publish only when the result hash
+  changes; log subscriptions ride the existing runtime-backend follow
+  channel. The transport is `POST /graphql` with
+  `Accept: text/event-stream` per gqlgen 0.17.
+- Retired the unused `GET /events` SSE stub (only ever emitted a static
+  `ready` event). Live event streaming is now exclusively via GraphQL
+  subscriptions on `/graphql`.
+
 ## v0.4.12 — 2026-05-15
 
 ### Operator
