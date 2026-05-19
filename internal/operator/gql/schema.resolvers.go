@@ -120,6 +120,15 @@ func (r *mutationResolver) ServiceInit(ctx context.Context, input model.ServiceI
 	return namedActionResult("created", req.Name), nil
 }
 
+// ServiceCreate is the resolver for the serviceCreate field.
+func (r *mutationResolver) ServiceCreate(ctx context.Context, input model.ServiceCreateInput) (*api.ServiceState, error) {
+	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(input))
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
 // ServiceUpdate is the resolver for the serviceUpdate field.
 func (r *mutationResolver) ServiceUpdate(ctx context.Context, name string, input model.ServiceInput) (*model.MutationResult, error) {
 	req := serviceRequestFrom(input)

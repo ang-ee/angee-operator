@@ -1,0 +1,12 @@
+services:
+  {{ service_name }}:
+    runtime: container
+    build:
+      context: ./.angee/services/{{ service_name }}/docker
+    ports:
+      - "{{ alloc_acp }}:3007"
+    mounts:
+      - "workspace://{{ workspace_name }}:/workspace"
+    env:
+      AUTH_MODE: "{{ auth_mode }}"
+      ACP_LOG_LEVEL: info

@@ -49,7 +49,8 @@ and local-process services. Runtime actions are routed by each service's
 ## Services
 
 ```sh
-angee service init <name> [flags]
+angee service init <name> [flags]                       # field-based
+angee service create --template <ref> --workspace <ws>  # template-based
 angee service update <name> [flags]
 angee service destroy <name> [--stop=false]
 angee service list  # alias: ls
@@ -59,7 +60,14 @@ angee service restart <service>...
 angee service logs <name> [--follow]
 ```
 
-Service flags:
+`service init` builds a service from explicit flags (image, command,
+env, ports). `service create` renders a Copier template with
+`_angee.kind: service` into the stack — useful for bundling agent
+runtimes or other reusable service shapes that need a Dockerfile and
+multiple inputs. See [Templates](/guide/templates) for the template
+contract.
+
+`service init` flags:
 
 ```sh
 --runtime container|local
@@ -70,6 +78,16 @@ Service flags:
 --port spec
 --workdir uri-or-path
 --start
+```
+
+`service create` flags:
+
+```sh
+--template <ref>      template ref or absolute path (required)
+--workspace <name>    target workspace (required)
+--input key=value     repeatable; passed to the Copier template
+--name <name>         override the resolved service name (default: agent-${workspace.name})
+--start               start the service after create
 ```
 
 If `--runtime` is omitted, `--image` creates a container service and

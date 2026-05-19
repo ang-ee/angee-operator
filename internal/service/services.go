@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/manifest"
@@ -94,8 +96,20 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 		_ = p.ServiceStop(ctx, []string{name})
 	}
 	delete(stack.Services, name)
+	// Release any port leases owned by this service (template-rendered
+	// services hold them under `service/<name>/<pool>`). Leases owned
+	// by workspaces or older service names are untouched.
+	releaseServicePortLeases(stack, name)
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return err
+	}
+	// Remove the template-rendered build-context dir if one exists.
+	// Idempotent: services created via `ServiceInit` (field-based) have
+	// no dir under .angee/services/, and os.RemoveAll on a missing path
+	// is a no-op.
+	buildContext := filepath.Join(p.root, ".angee", "services", name)
+	if err := os.RemoveAll(buildContext); err != nil {
+		return fmt.Errorf("remove service build context %s: %w", buildContext, err)
 	}
 	_, err = p.StackPrepare(ctx)
 	return err

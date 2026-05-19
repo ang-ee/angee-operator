@@ -244,6 +244,14 @@ input WorkspaceCreateInput {
   ttl: String
 }
 
+input ServiceCreateInput {
+  template: String!
+  workspace: String!
+  inputs: [KeyValueInput!]
+  name: String
+  start: Boolean
+}
+
 input WorkspaceUpdateInput {
   inputs: [KeyValueInput!]
   ttl: String
@@ -285,6 +293,7 @@ type Mutation {
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
   serviceInit(input: ServiceInput!): MutationResult
+  serviceCreate(input: ServiceCreateInput!): ServiceState
   serviceUpdate(name: String!, input: ServiceInput!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult

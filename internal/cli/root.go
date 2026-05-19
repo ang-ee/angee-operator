@@ -380,6 +380,7 @@ func actionPast(action string) string {
 func serviceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	cmd := &cobra.Command{Use: "service", Short: "Manage services"}
 	cmd.AddCommand(serviceInitCommand(stdout, root, operatorURL))
+	cmd.AddCommand(serviceCreateCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(serviceUpdateCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceDestroyCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceListCommand(stdout, root, operatorURL, jsonOutput))

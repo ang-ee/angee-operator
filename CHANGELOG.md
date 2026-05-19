@@ -32,6 +32,19 @@ latest tag.
 
 ### Operator
 
+- Added template-based service creation. `angee service create
+  --template <ref> --workspace <name>` (REST `POST /services/create`,
+  GraphQL `serviceCreate(input)`) renders a Copier template with
+  `_angee.kind: service` into the outer stack as one
+  `manifest.Service` entry. Templates declare `name_pattern` and
+  `ensure` port pools; the operator resolves the service name from
+  the workspace name + caller inputs, allocates ports under owner
+  `service/<name>/<pool>`, installs other rendered files (typically
+  `docker/`) at `<root>/.angee/services/<service_name>/`, and strictly
+  rejects anything outside `services:` in the rendered output. On
+  render failure the port leases are released and the build context
+  is removed. `service destroy` is updated to release the
+  service-prefixed leases and delete the build-context dir.
 - Added secret CRUD over REST + GraphQL + CLI. Five operations
   (`secrets`, `secret(name)`, `secretValue(name)`, `secretSet`,
   `secretDelete`) backed by the existing `secrets.Backend` interface so

@@ -42,7 +42,8 @@ Services:
 
 ```http
 GET   /services
-POST  /services
+POST  /services                 field-based init (image / command / env)
+POST  /services/create          template-based create (Copier template, kind=service)
 PATCH /services/{name}
 POST  /services/{name}/start
 POST  /services/{name}/stop
@@ -50,6 +51,25 @@ POST  /services/{name}/restart
 POST  /services/{name}/destroy
 GET   /services/{name}/logs
 ```
+
+`POST /services/create` body:
+
+```json
+{
+  "template": "agents/claude-code",
+  "workspace": "my-pa",
+  "inputs": {"auth_mode": "api_key"},
+  "name": "agent-my-pa",
+  "start": false
+}
+```
+
+The template must declare `_angee.kind: service` and render a
+`service.yaml` containing exactly one service entry. The operator
+appends that entry to the outer stack's `services:` map, installs any
+other rendered files (typically `docker/`) at
+`<root>/.angee/services/<service_name>/`, and allocates ports from
+declared pools under owner `service/<name>/<pool>`.
 
 Jobs:
 

@@ -144,6 +144,89 @@ needs to change. Promoting a feature to production does not rebuild any
 images or rewrite any compose files — it just updates which ref each
 Source points at and re-runs `angee stack up`.
 
+## Service templates
+
+A Copier template with `_angee.kind: service` renders a single
+`manifest.Service` entry into the outer stack. Use it when an agent
+runtime or other reusable service shape needs a Dockerfile, multiple
+inputs, and per-instance port allocation.
+
+**Metadata fields** (`_angee:`):
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `kind: service` | yes | Distinguishes service templates from workspace / stack templates. |
+| `name` | yes | Display name of the template. |
+| `name_pattern` | no | Substitution pattern for the resolved service name. Default: `agent-${workspace.name}`. Resolved against the workspace name + template inputs. |
+| `inputs` | no | Caller-supplied inputs with `required` / `default` flags. |
+| `ensure` | no | Port pools the template needs in the outer stack (`operator.port_pool.<pool>`). The operator allocates one port per declared pool, scoped to `service/<name>/<pool>`. |
+
+**Rendered output:** the template must emit a `service.yaml` containing
+exactly one service entry under `services:`. Anything else (jobs,
+volumes, secrets, sources) is rejected. Other files in the rendered
+tree — typically `docker/Dockerfile` and friends — are moved into
+`<stack_root>/.angee/services/<service_name>/` so the rendered
+`build.context: ./.angee/services/<service_name>/docker` resolves.
+
+**Render variables** available in Jinja:
+
+| Variable | Source |
+| --- | --- |
+| `service_name` | Resolved from `name_pattern` (or `--name` override). |
+| `workspace_name` | `--workspace` flag. |
+| `workspace_path` | Absolute path to the workspace dir. |
+| `alloc_<pool>` | Allocated port for each pool declared in `ensure`. |
+| Caller inputs | Every key from `--input k=v` plus template `_angee.inputs` defaults. |
+
+Secret markers (`${secret.foo}`) in the rendered output are resolved
+at compose-render time, not at service-create time.
+
+**Example skeleton:**
+
+```yaml
+# templates/services/my-agent/copier.yml
+_subdirectory: template
+_templates_suffix: .jinja
+_angee:
+  kind: service
+  name: my-agent
+  name_pattern: "agent-${workspace.name}"
+  inputs:
+    api_key:
+      required: true
+  ensure:
+    operator.port_pool.acp:
+      range: "3000-3999"
+
+api_key:
+  type: str
+```
+
+```yaml
+# templates/services/my-agent/template/service.yaml.jinja
+services:
+  {{ service_name }}:
+    runtime: container
+    build:
+      context: ./.angee/services/{{ service_name }}/docker
+    ports: ["{{ alloc_acp }}:3007"]
+    mounts: ["workspace://{{ workspace_name }}:/workspace"]
+    env:
+      API_KEY: "{{ api_key }}"
+```
+
+Run with:
+
+```sh
+angee service create \
+  --template ./templates/services/my-agent \
+  --workspace my-pa \
+  --input api_key=sk-...
+```
+
+`angee service destroy agent-my-pa` removes the manifest entry,
+releases the port lease, and deletes the build-context dir.
+
 ## Bundled templates
 
 The repo ships a small set of templates under `templates/`. Today this

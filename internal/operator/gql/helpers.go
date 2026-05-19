@@ -42,6 +42,16 @@ func workspaceCreateRequestFrom(input model.WorkspaceCreateInput) api.WorkspaceC
 	}
 }
 
+func serviceCreateRequestFrom(input model.ServiceCreateInput) api.ServiceCreateRequest {
+	return api.ServiceCreateRequest{
+		Template:  input.Template,
+		Workspace: input.Workspace,
+		Name:      stringPtrValue(input.Name),
+		Inputs:    keyValuesFrom(input.Inputs),
+		Start:     boolPtrValue(input.Start),
+	}
+}
+
 func stackRuntimeRequest(input *model.StackRuntimeInput) api.StackRuntimeRequest {
 	if input == nil {
 		return api.StackRuntimeRequest{}

@@ -25,6 +25,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `StackLogs` | Yes | Yes | No | GraphQL uses bounded `StackLogsLimited`. |
 | `StackLogsLimited` | No | No | Yes | GraphQL snapshot guardrail. |
 | `ServiceInit` | Yes | Yes | Yes | - |
+| `ServiceCreate` | Yes | Yes | Yes | Template-based: `angee service create`; REST `POST /services/create`; GraphQL `serviceCreate`. |
 | `ServiceUpdate` | Yes | Yes | Yes | - |
 | `ServiceDestroy` | Yes | Yes | Yes | - |
 | `ServiceList` | Yes | Yes | Yes | - |

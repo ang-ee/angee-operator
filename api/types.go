@@ -202,6 +202,18 @@ type WorkspaceCreateRequest struct {
 	TTL      string            `json:"ttl,omitempty"`
 }
 
+// ServiceCreateRequest renders a single manifest.Service into the
+// outer stack via a Copier template with `_angee.kind: service`.
+// Workspace is required because service templates mount
+// `workspace://<name>` paths from the named workspace.
+type ServiceCreateRequest struct {
+	Template  string            `json:"template"`
+	Workspace string            `json:"workspace"`
+	Inputs    map[string]string `json:"inputs,omitempty"`
+	Name      string            `json:"name,omitempty"`
+	Start     bool              `json:"start,omitempty"`
+}
+
 type WorkspaceUpdateRequest struct {
 	Inputs map[string]string `json:"inputs,omitempty"`
 	TTL    string            `json:"ttl,omitempty"`

@@ -124,6 +124,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /jobs/{name}/logs", s.auth(http.HandlerFunc(s.jobLogs)))
 	mux.Handle("GET /services", s.auth(http.HandlerFunc(s.serviceList)))
 	mux.Handle("POST /services", s.auth(http.HandlerFunc(s.serviceInit)))
+	mux.Handle("POST /services/create", s.auth(http.HandlerFunc(s.serviceCreate)))
 	mux.Handle("PATCH /services/{name}", s.auth(http.HandlerFunc(s.serviceUpdate)))
 	mux.Handle("POST /services/{name}/start", s.auth(http.HandlerFunc(s.serviceStart)))
 	mux.Handle("POST /services/{name}/stop", s.auth(http.HandlerFunc(s.serviceStop)))
@@ -416,6 +417,20 @@ func (s *Server) serviceInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "name": req.Name})
+}
+
+func (s *Server) serviceCreate(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[api.ServiceCreateRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	state, err := s.platform.ServiceCreate(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, state)
 }
 
 func (s *Server) serviceUpdate(w http.ResponseWriter, r *http.Request) {

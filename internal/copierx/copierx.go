@@ -130,6 +130,7 @@ type Renderer interface {
 type Metadata struct {
 	Kind           string                          `yaml:"kind"`
 	Name           string                          `yaml:"name"`
+	NamePattern    string                          `yaml:"name_pattern"`
 	InstanceNaming InstanceNaming                  `yaml:"instance_naming"`
 	Inputs         map[string]Input                `yaml:"inputs"`
 	Sources        map[string]TemplateSource       `yaml:"sources"`

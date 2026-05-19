@@ -32,6 +32,7 @@ type platformClient interface {
 	StackCompile(context.Context) (*service.CompiledStack, error)
 	StackPrepare(context.Context) (*service.CompiledStack, error)
 	ServiceInit(context.Context, api.ServiceInitRequest) error
+	ServiceCreate(context.Context, api.ServiceCreateRequest) (api.ServiceState, error)
 	ServiceUpdate(context.Context, api.ServiceInitRequest) error
 	ServiceDestroy(context.Context, string, bool) error
 	ServiceList(context.Context) ([]api.ServiceState, error)
@@ -171,6 +172,14 @@ func (p *remotePlatform) StackPrepare(ctx context.Context) (*service.CompiledSta
 
 func (p *remotePlatform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) error {
 	return p.doJSON(ctx, http.MethodPost, "/services", nil, req, nil)
+}
+
+func (p *remotePlatform) ServiceCreate(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error) {
+	var state api.ServiceState
+	if err := p.doJSON(ctx, http.MethodPost, "/services/create", nil, req, &state); err != nil {
+		return api.ServiceState{}, err
+	}
+	return state, nil
 }
 
 func (p *remotePlatform) ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error {

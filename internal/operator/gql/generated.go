@@ -154,6 +154,7 @@ type ComplexityRoot struct {
 		MintConnectionToken           func(childComplexity int, actor string, ttl *string) int
 		SecretDelete                  func(childComplexity int, name string) int
 		SecretSet                     func(childComplexity int, name string, value string) int
+		ServiceCreate                 func(childComplexity int, input model.ServiceCreateInput) int
 		ServiceDestroy                func(childComplexity int, name string) int
 		ServiceInit                   func(childComplexity int, input model.ServiceInput) int
 		ServiceRestart                func(childComplexity int, name string) int
@@ -392,6 +393,7 @@ type MutationResolver interface {
 	StackDestroy(ctx context.Context, purge *bool) (*model.MutationResult, error)
 	JobRun(ctx context.Context, name string, inputs []*model.KeyValueInput) (string, error)
 	ServiceInit(ctx context.Context, input model.ServiceInput) (*model.MutationResult, error)
+	ServiceCreate(ctx context.Context, input model.ServiceCreateInput) (*api.ServiceState, error)
 	ServiceUpdate(ctx context.Context, name string, input model.ServiceInput) (*model.MutationResult, error)
 	ServiceStart(ctx context.Context, name string) (*model.MutationResult, error)
 	ServiceStop(ctx context.Context, name string) (*model.MutationResult, error)
@@ -971,6 +973,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SecretSet(childComplexity, args["name"].(string), args["value"].(string)), true
+	case "Mutation.serviceCreate":
+		if e.ComplexityRoot.Mutation.ServiceCreate == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_serviceCreate_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ServiceCreate(childComplexity, args["input"].(model.ServiceCreateInput)), true
 	case "Mutation.serviceDestroy":
 		if e.ComplexityRoot.Mutation.ServiceDestroy == nil {
 			break
@@ -2232,6 +2245,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputKeyValueInput,
+		ec.unmarshalInputServiceCreateInput,
 		ec.unmarshalInputServiceInput,
 		ec.unmarshalInputStackInitInput,
 		ec.unmarshalInputStackRuntimeInput,
@@ -2575,6 +2589,14 @@ input WorkspaceCreateInput {
   ttl: String
 }
 
+input ServiceCreateInput {
+  template: String!
+  workspace: String!
+  inputs: [KeyValueInput!]
+  name: String
+  start: Boolean
+}
+
 input WorkspaceUpdateInput {
   inputs: [KeyValueInput!]
   ttl: String
@@ -2616,6 +2638,7 @@ type Mutation {
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
   serviceInit(input: ServiceInput!): MutationResult
+  serviceCreate(input: ServiceCreateInput!): ServiceState
   serviceUpdate(name: String!, input: ServiceInput!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult
@@ -3423,6 +3446,20 @@ func (ec *executionContext) field_Mutation_secretSet_args(ctx context.Context, r
 		return nil, err
 	}
 	args["value"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_serviceCreate_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.ServiceCreateInput, error) {
+			return ec.unmarshalNServiceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceCreateInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -6459,6 +6496,50 @@ func (ec *executionContext) fieldContext_Mutation_serviceInit(ctx context.Contex
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_serviceInit_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_serviceCreate(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_serviceCreate(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ServiceCreate(ctx, fc.Args["input"].(model.ServiceCreateInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
+			return ec.marshalOServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_serviceCreate(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceState(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_serviceCreate_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -12416,6 +12497,64 @@ func (ec *executionContext) unmarshalInputKeyValueInput(ctx context.Context, obj
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputServiceCreateInput(ctx context.Context, obj any) (model.ServiceCreateInput, error) {
+	var it model.ServiceCreateInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"template", "workspace", "inputs", "name", "start"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "template":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("template"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Template = data
+		case "workspace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("workspace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Workspace = data
+		case "inputs":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inputs"))
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Inputs = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "start":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("start"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Start = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputServiceInput(ctx context.Context, obj any) (model.ServiceInput, error) {
 	var it model.ServiceInput
 	if obj == nil {
@@ -13523,6 +13662,10 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "serviceInit":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_serviceInit(ctx, field)
+			})
+		case "serviceCreate":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_serviceCreate(ctx, field)
 			})
 		case "serviceUpdate":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
@@ -16013,6 +16156,11 @@ func (ec *executionContext) marshalNSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋ
 	return ec._SecretRef(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNServiceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceCreateInput(ctx context.Context, v any) (model.ServiceCreateInput, error) {
+	res, err := ec.unmarshalInputServiceCreateInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) unmarshalNServiceInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx context.Context, v any) (model.ServiceInput, error) {
 	res, err := ec.unmarshalInputServiceInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -16596,6 +16744,13 @@ func (ec *executionContext) marshalOSecretValue2ᚖgithubᚗcomᚋfyltrᚋangee�
 		return graphql.Null
 	}
 	return ec._SecretValue(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ServiceState(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
