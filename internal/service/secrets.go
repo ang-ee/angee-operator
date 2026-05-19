@@ -18,12 +18,30 @@ import (
 // cap (256) keeps the request body bounded.
 var secretNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,256}$`)
 
+// secretNameAlphaNum enforces "at least one alphanumeric character"
+// independently of secretNamePattern. Without this, names like `..`,
+// `--`, `_`, etc. all map through substitute.SecretEnvName (which
+// rewrites non-alphanum to `_` and trims trailing underscores) to the
+// same storage key `ANGEE_SECRET`, silently colliding distinct
+// manifest entries on env-file backends. Reject the degenerate forms
+// at the API boundary so callers see a typed error instead.
+var secretNameAlphaNum = regexp.MustCompile(`[A-Za-z0-9]`)
+
+// maxSecretValueBytes caps a single secret's value size. The REST body
+// limit (1 MiB) is generous for typical secrets; a Platform-level cap
+// catches accidental file-paste (PEM bundles, base64 blobs) before it
+// hits the backend.
+const maxSecretValueBytes = 64 * 1024
+
 func validateSecretName(name string) error {
 	if name == "" {
 		return &InvalidInputError{Field: "name", Reason: "secret name is required"}
 	}
 	if !secretNamePattern.MatchString(name) {
 		return &InvalidInputError{Field: "name", Reason: "secret name must match ^[A-Za-z0-9._-]{1,256}$"}
+	}
+	if !secretNameAlphaNum.MatchString(name) {
+		return &InvalidInputError{Field: "name", Reason: "secret name must contain at least one alphanumeric character"}
 	}
 	return nil
 }
@@ -107,6 +125,9 @@ func (p *Platform) SecretSet(ctx context.Context, name, value string) (api.Secre
 	}
 	if value == "" {
 		return api.SecretRef{}, &InvalidInputError{Field: "value", Reason: "value is empty; use secretDelete to remove"}
+	}
+	if len(value) > maxSecretValueBytes {
+		return api.SecretRef{}, &InvalidInputError{Field: "value", Reason: fmt.Sprintf("value exceeds %d byte cap", maxSecretValueBytes)}
 	}
 	stack, err := p.LoadStack()
 	if err != nil {

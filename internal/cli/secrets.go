@@ -98,8 +98,13 @@ func secretRevealCommand(stdout io.Writer, root, operatorURL *string) *cobra.Com
 	return &cobra.Command{
 		Use:   "reveal <name>",
 		Short: "Print the secret value (privileged read)",
-		Long:  "Prints the secret value to stdout. Use sparingly; logs and process listings may capture the value.",
-		Args:  cobra.ExactArgs(1),
+		Long: `Prints the secret value to stdout, followed by a trailing newline.
+Use sparingly; logs and process listings may capture the value. When
+piping into commands that don't strip newlines (e.g. building an
+Authorization header), trim explicitly:
+
+    angee secret reveal token | tr -d '\n'`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -146,7 +151,7 @@ func secretSetCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobr
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&value, "value", "", "literal value (mutually exclusive with --stdin)")
+	cmd.Flags().StringVar(&value, "value", "", "literal value (INSECURE: visible in ps/proc; prefer --stdin)")
 	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "read value from stdin (overrides --value)")
 	return cmd
 }

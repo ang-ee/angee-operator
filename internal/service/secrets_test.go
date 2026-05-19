@@ -98,6 +98,14 @@ func TestSecretNameValidation(t *testing.T) {
 		"name with spaces",
 		"name\nwith\nnewlines",
 		"name$shell",
+		// Punctuation-only names map through substitute.SecretEnvName to
+		// the same storage key `ANGEE_SECRET`, silently colliding distinct
+		// manifest entries. Reject at the API boundary.
+		"..",
+		"--",
+		"__",
+		".-",
+		"___---...",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -106,10 +114,23 @@ func TestSecretNameValidation(t *testing.T) {
 			}
 		})
 	}
-	for _, valid := range []string{"db", "DB_KEY", "db-password", "v1.0.0"} {
+	for _, valid := range []string{"db", "DB_KEY", "db-password", "v1.0.0", "a.b-c"} {
 		if err := validateSecretName(valid); err != nil {
 			t.Fatalf("validateSecretName(%q) rejected: %v", valid, err)
 		}
+	}
+}
+
+func TestSecretSetRejectsOversizeValue(t *testing.T) {
+	p := setupSecretsFixture(t)
+	huge := make([]byte, maxSecretValueBytes+1)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	_, err := p.SecretSet(context.Background(), "db-password", string(huge))
+	var invalid *InvalidInputError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("err = %v, want InvalidInputError for oversize value", err)
 	}
 }
 

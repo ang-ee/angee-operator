@@ -45,11 +45,13 @@ func (s *Server) secretSet(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	req, err := decode[api.SecretSetRequest](r)
 	if err != nil {
+		auditSecretAttempt(r, "set", name, "decode")
 		writeBadRequest(w, err)
 		return
 	}
 	ref, err := s.platform.SecretSet(r.Context(), name, req.Value)
 	if err != nil {
+		auditSecretAttempt(r, "set", name, err.Error())
 		writeError(w, err)
 		return
 	}
@@ -60,6 +62,7 @@ func (s *Server) secretSet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) secretDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := s.platform.SecretDelete(r.Context(), name); err != nil {
+		auditSecretAttempt(r, "delete", name, err.Error())
 		writeError(w, err)
 		return
 	}
@@ -67,11 +70,20 @@ func (s *Server) secretDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "name": name})
 }
 
-// auditSecretMutation logs a single line per mutating call so an
-// operator running against env-file (no backend-native audit) still
-// has a paper trail in stderr. Includes the remote address as the only
-// caller-identity hint available today; per-actor tokens would replace
-// this with the JWT subject in a future iteration.
+// auditSecretMutation logs a single line per successful mutating call
+// so an operator running against env-file (no backend-native audit)
+// still has a paper trail in stderr. RemoteAddr is %q'd for
+// defense-in-depth against any future middleware that might inject
+// control characters into the field (stdlib net/http produces a safe
+// host:port form by default).
 func auditSecretMutation(r *http.Request, op, name string) {
-	fmt.Fprintf(os.Stderr, "operator: secret %s name=%q remote=%s\n", op, name, r.RemoteAddr)
+	fmt.Fprintf(os.Stderr, "operator: secret %s name=%q remote=%q\n", op, name, r.RemoteAddr)
+}
+
+// auditSecretAttempt logs failed mutating calls so the audit trail
+// reflects rejected attempts (oversized values, malformed names,
+// validation failures) — security-relevant signal that a successful
+// log alone would miss.
+func auditSecretAttempt(r *http.Request, op, name, reason string) {
+	fmt.Fprintf(os.Stderr, "operator: secret %s attempt failed name=%q remote=%q reason=%q\n", op, name, r.RemoteAddr, reason)
 }
