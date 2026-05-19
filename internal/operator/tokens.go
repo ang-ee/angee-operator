@@ -95,10 +95,10 @@ func deriveJWTSecret(adminBearer string) []byte {
 	return mac.Sum(nil)
 }
 
-// fingerprint returns a short, non-reversible identifier for the signing
+// Fingerprint returns a short, non-reversible identifier for the signing
 // key suitable for log messages so operators can confirm two processes
 // share the same secret without leaking the secret itself.
-func (m *tokenMinter) fingerprint() string {
+func (m *tokenMinter) Fingerprint() string {
 	sum := sha256.Sum256(m.secret)
 	return hex.EncodeToString(sum[:4])
 }

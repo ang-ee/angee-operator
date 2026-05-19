@@ -131,9 +131,10 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 }
 
 // templateKindFromRef extracts the kind segment from a relative ref like
-// `workspaces/dev-pr`. The plural form (`workspaces`) is converted to the
-// singular form (`workspace`) expected by resolveTemplate; absolute or
-// remote refs return an empty kind so the resolver's fall-throughs apply.
+// `workspaces/dev-pr` and returns the singular form that resolveTemplate
+// expects. Only the plural kinds we actually recognise are mapped; any
+// other first segment returns an empty string so resolveTemplate's
+// "not found" path takes over with a meaningful error.
 func templateKindFromRef(ref string) string {
 	if filepath.IsAbs(ref) || isRemoteTemplateRef(ref) {
 		return ""
@@ -142,7 +143,12 @@ func templateKindFromRef(ref string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	kind := parts[0]
-	// Singularise: workspaces → workspace, stacks → stack.
-	return strings.TrimSuffix(kind, "s")
+	switch parts[0] {
+	case "workspaces":
+		return "workspace"
+	case "stacks":
+		return "stack"
+	default:
+		return ""
+	}
 }

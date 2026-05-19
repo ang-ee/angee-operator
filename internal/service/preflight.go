@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/fyltr/angee/api"
@@ -93,13 +94,11 @@ func validateInputType(declared, value string) string {
 			return fmt.Sprintf("not a boolean: %q", value)
 		}
 	case "int", "integer":
-		for _, r := range value {
-			if r == '-' || r == '+' {
-				continue
-			}
-			if r < '0' || r > '9' {
-				return fmt.Sprintf("not an integer: %q", value)
-			}
+		if strings.TrimSpace(value) == "" {
+			return ""
+		}
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return fmt.Sprintf("not an integer: %q", value)
 		}
 		return ""
 	}

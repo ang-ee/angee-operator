@@ -97,6 +97,7 @@ func NewServer(config Config) (*Server, error) {
 	}
 	eventHub := opgql.NewEventHub(platform)
 	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter}
+	fmt.Fprintf(os.Stderr, "operator: jwt signing key fingerprint=%s\n", minter.Fingerprint())
 	graphqlHandler, err := newGraphQLHandler(s)
 	if err != nil {
 		return nil, err

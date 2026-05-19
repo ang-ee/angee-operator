@@ -42,6 +42,10 @@ client-facing reference.
   the operator currently relies on the host to put it there. Add an
   operator helper that generates a per-workspace ACP token on
   workspaceCreate when the template declares an `acp_token` requirement.
+- [ ] **Cap diff response size.** `internal/service/diff.go` buffers
+  `git diff` output into an unbounded `bytes.Buffer`. Mirror the
+  `*LogsLimited` pattern (max bytes cap with `[truncated]` marker)
+  once a real client hits a multi-GB binary diff.
 
 ## Notes
 

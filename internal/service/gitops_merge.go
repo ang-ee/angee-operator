@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -72,6 +73,12 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 			return api.GitOpResult{}, fmt.Errorf("resolve HEAD branch in %s: %w", path, err)
 		}
 		branch = strings.TrimSpace(out)
+		// Detached HEAD: rev-parse returns the literal string "HEAD", which
+		// would publish to refs/heads/HEAD on the remote — never the intent.
+		// Force the caller to pass an explicit branch.
+		if branch == "HEAD" {
+			return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
+		}
 	}
 	return runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
 }
@@ -119,7 +126,11 @@ func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpR
 }
 
 func runGitCapture(ctx context.Context, workdir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// Force core.quotepath=false so non-ASCII paths come back as raw UTF-8
+	// rather than `\NNN`-escaped strings. Callers parse the output (e.g.
+	// ls-files -u for conflict files) and need stable bytes.
+	full := append([]string{"-c", "core.quotepath=false"}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = workdir
 	cmd.Env = gitOpEnv()
 	out, err := cmd.Output()
@@ -151,15 +162,25 @@ func parseConflictedPaths(lsFilesOutput string) []string {
 	return out
 }
 
+// gitOpEnv builds the child environment for git invocations. We pin a
+// deterministic identity for merge/rebase commits and silence prompts,
+// but we still inherit the small slice of env vars git relies on to
+// reach external helpers — most notably PATH (for `ssh`) and HOME (for
+// `~/.ssh/config` and friends). Wiping these would break
+// `workspaceSourcePublish` against any non-`file://` remote.
 func gitOpEnv() []string {
-	// Avoid commit-time prompts during merge --no-edit and rebase --continue;
-	// pin a deterministic identity for the merge/rebase commit so the
-	// operator never has to depend on the host's git config.
-	return []string{
+	inherit := []string{"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "LANG", "LC_ALL"}
+	env := make([]string, 0, len(inherit)+5)
+	for _, key := range inherit {
+		if v, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+v)
+		}
+	}
+	return append(env,
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_AUTHOR_NAME=angee",
 		"GIT_AUTHOR_EMAIL=angee@example.invalid",
 		"GIT_COMMITTER_NAME=angee",
 		"GIT_COMMITTER_EMAIL=angee@example.invalid",
-	}
+	)
 }

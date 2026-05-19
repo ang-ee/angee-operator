@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +55,9 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		}
 		c, err := walker.Next()
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				fmt.Fprintf(os.Stderr, "operator: commit walk on %s truncated: %v\n", repoPath, err)
+			}
 			break
 		}
 		sha := c.Hash.String()
