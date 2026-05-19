@@ -70,6 +70,12 @@ POST /sources/{name}/pull
 POST /sources/{name}/push
 ```
 
+`POST /sources/{name}/pull` is the top-level "update from upstream"
+operation: fetch + fast-forward the cached source's tracking ref. The
+per-workspace-slot equivalent is `POST /workspaces/{name}/sync-base`
+(across all slots) and the GraphQL `workspaceSourcePull` mutation
+(one slot).
+
 Workspaces:
 
 ```http
@@ -98,6 +104,16 @@ worktrees. Each status source includes the manifest `branch`, actual
 on its manifest branch, and the workspace top-level state is `discrepancy`.
 `sync-base` updates each workspace branch from its base ref without switching
 branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
+
+### Update scopes
+
+The operator exposes three "update" operations, distinguished by scope:
+
+| Scope | Endpoint | Behaviour |
+| --- | --- | --- |
+| **Whole source** | `POST /sources/{name}/pull` | Fetch and fast-forward the cached top-level source's tracking ref. |
+| **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. |
+| **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch — this is "stay current with `main`". |
 
 MCP descriptor:
 

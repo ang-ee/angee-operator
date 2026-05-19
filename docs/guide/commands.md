@@ -94,7 +94,15 @@ angee source pull <name>
 angee source push <name> [--ref ref]
 ```
 
-Implemented source materialization is `git` and `local`.
+Implemented source materialization is `git` and `local`. `source pull` is
+the top-level "update from upstream" operation: it fetches and
+fast-forwards the cached source's tracking ref.
+
+The per-source `diff` and per-slot convergence operations (`merge`,
+`rebase`, `merge-abort`, `rebase-abort`, `rebase-continue`, `publish`)
+do not yet have CLI subcommands — they're reachable via the operator's
+GraphQL `sourceDiff` / `workspaceSource*` mutations. See
+[Operator API](/reference/operator-api).
 
 ## Workspaces
 
@@ -139,6 +147,36 @@ workspace status includes `sources[].branch`, `sources[].current_ref` /
 `currentRef`, `sources[].state`, and top-level `state: discrepancy` when any
 source is on the wrong branch. The operator also exposes `POST
 /workspaces/{name}/sync-base` and GraphQL `workspaceSyncBase`.
+
+### Update scopes
+
+"Update" has three scopes, all in the same family of git operation:
+
+| Scope | CLI | Meaning |
+| --- | --- | --- |
+| Whole source | `angee source pull <name>` | Fetch + fast-forward the cached top-level source. |
+| One workspace slot | (GraphQL only: `workspaceSourcePull`) | Fast-forward a single workspace slot's worktree from its tracking ref. |
+| All slots of a workspace | `angee workspace sync-base [name] [--merge\|--rebase]` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch. |
+
+### GraphQL-only workspace operations
+
+Several workspace operations from the recent surface expansion are
+GraphQL-only today (no dedicated CLI subcommand):
+
+- `workspaceCreatePreflight(input)` — validate workspace inputs without
+  rendering anything.
+- `workspaceSourceMerge` / `Rebase` / `MergeAbort` / `RebaseAbort` /
+  `RebaseContinue` / `Publish` — per-slot convergence operations
+  returning `GitOpResult{ok, conflicted, conflictFiles, message}`.
+- `workspaceSourceDiff(workspace, slot, ref)` — unified-diff hunks for
+  one slot.
+- `gitOpsTopology(withCommits)` / `onGitOpsTopologyChange` —
+  topology snapshot and subscription.
+- `templates` / `template(ref)` — template introspection.
+- `mintConnectionToken(actor, ttl)` — per-actor scoped JWT.
+
+All of these are documented in detail in
+[Operator API](/reference/operator-api).
 
 ## Operator
 
