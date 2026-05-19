@@ -329,9 +329,9 @@ key resolves in this precedence order:
 4. Per-process random fallback when neither secret nor admin bearer is
    set (loopback dev only — tokens won't survive an operator restart).
 
-The mutation itself is gated by the admin bearer (`Authorization: Bearer
-<admin-token>` on the request that mints the new token). Callers should
-treat the returned token as opaque.
+The mutation itself is gated by the admin bearer — clients send
+`Authorization: Bearer <admin-token>` on the request that mints the new
+token. Callers should treat the returned token as opaque.
 
 ### Commit DAG
 
