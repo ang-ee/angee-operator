@@ -27,6 +27,15 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 	if limit <= 0 {
 		return nil, nil
 	}
+	// Defense-in-depth: GitOpsTopologyWithCommits clamps the caller's
+	// withCommits to gitOpsTopologyCommitsMax before reaching here, but
+	// CodeQL's flow analysis can't see the upstream clamp and rightly
+	// flags `make([]..., 0, limit)` as user-controlled. Repeat the cap
+	// at the allocation boundary so the bound holds even if a future
+	// caller forgets.
+	if limit > gitOpsTopologyCommitsMax {
+		limit = gitOpsTopologyCommitsMax
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
