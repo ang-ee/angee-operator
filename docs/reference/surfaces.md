@@ -52,6 +52,9 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |
 | `GitOpsTopology` | No | No | Yes | Gap: currently GraphQL-only topology view. |
+| `GitOpsTopologyWithCommits` | No | No | Yes | Gap: currently GraphQL-only topology view with commit-DAG window. |
+| `SourceDiff` | No | No | Yes | Gap: currently GraphQL-only source diff. |
+| `WorkspaceSourceDiff` | No | No | Yes | Gap: currently GraphQL-only per-workspace source diff. |
 | `WorkspaceSourceFetch` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
 | `WorkspaceSourcePull` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |
 | `WorkspaceSourcePush` | No | No | Yes | Gap: currently GraphQL-only per-workspace source operation. |

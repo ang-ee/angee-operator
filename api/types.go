@@ -247,6 +247,35 @@ type ConnectionTokenResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+type CommitRef struct {
+	SHA     string   `json:"sha"`
+	Parents []string `json:"parents"`
+	Refs    []string `json:"refs"`
+	Time    string   `json:"time"`
+	Summary string   `json:"summary"`
+	Author  string   `json:"author,omitempty"`
+}
+
+type DiffHunk struct {
+	OldStart int    `json:"old_start"`
+	OldLines int    `json:"old_lines"`
+	NewStart int    `json:"new_start"`
+	NewLines int    `json:"new_lines"`
+	Header   string `json:"header,omitempty"`
+	Body     string `json:"body"`
+}
+
+type DiffFile struct {
+	OldPath   string     `json:"old_path,omitempty"`
+	NewPath   string     `json:"new_path,omitempty"`
+	Mode      string     `json:"mode,omitempty"`
+	IsBinary  bool       `json:"is_binary"`
+	IsNew     bool       `json:"is_new"`
+	IsDeleted bool       `json:"is_deleted"`
+	IsRename  bool       `json:"is_rename"`
+	Hunks     []DiffHunk `json:"hunks"`
+}
+
 type SourceOperationRequest struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref,omitempty"`
@@ -257,20 +286,21 @@ type WorkspaceSyncBaseRequest struct {
 }
 
 type SourceState struct {
-	Name           string `json:"name"`
-	Slot           string `json:"slot,omitempty"`
-	Kind           string `json:"kind"`
-	Path           string `json:"path"`
-	Exists         bool   `json:"exists"`
-	State          string `json:"state,omitempty"`
-	Branch         string `json:"branch,omitempty"`
-	Ref            string `json:"ref,omitempty"`
-	CurrentRef     string `json:"current_ref,omitempty"`
-	Dirty          bool   `json:"dirty,omitempty"`
-	Upstream       string `json:"upstream,omitempty"`
-	Ahead          int    `json:"ahead,omitempty"`
-	Behind         int    `json:"behind,omitempty"`
-	Pushed         bool   `json:"pushed"`
-	UnpushedReason string `json:"unpushed_reason,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Name           string      `json:"name"`
+	Slot           string      `json:"slot,omitempty"`
+	Kind           string      `json:"kind"`
+	Path           string      `json:"path"`
+	Exists         bool        `json:"exists"`
+	State          string      `json:"state,omitempty"`
+	Branch         string      `json:"branch,omitempty"`
+	Ref            string      `json:"ref,omitempty"`
+	CurrentRef     string      `json:"current_ref,omitempty"`
+	Dirty          bool        `json:"dirty,omitempty"`
+	Upstream       string      `json:"upstream,omitempty"`
+	Ahead          int         `json:"ahead,omitempty"`
+	Commits        []CommitRef `json:"commits,omitempty"`
+	Behind         int         `json:"behind,omitempty"`
+	Pushed         bool        `json:"pushed"`
+	UnpushedReason string      `json:"unpushed_reason,omitempty"`
+	Error          string      `json:"error,omitempty"`
 }

@@ -338,9 +338,39 @@ func (r *queryResolver) WorkspaceGit(ctx context.Context, name string) ([]*api.S
 }
 
 // GitOpsTopology is the resolver for the gitOpsTopology field.
-func (r *queryResolver) GitOpsTopology(ctx context.Context) (*api.GitOpsTopologyResponse, error) {
-	topology, err := r.Platform.GitOpsTopology(ctx)
+func (r *queryResolver) GitOpsTopology(ctx context.Context, withCommits *int) (*api.GitOpsTopologyResponse, error) {
+	limit := 0
+	if withCommits != nil && *withCommits > 0 {
+		limit = *withCommits
+	}
+	topology, err := r.Platform.GitOpsTopologyWithCommits(ctx, limit)
 	return &topology, err
+}
+
+// SourceDiff is the resolver for the sourceDiff field.
+func (r *queryResolver) SourceDiff(ctx context.Context, name string, ref *string) ([]*api.DiffFile, error) {
+	files, err := r.Platform.SourceDiff(ctx, name, stringPtrValue(ref))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.DiffFile, len(files))
+	for i := range files {
+		out[i] = &files[i]
+	}
+	return out, nil
+}
+
+// WorkspaceSourceDiff is the resolver for the workspaceSourceDiff field.
+func (r *queryResolver) WorkspaceSourceDiff(ctx context.Context, workspace string, slot string, ref *string) ([]*api.DiffFile, error) {
+	files, err := r.Platform.WorkspaceSourceDiff(ctx, workspace, slot, stringPtrValue(ref))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*api.DiffFile, len(files))
+	for i := range files {
+		out[i] = &files[i]
+	}
+	return out, nil
 }
 
 // StackLogs is the resolver for the stackLogs field.

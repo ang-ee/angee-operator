@@ -44,6 +44,36 @@ type SourceState {
   pushed: Boolean
   unpushedReason: String
   error: String
+  commits: [CommitRef!]
+}
+
+type CommitRef {
+  sha: String!
+  parents: [String!]!
+  refs: [String!]!
+  time: String!
+  summary: String!
+  author: String
+}
+
+type DiffHunk {
+  oldStart: Int!
+  oldLines: Int!
+  newStart: Int!
+  newLines: Int!
+  header: String
+  body: String!
+}
+
+type DiffFile {
+  oldPath: String
+  newPath: String
+  mode: String
+  isBinary: Boolean!
+  isNew: Boolean!
+  isDeleted: Boolean!
+  isRename: Boolean!
+  hunks: [DiffHunk!]!
 }
 
 type WorkspaceSourceStatus {
@@ -224,7 +254,9 @@ type Query {
   workspace(name: String!): WorkspaceRef
   workspaceStatus(name: String!): WorkspaceStatus
   workspaceGit(name: String!): [SourceState!]!
-  gitOpsTopology: GitOpsTopology
+  gitOpsTopology(withCommits: Int): GitOpsTopology
+  sourceDiff(name: String!, ref: String): [DiffFile!]!
+  workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
   stackLogs(services: [String!], limit: Int): String!
   serviceLogs(name: String!, limit: Int): String!
   workspaceLogs(name: String!, limit: Int): String!

@@ -196,6 +196,26 @@ The mutation itself is gated by the admin bearer (`Authorization: Bearer
 <admin-token>` on the request that mints the new token). Callers should
 treat the returned token as opaque.
 
+### Commit DAG
+
+`gitOpsTopology(withCommits: Int)` accepts an opt-in window for
+commit-DAG population. When `withCommits` is omitted or 0, `sources[].commits`
+stays empty and the query path matches the cheap snapshot used by the
+topology subscription. Pass a positive integer to receive that many
+commits per git source, newest first by committer time, with each
+`CommitRef` carrying `{sha, parents, refs, time, summary, author}`.
+
+### Source and workspace-source diffs
+
+`sourceDiff(name, ref)` and `workspaceSourceDiff(workspace, slot, ref)`
+return `[DiffFile]` where each `DiffFile` carries `{oldPath, newPath, mode,
+isBinary, isNew, isDeleted, isRename, hunks: [DiffHunk]}`. The `hunks`
+list mirrors unified-diff output: `{oldStart, oldLines, newStart, newLines,
+header, body}` with `body` carrying the raw `+`/`-`/` ` prefixed lines.
+When `ref` is empty the diff is "working tree vs HEAD" (uncommitted
+changes); when set, it is "HEAD vs ref". Only git sources are
+diffable — local sources surface a typed `InvalidInputError`.
+
 ### Template introspection
 
 `templates: [TemplateDescriptor!]!` enumerates every template under

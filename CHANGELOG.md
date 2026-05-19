@@ -33,6 +33,21 @@ latest tag.
   returns descriptors with `kind`, `name`, `path`, and per-input
   metadata. `template(ref)` returns the single descriptor for an explicit
   ref (relative path, absolute path, or supported remote URL).
+- Added commit-DAG fields on `GitOpsTopology`: `gitOpsTopology(withCommits: Int)`
+  populates `sources[].commits` with `{sha, parents, refs, time, summary,
+  author}` for each git source, capped at `withCommits`. Default value
+  is 0 so the polling subscription stays cheap; clients opt in for the
+  DAG renderer view.
+- Added `sourceDiff(name, ref)` and `workspaceSourceDiff(workspace, slot, ref)`
+  queries that return unified-diff `[DiffFile{hunks: [DiffHunk]}]`
+  payloads parsed via `bluekeyes/go-gitdiff`. `ref` empty means
+  uncommitted (working-tree-vs-HEAD); otherwise it diffs against the
+  named revision.
+
+### Dependencies
+
+- `github.com/golang-jwt/jwt/v5@v5.3.1` (MIT) for `mintConnectionToken`.
+- `github.com/bluekeyes/go-gitdiff@v0.8.1` (MIT) for the diff queries.
 
 ## v0.4.12 — 2026-05-15
 

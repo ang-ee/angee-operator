@@ -105,3 +105,12 @@ models:
   ConnectionToken:
     model:
       - github.com/fyltr/angee/api.ConnectionTokenResponse
+  CommitRef:
+    model:
+      - github.com/fyltr/angee/api.CommitRef
+  DiffFile:
+    model:
+      - github.com/fyltr/angee/api.DiffFile
+  DiffHunk:
+    model:
+      - github.com/fyltr/angee/api.DiffHunk
