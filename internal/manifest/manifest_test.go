@@ -2,7 +2,9 @@ package manifest
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -66,6 +68,52 @@ func TestManifestRejectsInvalidLocalService(t *testing.T) {
 	}
 	if err := stack.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want error")
+	}
+}
+
+// TestLoadFileToleratesLegacyLifecycleField guards the
+// backwards-compat path for manifests written before commit f48784c
+// (workspace lifecycle removal). Older files persist
+// `workspaces[*].resolved.lifecycle`, which the strict YAML loader
+// would otherwise reject. The field must load successfully and be
+// silently dropped on the next save.
+func TestLoadFileToleratesLegacyLifecycleField(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "angee.yaml")
+	legacy := `version: 1
+kind: stack
+name: legacy
+workspaces:
+  feature-a:
+    template: workspaces/dev-pr
+    resolved:
+      chain_root: ".angee"
+      lifecycle: auto
+      allocations:
+        custom: 10002
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	stack, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile rejected legacy lifecycle field: %v", err)
+	}
+	resolved := stack.Workspaces["feature-a"].Resolved
+	if resolved.ChainRoot != ".angee" {
+		t.Fatalf("ChainRoot = %q, want .angee", resolved.ChainRoot)
+	}
+	// LegacyLifecycle is intentionally not part of the persisted form;
+	// saving must drop it from the file.
+	if err := SaveFile(path, stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	roundtripped, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(roundtripped), "lifecycle") {
+		t.Fatalf("saved manifest still carries lifecycle field:\n%s", roundtripped)
 	}
 }
 

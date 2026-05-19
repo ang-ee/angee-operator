@@ -66,21 +66,24 @@ func (b *broker[T]) Subscribe(ctx context.Context, buf int) <-chan T {
 	return sub.ch
 }
 
-// Publish fans v out to every current subscriber, dropping for any whose
-// buffer is full. Returns the number of successful deliveries.
+// Publish fans v out to every current subscriber, dropping for any
+// whose buffer is full. Returns the number of successful deliveries.
+//
+// The whole publish runs under b.mu so the per-subscriber cancel
+// goroutine (which holds the same lock when it closes the channel)
+// can't race with us. Sends use the non-blocking select form, so a
+// slow subscriber never blocks the publish — at worst the send drops
+// for that subscriber and we move on. Holding the lock is therefore
+// bounded by len(subs) buffered-send attempts, not by any subscriber's
+// read speed.
 func (b *broker[T]) Publish(v T) int {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.closed {
-		b.mu.Unlock()
 		return 0
 	}
-	targets := make([]*subscription[T], 0, len(b.subs))
-	for sub := range b.subs {
-		targets = append(targets, sub)
-	}
-	b.mu.Unlock()
 	delivered := 0
-	for _, sub := range targets {
+	for sub := range b.subs {
 		select {
 		case sub.ch <- v:
 			delivered++

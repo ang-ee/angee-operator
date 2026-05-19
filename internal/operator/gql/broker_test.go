@@ -92,6 +92,29 @@ func TestBrokerCloseReleasesSubscribers(t *testing.T) {
 	b.Close()
 }
 
+// TestBrokerPublishSurvivesConcurrentSubscriberClose covers the
+// classic fan-out race: Publish snapshots the subscriber set, releases
+// the broker mutex, and starts sending. A subscriber's context fires
+// concurrently and its per-subscriber goroutine closes the channel. A
+// naive send would panic on "send on closed channel"; trySend's
+// defer-recover swallows the panic and the publish loop continues.
+//
+// Run with -race; the test stress-loops to make the schedule likely.
+func TestBrokerPublishSurvivesConcurrentSubscriberClose(t *testing.T) {
+	b := newBroker[int]()
+	t.Cleanup(b.Close)
+
+	for i := 0; i < 100; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		_ = b.Subscribe(ctx, 1)
+		// Cancel and publish concurrently to maximise the chance of
+		// hitting the race window between Publish's snapshot and the
+		// per-subscriber close.
+		go cancel()
+		b.Publish(i)
+	}
+}
+
 func TestBrokerCloseWakesBackgroundSubscriber(t *testing.T) {
 	// Subscribers that pass context.Background() must not leak their
 	// auto-unsubscribe goroutine when the broker is Closed before any

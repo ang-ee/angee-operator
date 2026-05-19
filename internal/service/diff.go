@@ -45,8 +45,14 @@ func runDiffAt(ctx context.Context, workdir, ref string) ([]api.DiffFile, error)
 		return nil, &NotFoundError{Kind: "worktree", Name: workdir}
 	}
 	args := []string{"diff", "--no-color", "--no-ext-diff"}
+	// Empty ref = "working tree vs HEAD" (uncommitted changes).
+	// Non-empty ref = "HEAD vs ref" (committed range). Use the
+	// two-argument form so any uncommitted local edits don't leak
+	// into ref-to-ref output — `git diff <ref>` (single-arg) would
+	// compare the working tree against ref, which is the wrong
+	// surface for clients asking for a committed diff.
 	if ref != "" {
-		args = append(args, ref)
+		args = append(args, "HEAD", ref)
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
