@@ -51,6 +51,20 @@ latest tag.
   conflictFiles, message}`. On conflict the worktree is left in the
   conflicted state for the caller to resolve; conflict files come from
   `git ls-files -u` rather than parsing free-form stderr.
+- Added integration tests covering behind/diverged worktrees, dirty
+  worktrees blocking pull/push, missing workspace-source paths, and
+  undeclared source references in `gitOpsTopology`.
+
+### Templates
+
+- Added the bundled `templates/agent-runtime/` workspace template with
+  a documented env-var contract: `AGENT_ID` (required), `MCP_URL` /
+  `MCP_TOKEN` (optional, caller-supplied), `ACP_PORT` (allocated from
+  the host stack's `acp` port pool), `ACP_TOKEN` (resolved via
+  `${secret:acp_token}`). v1 ships a placeholder service that prints
+  the contract and sleeps; downstream consumers (e.g. the angee-django
+  `agents` addon) replace the command block with a real runtime
+  invocation. Contract documented in `docs/guide/templates.md`.
 
 ### Dependencies
 

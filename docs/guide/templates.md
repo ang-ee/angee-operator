@@ -140,3 +140,67 @@ The templating system is therefore the only place where "what runs"
 needs to change. Promoting a feature to production does not rebuild any
 images or rewrite any compose files — it just updates which ref each
 Source points at and re-runs `angee stack up`.
+
+## Bundled templates
+
+The repo ships a small set of templates under `templates/`. Today this
+is just `agent-runtime`; more will follow as the host integrations
+solidify.
+
+### `agent-runtime`
+
+Materialises a single long-running process that an external host —
+today, the `agents` addon in
+[`angee-django`](https://github.com/fyltr/angee-django) — addresses
+over [ACP](https://github.com/anthropics/agent-client-protocol). The
+template is the contract between the operator and any host that wants
+to provision per-agent workspaces; the actual runtime binary is
+expected to be wired in by the consuming host.
+
+**Inputs:**
+
+| Name | Required | Purpose |
+| --- | --- | --- |
+| `AGENT_ID` | yes | Identifier for this agent runtime instance. Slugged into the workspace name and passed through to the spawned process. |
+| `MCP_URL` | no | URL of the MCP server the agent should connect to. Empty / unset means "no MCP". |
+| `MCP_TOKEN` | no | Bearer token for `MCP_URL`. v1 stores it in the workspace env file; rotate by re-running the workspace with updated inputs. |
+
+**Env contract.** The materialised process receives these env vars; this
+shape is the load-bearing contract for host integrations:
+
+| Env var | Source |
+| --- | --- |
+| `AGENT_ID` | Caller input. |
+| `MCP_URL` | Caller input (may be empty). |
+| `MCP_TOKEN` | Caller input (may be empty). |
+| `ACP_PORT` | Allocated from the host stack's `acp` port pool — the host stack must declare one in `operator.port_pool.acp`. |
+| `ACP_TOKEN` | Resolved from `${secret:acp_token}` against the operator's secret backend. The host is responsible for provisioning the secret before bringing the workspace up. |
+
+The v1 template renders a placeholder service that prints the contract
+and sleeps forever; replace the `services.agent.command` block in your
+fork with the real agent runtime invocation.
+
+**Provisioning shape (Django side):**
+
+```graphql
+mutation {
+  workspaceCreate(input: {
+    template: "agent-runtime"
+    inputs: [
+      {key: "AGENT_ID", value: "agent-claude-1"}
+      {key: "MCP_URL", value: "https://mcp.internal/sse"}
+      {key: "MCP_TOKEN", value: "..."}
+    ]
+    start: true
+  }) {
+    name
+    path
+    processComposePort
+  }
+}
+```
+
+Keep this contract in lockstep with
+`templates/agent-runtime/copier.yml` and the consuming addon's
+provisioning code. Changes to the env var names or semantics need a
+coordinated bump on both sides.

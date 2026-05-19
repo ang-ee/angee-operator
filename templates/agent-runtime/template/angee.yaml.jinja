@@ -1,0 +1,24 @@
+version: 1
+kind: stack
+name: agent-{{ AGENT_ID }}
+
+# agent-runtime materialises a single long-running process that the
+# host (today: angee-django) addresses over ACP. Until a concrete
+# runtime binary is wired in, this is a documented skeleton: it
+# advertises the contract via env, sleeps forever, and proves the
+# allocation/secret/render plumbing works end to end.
+services:
+  agent:
+    runtime: local
+    command:
+      - sh
+      - -c
+      - >-
+        echo "agent {{ AGENT_ID }} ready: ACP=$ACP_PORT MCP=$MCP_URL";
+        sleep infinity
+    env:
+      AGENT_ID: "{{ AGENT_ID }}"
+      MCP_URL: "{{ MCP_URL }}"
+      MCP_TOKEN: "{{ MCP_TOKEN }}"
+      ACP_PORT: "${alloc_acp}"
+      ACP_TOKEN: "${secret:acp_token}"
