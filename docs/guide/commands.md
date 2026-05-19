@@ -157,7 +157,7 @@ source is on the wrong branch. The operator also exposes `POST
 | Scope | CLI | Meaning |
 | --- | --- | --- |
 | Whole source | `angee source pull <name>` | Fetch + fast-forward the cached top-level source. |
-| One workspace slot | (GraphQL only: `workspaceSourcePull`) | Fast-forward a single workspace slot's worktree from its tracking ref. |
+| One workspace slot | `POST /workspaces/{name}/sources/{slot}/pull` / GraphQL `workspaceSourcePull` | Fast-forward a single workspace slot's worktree from its tracking ref. No CLI subcommand yet. |
 | All slots of a workspace | `angee workspace sync-base [name] [--merge\|--rebase]` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch. |
 
 ### Operations reachable only over REST + GraphQL

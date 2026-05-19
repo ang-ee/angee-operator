@@ -3,9 +3,11 @@
 Status snapshot after the GraphQL surface push tracked under
 branch `feat/graphql-subscriptions`. Everything in the original
 "GitOps API", "Operator Hardening", and "From angee-django
-operator-addon plan" sections has shipped — the remaining open items
-sit downstream of the six-wave push (host-side wiring, hosting
-follow-ups, etc.).
+operator-addon plan" sections has shipped. Subsequent commits on the
+same branch closed REST/GraphQL parity (every Wave 1-6 op is now
+reachable via both) and added a full secret CRUD API across REST,
+GraphQL, and CLI. The remaining open items sit downstream of that push
+(host-side wiring, CLI catch-up, hosting follow-ups).
 
 See `CHANGELOG.md` (Unreleased) for the per-wave summary and
 `docs/reference/operator-api.md` + `docs/guide/templates.md` for the
@@ -23,11 +25,17 @@ client-facing reference.
   angee-django `agents` addon) will fork the template to inject the
   real ACP runtime invocation. If a canonical runtime binary lands in
   this repo, swap the placeholder for it.
-- [ ] **Surface convergence + diff + token + preflight mutations on the
-  CLI and REST.** Today they are GraphQL-only (tracked in
-  `docs/reference/surfaces.md`). Add `angee workspace merge|rebase|...`
-  CLI subcommands and matching REST endpoints when a CLI workflow
-  emerges that needs them.
+- [ ] **CLI subcommands for the new operations.** Convergence
+  (`merge`/`rebase`/`abort`/`continue`/`publish`), diff, preflight,
+  templates introspection, and mint-token are reachable over REST +
+  GraphQL but have no CLI subcommand. Surfaces.md tracks the gap. Add
+  `angee workspace merge|rebase|...` when a CLI workflow needs them.
+- [ ] **Per-actor RBAC for the secret CRUD surface.** Today every
+  protected route — including `secretSet` / `secretDelete` /
+  `secretValue` — requires either the admin bearer or a token minted
+  from it via `mintConnectionToken`. Scoping a non-admin token to "no
+  secret reads" requires a fresh design (claims, manifest-declared
+  roles, per-op scopes).
 - [ ] **`onServiceLogs` and `onWorkspaceLogs` follow-channel sharing.**
   Each subscriber today spawns its own `docker compose logs --follow`
   process. Acceptable for v1 (operator is single-stack); revisit if
