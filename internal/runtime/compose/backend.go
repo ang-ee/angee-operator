@@ -188,6 +188,7 @@ func parsePS(data []byte) []runtime.ServiceStatus {
 			Service string `json:"Service"`
 			Name    string `json:"Name"`
 			State   string `json:"State"`
+			Health  string `json:"Health"`
 		}
 		if err := json.Unmarshal([]byte(line), &one); err != nil {
 			continue
@@ -199,7 +200,7 @@ func parsePS(data []byte) []runtime.ServiceStatus {
 		if name == "" {
 			continue
 		}
-		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State})
+		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State, Health: one.Health})
 	}
 	return statuses
 }

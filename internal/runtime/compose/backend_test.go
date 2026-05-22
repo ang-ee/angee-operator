@@ -34,10 +34,20 @@ func TestBackendUpCommand(t *testing.T) {
 }
 
 func TestParsePS(t *testing.T) {
-	got := parsePS([]byte(`{"Service":"web","State":"running"}
-{"Service":"db","State":"exited"}
+	got := parsePS([]byte(`{"Service":"web","State":"running","Health":"healthy"}
+{"Service":"db","State":"running","Health":"unhealthy"}
+{"Service":"worker","State":"exited"}
 `))
-	if len(got) != 2 || got[0].Name != "web" || got[0].State != "running" {
-		t.Fatalf("parsePS() = %#v", got)
+	if len(got) != 3 {
+		t.Fatalf("parsePS() len = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].Name != "web" || got[0].State != "running" || got[0].Health != "healthy" {
+		t.Fatalf("web entry = %#v", got[0])
+	}
+	if got[1].Name != "db" || got[1].State != "running" || got[1].Health != "unhealthy" {
+		t.Fatalf("db entry = %#v", got[1])
+	}
+	if got[2].Name != "worker" || got[2].State != "exited" || got[2].Health != "" {
+		t.Fatalf("worker entry = %#v", got[2])
 	}
 }

@@ -9,6 +9,7 @@ type ServiceState {
   name: String!
   runtime: String!
   status: String!
+  health: String
 }
 
 type JobState {

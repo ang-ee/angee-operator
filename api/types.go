@@ -56,6 +56,11 @@ type ServiceState struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
 	Status  string `json:"status"`
+	// Health mirrors the container healthcheck verdict from the
+	// runtime backend: typically `healthy`, `unhealthy`, or `starting`.
+	// Empty when no healthcheck is declared, the service has not been
+	// brought up, or the local-runtime backend doesn't expose one.
+	Health string `json:"health,omitempty"`
 }
 
 type JobState struct {

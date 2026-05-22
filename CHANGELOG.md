@@ -6,6 +6,26 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.3 — 2026-05-21
+
+### Services
+
+- `StackStatus` (REST `GET /stack/status`, GraphQL `stackStatus`, CLI
+  `angee stack status`) now reports the real runtime state of each
+  service by querying the runtime backends, instead of always returning
+  `"declared"`. `ServiceList` / `angee service list` inherit the fix.
+  Services that haven't been brought up still report `"declared"`;
+  brought-up services report docker's literal state (`running`,
+  `exited`, `created`, …). Backend query errors are swallowed and fall
+  back to `"declared"` so partial-stack scenarios stay useful.
+- `api.ServiceState` and the GraphQL `ServiceState` type gained a
+  `health` field that mirrors docker's healthcheck verdict
+  (`healthy`, `unhealthy`, `starting`). Empty when the container has
+  no healthcheck declared or the service has not been brought up.
+  Process-compose services don't surface a health verdict yet — the
+  field stays empty for them until the proc-compose `Status`
+  implementation lands.
+
 ## v0.5.2 — 2026-05-21
 
 ### Services

@@ -242,6 +242,7 @@ type ComplexityRoot struct {
 	}
 
 	ServiceState struct {
+		Health  func(childComplexity int) int
 		Name    func(childComplexity int) int
 		Runtime func(childComplexity int) int
 		Status  func(childComplexity int) int
@@ -1622,6 +1623,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SecretValue.Value(childComplexity), true
 
+	case "ServiceState.health":
+		if e.ComplexityRoot.ServiceState.Health == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceState.Health(childComplexity), true
 	case "ServiceState.name":
 		if e.ComplexityRoot.ServiceState.Name == nil {
 			break
@@ -2367,6 +2374,7 @@ type ServiceState {
   name: String!
   runtime: String!
   status: String!
+  health: String
 }
 
 type JobState {
@@ -3017,6 +3025,8 @@ func (ec *executionContext) childFields_ServiceState(ctx context.Context, field 
 		return ec.fieldContext_ServiceState_runtime(ctx, field)
 	case "status":
 		return ec.fieldContext_ServiceState_status(ctx, field)
+	case "health":
+		return ec.fieldContext_ServiceState_health(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServiceState", field.Name)
 }
@@ -9080,6 +9090,29 @@ func (ec *executionContext) fieldContext_ServiceState_status(_ context.Context, 
 	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ServiceState_health(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceState_health(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Health, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceState_health(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _SourceState_name(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -14624,6 +14657,8 @@ func (ec *executionContext) _ServiceState(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "health":
+			out.Values[i] = ec._ServiceState_health(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

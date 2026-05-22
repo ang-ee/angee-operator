@@ -26,6 +26,10 @@ type ServiceStatus struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
 	State   string `json:"state"`
+	// Health mirrors docker's healthcheck verdict (`healthy`,
+	// `unhealthy`, `starting`). Empty when the container has no
+	// healthcheck declared or when the backend doesn't expose one.
+	Health string `json:"health,omitempty"`
 }
 
 type Backend interface {
