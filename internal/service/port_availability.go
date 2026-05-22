@@ -23,10 +23,7 @@ func hostPortUnavailable(port int) bool {
 	_ = ln.Close()
 	ln6, err := net.Listen("tcp6", net.JoinHostPort("::", portText))
 	if err != nil {
-		if errors.Is(err, syscall.EAFNOSUPPORT) {
-			return false
-		}
-		return true
+		return !errors.Is(err, syscall.EAFNOSUPPORT)
 	}
 	_ = ln6.Close()
 	return false
