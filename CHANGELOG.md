@@ -6,6 +6,14 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.4 — 2026-05-21
+
+### Internal
+
+- Simplified the IPv6 `EAFNOSUPPORT` check in `hostPortUnavailable` to
+  satisfy staticcheck S1008. No behavioural change; the port allocator
+  still treats hosts without IPv6 as having `[::]` ports available.
+
 ## v0.5.3 — 2026-05-21
 
 ### Services
