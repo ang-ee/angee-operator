@@ -295,6 +295,7 @@ type Mutation {
   serviceInit(input: ServiceInput!): MutationResult
   serviceCreate(input: ServiceCreateInput!): ServiceState
   serviceUpdate(name: String!, input: ServiceInput!): MutationResult
+  serviceUp(name: String!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult
   serviceRestart(name: String!): MutationResult

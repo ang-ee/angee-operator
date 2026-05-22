@@ -6,6 +6,31 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.2 — 2026-05-21
+
+### Services
+
+- New `service up` verb across all surfaces (CLI `angee service up
+  <name>...`, REST `POST /services/{name}/up`, GraphQL `serviceUp(name:
+  String!)`). Maps to `docker compose up -d` / `process-compose up`, so
+  it is idempotent across never-created services. `angee service create
+  --start` now goes through `ServiceUp` instead of `ServiceStart`, so
+  fresh services boot correctly on first try while `start`/`stop`/`restart`
+  keep their literal docker compose semantics.
+- Port allocations skip ports the host is already listening on. The
+  allocator probes `0.0.0.0` and `[::]` for each candidate; ports in
+  use are skipped so `docker compose up` does not later fail with
+  `address already in use`. The IPv6 probe treats `EAFNOSUPPORT` as
+  "available" so hosts without IPv6 are unaffected.
+
+### Operator
+
+- `angee-operator --version` now prints the build version, stamped at
+  release time via the same ldflags pipeline that already drove
+  `angee --version`.
+
+## v0.5.1 — 2026-05-19
+
 ### Breaking
 
 - **Workspaces are now a pure file primitive.** The operator no longer

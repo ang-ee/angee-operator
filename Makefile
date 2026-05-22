@@ -1,7 +1,7 @@
 .PHONY: init build build-cli build-operator generate check-generated schema check-schema test fmt vet check clean
 
 VERSION ?= dev
-LDFLAGS := -s -w -X github.com/fyltr/angee/internal/cli.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/fyltr/angee/internal/cli.Version=$(VERSION) -X github.com/fyltr/angee/internal/operator.Version=$(VERSION)
 
 build: build-cli build-operator
 

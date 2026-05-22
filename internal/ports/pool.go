@@ -56,18 +56,40 @@ func FromManifest(specs map[string]manifest.PortPool, leases map[string][]manife
 }
 
 func (p *Pool) Allocate(owner string) (int, error) {
+	return p.AllocateAvailable(owner, nil)
+}
+
+// AllocateAvailable reserves the next free port that the supplied
+// `unavailable` predicate does not flag. A nil predicate behaves like
+// Allocate. The predicate is invoked outside the pool mutex so callers
+// may pass functions that perform I/O (e.g. probing the host network).
+func (p *Pool) AllocateAvailable(owner string, unavailable func(int) bool) (int, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	for port, existingOwner := range p.leases {
 		if existingOwner == owner {
+			p.mu.Unlock()
 			return port, nil
 		}
 	}
+	candidates := make([]int, 0, p.End-p.Start+1)
 	for port := p.Start; port <= p.End; port++ {
-		if _, ok := p.leases[port]; ok {
+		if _, ok := p.leases[port]; !ok {
+			candidates = append(candidates, port)
+		}
+	}
+	p.mu.Unlock()
+
+	for _, port := range candidates {
+		if unavailable != nil && unavailable(port) {
+			continue
+		}
+		p.mu.Lock()
+		if _, taken := p.leases[port]; taken {
+			p.mu.Unlock()
 			continue
 		}
 		p.leases[port] = owner
+		p.mu.Unlock()
 		return port, nil
 	}
 	return 0, fmt.Errorf("port pool %q is exhausted", p.Name)

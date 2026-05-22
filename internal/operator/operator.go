@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var Version = "dev"
+
 type Config struct {
 	Root      string
 	Bind      string
@@ -45,6 +47,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	cmd := &cobra.Command{
 		Use:           "operator",
 		Short:         "Run the Angee operator",
+		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -126,6 +129,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /services", s.auth(http.HandlerFunc(s.serviceInit)))
 	mux.Handle("POST /services/create", s.auth(http.HandlerFunc(s.serviceCreate)))
 	mux.Handle("PATCH /services/{name}", s.auth(http.HandlerFunc(s.serviceUpdate)))
+	mux.Handle("POST /services/{name}/up", s.auth(http.HandlerFunc(s.serviceUp)))
 	mux.Handle("POST /services/{name}/start", s.auth(http.HandlerFunc(s.serviceStart)))
 	mux.Handle("POST /services/{name}/stop", s.auth(http.HandlerFunc(s.serviceStop)))
 	mux.Handle("POST /services/{name}/restart", s.auth(http.HandlerFunc(s.serviceRestart)))
@@ -447,6 +451,10 @@ func (s *Server) serviceUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": req.Name})
 }
 
+func (s *Server) serviceUp(w http.ResponseWriter, r *http.Request) {
+	s.serviceAction(w, r, "up")
+}
+
 func (s *Server) serviceStart(w http.ResponseWriter, r *http.Request) {
 	s.serviceAction(w, r, "start")
 }
@@ -463,6 +471,8 @@ func (s *Server) serviceAction(w http.ResponseWriter, r *http.Request, action st
 	name := r.PathValue("name")
 	var err error
 	switch action {
+	case "up":
+		err = s.platform.ServiceUp(r.Context(), []string{name})
 	case "start":
 		err = s.platform.ServiceStart(r.Context(), []string{name})
 	case "stop":

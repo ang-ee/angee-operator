@@ -42,6 +42,7 @@ func setupServiceCreateFixture(t *testing.T) (*Platform, string) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	p.portUnavailable = func(int) bool { return false }
 	return p, fixtureTemplatePath(t, "claude-code")
 }
 
@@ -96,6 +97,31 @@ func TestServiceCreateHappyPath(t *testing.T) {
 	// Build context dir landed at .angee/services/agent-my-pa/.
 	if _, err := os.Stat(filepath.Join(p.root, ".angee", "services", "agent-my-pa", "docker", "Dockerfile")); err != nil {
 		t.Fatalf("build context not installed: %v", err)
+	}
+}
+
+func TestServiceCreateSkipsUnavailableHostPorts(t *testing.T) {
+	p, templatePath := setupServiceCreateFixture(t)
+	p.portUnavailable = func(port int) bool { return port == 3000 }
+	state, err := p.ServiceCreate(context.Background(), api.ServiceCreateRequest{
+		Template:  templatePath,
+		Workspace: "my-pa",
+		Inputs:    map[string]string{"auth_mode": "api_key"},
+	})
+	if err != nil {
+		t.Fatalf("ServiceCreate: %v", err)
+	}
+	if state.Name != "agent-my-pa" {
+		t.Fatalf("resolved name = %q, want agent-my-pa", state.Name)
+	}
+
+	stack, err := manifest.LoadFile(manifest.Path(p.root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	svc := stack.Services["agent-my-pa"]
+	if len(svc.Ports) != 1 || !strings.HasPrefix(string(svc.Ports[0]), "3001:") {
+		t.Fatalf("rendered ports = %v, want host port 3001", svc.Ports)
 	}
 }
 

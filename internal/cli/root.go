@@ -351,6 +351,8 @@ func serviceActionCommand(stdout io.Writer, root, operatorURL *string, action st
 				return err
 			}
 			switch action {
+			case "up":
+				err = platform.ServiceUp(cmd.Context(), args)
 			case "start":
 				err = platform.ServiceStart(cmd.Context(), args)
 			case "stop":
@@ -369,6 +371,8 @@ func serviceActionCommand(stdout io.Writer, root, operatorURL *string, action st
 
 func actionPast(action string) string {
 	switch action {
+	case "up":
+		return "brought up"
 	case "start":
 		return "started"
 	case "stop":
@@ -387,6 +391,7 @@ func serviceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 	cmd.AddCommand(serviceUpdateCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceDestroyCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceListCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(serviceActionCommand(stdout, root, operatorURL, "up"))
 	cmd.AddCommand(serviceActionCommand(stdout, root, operatorURL, "start"))
 	cmd.AddCommand(serviceActionCommand(stdout, root, operatorURL, "stop"))
 	cmd.AddCommand(serviceActionCommand(stdout, root, operatorURL, "restart"))

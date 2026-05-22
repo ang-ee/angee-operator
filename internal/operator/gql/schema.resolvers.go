@@ -139,6 +139,14 @@ func (r *mutationResolver) ServiceUpdate(ctx context.Context, name string, input
 	return namedActionResult("updated", req.Name), nil
 }
 
+// ServiceUp is the resolver for the serviceUp field.
+func (r *mutationResolver) ServiceUp(ctx context.Context, name string) (*model.MutationResult, error) {
+	if err := r.Platform.ServiceUp(ctx, []string{name}); err != nil {
+		return nil, err
+	}
+	return namedActionResult("up", name), nil
+}
+
 // ServiceStart is the resolver for the serviceStart field.
 func (r *mutationResolver) ServiceStart(ctx context.Context, name string) (*model.MutationResult, error) {
 	if err := r.Platform.ServiceStart(ctx, []string{name}); err != nil {

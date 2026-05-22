@@ -51,7 +51,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if _, exists := stack.Workspaces[name]; exists {
 		return api.WorkspaceRef{}, &ConflictError{Kind: "workspace", Name: name, Reason: "already exists"}
 	}
-	allocations, err := allocateWorkspacePorts(stack, name)
+	allocations, err := p.allocateWorkspacePorts(stack, name)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -1284,7 +1284,7 @@ func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspaceP
 	return p.resolveTemplate(ctx, ref, "stack")
 }
 
-func allocateWorkspacePorts(stack *manifest.Stack, workspaceName string) (map[string]int, error) {
+func (p *Platform) allocateWorkspacePorts(stack *manifest.Stack, workspaceName string) (map[string]int, error) {
 	alloc := map[string]int{}
 	if len(stack.Operator.PortPool) == 0 {
 		return alloc, nil
@@ -1299,7 +1299,7 @@ func allocateWorkspacePorts(stack *manifest.Stack, workspaceName string) (map[st
 	}
 	for _, name := range sortedKeys(pools) {
 		owner := "workspace/" + workspaceName + "/" + name
-		port, err := pools[name].Allocate(owner)
+		port, err := pools[name].AllocateAvailable(owner, p.portUnavailable)
 		if err != nil {
 			return nil, err
 		}

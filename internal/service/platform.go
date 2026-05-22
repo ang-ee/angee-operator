@@ -21,9 +21,10 @@ import (
 )
 
 type Platform struct {
-	root           string
-	composeBackend runtime.Backend
-	procBackend    runtime.Backend
+	root            string
+	composeBackend  runtime.Backend
+	procBackend     runtime.Backend
+	portUnavailable func(int) bool
 }
 
 type CompiledStack struct {
@@ -44,7 +45,7 @@ func New(root string) (*Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Platform{root: abs, composeBackend: compose.NewBackend(), procBackend: proccompose.NewBackend()}, nil
+	return &Platform{root: abs, composeBackend: compose.NewBackend(), procBackend: proccompose.NewBackend(), portUnavailable: hostPortUnavailable}, nil
 }
 
 func NewWithBackends(root string, composeBackend, procBackend runtime.Backend) (*Platform, error) {

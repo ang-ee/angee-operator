@@ -50,3 +50,28 @@ func TestPoolRelease(t *testing.T) {
 		t.Fatalf("port = %d", port)
 	}
 }
+
+func TestPoolSkipsUnavailablePorts(t *testing.T) {
+	pool, err := ParsePool("acp", "3007-3009")
+	if err != nil {
+		t.Fatalf("ParsePool() error = %v", err)
+	}
+	port, err := pool.AllocateAvailable("service/agent/acp", func(port int) bool {
+		return port == 3007 || port == 3008
+	})
+	if err != nil {
+		t.Fatalf("AllocateAvailable() error = %v", err)
+	}
+	if port != 3009 {
+		t.Fatalf("port = %d, want 3009", port)
+	}
+	again, err := pool.AllocateAvailable("service/agent/acp", func(port int) bool {
+		return port == 3009
+	})
+	if err != nil {
+		t.Fatalf("stable AllocateAvailable() error = %v", err)
+	}
+	if again != port {
+		t.Fatalf("stable port = %d, want %d", again, port)
+	}
+}

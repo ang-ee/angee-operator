@@ -45,6 +45,7 @@ GET   /services
 POST  /services                 field-based init (image / command / env)
 POST  /services/create          template-based create (Copier template, kind=service)
 PATCH /services/{name}
+POST  /services/{name}/up        idempotent create-and-start
 POST  /services/{name}/start
 POST  /services/{name}/stop
 POST  /services/{name}/restart

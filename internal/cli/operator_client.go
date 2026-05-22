@@ -36,6 +36,7 @@ type platformClient interface {
 	ServiceUpdate(context.Context, api.ServiceInitRequest) error
 	ServiceDestroy(context.Context, string, bool) error
 	ServiceList(context.Context) ([]api.ServiceState, error)
+	ServiceUp(context.Context, []string) error
 	ServiceStart(context.Context, []string) error
 	ServiceStop(context.Context, []string) error
 	ServiceRestart(context.Context, []string) error
@@ -212,6 +213,10 @@ func (p *remotePlatform) ServiceList(ctx context.Context) ([]api.ServiceState, e
 		return nil, err
 	}
 	return services, nil
+}
+
+func (p *remotePlatform) ServiceUp(ctx context.Context, names []string) error {
+	return p.serviceAction(ctx, names, "up")
 }
 
 func (p *remotePlatform) ServiceStart(ctx context.Context, names []string) error {

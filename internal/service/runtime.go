@@ -166,6 +166,10 @@ func (p *Platform) StackDown(ctx context.Context) error {
 	return nil
 }
 
+func (p *Platform) ServiceUp(ctx context.Context, names []string) error {
+	return p.serviceRuntimeAction(ctx, "up", names)
+}
+
 func (p *Platform) ServiceStart(ctx context.Context, names []string) error {
 	return p.serviceRuntimeAction(ctx, "start", names)
 }
@@ -248,6 +252,11 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 	if err != nil {
 		return err
 	}
+	if action == "up" {
+		if err := p.bootstrapOpenBao(ctx, stack, nil, nil); err != nil {
+			return err
+		}
+	}
 	if _, err := p.StackPrepare(ctx); err != nil {
 		return err
 	}
@@ -258,6 +267,16 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 	containerTarget := runtime.Target{Root: p.root, Services: container, EnvFile: p.runtimeEnvFile(stack)}
 	localTarget := runtime.Target{Root: p.root, Services: local, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
 	switch action {
+	case "up":
+		if len(container) > 0 {
+			if err := p.composeBackend.Up(ctx, containerTarget); err != nil {
+				return err
+			}
+		}
+		if len(local) > 0 {
+			return p.procBackend.Up(ctx, localTarget)
+		}
+		return nil
 	case "start":
 		if len(container) > 0 {
 			if err := p.composeBackend.Start(ctx, containerTarget); err != nil {

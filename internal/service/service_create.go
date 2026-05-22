@@ -50,7 +50,7 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 	// Hold the root lock for the load → allocate → persist cycle so
 	// concurrent ServiceCreate calls don't race on port allocation or
 	// the Services[name] uniqueness check (TOCTOU). The lock is
-	// released BEFORE calling StackPrepare/ServiceStart because those
+	// released BEFORE calling StackPrepare/ServiceUp because those
 	// take the same lock internally and the stdlib fslock is
 	// non-recursive.
 	lock := fslock.RootLock(p.root)
@@ -66,13 +66,13 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 		return api.ServiceState{}, err
 	}
 	// Out of the critical section now: compose re-render and optional
-	// start. If these fail the manifest entry persists; the caller can
+	// boot. If these fail the manifest entry persists; the caller can
 	// recover with `angee service destroy <name>`.
 	if _, err := p.StackPrepare(ctx); err != nil {
 		return api.ServiceState{}, fmt.Errorf("re-render compose after service create: %w", err)
 	}
 	if req.Start {
-		if err := p.ServiceStart(ctx, []string{state.Name}); err != nil {
+		if err := p.ServiceUp(ctx, []string{state.Name}); err != nil {
 			return api.ServiceState{}, err
 		}
 	}
@@ -120,7 +120,7 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		return api.ServiceState{}, &ConflictError{Kind: "service", Name: serviceName, Reason: "already exists"}
 	}
 
-	allocations, err := allocateServicePorts(stack, serviceName)
+	allocations, err := p.allocateServicePorts(stack, serviceName)
 	if err != nil {
 		return api.ServiceState{}, err
 	}
@@ -216,7 +216,7 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		return api.ServiceState{}, err
 	}
 	// Past this point the manifest entry and leases are committed.
-	// Cancel the rollback; StackPrepare / ServiceStart run after the
+	// Cancel the rollback; StackPrepare / ServiceUp run after the
 	// caller releases the lock (see ServiceCreate).
 	rollback = nil
 
@@ -274,7 +274,7 @@ func resolveServiceName(metadata copierx.Metadata, override, workspaceName strin
 // stack.Operator.PortPool, scoped to the named service. Mirrors
 // allocateWorkspacePorts but with a service-prefixed owner so the
 // leases don't collide.
-func allocateServicePorts(stack *manifest.Stack, serviceName string) (map[string]int, error) {
+func (p *Platform) allocateServicePorts(stack *manifest.Stack, serviceName string) (map[string]int, error) {
 	alloc := map[string]int{}
 	if len(stack.Operator.PortPool) == 0 {
 		return alloc, nil
@@ -289,7 +289,7 @@ func allocateServicePorts(stack *manifest.Stack, serviceName string) (map[string
 	}
 	for _, name := range sortedKeys(pools) {
 		owner := servicePortOwner(serviceName, name)
-		port, err := pools[name].Allocate(owner)
+		port, err := pools[name].AllocateAvailable(owner, p.portUnavailable)
 		if err != nil {
 			return nil, err
 		}

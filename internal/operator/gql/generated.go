@@ -160,6 +160,7 @@ type ComplexityRoot struct {
 		ServiceRestart                func(childComplexity int, name string) int
 		ServiceStart                  func(childComplexity int, name string) int
 		ServiceStop                   func(childComplexity int, name string) int
+		ServiceUp                     func(childComplexity int, name string) int
 		ServiceUpdate                 func(childComplexity int, name string, input model.ServiceInput) int
 		SourceFetch                   func(childComplexity int, name string) int
 		SourcePull                    func(childComplexity int, name string) int
@@ -395,6 +396,7 @@ type MutationResolver interface {
 	ServiceInit(ctx context.Context, input model.ServiceInput) (*model.MutationResult, error)
 	ServiceCreate(ctx context.Context, input model.ServiceCreateInput) (*api.ServiceState, error)
 	ServiceUpdate(ctx context.Context, name string, input model.ServiceInput) (*model.MutationResult, error)
+	ServiceUp(ctx context.Context, name string) (*model.MutationResult, error)
 	ServiceStart(ctx context.Context, name string) (*model.MutationResult, error)
 	ServiceStop(ctx context.Context, name string) (*model.MutationResult, error)
 	ServiceRestart(ctx context.Context, name string) (*model.MutationResult, error)
@@ -1039,6 +1041,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ServiceStop(childComplexity, args["name"].(string)), true
+	case "Mutation.serviceUp":
+		if e.ComplexityRoot.Mutation.ServiceUp == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_serviceUp_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ServiceUp(childComplexity, args["name"].(string)), true
 	case "Mutation.serviceUpdate":
 		if e.ComplexityRoot.Mutation.ServiceUpdate == nil {
 			break
@@ -2640,6 +2653,7 @@ type Mutation {
   serviceInit(input: ServiceInput!): MutationResult
   serviceCreate(input: ServiceCreateInput!): ServiceState
   serviceUpdate(name: String!, input: ServiceInput!): MutationResult
+  serviceUp(name: String!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult
   serviceRestart(name: String!): MutationResult
@@ -3520,6 +3534,20 @@ func (ec *executionContext) field_Mutation_serviceStart_args(ctx context.Context
 }
 
 func (ec *executionContext) field_Mutation_serviceStop_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_serviceUp_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
@@ -6584,6 +6612,50 @@ func (ec *executionContext) fieldContext_Mutation_serviceUpdate(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_serviceUpdate_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_serviceUp(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_serviceUp(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ServiceUp(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_serviceUp(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_serviceUp_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -13670,6 +13742,10 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "serviceUpdate":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_serviceUpdate(ctx, field)
+			})
+		case "serviceUp":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_serviceUp(ctx, field)
 			})
 		case "serviceStart":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {

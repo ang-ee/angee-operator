@@ -90,7 +90,7 @@ jobs:
           if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
 
           mkdir -p dist
-          LDFLAGS="-s -w -X github.com/fyltr/angee/internal/cli.Version=${VERSION}"
+          LDFLAGS="-s -w -X github.com/fyltr/angee/internal/cli.Version=${VERSION} -X github.com/fyltr/angee/internal/operator.Version=${VERSION}"
 
           go build -trimpath -ldflags="${LDFLAGS}" \
             -o "dist/angee${EXT}" \
