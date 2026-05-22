@@ -160,7 +160,7 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		Jobs:       map[string]api.JobState{},
 		Workspaces: map[string]api.WorkspaceRef{},
 	}
-	runtimeStates := p.runtimeServiceStates(ctx)
+	runtimeStates := p.runtimeServiceStates(ctx, stack)
 	for _, name := range sortedKeys(stack.Services) {
 		service := stack.Services[name]
 		observed := runtimeStates[name]
@@ -194,14 +194,15 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 // unreachable, process-compose supervisor offline) all legitimately
 // translate to "not observed running", and StackStatus falls back to
 // the "declared" sentinel for services missing from this map.
-func (p *Platform) runtimeServiceStates(ctx context.Context) map[string]runtime.ServiceStatus {
+func (p *Platform) runtimeServiceStates(ctx context.Context, stack *manifest.Stack) map[string]runtime.ServiceStatus {
 	states := map[string]runtime.ServiceStatus{}
-	if statuses, err := p.composeBackend.Status(ctx, p.root); err == nil {
+	if statuses, err := p.composeBackend.Status(ctx, runtime.StatusRequest{Root: p.root}); err == nil {
 		for _, s := range statuses {
 			states[s.Name] = s
 		}
 	}
-	if statuses, err := p.procBackend.Status(ctx, p.root); err == nil {
+	procReq := runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}
+	if statuses, err := p.procBackend.Status(ctx, procReq); err == nil {
 		for _, s := range statuses {
 			states[s.Name] = s
 		}

@@ -22,6 +22,11 @@ type LogsRequest struct {
 	ControlPort int
 }
 
+type StatusRequest struct {
+	Root        string
+	ControlPort int
+}
+
 type ServiceStatus struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
@@ -41,5 +46,5 @@ type Backend interface {
 	Stop(ctx context.Context, target Target) error
 	Restart(ctx context.Context, target Target) error
 	Logs(ctx context.Context, req LogsRequest) (<-chan string, error)
-	Status(ctx context.Context, root string) ([]ServiceStatus, error)
+	Status(ctx context.Context, req StatusRequest) ([]ServiceStatus, error)
 }

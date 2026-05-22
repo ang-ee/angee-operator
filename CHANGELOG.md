@@ -6,6 +6,22 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.5 — 2026-05-21
+
+### Services
+
+- `StackStatus` now reports real runtime state for **process-compose**
+  services too (previously they always came back as `"declared"`).
+  `proccompose.Backend.Status` queries the supervisor via
+  `process-compose list -o json` and returns the literal status string
+  lowercased (`running`, `completed`, `pending`, …). If the supervisor
+  is offline or the control port is wrong, services fall back to
+  `"declared"` exactly as before. Readiness probes (`is_ready: Ready`)
+  also surface as a `healthy` health verdict on the response.
+- `runtime.Backend.Status` now takes a `runtime.StatusRequest`
+  (`Root` + `ControlPort`) instead of a bare root. This is an internal
+  interface change; CLI, REST, GraphQL surfaces are unchanged.
+
 ## v0.5.4 — 2026-05-21
 
 ### Internal

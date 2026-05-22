@@ -2,7 +2,9 @@ package proccompose
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -131,8 +133,65 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 	return ch, nil
 }
 
-func (b Backend) Status(context.Context, string) ([]runtime.ServiceStatus, error) {
-	return nil, nil
+func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
+	args := b.clientArgs(req.ControlPort)
+	args = append(args, "list", "-o", "json")
+	out, err := b.run(ctx, req.Root, "", args...)
+	if err != nil {
+		// Supervisor not running, port wrong, etc. Treat as
+		// "nothing observed running" — Platform falls back to the
+		// "declared" sentinel for services missing from this list.
+		return nil, nil
+	}
+	return parseList(out), nil
+}
+
+type processListEntry struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	IsRunning bool   `json:"is_running"`
+	ExitCode  int    `json:"exit_code"`
+	IsReady   string `json:"is_ready"`
+}
+
+func parseList(data []byte) []runtime.ServiceStatus {
+	// process-compose emits status banner lines on stderr before the
+	// JSON array on stdout (when invoked via CombinedOutput). Trim
+	// anything before the first '[' to make the response parseable.
+	trimmed := bytes.TrimSpace(data)
+	if idx := bytes.IndexByte(trimmed, '['); idx > 0 {
+		trimmed = trimmed[idx:]
+	}
+	var entries []processListEntry
+	if err := json.Unmarshal(trimmed, &entries); err != nil {
+		return nil
+	}
+	statuses := make([]runtime.ServiceStatus, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name == "" {
+			continue
+		}
+		statuses = append(statuses, runtime.ServiceStatus{
+			Name:    entry.Name,
+			Runtime: "local",
+			State:   strings.ToLower(strings.TrimSpace(entry.Status)),
+			Health:  procHealth(entry),
+		})
+	}
+	return statuses
+}
+
+func procHealth(entry processListEntry) string {
+	// process-compose surfaces readiness through `is_ready`. When a
+	// service has no ready probe declared, the value is "-" and we
+	// leave Health empty (matching docker's "no healthcheck" case).
+	switch strings.ToLower(strings.TrimSpace(entry.IsReady)) {
+	case "ready":
+		return "healthy"
+	case "not ready", "notready":
+		return "unhealthy"
+	}
+	return ""
 }
 
 func (b Backend) run(ctx context.Context, root string, envFile string, args ...string) ([]byte, error) {

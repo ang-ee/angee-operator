@@ -98,3 +98,52 @@ func TestBackendDownUsesControlPort(t *testing.T) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
 	}
 }
+
+type stubListRunner struct {
+	args   []string
+	output []byte
+	err    error
+}
+
+func (r *stubListRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	r.args = append([]string(nil), args...)
+	return r.output, r.err
+}
+
+func TestBackendStatusParsesProcessList(t *testing.T) {
+	const payload = `[
+	{"name":"build-watch","status":"Running","is_running":true,"exit_code":0,"is_ready":"-"},
+	{"name":"web","status":"Running","is_running":true,"exit_code":0,"is_ready":"Ready"},
+	{"name":"migrate","status":"Completed","is_running":false,"exit_code":0,"is_ready":"-"}
+]`
+	runner := &stubListRunner{output: []byte(payload)}
+	backend := Backend{Runner: runner}
+	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: "/stack", ControlPort: 10004})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	wantArgs := []string{"--address", "127.0.0.1", "--port", "10004", "list", "-o", "json"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("args = %v, want %v", runner.args, wantArgs)
+	}
+	want := []runtime.ServiceStatus{
+		{Name: "build-watch", Runtime: "local", State: "running"},
+		{Name: "web", Runtime: "local", State: "running", Health: "healthy"},
+		{Name: "migrate", Runtime: "local", State: "completed"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %#v, want %#v", got, want)
+	}
+}
+
+func TestBackendStatusSwallowsErrors(t *testing.T) {
+	runner := &stubListRunner{err: errors.New("supervisor offline")}
+	backend := Backend{Runner: runner}
+	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: "/stack", ControlPort: 10005})
+	if err != nil {
+		t.Fatalf("Status() error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Fatalf("statuses = %v, want nil", got)
+	}
+}

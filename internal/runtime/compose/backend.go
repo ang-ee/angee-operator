@@ -123,10 +123,10 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 	return ch, nil
 }
 
-func (b Backend) Status(ctx context.Context, root string) ([]runtime.ServiceStatus, error) {
-	args := b.baseArgs(root, "")
+func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
+	args := b.baseArgs(req.Root, "")
 	args = append(args, "ps", "--format", "json")
-	out, err := b.run(ctx, root, args...)
+	out, err := b.run(ctx, req.Root, args...)
 	if err != nil {
 		return nil, err
 	}

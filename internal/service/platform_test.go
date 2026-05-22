@@ -30,7 +30,7 @@ func (b stubStatusBackend) Logs(context.Context, runtime.LogsRequest) (<-chan st
 	close(ch)
 	return ch, nil
 }
-func (b stubStatusBackend) Status(context.Context, string) ([]runtime.ServiceStatus, error) {
+func (b stubStatusBackend) Status(context.Context, runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
 	return b.statuses, nil
 }
 
