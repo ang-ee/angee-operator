@@ -168,9 +168,8 @@ gets composed inside them, and how features are added.
 
 | Term | Meaning | Status in `angee-go` |
 | --- | --- | --- |
-| **Host** | An application runtime that runs *inside* one or more of a Stack's Services — for example a Django process, a React build, or an MCP server. The Host is what end-user code talks to. | Not a manifest concept. The engine just runs Services. |
-| **Block** | A unit of application code that contributes to the Host runtime — for example a Python pip distribution that adds models, GraphQL types, permissions, and React views. | Not a manifest concept. Defined by the Host. |
-| **Build** | The Host's own build step (e.g. `manage.py angee build`) that composes Blocks into a deterministic `runtime/` tree before the Service starts. | Not invoked by the engine; usually a Job or a service entrypoint step. |
+| **Host** | An application runtime that runs *inside* one or more of a Stack's Services — for example a Django process, a React build, or an MCP server. The Host is what end-user code talks to. How a Host structures its own application code is entirely internal to it. | Not a manifest concept. The engine just runs Services. |
+| **Build** | The Host's own build step (e.g. `manage.py angee build`) that composes the Host's application into a deterministic `runtime/` tree before the Service starts. | Not invoked by the engine; usually a Job or a service entrypoint step. |
 
 The engine treats a Host as just another container or local process. It
 will mount Sources, set env, allocate ports, and start the Service — what
@@ -180,12 +179,12 @@ to the Host.
 ### `angee-django` — the first default Host
 
 [`angee-django`](https://github.com/fyltr/angee-django) is the first and
-currently the default application runtime. It is a **Block compiler**
-that produces a working Django + GraphQL + React application:
+currently the default application runtime. It produces a working
+Django + GraphQL + React application:
 
-- Each Block is a pip distribution that contributes abstract models,
-  GraphQL fragments, REBAC permissions, and React views.
-- `manage.py angee build` composes every installed Block into a
+- Its installed application code contributes abstract models, GraphQL
+  fragments, REBAC permissions, and React views.
+- `manage.py angee build` composes that application code into a
   deterministic `runtime/` tree.
 - The output runs as a single Django Service inside an Angee Stack.
 

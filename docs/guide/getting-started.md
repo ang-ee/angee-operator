@@ -8,8 +8,8 @@ the result on docker-compose or process-compose.
 If you have not already, skim [Concepts](/guide/concepts) first — it
 explains what the engine does, what a **Host** is (e.g. `angee-django`
 is the first default Host), and the difference between abstract terms
-(Stack template, Block) and concrete runtime objects (Source, Workspace,
-Service).
+(Stack template, Workspace template) and concrete runtime objects
+(Source, Workspace, Service).
 
 ## Install
 

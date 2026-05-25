@@ -236,9 +236,8 @@ solidify.
 ### `agent-runtime`
 
 Materialises a single long-running process that an external host —
-today, the `agents` addon in
-[`angee-django`](https://github.com/fyltr/angee-django) — addresses
-over [ACP](https://github.com/anthropics/agent-client-protocol). The
+today, [`angee-django`](https://github.com/fyltr/angee-django) —
+addresses over [ACP](https://github.com/anthropics/agent-client-protocol). The
 template is the contract between the operator and any host that wants
 to provision per-agent workspaces; the actual runtime binary is
 expected to be wired in by the consuming host.
@@ -297,6 +296,6 @@ angee operator --root workspaces/agent-claude-1/.angee --port 9100
 ```
 
 Keep this contract in lockstep with
-`templates/agent-runtime/copier.yml` and the consuming addon's
+`templates/agent-runtime/copier.yml` and the consuming host's
 provisioning code. Changes to the env var names or semantics need a
 coordinated bump on both sides.
