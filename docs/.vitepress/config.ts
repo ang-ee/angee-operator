@@ -17,6 +17,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Reference', link: '/reference/operator-api' },
+      { text: 'Proposals', link: '/proposals/stack-update-template-sync' },
       {
         text: 'v0.4.7',
         items: [
@@ -47,6 +48,14 @@ export default defineConfig({
             { text: 'GraphQL schema', link: '/reference/graphql/' },
             { text: 'Manifest schema', link: '/reference/manifest-schema' },
             { text: 'Surface parity', link: '/reference/surfaces' },
+          ],
+        },
+      ],
+      '/proposals/': [
+        {
+          text: 'Proposals',
+          items: [
+            { text: 'stack update ↔ template sync', link: '/proposals/stack-update-template-sync' },
           ],
         },
       ],
