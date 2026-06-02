@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** B (compose fields)
+- **Current chunk:** C (edge package skeleton)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -38,7 +38,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | Chunk | Build | Verify | Title |
 |---|---|---|---|
 | A | [x] | [x] | Manifest `Ingress`/`Route` types + defaults + validation |
-| B | [ ] | [ ] | Compose `Networks`/`Labels` fields |
+| B | [x] | [x] | Compose `Networks`/`Labels` fields |
 | C | [ ] | [ ] | `edge` backend package (interface + FromManifest + None) |
 | D | [ ] | [ ] | `CaddyBackend.Contribute` (inject edge, network, labels) |
 | E | [ ] | [ ] | `Compile()` hook wiring the edge backend |
@@ -84,11 +84,12 @@ all clean; Port validation tightened to `gte=1,lte=65535` during verify.
 - `Service` gains `Networks []string \`yaml:"networks,omitempty"\`` and
   `Labels map[string]string \`yaml:"labels,omitempty"\``.
 
-**Verify (Claude):**
-- [ ] `go build ./...` clean.
-- [ ] Marshal test: a service with networks+labels and a file-level network
+**Verify (Claude):** ✅ done — gofmt/build/vet/`go test ./internal/runtime/compose/...`
+all clean; tests assert round-trip DeepEqual + `omitempty` proof.
+- [x] `go build ./...` clean.
+- [x] Marshal test: a service with networks+labels and a file-level network
   round-trips through `Marshal`.
-- [ ] A service/file without them marshals **byte-identically** to before
+- [x] A service/file without them marshals **byte-identically** to before
   (omitempty).
 
 ## Chunk C — `edge` backend package (interface + FromManifest + None)
