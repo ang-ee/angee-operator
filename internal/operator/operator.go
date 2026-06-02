@@ -668,6 +668,11 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mcpDescriptor())
 }
 
+// auth gates protected routes with a two-tier check. An empty configured token
+// leaves the operator open (loopback dev). Otherwise a request authenticates
+// either with the admin bearer (full, unscoped, server-to-server access) or
+// with a minted aud="operator" token, whose actor and capability scope are
+// attached to the request context for downstream enforcement.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.config.Token == "" {
@@ -675,14 +680,30 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			return
 		}
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		got := sha256.Sum256([]byte(token))
-		want := sha256.Sum256([]byte(s.config.Token))
-		if !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		if !ok {
 			writeJSON(w, http.StatusUnauthorized, api.ErrorResponse{Error: "unauthorized"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		if constantTimeEqual(token, s.config.Token) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		claims, err := s.tokens.Verify(token, audienceOperator)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, api.ErrorResponse{Error: "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(withActorScope(r.Context(), claims)))
 	})
+}
+
+// constantTimeEqual reports whether got equals want without leaking length or
+// content through timing. Inputs are hashed first so the comparison is over
+// fixed-width digests regardless of token length.
+func constantTimeEqual(got, want string) bool {
+	g := sha256.Sum256([]byte(got))
+	w := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(g[:], w[:]) == 1
 }
 
 func writeError(w http.ResponseWriter, err error) {

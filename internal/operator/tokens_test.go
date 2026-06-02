@@ -94,6 +94,116 @@ func TestTokenMinterRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestMintStampsOperatorAudience(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	resp, err := m.Mint("user-1", "1h")
+	if err != nil {
+		t.Fatalf("Mint() error = %v", err)
+	}
+	claims, err := m.Verify(resp.Token, audienceOperator)
+	if err != nil {
+		t.Fatalf("Verify(operator) error = %v", err)
+	}
+	if claims.Subject != "user-1" {
+		t.Fatalf("Subject = %q, want user-1", claims.Subject)
+	}
+	if len(claims.Scope) != 0 {
+		t.Fatalf("Scope = %#v, want empty", claims.Scope)
+	}
+}
+
+func TestMintScopedRoundTripsAudienceAndScope(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	scope := []string{"service:read", "service:up"}
+	resp, err := m.MintScoped("svc-actor", audienceOperator, scope, "5m")
+	if err != nil {
+		t.Fatalf("MintScoped() error = %v", err)
+	}
+	claims, err := m.Verify(resp.Token, audienceOperator)
+	if err != nil {
+		t.Fatalf("Verify(operator) error = %v", err)
+	}
+	if claims.Subject != "svc-actor" {
+		t.Fatalf("Subject = %q, want svc-actor", claims.Subject)
+	}
+	if strings.Join(claims.Scope, ",") != strings.Join(scope, ",") {
+		t.Fatalf("Scope = %#v, want %#v", claims.Scope, scope)
+	}
+}
+
+func TestVerifyRejectsWrongAudience(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	// A route token (aud=svc:agent-x) must not satisfy an operator-API check.
+	resp, err := m.MintScoped("actor", serviceAudience("agent-x"), nil, "1h")
+	if err != nil {
+		t.Fatalf("MintScoped() error = %v", err)
+	}
+	if _, err := m.Verify(resp.Token, audienceOperator); err == nil {
+		t.Fatal("Verify(operator) on a svc token error = nil, want audience rejection")
+	}
+	if _, err := m.Verify(resp.Token, serviceAudience("agent-x")); err != nil {
+		t.Fatalf("Verify(svc:agent-x) error = %v, want success", err)
+	}
+	if _, err := m.Verify(resp.Token, serviceAudience("agent-y")); err == nil {
+		t.Fatal("Verify(svc:agent-y) error = nil, want audience rejection")
+	}
+	// An empty expected audience must fail closed, not match any token.
+	if _, err := m.Verify(resp.Token, ""); err == nil {
+		t.Fatal("Verify(\"\") error = nil, want audience-required rejection")
+	}
+}
+
+func TestVerifyRejectsExpiredToken(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	expired := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "actor",
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{audienceOperator},
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
+		},
+	})
+	raw, err := expired.SignedString(m.secret)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+	if _, err := m.Verify(raw, audienceOperator); err == nil {
+		t.Fatal("Verify() on expired token error = nil, want expiry rejection")
+	}
+}
+
+func TestVerifyRejectsTamperedAndForeignTokens(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	other, _ := newTokenMinter("a-different-secret", "")
+
+	resp, err := m.Mint("actor", "1h")
+	if err != nil {
+		t.Fatalf("Mint() error = %v", err)
+	}
+	// A token signed by a different key must not verify here.
+	foreign, err := other.Mint("actor", "1h")
+	if err != nil {
+		t.Fatalf("other.Mint() error = %v", err)
+	}
+	if _, err := m.Verify(foreign.Token, audienceOperator); err == nil {
+		t.Fatal("Verify() on foreign-signed token error = nil, want signature rejection")
+	}
+	// Flipping the final signature byte must invalidate the token.
+	tampered := resp.Token[:len(resp.Token)-1]
+	if resp.Token[len(resp.Token)-1] == 'a' {
+		tampered += "b"
+	} else {
+		tampered += "a"
+	}
+	if _, err := m.Verify(tampered, audienceOperator); err == nil {
+		t.Fatal("Verify() on tampered token error = nil, want signature rejection")
+	}
+	if _, err := m.Verify("", audienceOperator); err == nil {
+		t.Fatal("Verify() on empty token error = nil, want rejection")
+	}
+}
+
 func parseToken(t *testing.T, token string, secret []byte) (*jwt.RegisteredClaims, error) {
 	t.Helper()
 	claims := &jwt.RegisteredClaims{}
