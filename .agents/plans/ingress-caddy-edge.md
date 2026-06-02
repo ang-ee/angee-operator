@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** H (port-lease skip)
+- **Current chunk:** I (docs + CHANGELOG)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -44,7 +44,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | E | [x] | [x] | `Compile()` hook wiring the edge backend |
 | F | [x] | [x] | `/edge/verify` forward_auth endpoint |
 | G | [x] | [x] | `serviceEndpoint` + `ingressStatus` GraphQL |
-| H | [ ] | [ ] | Port-lease skip for routed services |
+| H | [x] | [x] | Port-lease skip for routed services |
 | I | [ ] | [ ] | Docs + CHANGELOG + schema regen |
 
 ---
@@ -191,9 +191,11 @@ non-sandboxed env (Codex's sandbox blocks `httptest` listeners); mounted outside
 - Routed services (`Route != nil`) must **not** acquire a port lease — only the
   edge publishes a host port.
 
-**Verify (Claude):**
-- [ ] Test: a routed service acquires no lease; a non-routed service still does.
-- [ ] `make check` green.
+**Verify (Claude):** ✅ done — guard reuses the empty alloc, early-returns for
+routed (caddy + route) services; test asserts routed→no lease, plain→leases;
+`make check` green.
+- [x] Test: a routed service acquires no lease; a non-routed service still does.
+- [x] `make check` green.
 
 ## Chunk I — Docs + CHANGELOG + schema regen
 

@@ -276,6 +276,9 @@ func resolveServiceName(metadata copierx.Metadata, override, workspaceName strin
 // leases don't collide.
 func (p *Platform) allocateServicePorts(stack *manifest.Stack, serviceName string) (map[string]int, error) {
 	alloc := map[string]int{}
+	if svc, ok := stack.Services[serviceName]; ok && isRouted(stack, svc) {
+		return alloc, nil
+	}
 	if len(stack.Operator.PortPool) == 0 {
 		return alloc, nil
 	}
