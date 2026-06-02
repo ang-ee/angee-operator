@@ -1,11 +1,16 @@
 package service
 
 import (
+	"context"
+
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/manifest"
 )
 
-func (p *Platform) ServiceEndpoint(name string) (*api.ServiceEndpoint, error) {
+func (p *Platform) ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -28,22 +33,25 @@ func (p *Platform) ServiceEndpoint(name string) (*api.ServiceEndpoint, error) {
 	return endpoint, nil
 }
 
-func (p *Platform) IngressStatus() (*api.IngressStatus, error) {
+func (p *Platform) IngressStatus(ctx context.Context) (*api.IngressStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
 	}
 
-	domain := ingressDomain(stack)
 	status := &api.IngressStatus{
 		Type:   stack.Ingress.Type,
-		Domain: domain,
 		Routes: []api.RouteRef{},
 	}
 	if stack.Ingress.Type != "caddy" {
 		return status, nil
 	}
 
+	domain := ingressDomain(stack)
+	status.Domain = domain
 	for _, name := range sortedKeys(stack.Services) {
 		service := stack.Services[name]
 		if service.Route == nil {
@@ -68,6 +76,8 @@ func isRouted(stack *manifest.Stack, service manifest.Service) bool {
 	return stack.Ingress.Type == "caddy" && service.Route != nil
 }
 
+// routeURL assumes routed endpoints are WebSocket agent endpoints and therefore
+// uses wss:// because manifest.Route does not carry a scheme today.
 func routeURL(serviceName string, route *manifest.Route, domain string) string {
 	host := route.Host
 	if host == "" {

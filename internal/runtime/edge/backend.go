@@ -14,12 +14,15 @@ type Backend interface {
 	Contribute(stack *manifest.Stack, compiled *compose.File) error
 }
 
+// NoneBackend leaves the compiled compose unchanged when ingress is disabled.
 type NoneBackend struct{}
 
+// Contribute is a no-op for NoneBackend.
 func (NoneBackend) Contribute(stack *manifest.Stack, compiled *compose.File) error {
 	return nil
 }
 
+// FromManifest returns the ingress backend selected by the manifest config.
 func FromManifest(cfg manifest.Ingress) (Backend, error) {
 	switch cfg.Type {
 	case "", "none":

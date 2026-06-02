@@ -136,8 +136,13 @@ TLS terminates at the edge; backends stay plaintext on the private network.
 > **Operational note:** every container start/stop reconciles
 > caddy-docker-proxy, which reloads Caddy and severs active WebSockets. Use
 > short connection-token TTLs (~60 s) and client auto-reconnect, and debounce
-> bursts of container events. Edge tokens passed as `?token=` are stripped from
-> access logs.
+> bursts of container events. The operator does not log request URIs, so tokens
+> passed as `?token=` are not written to operator logs; short TTLs remain
+> defense-in-depth.
+>
+> **Security note:** the edge mounts the Docker socket, a high-privilege grant
+> inherent to caddy-docker-proxy. The operator must be the sole owner of the
+> `ingress.verify` name on a dedicated edge network.
 
 ## Services
 

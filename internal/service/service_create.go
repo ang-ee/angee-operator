@@ -196,6 +196,13 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		return api.ServiceState{}, err
 	}
 
+	// A routed service is reached through the edge and publishes no host port,
+	// so release any pool lease optimistically taken before the template (which
+	// determines routing) was rendered.
+	if isRouted(stack, renderedService) {
+		releaseServicePortLeases(stack, serviceName)
+	}
+
 	// On failure after this point, also wipe the build context and
 	// remove the in-memory service entry so the deferred rollback's
 	// SaveFile doesn't persist a half-installed service. Order matters:
@@ -276,9 +283,6 @@ func resolveServiceName(metadata copierx.Metadata, override, workspaceName strin
 // leases don't collide.
 func (p *Platform) allocateServicePorts(stack *manifest.Stack, serviceName string) (map[string]int, error) {
 	alloc := map[string]int{}
-	if svc, ok := stack.Services[serviceName]; ok && isRouted(stack, svc) {
-		return alloc, nil
-	}
 	if len(stack.Operator.PortPool) == 0 {
 		return alloc, nil
 	}

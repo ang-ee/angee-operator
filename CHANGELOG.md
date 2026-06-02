@@ -22,6 +22,12 @@ latest tag.
 - New GraphQL queries `serviceEndpoint(name)` (`{routed, url, internalHost,
   internalPort}`) and `ingressStatus` (`{type, domain, routes}`), replacing
   host-side compose-port-scraping.
+- Manifest validation hardens the edge against Caddyfile injection: under
+  `ingress.type: caddy`, routed service names and `route.host` are charset-checked
+  and the ingress fields are rejected if they contain Caddy metacharacters, and
+  `edge` is a reserved service name. The forward_auth wiring (`caddy.forward_auth`
+  + `/edge/verify?service=<name>`) and the `X-Forwarded-Uri` token read were
+  validated end-to-end against a live `caddy-docker-proxy` run-spike.
 
 ## v0.5.7 — 2026-06-02
 

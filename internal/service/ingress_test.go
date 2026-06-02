@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -18,7 +19,7 @@ func TestServiceEndpointIngressNone(t *testing.T) {
 		},
 	})
 
-	endpoint, err := platform.ServiceEndpoint("agent")
+	endpoint, err := platform.ServiceEndpoint(context.Background(), "agent")
 	if err != nil {
 		t.Fatalf("ServiceEndpoint() error = %v", err)
 	}
@@ -29,12 +30,15 @@ func TestServiceEndpointIngressNone(t *testing.T) {
 		t.Fatalf("ServiceEndpoint().URL = %q, want empty", endpoint.URL)
 	}
 
-	status, err := platform.IngressStatus()
+	status, err := platform.IngressStatus(context.Background())
 	if err != nil {
 		t.Fatalf("IngressStatus() error = %v", err)
 	}
 	if status.Type != "none" {
 		t.Fatalf("IngressStatus().Type = %q, want none", status.Type)
+	}
+	if status.Domain != "" {
+		t.Fatalf("IngressStatus().Domain = %q, want empty", status.Domain)
 	}
 	if len(status.Routes) != 0 {
 		t.Fatalf("IngressStatus().Routes = %#v, want empty", status.Routes)
@@ -54,7 +58,7 @@ func TestServiceEndpointIngressCaddy(t *testing.T) {
 		},
 	})
 
-	endpoint, err := platform.ServiceEndpoint("agent")
+	endpoint, err := platform.ServiceEndpoint(context.Background(), "agent")
 	if err != nil {
 		t.Fatalf("ServiceEndpoint() error = %v", err)
 	}
@@ -68,7 +72,7 @@ func TestServiceEndpointIngressCaddy(t *testing.T) {
 		t.Fatalf("ServiceEndpoint().InternalPort = %d, want 3008", endpoint.InternalPort)
 	}
 
-	status, err := platform.IngressStatus()
+	status, err := platform.IngressStatus(context.Background())
 	if err != nil {
 		t.Fatalf("IngressStatus() error = %v", err)
 	}
@@ -91,7 +95,7 @@ func TestServiceEndpointMissing(t *testing.T) {
 		},
 	})
 
-	_, err := platform.ServiceEndpoint("missing")
+	_, err := platform.ServiceEndpoint(context.Background(), "missing")
 	if err == nil {
 		t.Fatal("ServiceEndpoint(missing) error = nil, want error")
 	}

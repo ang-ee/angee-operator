@@ -346,12 +346,12 @@ func (r *queryResolver) StackStatus(ctx context.Context) (*api.StackStatusRespon
 
 // ServiceEndpoint is the resolver for the serviceEndpoint field.
 func (r *queryResolver) ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error) {
-	return r.Platform.ServiceEndpoint(name)
+	return r.Platform.ServiceEndpoint(ctx, name)
 }
 
 // IngressStatus is the resolver for the ingressStatus field.
 func (r *queryResolver) IngressStatus(ctx context.Context) (*api.IngressStatus, error) {
-	return r.Platform.IngressStatus()
+	return r.Platform.IngressStatus(ctx)
 }
 
 // Services is the resolver for the services field.
