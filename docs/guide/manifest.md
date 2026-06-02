@@ -40,6 +40,7 @@ name: example
 template: {}
 operator: {}
 secrets_backend: {}
+ingress: {}
 secrets: {}
 ports: {}
 volumes: {}
@@ -95,6 +96,48 @@ secrets_backend:
 ```
 
 Secret substitutions use `${secret.name}` in service and job fields.
+
+## Ingress
+
+`ingress` selects an edge backend by `type`, defaulting to `none` (today's
+host-published-ports behavior). With `type: caddy`, the operator compiles a
+single Caddy edge (`lucaslorentz/caddy-docker-proxy`) into the compose file,
+puts routed services on a private network with **no** host-published ports, and
+authenticates inbound connections at the edge.
+
+```yaml
+ingress:
+  type: caddy            # none (default) | caddy
+  domain: agents.localhost  # base domain; defaults to operator.domain
+  # image:   lucaslorentz/caddy-docker-proxy:2.9   # override the edge image
+  # network: <name>_edge                            # override the private network
+  # verify:  http://operator/edge/verify            # forward_auth target
+```
+
+A service opts into routing with a `route:` block instead of publishing host
+ports — it is reached only through the edge:
+
+```yaml
+services:
+  agent:
+    runtime: container        # routing is container-only
+    image: angee/agent:latest
+    route:
+      port: 3008              # container port the edge proxies to
+      host: agent.agents.localhost  # default: <service>.<ingress.domain>
+      # auth: forward          # forward (default) | none
+```
+
+A routed service publishes no host port and takes no lease from
+`operator.port_pool` — only the edge publishes (`:443`/`:80`). `route:` on a
+`runtime: local` service is rejected (it can't join a Docker network).
+TLS terminates at the edge; backends stay plaintext on the private network.
+
+> **Operational note:** every container start/stop reconciles
+> caddy-docker-proxy, which reloads Caddy and severs active WebSockets. Use
+> short connection-token TTLs (~60 s) and client auto-reconnect, and debounce
+> bursts of container events. Edge tokens passed as `?token=` are stripped from
+> access logs.
 
 ## Services
 

@@ -6,6 +6,23 @@ latest tag.
 
 ## Unreleased
 
+### Ingress (Caddy edge)
+
+- New optional `ingress` backend, selected by `type` and defaulting to `none`
+  (today's host-published-ports behavior). With `ingress.type: caddy`, `Compile`
+  injects a single `caddy-docker-proxy` edge into the compose file: routed
+  services (those with a `route:` block) drop their host ports, join a private
+  `<name>_edge` network, and get stamped with Caddy router labels; only the edge
+  publishes a host port. A `route:` on a `runtime: local` service is rejected,
+  and routed services take no `operator.port_pool` lease.
+- `GET /edge/verify` — the operator's forward_auth target for the edge. Reads a
+  route token from `?token=` / `Authorization` / `Sec-WebSocket-Protocol` and
+  verifies `aud=svc:<service>`; returns 200/401 (never 101). Not behind the
+  admin-bearer gate.
+- New GraphQL queries `serviceEndpoint(name)` (`{routed, url, internalHost,
+  internalPort}`) and `ingressStatus` (`{type, domain, routes}`), replacing
+  host-side compose-port-scraping.
+
 ## v0.5.7 — 2026-06-02
 
 ### Internal

@@ -378,6 +378,31 @@ authorization check, then returns the minted token to the browser. The admin
 bearer never leaves the server. Callers should treat the returned token as
 opaque.
 
+### Ingress
+
+When a stack sets `ingress.type: caddy` (see the
+[manifest guide](../guide/manifest.md#ingress)), routed services are reached
+through one Caddy edge instead of host-published ports. Two queries expose the
+routing, replacing host-side compose-port-scraping:
+
+- `serviceEndpoint(name: String!): ServiceEndpoint` — returns
+  `{routed, url, internalHost, internalPort}`. `routed` is `false` when
+  `ingress.type` is `none`; when routed, `url` is the public `wss://…/` address
+  and `internalHost`/`internalPort` are the in-network Docker DNS name and port.
+- `ingressStatus: IngressStatus` — returns `{type, domain, routes}` where
+  `routes` is `[{service, url}]` for every routed service.
+
+The edge authenticates each inbound connection against a non-public forward_auth
+target on the operator:
+
+- `GET /edge/verify?service=<name>` — reads the token from `?token=`,
+  `Authorization: Bearer`, or `Sec-WebSocket-Protocol`, and verifies it carries
+  `aud=svc:<name>` (a route token from `mintRouteToken` / `POST /tokens/route`).
+  Returns **200** on success and **401** otherwise — never `101`; the edge
+  performs the actual WebSocket upgrade. It is **not** behind the admin-bearer
+  gate (a route token is not an operator token) and is intended to be reachable
+  only from the edge network.
+
 ### Commit DAG
 
 `gitOpsTopology(withCommits: Int)` accepts an opt-in window for

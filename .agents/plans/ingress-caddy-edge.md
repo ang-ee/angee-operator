@@ -21,7 +21,11 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** I (docs + CHANGELOG)
+- **Current chunk:** ✅ ALL CHUNKS COMPLETE (A–I built by Codex, verified by
+  Claude, committed). `make check` green. Ready for review/PR. Remaining: the
+  caddy-docker-proxy global-snippet/forward_auth label + WS-through-edge
+  run-spike (TODO(spike) in `edge/caddy.go`), and the cross-repo Django +
+  service-template work (out of scope here).
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -45,7 +49,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | F | [x] | [x] | `/edge/verify` forward_auth endpoint |
 | G | [x] | [x] | `serviceEndpoint` + `ingressStatus` GraphQL |
 | H | [x] | [x] | Port-lease skip for routed services |
-| I | [ ] | [ ] | Docs + CHANGELOG + schema regen |
+| I | [x] | [x] | Docs + CHANGELOG + schema regen |
 
 ---
 
@@ -207,5 +211,8 @@ routed (caddy + route) services; test asserts routed→no lease, plain→leases;
 - `CHANGELOG.md` `Unreleased`.
 - Regenerate `docs/reference/manifest-schema.md` if present.
 
-**Verify (Claude):**
-- [ ] Schema/docs regen clean; `make check` green; final review pass.
+**Verify (Claude):** ✅ done — `ingress`/`route` documented in the manifest
+guide (with the WS-reload operational note); `/edge/verify`, `serviceEndpoint`,
+`ingressStatus` documented in operator-api.md; CHANGELOG `Unreleased` updated.
+No generated `manifest-schema.md` in-repo (site relocated). `make check` green.
+- [x] Schema/docs regen clean; `make check` green; final review pass.
