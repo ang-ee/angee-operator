@@ -31,6 +31,12 @@ latest tag.
   + `/edge/verify?service=<name>`) and the `X-Forwarded-Uri` token read were
   validated end-to-end against a live `caddy-docker-proxy` run-spike.
 
+### Internal
+
+- Bumped the CI/release/CodeQL Go toolchain from 1.25.10 to **1.25.11**,
+  clearing the `net/textproto` (GO-2026-5039) and `crypto/x509` (GO-2026-5037)
+  standard-library advisories govulncheck flagged against the pinned version.
+
 ## v0.5.7 — 2026-06-02
 
 ### Internal
