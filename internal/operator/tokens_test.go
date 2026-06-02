@@ -170,13 +170,17 @@ func TestVerifyRejectsTamperedAndForeignTokens(t *testing.T) {
 	if _, err := m.Verify(foreign.Token, audienceOperator); err == nil {
 		t.Fatal("Verify() on foreign-signed token error = nil, want signature rejection")
 	}
-	// Flipping the final signature byte must invalidate the token.
-	tampered := resp.Token[:len(resp.Token)-1]
-	if resp.Token[len(resp.Token)-1] == 'a' {
-		tampered += "b"
-	} else {
-		tampered += "a"
+	// Corrupt the signature by flipping its first base64 character, which
+	// always encodes meaningful signature bits. (Flipping the *last* char can
+	// land on the unused trailing padding bits of a 32-byte HS256 signature
+	// and decode to the same bytes, leaving the token valid.)
+	dot := strings.LastIndex(resp.Token, ".")
+	sig := resp.Token[dot+1:]
+	flip := byte('A')
+	if sig[0] == 'A' {
+		flip = 'B'
 	}
+	tampered := resp.Token[:dot+1] + string(flip) + sig[1:]
 	if _, err := m.Verify(tampered, audienceOperator); err == nil {
 		t.Fatal("Verify() on tampered token error = nil, want signature rejection")
 	}

@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.6 — 2026-06-02
+
 ### Operator auth & tokens
 
 - The operator now mints **scoped, audience-bound JWTs** and verifies them
@@ -33,6 +35,14 @@ latest tag.
   allowlist guards the upgrade — loopback and no-`Origin` requests are allowed;
   extend it with the repeatable `--allowed-origin` flag. SSE, `POST` queries,
   and the admin-bearer header gate are unchanged.
+
+### Internal
+
+- Bumped `golang.org/x/crypto` to v0.52.0, clearing the reachable
+  `golang.org/x/crypto/ssh` advisories (GO-2026-5013/5015 and related) that
+  govulncheck flagged on the copier git-over-SSH path.
+- Removed the VitePress docs build/deploy CI workflow — the docs site no
+  longer lives in this repo. The `docs/` markdown remains as source.
 
 ## v0.5.5 — 2026-05-21
 
