@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** E (Compile() hook)
+- **Current chunk:** F (/edge/verify endpoint)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -41,7 +41,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | B | [x] | [x] | Compose `Networks`/`Labels` fields |
 | C | [x] | [x] | `edge` backend package (interface + FromManifest + None) |
 | D | [x] | [x] | `CaddyBackend.Contribute` (inject edge, network, labels) |
-| E | [ ] | [ ] | `Compile()` hook wiring the edge backend |
+| E | [x] | [x] | `Compile()` hook wiring the edge backend |
 | F | [ ] | [ ] | `/edge/verify` forward_auth endpoint |
 | G | [ ] | [ ] | `serviceEndpoint` + `ingressStatus` GraphQL |
 | H | [ ] | [ ] | Port-lease skip for routed services |
@@ -139,12 +139,15 @@ caddy-docker-proxy global-snippet/forward_auth label syntax is best-effort
   `edge.FromManifest(stack.Ingress).Contribute(stack, &compiled.Compose)` and
   wrap any error.
 
-**Verify (Claude):**
-- [ ] `Compile` with `ingress: none`/absent → compose **byte-identical** to a
-  pre-change golden.
-- [ ] `Compile` with `ingress: caddy` + a routed service → edge injected per
+**Verify (Claude):** ✅ done — hook placed before final return with error
+wrapping; test proves none→no `edge` service + empty networks, caddy→edge present
++ routed ports cleared (through the real `Compile`); existing service tests
+unchanged; `make check` green.
+- [x] `Compile` with `ingress: none`/absent → no edge service, empty networks
+  (none-backend inert; existing tests unchanged).
+- [x] `Compile` with `ingress: caddy` + a routed service → edge injected per
   Chunk D.
-- [ ] `make check` green.
+- [x] `make check` green.
 
 ## Chunk F — `/edge/verify` forward_auth endpoint
 

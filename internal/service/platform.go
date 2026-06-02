@@ -14,6 +14,7 @@ import (
 	mountx "github.com/fyltr/angee/internal/mount"
 	"github.com/fyltr/angee/internal/runtime"
 	"github.com/fyltr/angee/internal/runtime/compose"
+	"github.com/fyltr/angee/internal/runtime/edge"
 	"github.com/fyltr/angee/internal/runtime/proccompose"
 	"github.com/fyltr/angee/internal/secrets"
 	"github.com/fyltr/angee/internal/substitute"
@@ -348,6 +349,14 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			WorkingDir:  workdir,
 			DependsOn:   processDependsOn(job.DependsOn, stack),
 		}
+	}
+
+	edgeBackend, err := edge.FromManifest(stack.Ingress)
+	if err != nil {
+		return nil, fmt.Errorf("ingress backend: %w", err)
+	}
+	if err := edgeBackend.Contribute(stack, &compiled.Compose); err != nil {
+		return nil, fmt.Errorf("ingress contribute: %w", err)
 	}
 
 	return compiled, nil
