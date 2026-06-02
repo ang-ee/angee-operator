@@ -340,6 +340,54 @@ so the API and the agent services share one edge and one verifier.
 
 **Recommendation: A** — it requires zero new runtime machinery in the operator.
 
+## Prior art & validated risks (2026-06 research)
+
+A deep prior-art pass (20 primary sources, adversarially verified) confirms this
+design rather than finding something to adopt wholesale. Key conclusions:
+
+- **Build custom — nothing off-the-shelf fits the "operator mints / edge
+  verifies / host decides" split.** No manifest→Compose stack manager ships a
+  liftable auth edge: Kamal dropped Traefik for `kamal-proxy` (which has **zero
+  auth**); CapRover uses NGINX + EJS templates (no JWT auth); Coolify bolts on
+  **Authentik** (a full external IdP). The pattern we want genuinely doesn't
+  exist pre-packaged.
+  ([kamal-proxy](https://github.com/basecamp/kamal-proxy),
+  [caprover nginx](https://caprover.com/docs/nginx-customization.html))
+- **Off-the-shelf auth proxies don't fit, with one exception.** Ory Oathkeeper
+  is verify+policy only (**not** a minter — delegates issuance to Hydra);
+  Pomerium mints its *own* asymmetric ES256 OIDC identity JWTs. Only
+  [`ggicci/caddy-jwt`](https://github.com/ggicci/caddy-jwt) maps to our model:
+  HS256 `sign_key`, `audience_whitelist` (for `aud=operator` / `aud=svc:<name>`),
+  and `from_query` (reads `?token=`). We keep self-minting; caddy-jwt is a
+  **fallback** for the verify step (see below).
+- **The `?token=` spike is resolved: it works.** Caddy `forward_auth` exposes the
+  full original URI (incl. query) to the auth server via `X-Forwarded-Uri`, so
+  the edge can read a WS token from the query string. Two maintainer-confirmed
+  rules: the auth endpoint **must return 2xx, never 101** (else the WS upgrade
+  hangs), and the hop-by-hop `Connection` header must be stripped on the auth
+  subrequest (`header_up -Connection`) while the backend still upgrades. This is
+  the same failure class that broke Traefik (#3039, ~120 s timeout; fixed in
+  1.7). ([caddy #5430](https://github.com/caddyserver/caddy/issues/5430),
+  [#6795](https://github.com/caddyserver/caddy/issues/6795))
+- **NEW critical risk — a config reload drops active WebSockets.** Every
+  caddy-docker-proxy reconcile is a Caddy config reload, and a reload drops live
+  WebSockets even with `stream_close_delay` (v2.8.4; that flag only *delays* the
+  close). Cross-route WS preservation is still open
+  ([caddy #7222](https://github.com/caddyserver/caddy/issues/7222) /
+  PR #7649). Concretely: **spinning up one new agent container would blip every
+  other agent's live chat.** Mitigate by (a) **debouncing/batching reconciles**
+  so a burst of container events triggers one reload, (b) **60 s token TTLs +
+  client auto-reconnect**, and (c) treating an open socket as best-effort across
+  reloads. This is the single most important thing to design around.
+
+**Verify step — `/edge/verify` over `caddy-jwt`.** Given the reload risk,
+prefer the custom `/edge/verify` endpoint: `caddy-jwt`'s `audience_whitelist` is
+**static per route**, so per-service `aud=svc:<name>` would mean per-service
+labels → *more* config reloads. A single dynamic `/edge/verify` that derives the
+expected audience from the request name avoids extra labels/reloads and reuses
+the existing `Verify()`. Keep `caddy-jwt` documented as the zero-custom-code
+fallback. (Caveat: `caddy-jwt` has no published end-to-end WebSocket test.)
+
 ## Out of scope / caveats
 
 - **`runtime: local` services** can't join a Docker network; routing applies to
@@ -347,8 +395,14 @@ so the API and the agent services share one edge and one verifier.
   upstreams) is a follow-up.
 - **forward_auth gates the upgrade, not the open socket** — short TTL bounds
   re-connection; the open WebSocket lives on (same as today).
-- **`X-Forwarded-Uri` carrying `?token=`** through caddy-docker-proxy must be
-  proven in a spike for the WS upgrade before relying on it.
+- **`X-Forwarded-Uri` carrying `?token=`** through Caddy forward_auth is
+  **validated** (see Prior art). Required rules: the `/edge/verify` response is
+  2xx-never-101, the auth subrequest strips hop-by-hop `Connection`, and the
+  query token is **stripped from access logs** (short TTL bounds the leak; or
+  smuggle via `Sec-WebSocket-Protocol`).
+- **Config reload drops live WebSockets** — every caddy-docker-proxy reconcile
+  reloads Caddy and severs active sockets (caddy #7222, open). Debounce/batch
+  reconciles, use 60 s TTLs, and require client auto-reconnect.
 - **Scope→field map** for operator-API tokens needs to be authored once and kept
   in sync as mutations are added; default-deny for unmapped fields.
 - **Single edge = single chokepoint** — fine at this scale; note for capacity.
