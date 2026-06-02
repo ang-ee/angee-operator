@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** F (/edge/verify endpoint)
+- **Current chunk:** G (serviceEndpoint + ingressStatus)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -42,7 +42,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | C | [x] | [x] | `edge` backend package (interface + FromManifest + None) |
 | D | [x] | [x] | `CaddyBackend.Contribute` (inject edge, network, labels) |
 | E | [x] | [x] | `Compile()` hook wiring the edge backend |
-| F | [ ] | [ ] | `/edge/verify` forward_auth endpoint |
+| F | [x] | [x] | `/edge/verify` forward_auth endpoint |
 | G | [ ] | [ ] | `serviceEndpoint` + `ingressStatus` GraphQL |
 | H | [ ] | [ ] | Port-lease skip for routed services |
 | I | [ ] | [ ] | Docs + CHANGELOG + schema regen |
@@ -159,11 +159,13 @@ unchanged; `make check` green.
   otherwise — **never 101**. Mount **without** `s.auth` (it is itself the auth
   target; only reachable from the edge network).
 
-**Verify (Claude):**
-- [ ] Test: valid `svc:<name>` token → 200; token for another service → 401;
+**Verify (Claude):** ✅ done — full operator suite passes with `-race` in a
+non-sandboxed env (Codex's sandbox blocks `httptest` listeners); mounted outside
+`s.auth`.
+- [x] Test: valid `svc:<name>` token → 200; token for another service → 401;
   `aud=operator` token → 401; missing/garbage → 401.
-- [ ] Token accepted from each of `?token=` / `Authorization` / `Sec-WebSocket-Protocol`.
-- [ ] Response is 2xx/4xx, never 101.
+- [x] Token accepted from each of `?token=` / `Authorization` / `Sec-WebSocket-Protocol`.
+- [x] Response is 2xx/4xx, never 101.
 
 ## Chunk G — `serviceEndpoint` + `ingressStatus` GraphQL
 

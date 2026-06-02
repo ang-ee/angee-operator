@@ -114,6 +114,7 @@ func NewServer(config Config) (*Server, error) {
 	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /edge/verify", s.edgeVerify)
 	// gqlgen 0.17 dispatches subscriptions over SSE as POST with
 	// Accept: text/event-stream — same route, same wrapper.
 	mux.Handle("POST /graphql", s.auth(cop.Handler(s.graphqlHandler)))
