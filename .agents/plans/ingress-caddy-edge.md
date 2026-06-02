@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** C (edge package skeleton)
+- **Current chunk:** D (CaddyBackend.Contribute)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -39,7 +39,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 |---|---|---|---|
 | A | [x] | [x] | Manifest `Ingress`/`Route` types + defaults + validation |
 | B | [x] | [x] | Compose `Networks`/`Labels` fields |
-| C | [ ] | [ ] | `edge` backend package (interface + FromManifest + None) |
+| C | [x] | [x] | `edge` backend package (interface + FromManifest + None) |
 | D | [ ] | [ ] | `CaddyBackend.Contribute` (inject edge, network, labels) |
 | E | [ ] | [ ] | `Compile()` hook wiring the edge backend |
 | F | [ ] | [ ] | `/edge/verify` forward_auth endpoint |
@@ -100,9 +100,11 @@ all clean; tests assert round-trip DeepEqual + `omitempty` proof.
   `NoneBackend{}`; `"caddy"` → `NewCaddyBackend(cfg)`; else error.
 - `NoneBackend.Contribute` is a no-op returning nil.
 
-**Verify (Claude):**
-- [ ] `go build ./...` clean.
-- [ ] Test: `FromManifest({Type:""})` and `{Type:"none"}` → no-op Contribute
+**Verify (Claude):** ✅ done — gofmt/build/vet/test clean; test asserts DeepEqual
+no-op on a populated compose file + unsupported-type error. Caddy case is a
+placeholder error wired in Chunk D.
+- [x] `go build ./...` clean.
+- [x] Test: `FromManifest({Type:""})` and `{Type:"none"}` → no-op Contribute
   leaves the compose unchanged; unknown type → error.
 
 ## Chunk D — `CaddyBackend.Contribute`
