@@ -6,6 +6,17 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.7 — 2026-06-02
+
+### Internal
+
+- Fixed the release and CI workflows to use the `ghcr.io/ang-ee/*` container
+  image namespace (and `scripts/install.sh` to use the `ang-ee/angee` repo)
+  after the GitHub org rename from `fyltr` to `ang-ee`. The v0.5.6 release
+  published its binaries but the docker image push was denied against the old
+  `fyltr` namespace; v0.5.7 re-publishes with images under the correct one.
+  No source changes — the operator/CLI binaries are identical to v0.5.6.
+
 ## v0.5.6 — 2026-06-02
 
 ### Operator auth & tokens

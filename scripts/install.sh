@@ -4,7 +4,7 @@
 set -e
 
 ANGEE_VERSION=latest
-REPO="fyltr/angee"
+REPO="ang-ee/angee"
 INSTALL_DIR="${ANGEE_INSTALL_DIR:-/usr/local/bin}"
 
 install_bin() {

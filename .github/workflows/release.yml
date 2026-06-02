@@ -7,8 +7,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  OPERATOR_IMAGE: ghcr.io/fyltr/angee-operator
-  CLI_IMAGE: ghcr.io/fyltr/angee-cli
+  OPERATOR_IMAGE: ghcr.io/ang-ee/angee-operator
+  CLI_IMAGE: ghcr.io/ang-ee/angee-cli
   GO_VERSION: "1.25.10"
 
 permissions:
