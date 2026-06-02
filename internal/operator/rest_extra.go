@@ -198,7 +198,25 @@ func (s *Server) mintConnectionToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, api.ErrorResponse{Error: "token minter not initialised"})
 		return
 	}
-	resp, err := s.tokens.Mint(req.Actor, req.TTL)
+	resp, err := s.tokens.MintConnection(req.Actor, req.Scope, req.TTL)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) mintRouteToken(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[api.MintRouteTokenRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	if s.tokens == nil {
+		writeJSON(w, http.StatusServiceUnavailable, api.ErrorResponse{Error: "token minter not initialised"})
+		return
+	}
+	resp, err := s.tokens.MintRoute(req.Actor, req.Service, req.TTL)
 	if err != nil {
 		writeBadRequest(w, err)
 		return

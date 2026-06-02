@@ -257,11 +257,23 @@ func (r *mutationResolver) WorkspaceCreatePreflight(ctx context.Context, input m
 }
 
 // MintConnectionToken is the resolver for the mintConnectionToken field.
-func (r *mutationResolver) MintConnectionToken(ctx context.Context, actor string, ttl *string) (*api.ConnectionTokenResponse, error) {
+func (r *mutationResolver) MintConnectionToken(ctx context.Context, actor string, scope []string, ttl *string) (*api.ConnectionTokenResponse, error) {
 	if r.Tokens == nil {
 		return nil, errSubscriptionsUnavailable
 	}
-	resp, err := r.Tokens.Mint(actor, stringPtrValue(ttl))
+	resp, err := r.Tokens.MintConnection(actor, scope, stringPtrValue(ttl))
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// MintRouteToken is the resolver for the mintRouteToken field.
+func (r *mutationResolver) MintRouteToken(ctx context.Context, actor string, service string, ttl *string) (*api.ConnectionTokenResponse, error) {
+	if r.Tokens == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	resp, err := r.Tokens.MintRoute(actor, service, stringPtrValue(ttl))
 	if err != nil {
 		return nil, err
 	}

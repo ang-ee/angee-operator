@@ -842,6 +842,52 @@ func runTestGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func TestGraphQLMintConnectionAndRouteTokens(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000, JWTSecret: "explicit-secret-1234"})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	t.Cleanup(server.Close)
+
+	connResp := doGraphQL(t, server, map[string]any{
+		"query":     `mutation($s:[String!]){ mintConnectionToken(actor:"alice", scope:$s, ttl:"30m"){ token actor } }`,
+		"variables": map[string]any{"s": []string{"service:read", "service:up"}},
+	})
+	if len(connResp.Errors) > 0 {
+		t.Fatalf("mintConnectionToken errors = %#v", connResp.Errors)
+	}
+	conn := connResp.Data["mintConnectionToken"].(map[string]any)
+	if conn["actor"] != "alice" || conn["token"] == "" {
+		t.Fatalf("mintConnectionToken = %#v, want actor alice + token", conn)
+	}
+	claims, err := server.tokens.Verify(conn["token"].(string), audienceOperator)
+	if err != nil {
+		t.Fatalf("Verify(operator) error = %v", err)
+	}
+	if strings.Join(claims.Scope, ",") != "service:read,service:up" {
+		t.Fatalf("scope = %#v, want [service:read service:up]", claims.Scope)
+	}
+
+	routeResp := doGraphQL(t, server, map[string]any{
+		"query": `mutation{ mintRouteToken(actor:"alice", service:"agent-x", ttl:"60s"){ token actor } }`,
+	})
+	if len(routeResp.Errors) > 0 {
+		t.Fatalf("mintRouteToken errors = %#v", routeResp.Errors)
+	}
+	tok := routeResp.Data["mintRouteToken"].(map[string]any)["token"].(string)
+	if _, err := server.tokens.Verify(tok, serviceAudience("agent-x")); err != nil {
+		t.Fatalf("Verify(svc:agent-x) error = %v", err)
+	}
+	if _, err := server.tokens.Verify(tok, audienceOperator); err == nil {
+		t.Fatal("route token verified as operator; want audience rejection")
+	}
+}
+
 type graphQLTestResponse struct {
 	Data   map[string]any `json:"data"`
 	Errors []any          `json:"errors,omitempty"`

@@ -348,14 +348,22 @@ an `invalidInputs` list of `{field, reason}` for type-mismatch errors.
 Use this from any client that builds workspace-create forms before
 committing the irreversible-but-recoverable materialisation.
 
-### Connection tokens
+### Connection and route tokens
 
-`mintConnectionToken(actor: String!, ttl: String): ConnectionToken!`
-returns an HS256-signed JWT carrying `sub=<actor>`, `iss=angee-operator`,
-`aud=operator`, plus `iat`/`exp`. TTL defaults to 1 h and is capped at 24 h.
-The operator accepts such a token on its API (and on the WebSocket transport)
-as an alternative to the admin bearer. The signing key resolves in this
-precedence order:
+The operator mints two kinds of short-lived HS256 JWT, both returned as a
+`ConnectionToken` (`{token, actor, expiresAt}`) carrying `sub=<actor>`,
+`iss=angee-operator`, plus `iat`/`exp`. TTL defaults to 1 h and is capped at
+24 h. They differ only in audience and scope:
+
+| Mutation (REST) | Audience | Purpose |
+| --- | --- | --- |
+| `mintConnectionToken(actor: String!, scope: [String!], ttl: String)` — `POST /tokens/mint` | `operator` | An operator-API token the host backend mints (server-side, over the admin bearer) and hands to a browser instead of the admin bearer. Carries the approved capability `scope`. |
+| `mintRouteToken(actor: String!, service: String!, ttl: String)` — `POST /tokens/route` | `svc:<service>` | A route token authorizing one service's socket through the edge. Carries no scope. |
+
+The operator accepts an `aud=operator` token on its API (and on the WebSocket
+transport) as an alternative to the admin bearer; a route token verifies only
+against its own `svc:<service>` audience and is rejected on the operator API.
+The signing key resolves in this precedence order:
 
 1. `--jwt-secret` flag on the operator command line.
 2. `ANGEE_OPERATOR_JWT_SECRET` env var.
@@ -364,9 +372,11 @@ precedence order:
 4. Per-process random fallback when neither secret nor admin bearer is
    set (loopback dev only — tokens won't survive an operator restart).
 
-The mutation itself is gated by the admin bearer — clients send
-`Authorization: Bearer <admin-token>` on the request that mints the new
-token. Callers should treat the returned token as opaque.
+Minting is gated by the admin bearer — the caller (the host backend) sends
+`Authorization: Bearer <admin-token>` on the mint request after its own
+authorization check, then returns the minted token to the browser. The admin
+bearer never leaves the server. Callers should treat the returned token as
+opaque.
 
 ### Commit DAG
 

@@ -66,9 +66,9 @@ name: test
 	defer ts.Close()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/graphql"
 
-	minted, err := server.tokens.MintScoped("alice", audienceOperator, []string{"service:read"}, "1h")
+	minted, err := server.tokens.MintConnection("alice", []string{"service:read"}, "1h")
 	if err != nil {
-		t.Fatalf("MintScoped() error = %v", err)
+		t.Fatalf("MintConnection() error = %v", err)
 	}
 
 	dial := func(t *testing.T, origin string) (*websocket.Conn, *http.Response, error) {
@@ -144,9 +144,9 @@ name: test
 	})
 
 	t.Run("route-audience token is rejected", func(t *testing.T) {
-		routeTok, err := server.tokens.MintScoped("alice", serviceAudience("agent-x"), nil, "1h")
+		routeTok, err := server.tokens.MintRoute("alice", "agent-x", "1h")
 		if err != nil {
-			t.Fatalf("MintScoped(svc) error = %v", err)
+			t.Fatalf("MintRoute() error = %v", err)
 		}
 		conn, _, err := dial(t, "http://localhost")
 		if err != nil {

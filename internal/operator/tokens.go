@@ -74,20 +74,22 @@ func newTokenMinter(explicitSecret, adminBearer string) (*tokenMinter, error) {
 	}
 }
 
-// Mint issues an operator-API connection token for actor with the given TTL.
-// It is the back-compatible entrypoint used by mintConnectionToken: the token
-// carries aud="operator" and no scope, so the two-tier auth middleware accepts
-// it at (currently unscoped) operator access.
-func (m *tokenMinter) Mint(actor, ttlSpec string) (api.ConnectionTokenResponse, error) {
-	return m.mint(actor, audienceOperator, nil, ttlSpec)
+// MintConnection issues an operator-API token (aud="operator") carrying the
+// given capability scope, which the auth layer will gate mutations against.
+// This is what the host backend mints (server-side, over the admin bearer)
+// and hands to a browser instead of the admin bearer itself.
+func (m *tokenMinter) MintConnection(actor string, scope []string, ttlSpec string) (api.ConnectionTokenResponse, error) {
+	return m.mint(actor, audienceOperator, scope, ttlSpec)
 }
 
-// MintScoped issues a token bound to a specific audience and capability scope.
-// Use audienceOperator with a scope for operator-API tokens, or
-// serviceAudience(name) (with no scope) for a route token that authorizes
-// opening one service's socket through the edge.
-func (m *tokenMinter) MintScoped(actor, audience string, scope []string, ttlSpec string) (api.ConnectionTokenResponse, error) {
-	return m.mint(actor, audience, scope, ttlSpec)
+// MintRoute issues a route token (aud="svc:<service>", no scope) that
+// authorizes opening that one service's socket through the edge.
+func (m *tokenMinter) MintRoute(actor, service, ttlSpec string) (api.ConnectionTokenResponse, error) {
+	service = strings.TrimSpace(service)
+	if service == "" {
+		return api.ConnectionTokenResponse{}, errors.New("service is required")
+	}
+	return m.mint(actor, serviceAudience(service), nil, ttlSpec)
 }
 
 // mint signs an HMAC-SHA256 JWT for actor with the given audience, scope, and

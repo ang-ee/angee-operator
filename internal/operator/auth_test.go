@@ -41,13 +41,13 @@ func TestAuthTwoTier(t *testing.T) {
 	}
 	s := &Server{config: Config{Token: adminBearer}, tokens: minter}
 
-	operatorTok, err := minter.MintScoped("alice", audienceOperator, []string{"service:read"}, "1h")
+	operatorTok, err := minter.MintConnection("alice", []string{"service:read"}, "1h")
 	if err != nil {
-		t.Fatalf("MintScoped(operator) error = %v", err)
+		t.Fatalf("MintConnection() error = %v", err)
 	}
-	routeTok, err := minter.MintScoped("alice", serviceAudience("agent-x"), nil, "1h")
+	routeTok, err := minter.MintRoute("alice", "agent-x", "1h")
 	if err != nil {
-		t.Fatalf("MintScoped(svc) error = %v", err)
+		t.Fatalf("MintRoute() error = %v", err)
 	}
 
 	probe := &authProbe{}

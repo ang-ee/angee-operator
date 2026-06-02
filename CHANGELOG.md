@@ -6,6 +6,34 @@ latest tag.
 
 ## Unreleased
 
+### Operator auth & tokens
+
+- The operator now mints **scoped, audience-bound JWTs** and verifies them
+  centrally. `mintConnectionToken` gained a `scope: [String!]` argument and
+  stamps `aud=operator`; a new `mintRouteToken(actor, service, ttl)` issues
+  `aud=svc:<service>` route tokens. Both are exposed over GraphQL and REST
+  (`POST /tokens/mint`, `POST /tokens/route`).
+- The operator-API auth middleware is now **two-tier**: it accepts the admin
+  bearer (full, server-to-server access) **or** a minted `aud=operator` token,
+  binding the token's actor and capability scope to the request context.
+  Existing admin-bearer callers are unchanged. A single shared `Verify`
+  enforces HS256, the `angee-operator` issuer, a present expiry, and audience
+  membership, and is reused by the WebSocket transport below.
+- Together these let a host backend hold the admin bearer **server-side** and
+  hand the browser a short-lived, capability-scoped token instead of the admin
+  bearer. (Scopes are carried but not yet enforced per-mutation — that follows.)
+
+### GraphQL
+
+- Added a **`graphql-transport-ws` WebSocket transport** on `GET /graphql`,
+  alongside the existing SSE transport, so browser GraphQL clients can run
+  subscriptions over their built-in transport. Authentication happens in the
+  `connection_init` handshake (token in `connectionParams`) via the same
+  two-tier check as the HTTP API. A cross-site-WebSocket-hijacking origin
+  allowlist guards the upgrade — loopback and no-`Origin` requests are allowed;
+  extend it with the repeatable `--allowed-origin` flag. SSE, `POST` queries,
+  and the admin-bearer header gate are unchanged.
+
 ## v0.5.5 — 2026-05-21
 
 ### Services

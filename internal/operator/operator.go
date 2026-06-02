@@ -178,6 +178,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /templates", s.auth(http.HandlerFunc(s.templates)))
 	mux.Handle("GET /templates/{ref...}", s.auth(http.HandlerFunc(s.template)))
 	mux.Handle("POST /tokens/mint", s.auth(http.HandlerFunc(s.mintConnectionToken)))
+	mux.Handle("POST /tokens/route", s.auth(http.HandlerFunc(s.mintRouteToken)))
 	mux.Handle("GET /secrets", s.auth(http.HandlerFunc(s.secretsList)))
 	mux.Handle("GET /secrets/{name}", s.auth(http.HandlerFunc(s.secretGet)))
 	mux.Handle("GET /secrets/{name}/value", s.auth(http.HandlerFunc(s.secretValue)))
