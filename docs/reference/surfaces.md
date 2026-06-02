@@ -29,10 +29,12 @@ helper used by adapters or tests and should not be exposed directly.
 | `ServiceUpdate` | Yes | Yes | Yes | - |
 | `ServiceDestroy` | Yes | Yes | Yes | - |
 | `ServiceList` | Yes | Yes | Yes | - |
+| `ServiceEndpoint` | No | No | Yes | GraphQL `serviceEndpoint` ingress route lookup. |
 | `ServiceUp` | Yes | Yes | Yes | Create-and-start; idempotent across never-created services. |
 | `ServiceStart` | Yes | Yes | Yes | - |
 | `ServiceStop` | Yes | Yes | Yes | - |
 | `ServiceRestart` | Yes | Yes | Yes | - |
+| `IngressStatus` | No | No | Yes | GraphQL `ingressStatus` route summary. |
 | `JobList` | Yes | Yes | Yes | - |
 | `JobRun` | Yes | Yes | Yes | - |
 | `SourceList` | Yes | Yes | Yes | - |

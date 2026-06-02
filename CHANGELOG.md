@@ -6,6 +6,37 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.8 — 2026-06-02
+
+### Ingress (Caddy edge)
+
+- New optional `ingress` backend, selected by `type` and defaulting to `none`
+  (today's host-published-ports behavior). With `ingress.type: caddy`, `Compile`
+  injects a single `caddy-docker-proxy` edge into the compose file: routed
+  services (those with a `route:` block) drop their host ports, join a private
+  `<name>_edge` network, and get stamped with Caddy router labels; only the edge
+  publishes a host port. A `route:` on a `runtime: local` service is rejected,
+  and routed services take no `operator.port_pool` lease.
+- `GET /edge/verify` — the operator's forward_auth target for the edge. Reads a
+  route token from `?token=` / `Authorization` / `Sec-WebSocket-Protocol` and
+  verifies `aud=svc:<service>`; returns 200/401 (never 101). Not behind the
+  admin-bearer gate.
+- New GraphQL queries `serviceEndpoint(name)` (`{routed, url, internalHost,
+  internalPort}`) and `ingressStatus` (`{type, domain, routes}`), replacing
+  host-side compose-port-scraping.
+- Manifest validation hardens the edge against Caddyfile injection: under
+  `ingress.type: caddy`, routed service names and `route.host` are charset-checked
+  and the ingress fields are rejected if they contain Caddy metacharacters, and
+  `edge` is a reserved service name. The forward_auth wiring (`caddy.forward_auth`
+  + `/edge/verify?service=<name>`) and the `X-Forwarded-Uri` token read were
+  validated end-to-end against a live `caddy-docker-proxy` run-spike.
+
+### Internal
+
+- Bumped the CI/release/CodeQL Go toolchain from 1.25.10 to **1.25.11**,
+  clearing the `net/textproto` (GO-2026-5039) and `crypto/x509` (GO-2026-5037)
+  standard-library advisories govulncheck flagged against the pinned version.
+
 ## v0.5.7 — 2026-06-02
 
 ### Internal

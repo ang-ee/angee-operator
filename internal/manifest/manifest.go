@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,9 @@ const (
 	KindStack      = "stack"
 	VersionCurrent = 1
 )
+
+var routeNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+var routeHostPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 
 type Runtime string
 
@@ -32,6 +36,7 @@ type Stack struct {
 	Template       *Template              `yaml:"template,omitempty" json:"template,omitempty"`
 	Operator       Operator               `yaml:"operator,omitempty" json:"operator,omitempty"`
 	SecretsBackend SecretsBackend         `yaml:"secrets_backend,omitempty" json:"secrets_backend,omitempty"`
+	Ingress        Ingress                `yaml:"ingress,omitempty" json:"ingress,omitempty"`
 	Secrets        map[string]Secret      `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Ports          map[string]Port        `yaml:"ports,omitempty" json:"ports,omitempty"`
 	Volumes        map[string]Volume      `yaml:"volumes,omitempty" json:"volumes,omitempty"`
@@ -71,6 +76,14 @@ type SecretsBackend struct {
 	Address string `yaml:"address,omitempty" json:"address,omitempty"`
 	Mount   string `yaml:"mount,omitempty" json:"mount,omitempty"`
 	Token   string `yaml:"token,omitempty" json:"token,omitempty"`
+}
+
+type Ingress struct {
+	Type    string `yaml:"type,omitempty" json:"type,omitempty" validate:"omitempty,oneof=none caddy" jsonschema:"enum=none,enum=caddy"`
+	Domain  string `yaml:"domain,omitempty" json:"domain,omitempty"`
+	Image   string `yaml:"image,omitempty" json:"image,omitempty"`
+	Network string `yaml:"network,omitempty" json:"network,omitempty"`
+	Verify  string `yaml:"verify,omitempty" json:"verify,omitempty"`
 }
 
 type Secret struct {
@@ -163,6 +176,13 @@ type Service struct {
 	Workdir   string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
 	After     []string          `yaml:"after,omitempty" json:"after,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	Route     *Route            `yaml:"route,omitempty" json:"route,omitempty"`
+}
+
+type Route struct {
+	Port int    `yaml:"port" json:"port" validate:"required,gte=1,lte=65535" jsonschema:"required,minimum=1,maximum=65535"`
+	Host string `yaml:"host,omitempty" json:"host,omitempty"`
+	Auth string `yaml:"auth,omitempty" json:"auth,omitempty" validate:"omitempty,oneof=forward none" jsonschema:"enum=forward,enum=none"`
 }
 
 type Job struct {
@@ -316,6 +336,9 @@ func (s *Stack) Defaults() {
 	if s.SecretsBackend.Type == "" {
 		s.SecretsBackend.Type = "env-file"
 	}
+	if s.Ingress.Type == "" {
+		s.Ingress.Type = "none"
+	}
 	s.initMaps()
 }
 
@@ -337,10 +360,47 @@ func validateStruct(stack *Stack) error {
 	return nil
 }
 
+// hasCaddyMeta reports whether s contains characters that could break out of
+// a caddy-docker-proxy label into adjacent Caddyfile directives.
+func hasCaddyMeta(s string) bool { return strings.ContainsAny(s, " \t\r\n{}#\"`") }
+
 func (s *Stack) ValidateExtended() error {
 	for name, service := range s.Services {
+		if service.Route != nil && service.Runtime == RuntimeLocal {
+			return fmt.Errorf("service %q: route requires runtime: container", name)
+		}
 		if err := validateRunnable("service", name, service.Runtime, service.Image, service.Build, service.Command); err != nil {
 			return err
+		}
+	}
+	if s.Ingress.Type == "caddy" {
+		fields := []struct {
+			name  string
+			value string
+		}{
+			{name: "domain", value: s.Ingress.Domain},
+			{name: "image", value: s.Ingress.Image},
+			{name: "network", value: s.Ingress.Network},
+			{name: "verify", value: s.Ingress.Verify},
+		}
+		for _, field := range fields {
+			if hasCaddyMeta(field.value) {
+				return fmt.Errorf("ingress.%s contains invalid characters", field.name)
+			}
+		}
+		for name, service := range s.Services {
+			if service.Route == nil {
+				continue
+			}
+			if name == "edge" {
+				return fmt.Errorf("service %q: name is reserved for the ingress edge", name)
+			}
+			if !routeNamePattern.MatchString(name) {
+				return fmt.Errorf("service %q: name not allowed for ingress routing (must match %s)", name, routeNamePattern.String())
+			}
+			if service.Route.Host != "" && !routeHostPattern.MatchString(service.Route.Host) {
+				return fmt.Errorf("service %q: route.host %q contains invalid characters", name, service.Route.Host)
+			}
 		}
 	}
 	for name, job := range s.Jobs {

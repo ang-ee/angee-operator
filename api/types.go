@@ -261,6 +261,24 @@ type ConnectionTokenResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+type ServiceEndpoint struct {
+	Routed       bool   `json:"routed"`
+	URL          string `json:"url"`
+	InternalHost string `json:"internal_host"`
+	InternalPort int    `json:"internal_port"`
+}
+
+type IngressStatus struct {
+	Type   string     `json:"type"`
+	Domain string     `json:"domain,omitempty"`
+	Routes []RouteRef `json:"routes"`
+}
+
+type RouteRef struct {
+	Service string `json:"service"`
+	URL     string `json:"url"`
+}
+
 type CommitRef struct {
 	SHA     string   `json:"sha"`
 	Parents []string `json:"parents"`

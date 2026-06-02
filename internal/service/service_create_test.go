@@ -125,6 +125,67 @@ func TestServiceCreateSkipsUnavailableHostPorts(t *testing.T) {
 	}
 }
 
+func TestAllocateServicePortsReleasesRenderedRoutedCaddyService(t *testing.T) {
+	p := &Platform{portUnavailable: func(int) bool { return false }}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "test",
+		Operator: manifest.Operator{
+			PortPool: map[string]manifest.PortPool{
+				"acp": {Range: "3000-3999"},
+			},
+		},
+		Ingress: manifest.Ingress{Type: "caddy"},
+		Services: map[string]manifest.Service{
+			"agent": {
+				Runtime: manifest.RuntimeContainer,
+				Image:   "nginx",
+				Route:   &manifest.Route{Port: 3008},
+			},
+			"db": {
+				Runtime: manifest.RuntimeContainer,
+				Image:   "postgres",
+			},
+		},
+	}
+
+	alloc, err := p.allocateServicePorts(stack, "agent")
+	if err != nil {
+		t.Fatalf("allocateServicePorts(agent): %v", err)
+	}
+	if len(alloc) == 0 {
+		t.Fatalf("allocateServicePorts(agent) = %v, want non-empty map", alloc)
+	}
+
+	alloc, err = p.allocateServicePorts(stack, "db")
+	if err != nil {
+		t.Fatalf("allocateServicePorts(db): %v", err)
+	}
+	if len(alloc) == 0 {
+		t.Fatalf("allocateServicePorts(db) = %v, want non-empty map", alloc)
+	}
+
+	if isRouted(stack, stack.Services["agent"]) {
+		releaseServicePortLeases(stack, "agent")
+	}
+
+	agentOwner := servicePortOwner("agent", "acp")
+	dbOwner := servicePortOwner("db", "acp")
+	foundDB := false
+	for _, lease := range stack.PortLeases["acp"] {
+		if lease.Owner == dbOwner {
+			foundDB = true
+		}
+		if lease.Owner == agentOwner {
+			t.Fatalf("routed service lease was not released: %+v", lease)
+		}
+	}
+	if !foundDB {
+		t.Fatalf("port lease for %q not persisted: %+v", dbOwner, stack.PortLeases)
+	}
+}
+
 func TestServiceCreateRejectsMissingWorkspace(t *testing.T) {
 	p, templatePath := setupServiceCreateFixture(t)
 	_, err := p.ServiceCreate(context.Background(), api.ServiceCreateRequest{
