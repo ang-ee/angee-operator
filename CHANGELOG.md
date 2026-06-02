@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.8 — 2026-06-02
+
 ### Ingress (Caddy edge)
 
 - New optional `ingress` backend, selected by `type` and defaulting to `none`
