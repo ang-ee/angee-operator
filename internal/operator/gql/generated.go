@@ -151,7 +151,8 @@ type ComplexityRoot struct {
 
 	Mutation struct {
 		JobRun                        func(childComplexity int, name string, inputs []*model.KeyValueInput) int
-		MintConnectionToken           func(childComplexity int, actor string, ttl *string) int
+		MintConnectionToken           func(childComplexity int, actor string, scope []string, ttl *string) int
+		MintRouteToken                func(childComplexity int, actor string, service string, ttl *string) int
 		SecretDelete                  func(childComplexity int, name string) int
 		SecretSet                     func(childComplexity int, name string, value string) int
 		ServiceCreate                 func(childComplexity int, input model.ServiceCreateInput) int
@@ -414,7 +415,8 @@ type MutationResolver interface {
 	WorkspaceSourcePull(ctx context.Context, workspace string, slot string) (*api.WorkspaceSourceStatus, error)
 	WorkspaceSourcePush(ctx context.Context, workspace string, slot string, ref *string) (*api.WorkspaceSourceStatus, error)
 	WorkspaceCreatePreflight(ctx context.Context, input model.WorkspaceCreateInput) (*api.WorkspaceCreatePreflightResponse, error)
-	MintConnectionToken(ctx context.Context, actor string, ttl *string) (*api.ConnectionTokenResponse, error)
+	MintConnectionToken(ctx context.Context, actor string, scope []string, ttl *string) (*api.ConnectionTokenResponse, error)
+	MintRouteToken(ctx context.Context, actor string, service string, ttl *string) (*api.ConnectionTokenResponse, error)
 	WorkspaceSourceMerge(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error)
 	WorkspaceSourceRebase(ctx context.Context, workspace string, slot string, ref string) (*api.GitOpResult, error)
 	WorkspaceSourceMergeAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error)
@@ -953,7 +955,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Mutation.MintConnectionToken(childComplexity, args["actor"].(string), args["ttl"].(*string)), true
+		return e.ComplexityRoot.Mutation.MintConnectionToken(childComplexity, args["actor"].(string), args["scope"].([]string), args["ttl"].(*string)), true
+	case "Mutation.mintRouteToken":
+		if e.ComplexityRoot.Mutation.MintRouteToken == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_mintRouteToken_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.MintRouteToken(childComplexity, args["actor"].(string), args["service"].(string), args["ttl"].(*string)), true
 	case "Mutation.secretDelete":
 		if e.ComplexityRoot.Mutation.SecretDelete == nil {
 			break
@@ -2678,7 +2691,8 @@ type Mutation {
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
   workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
-  mintConnectionToken(actor: String!, ttl: String): ConnectionToken!
+  mintConnectionToken(actor: String!, scope: [String!], ttl: String): ConnectionToken!
+  mintRouteToken(actor: String!, service: String!, ttl: String): ConnectionToken!
   workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
   workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
   workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!
@@ -3426,14 +3440,52 @@ func (ec *executionContext) field_Mutation_mintConnectionToken_args(ctx context.
 		return nil, err
 	}
 	args["actor"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "ttl",
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "scope",
+		func(ctx context.Context, v any) ([]string, error) {
+			return ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["scope"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "ttl",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["ttl"] = arg1
+	args["ttl"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_mintRouteToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "actor",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["actor"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "service",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["service"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "ttl",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["ttl"] = arg2
 	return args, nil
 }
 
@@ -7386,7 +7438,7 @@ func (ec *executionContext) _Mutation_mintConnectionToken(ctx context.Context, f
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().MintConnectionToken(ctx, fc.Args["actor"].(string), fc.Args["ttl"].(*string))
+			return ec.Resolvers.Mutation().MintConnectionToken(ctx, fc.Args["actor"].(string), fc.Args["scope"].([]string), fc.Args["ttl"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.ConnectionTokenResponse) graphql.Marshaler {
@@ -7414,6 +7466,50 @@ func (ec *executionContext) fieldContext_Mutation_mintConnectionToken(ctx contex
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_mintConnectionToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_mintRouteToken(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_mintRouteToken(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().MintRouteToken(ctx, fc.Args["actor"].(string), fc.Args["service"].(string), fc.Args["ttl"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.ConnectionTokenResponse) graphql.Marshaler {
+			return ec.marshalNConnectionToken2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐConnectionTokenResponse(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_mintRouteToken(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ConnectionToken(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_mintRouteToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -13856,6 +13952,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "mintConnectionToken":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_mintConnectionToken(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "mintRouteToken":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_mintRouteToken(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++

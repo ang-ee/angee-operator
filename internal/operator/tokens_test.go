@@ -13,9 +13,9 @@ func TestTokenMinterUsesExplicitSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTokenMinter() error = %v", err)
 	}
-	resp, err := m.Mint("user-1", "1h")
+	resp, err := m.MintConnection("user-1", nil, "1h")
 	if err != nil {
-		t.Fatalf("Mint() error = %v", err)
+		t.Fatalf("MintConnection() error = %v", err)
 	}
 	if resp.Actor != "user-1" {
 		t.Fatalf("Actor = %q, want user-1", resp.Actor)
@@ -35,9 +35,9 @@ func TestTokenMinterDerivesFromBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTokenMinter() error = %v", err)
 	}
-	resp, err := m.Mint("svc", "")
+	resp, err := m.MintConnection("svc", nil, "")
 	if err != nil {
-		t.Fatalf("Mint() error = %v", err)
+		t.Fatalf("MintConnection() error = %v", err)
 	}
 	// Default TTL is 1h, exact match within a second.
 	expires, err := time.Parse(time.RFC3339Nano, resp.ExpiresAt)
@@ -83,14 +83,152 @@ func TestTokenMinterRejectsBadInput(t *testing.T) {
 			if tc.name == "empty actor" {
 				actor = ""
 			}
-			_, err := m.Mint(actor, tc.ttl)
+			_, err := m.MintConnection(actor, nil, tc.ttl)
 			if err == nil {
-				t.Fatalf("Mint() error = nil, want %q", tc.want)
+				t.Fatalf("MintConnection() error = nil, want %q", tc.want)
 			}
 			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Mint() error = %v, want substring %q", err, tc.want)
+				t.Fatalf("MintConnection() error = %v, want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestMintStampsOperatorAudience(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	resp, err := m.MintConnection("user-1", nil, "1h")
+	if err != nil {
+		t.Fatalf("MintConnection() error = %v", err)
+	}
+	claims, err := m.Verify(resp.Token, audienceOperator)
+	if err != nil {
+		t.Fatalf("Verify(operator) error = %v", err)
+	}
+	if claims.Subject != "user-1" {
+		t.Fatalf("Subject = %q, want user-1", claims.Subject)
+	}
+	if len(claims.Scope) != 0 {
+		t.Fatalf("Scope = %#v, want empty", claims.Scope)
+	}
+}
+
+func TestVerifyRejectsWrongAudience(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	// A route token (aud=svc:agent-x) must not satisfy an operator-API check.
+	resp, err := m.MintRoute("actor", "agent-x", "1h")
+	if err != nil {
+		t.Fatalf("MintRoute() error = %v", err)
+	}
+	if _, err := m.Verify(resp.Token, audienceOperator); err == nil {
+		t.Fatal("Verify(operator) on a svc token error = nil, want audience rejection")
+	}
+	if _, err := m.Verify(resp.Token, serviceAudience("agent-x")); err != nil {
+		t.Fatalf("Verify(svc:agent-x) error = %v, want success", err)
+	}
+	if _, err := m.Verify(resp.Token, serviceAudience("agent-y")); err == nil {
+		t.Fatal("Verify(svc:agent-y) error = nil, want audience rejection")
+	}
+	// An empty expected audience must fail closed, not match any token.
+	if _, err := m.Verify(resp.Token, ""); err == nil {
+		t.Fatal("Verify(\"\") error = nil, want audience-required rejection")
+	}
+}
+
+func TestVerifyRejectsExpiredToken(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	expired := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "actor",
+			Issuer:    tokenIssuer,
+			Audience:  jwt.ClaimStrings{audienceOperator},
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
+		},
+	})
+	raw, err := expired.SignedString(m.secret)
+	if err != nil {
+		t.Fatalf("sign expired token: %v", err)
+	}
+	if _, err := m.Verify(raw, audienceOperator); err == nil {
+		t.Fatal("Verify() on expired token error = nil, want expiry rejection")
+	}
+}
+
+func TestVerifyRejectsTamperedAndForeignTokens(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	other, _ := newTokenMinter("a-different-secret", "")
+
+	resp, err := m.MintConnection("actor", nil, "1h")
+	if err != nil {
+		t.Fatalf("MintConnection() error = %v", err)
+	}
+	// A token signed by a different key must not verify here.
+	foreign, err := other.MintConnection("actor", nil, "1h")
+	if err != nil {
+		t.Fatalf("other.MintConnection() error = %v", err)
+	}
+	if _, err := m.Verify(foreign.Token, audienceOperator); err == nil {
+		t.Fatal("Verify() on foreign-signed token error = nil, want signature rejection")
+	}
+	// Corrupt the signature by flipping its first base64 character, which
+	// always encodes meaningful signature bits. (Flipping the *last* char can
+	// land on the unused trailing padding bits of a 32-byte HS256 signature
+	// and decode to the same bytes, leaving the token valid.)
+	dot := strings.LastIndex(resp.Token, ".")
+	sig := resp.Token[dot+1:]
+	flip := byte('A')
+	if sig[0] == 'A' {
+		flip = 'B'
+	}
+	tampered := resp.Token[:dot+1] + string(flip) + sig[1:]
+	if _, err := m.Verify(tampered, audienceOperator); err == nil {
+		t.Fatal("Verify() on tampered token error = nil, want signature rejection")
+	}
+	if _, err := m.Verify("", audienceOperator); err == nil {
+		t.Fatal("Verify() on empty token error = nil, want rejection")
+	}
+}
+
+func TestMintConnectionCarriesScope(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	scope := []string{"service:read", "workspace:create"}
+	resp, err := m.MintConnection("alice", scope, "1h")
+	if err != nil {
+		t.Fatalf("MintConnection() error = %v", err)
+	}
+	claims, err := m.Verify(resp.Token, audienceOperator)
+	if err != nil {
+		t.Fatalf("Verify(operator) error = %v", err)
+	}
+	if claims.Subject != "alice" {
+		t.Fatalf("Subject = %q, want alice", claims.Subject)
+	}
+	if strings.Join(claims.Scope, ",") != strings.Join(scope, ",") {
+		t.Fatalf("Scope = %#v, want %#v", claims.Scope, scope)
+	}
+}
+
+func TestMintRouteAudienceAndValidation(t *testing.T) {
+	m, _ := newTokenMinter("secret-abcdefghij", "")
+	resp, err := m.MintRoute("alice", "agent-x", "1h")
+	if err != nil {
+		t.Fatalf("MintRoute() error = %v", err)
+	}
+	// Bound to exactly that service's audience.
+	if _, err := m.Verify(resp.Token, serviceAudience("agent-x")); err != nil {
+		t.Fatalf("Verify(svc:agent-x) error = %v", err)
+	}
+	if _, err := m.Verify(resp.Token, audienceOperator); err == nil {
+		t.Fatal("route token verified as operator; want audience rejection")
+	}
+	// A route token carries no scope.
+	claims, _ := m.Verify(resp.Token, serviceAudience("agent-x"))
+	if len(claims.Scope) != 0 {
+		t.Fatalf("Scope = %#v, want empty", claims.Scope)
+	}
+	// Empty/whitespace service is rejected.
+	if _, err := m.MintRoute("alice", "   ", "1h"); err == nil {
+		t.Fatal("MintRoute(empty service) error = nil, want rejection")
 	}
 }
 

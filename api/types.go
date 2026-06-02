@@ -313,11 +313,22 @@ type WorkspaceSourceGitOpRequest struct {
 }
 
 // MintConnectionTokenRequest is the body for `POST /tokens/mint`.
-// `Actor` is required and becomes the `sub` claim; `TTL` is a Go
-// duration string capped at 24h.
+// `Actor` is required and becomes the `sub` claim; `Scope` is the optional
+// capability set carried on the operator-API token; `TTL` is a Go duration
+// string capped at 24h.
 type MintConnectionTokenRequest struct {
-	Actor string `json:"actor"`
-	TTL   string `json:"ttl,omitempty"`
+	Actor string   `json:"actor"`
+	Scope []string `json:"scope,omitempty"`
+	TTL   string   `json:"ttl,omitempty"`
+}
+
+// MintRouteTokenRequest is the body for `POST /tokens/route`. `Actor` and
+// `Service` are required; the minted token's audience is `svc:<Service>`.
+// `TTL` is a Go duration string capped at 24h.
+type MintRouteTokenRequest struct {
+	Actor   string `json:"actor"`
+	Service string `json:"service"`
+	TTL     string `json:"ttl,omitempty"`
 }
 
 // SecretRef is metadata about a secret — never includes the value.

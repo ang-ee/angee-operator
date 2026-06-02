@@ -306,6 +306,38 @@ curl -N http://127.0.0.1:9000/graphql \
   -d '{"query":"subscription { onGitOpsTopologyChange { summary { sources workspaces dirty diverged } } }"}'
 ```
 
+#### WebSocket transport
+
+The same subscription root is also served over the standard
+`graphql-transport-ws` protocol as a WebSocket upgrade on `GET /graphql`,
+alongside SSE. Browser GraphQL clients (urql, Apollo, `graphql-ws`) ship this
+transport by default; point them at the same `/graphql` URL. SSE is unchanged
+and remains the right choice for curl and server-side consumers.
+
+Authentication happens in the `connection_init` handshake, not via an
+`Authorization` header (a browser cannot set headers on a WS upgrade). Put the
+credential in the client's `connectionParams`, which the daemon reads as the
+`Authorization` payload key and runs through the same two-tier check as the
+HTTP API — the admin bearer, or a minted `aud=operator` token (see
+[Connection tokens](#connection-tokens)):
+
+```js
+import { createClient } from 'graphql-ws'
+
+const client = createClient({
+  url: 'ws://127.0.0.1:9000/graphql',
+  connectionParams: { Authorization: `Bearer ${operatorToken}` },
+})
+```
+
+An invalid or missing token closes the socket after a `connection_error`; a
+valid token receives `connection_ack` and then `next` frames. Because the
+upgrade is a `GET` (which `CrossOriginProtection` treats as safe), the upgrader
+enforces an `Origin` allowlist instead: loopback origins and requests with no
+`Origin` header are always allowed, and additional browser origins are
+permitted with the repeatable `--allowed-origin` flag. A disallowed `Origin`
+is rejected at the handshake with `403`.
+
 ### Workspace preflight
 
 `workspaceCreatePreflight(input: WorkspaceCreateInput!)` validates the
@@ -316,12 +348,22 @@ an `invalidInputs` list of `{field, reason}` for type-mismatch errors.
 Use this from any client that builds workspace-create forms before
 committing the irreversible-but-recoverable materialisation.
 
-### Connection tokens
+### Connection and route tokens
 
-`mintConnectionToken(actor: String!, ttl: String): ConnectionToken!`
-returns an HS256-signed JWT carrying `sub=<actor>`, `iss=angee-operator`,
-plus `iat`/`exp`. TTL defaults to 1 h and is capped at 24 h. The signing
-key resolves in this precedence order:
+The operator mints two kinds of short-lived HS256 JWT, both returned as a
+`ConnectionToken` (`{token, actor, expiresAt}`) carrying `sub=<actor>`,
+`iss=angee-operator`, plus `iat`/`exp`. TTL defaults to 1 h and is capped at
+24 h. They differ only in audience and scope:
+
+| Mutation (REST) | Audience | Purpose |
+| --- | --- | --- |
+| `mintConnectionToken(actor: String!, scope: [String!], ttl: String)` — `POST /tokens/mint` | `operator` | An operator-API token the host backend mints (server-side, over the admin bearer) and hands to a browser instead of the admin bearer. Carries the approved capability `scope`. |
+| `mintRouteToken(actor: String!, service: String!, ttl: String)` — `POST /tokens/route` | `svc:<service>` | A route token authorizing one service's socket through the edge. Carries no scope. |
+
+The operator accepts an `aud=operator` token on its API (and on the WebSocket
+transport) as an alternative to the admin bearer; a route token verifies only
+against its own `svc:<service>` audience and is rejected on the operator API.
+The signing key resolves in this precedence order:
 
 1. `--jwt-secret` flag on the operator command line.
 2. `ANGEE_OPERATOR_JWT_SECRET` env var.
@@ -330,9 +372,11 @@ key resolves in this precedence order:
 4. Per-process random fallback when neither secret nor admin bearer is
    set (loopback dev only — tokens won't survive an operator restart).
 
-The mutation itself is gated by the admin bearer — clients send
-`Authorization: Bearer <admin-token>` on the request that mints the new
-token. Callers should treat the returned token as opaque.
+Minting is gated by the admin bearer — the caller (the host backend) sends
+`Authorization: Bearer <admin-token>` on the mint request after its own
+authorization check, then returns the minted token to the browser. The admin
+bearer never leaves the server. Callers should treat the returned token as
+opaque.
 
 ### Commit DAG
 

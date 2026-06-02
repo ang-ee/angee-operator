@@ -313,7 +313,8 @@ type Mutation {
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
   workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
-  mintConnectionToken(actor: String!, ttl: String): ConnectionToken!
+  mintConnectionToken(actor: String!, scope: [String!], ttl: String): ConnectionToken!
+  mintRouteToken(actor: String!, service: String!, ttl: String): ConnectionToken!
   workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
   workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
   workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!

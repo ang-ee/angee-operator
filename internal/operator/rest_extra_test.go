@@ -49,6 +49,7 @@ name: test
 		{http.MethodGet, "/templates", ""},
 		{http.MethodGet, "/templates/workspaces/dev-pr", ""},
 		{http.MethodPost, "/tokens/mint", `{"actor":"u","ttl":"1h"}`},
+		{http.MethodPost, "/tokens/route", `{"actor":"u","service":"x","ttl":"1h"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
@@ -177,10 +178,69 @@ name: test
 	}
 	t.Cleanup(server.Close)
 
-	body := []byte(`{"actor":"agent-1","ttl":"30m"}`)
+	body := []byte(`{"actor":"agent-1","scope":["service:read","service:up"],"ttl":"30m"}`)
 	resp := doREST[api.ConnectionTokenResponse](t, server, http.MethodPost, "/tokens/mint", body)
 	if resp.Actor != "agent-1" || resp.Token == "" {
 		t.Fatalf("token response = %+v, want non-empty token for agent-1", resp)
+	}
+	// The minted token is an operator-API token carrying the requested scope.
+	claims, err := server.tokens.Verify(resp.Token, audienceOperator)
+	if err != nil {
+		t.Fatalf("Verify(operator) error = %v", err)
+	}
+	if strings.Join(claims.Scope, ",") != "service:read,service:up" {
+		t.Fatalf("scope = %#v, want [service:read service:up]", claims.Scope)
+	}
+}
+
+func TestRESTMintRouteToken(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000, JWTSecret: "explicit-secret-1234"})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	t.Cleanup(server.Close)
+
+	body := []byte(`{"actor":"agent-1","service":"agent-x","ttl":"60s"}`)
+	resp := doREST[api.ConnectionTokenResponse](t, server, http.MethodPost, "/tokens/route", body)
+	if resp.Actor != "agent-1" || resp.Token == "" {
+		t.Fatalf("token response = %+v, want non-empty token for agent-1", resp)
+	}
+	// The token is bound to that one service's audience and nothing else.
+	if _, err := server.tokens.Verify(resp.Token, serviceAudience("agent-x")); err != nil {
+		t.Fatalf("Verify(svc:agent-x) error = %v", err)
+	}
+	if _, err := server.tokens.Verify(resp.Token, audienceOperator); err == nil {
+		t.Fatal("route token verified as an operator token; want audience rejection")
+	}
+}
+
+func TestRESTMintRouteTokenRejectsEmptyService(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	t.Cleanup(server.Close)
+
+	body := []byte(`{"actor":"agent-1","service":""}`)
+	req := httptest.NewRequest(http.MethodPost, "/tokens/route", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "service") {
+		t.Fatalf("body = %q, want mention of service", rr.Body.String())
 	}
 }
 
