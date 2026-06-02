@@ -306,6 +306,38 @@ curl -N http://127.0.0.1:9000/graphql \
   -d '{"query":"subscription { onGitOpsTopologyChange { summary { sources workspaces dirty diverged } } }"}'
 ```
 
+#### WebSocket transport
+
+The same subscription root is also served over the standard
+`graphql-transport-ws` protocol as a WebSocket upgrade on `GET /graphql`,
+alongside SSE. Browser GraphQL clients (urql, Apollo, `graphql-ws`) ship this
+transport by default; point them at the same `/graphql` URL. SSE is unchanged
+and remains the right choice for curl and server-side consumers.
+
+Authentication happens in the `connection_init` handshake, not via an
+`Authorization` header (a browser cannot set headers on a WS upgrade). Put the
+credential in the client's `connectionParams`, which the daemon reads as the
+`Authorization` payload key and runs through the same two-tier check as the
+HTTP API — the admin bearer, or a minted `aud=operator` token (see
+[Connection tokens](#connection-tokens)):
+
+```js
+import { createClient } from 'graphql-ws'
+
+const client = createClient({
+  url: 'ws://127.0.0.1:9000/graphql',
+  connectionParams: { Authorization: `Bearer ${operatorToken}` },
+})
+```
+
+An invalid or missing token closes the socket after a `connection_error`; a
+valid token receives `connection_ack` and then `next` frames. Because the
+upgrade is a `GET` (which `CrossOriginProtection` treats as safe), the upgrader
+enforces an `Origin` allowlist instead: loopback origins and requests with no
+`Origin` header are always allowed, and additional browser origins are
+permitted with the repeatable `--allowed-origin` flag. A disallowed `Origin`
+is rejected at the handshake with `403`.
+
 ### Workspace preflight
 
 `workspaceCreatePreflight(input: WorkspaceCreateInput!)` validates the
@@ -320,8 +352,10 @@ committing the irreversible-but-recoverable materialisation.
 
 `mintConnectionToken(actor: String!, ttl: String): ConnectionToken!`
 returns an HS256-signed JWT carrying `sub=<actor>`, `iss=angee-operator`,
-plus `iat`/`exp`. TTL defaults to 1 h and is capped at 24 h. The signing
-key resolves in this precedence order:
+`aud=operator`, plus `iat`/`exp`. TTL defaults to 1 h and is capped at 24 h.
+The operator accepts such a token on its API (and on the WebSocket transport)
+as an alternative to the admin bearer. The signing key resolves in this
+precedence order:
 
 1. `--jwt-secret` flag on the operator command line.
 2. `ANGEE_OPERATOR_JWT_SECRET` env var.

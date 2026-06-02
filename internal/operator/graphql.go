@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler"
@@ -16,15 +17,35 @@ import (
 	"github.com/fyltr/angee/api"
 	opgql "github.com/fyltr/angee/internal/operator/gql"
 	"github.com/fyltr/angee/internal/service"
+	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 const maxGraphQLBodyBytes = 1 << 20
 
-var errUnsupportedGraphQLMediaType = errors.New("unsupported GraphQL content type")
+const (
+	// wsKeepAlivePingInterval keeps idle subscription sockets alive across
+	// intermediary timeouts and lets dead peers be reaped.
+	wsKeepAlivePingInterval = 10 * time.Second
+	// wsInitTimeout bounds how long a client may hold an upgraded socket open
+	// without sending connection_init.
+	wsInitTimeout = 10 * time.Second
+)
 
-func newGraphQLHandler(s *Server) (http.Handler, error) {
+var (
+	errUnsupportedGraphQLMediaType = errors.New("unsupported GraphQL content type")
+	// errWSUnauthorized is surfaced to the client as a graphql-ws
+	// connection_error and a socket close; it deliberately carries no detail.
+	errWSUnauthorized = errors.New("unauthorized")
+)
+
+// newGraphQLHandler builds the shared gqlgen server and returns two HTTP
+// handlers over it: post serves queries/mutations/SSE-subscriptions over
+// POST (with a body cap and content-type validation), and ws serves the
+// graphql-transport-ws WebSocket upgrade on GET. They share one schema,
+// resolver set, and event hub; only the transport differs.
+func newGraphQLHandler(s *Server) (post, ws http.Handler, err error) {
 	gqlServer := handler.New(opgql.NewExecutableSchema(opgql.Config{
 		Resolvers: &opgql.Resolver{Platform: s.platform, Events: s.eventHub, Tokens: s.tokens},
 	}))
@@ -33,11 +54,24 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 	gqlServer.AddTransport(transport.SSE{})
 	gqlServer.AddTransport(transport.POST{})
 	gqlServer.AddTransport(transport.GRAPHQL{})
+	// WebSocket subscriptions for browser clients. A WS upgrade carries no
+	// Authorization header, so auth runs in InitFunc (the same two-tier check
+	// as s.auth, reading the token from connection_init). CrossOriginProtection
+	// treats the GET upgrade as safe and does not gate it, so the origin
+	// allowlist on the upgrader is the cross-site-WebSocket-hijacking guard.
+	// On a rejected origin gorilla writes a 403 itself; gqlgen then logs a
+	// (harmless) "superfluous WriteHeader" — the client still sees the 403.
+	gqlServer.AddTransport(transport.Websocket{
+		Upgrader:              websocket.Upgrader{CheckOrigin: s.checkWebSocketOrigin},
+		InitFunc:              s.graphqlWSInit,
+		InitTimeout:           wsInitTimeout,
+		KeepAlivePingInterval: wsKeepAlivePingInterval,
+	})
 	gqlServer.SetQueryCache(lru.New[*ast.QueryDocument](1000))
 	gqlServer.Use(extension.Introspection{})
 	gqlServer.SetErrorPresenter(formatGraphQLError)
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	post = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, api.ErrorResponse{Error: "graphql requires POST"})
 			return
@@ -58,7 +92,36 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		gqlServer.ServeHTTP(w, r)
-	}), nil
+	})
+	// The gqlgen server dispatches the GET upgrade to the Websocket transport;
+	// the POST-only body cap and content-type checks above must not gate it.
+	ws = gqlServer
+	return post, ws, nil
+}
+
+// graphqlWSInit authenticates a graphql-transport-ws connection_init. The
+// browser cannot set an Authorization header on a WS upgrade, so the token
+// rides connection_init's payload; this runs the same two-tier check as
+// s.auth and binds the resolved actor/scope to the connection context.
+func (s *Server) graphqlWSInit(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
+	if s.config.Token == "" {
+		return ctx, nil, nil
+	}
+	// initPayload.Authorization() reads the "Authorization"/"authorization"
+	// key from connection_init; require the same "Bearer " scheme as the HTTP
+	// path so the two entrypoints accept exactly the same credentials.
+	token, ok := parseBearer(initPayload.Authorization())
+	if !ok {
+		return ctx, nil, errWSUnauthorized
+	}
+	claims, ok := s.authenticateBearer(token)
+	if !ok {
+		return ctx, nil, errWSUnauthorized
+	}
+	if claims != nil {
+		ctx = withActorScope(ctx, *claims)
+	}
+	return ctx, nil, nil
 }
 
 func validateGraphQLContentType(r *http.Request) error {

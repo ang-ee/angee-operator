@@ -547,7 +547,7 @@ services:
 	}
 }
 
-func TestGraphQLRequiresPOST(t *testing.T) {
+func TestGraphQLGETWithoutUpgradeIsRejected(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1
 kind: stack
@@ -559,11 +559,17 @@ name: test
 	}
 	t.Cleanup(server.Close)
 
+	// GET /graphql is now reserved for the WebSocket upgrade. A plain GET
+	// query (no Upgrade header) matches no transport and must be rejected by
+	// gqlgen — never executed as a query over GET.
 	req := httptest.NewRequest(http.MethodGet, "/graphql?query={health{status}}", nil)
 	rr := httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET /graphql status = %d, want %d", rr.Code, http.StatusMethodNotAllowed)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("GET /graphql status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+	if strings.Contains(rr.Body.String(), "\"status\"") {
+		t.Fatalf("GET /graphql appears to have executed as a query: %s", rr.Body.String())
 	}
 }
 

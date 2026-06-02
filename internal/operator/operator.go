@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -26,20 +27,22 @@ import (
 var Version = "dev"
 
 type Config struct {
-	Root      string
-	Bind      string
-	Port      int
-	Token     string
-	JWTSecret string
+	Root           string
+	Bind           string
+	Port           int
+	Token          string
+	JWTSecret      string
+	AllowedOrigins []string
 }
 
 type Server struct {
-	config         Config
-	platform       *service.Platform
-	eventHub       *opgql.EventHub
-	tokens         *tokenMinter
-	graphqlHandler http.Handler
-	server         *http.Server
+	config           Config
+	platform         *service.Platform
+	eventHub         *opgql.EventHub
+	tokens           *tokenMinter
+	graphqlHandler   http.Handler
+	graphqlWSHandler http.Handler
+	server           *http.Server
 }
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -68,6 +71,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	cmd.Flags().IntVar(&config.Port, "port", config.Port, "listen port")
 	cmd.Flags().StringVar(&config.Token, "token", config.Token, "bearer token for protected endpoints")
 	cmd.Flags().StringVar(&config.JWTSecret, "jwt-secret", config.JWTSecret, "explicit HS256 signing key for mintConnectionToken (default: env ANGEE_OPERATOR_JWT_SECRET, then HKDF-from-bearer, then per-process random)")
+	cmd.Flags().StringArrayVar(&config.AllowedOrigins, "allowed-origin", config.AllowedOrigins, "additional allowed WebSocket Origin (repeatable); loopback origins are always allowed")
 	return cmd.ExecuteContext(ctx)
 }
 
@@ -101,17 +105,23 @@ func NewServer(config Config) (*Server, error) {
 	eventHub := opgql.NewEventHub(platform)
 	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter}
 	fmt.Fprintf(os.Stderr, "operator: jwt signing key fingerprint=%s\n", minter.Fingerprint())
-	graphqlHandler, err := newGraphQLHandler(s)
+	graphqlHandler, graphqlWSHandler, err := newGraphQLHandler(s)
 	if err != nil {
 		return nil, err
 	}
 	s.graphqlHandler = graphqlHandler
+	s.graphqlWSHandler = graphqlWSHandler
 	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	// gqlgen 0.17 dispatches subscriptions over SSE as POST with
 	// Accept: text/event-stream — same route, same wrapper.
 	mux.Handle("POST /graphql", s.auth(cop.Handler(s.graphqlHandler)))
+	// The WebSocket upgrade is a GET with no Authorization header, so it is
+	// not wrapped in s.auth (auth runs in the transport InitFunc) nor in
+	// CrossOriginProtection (which treats GET as safe); the upgrader's origin
+	// allowlist is the cross-site guard.
+	mux.Handle("GET /graphql", s.graphqlWSHandler)
 	mux.Handle("GET /stack/status", s.auth(http.HandlerFunc(s.stackStatus)))
 	mux.Handle("POST /stack/init", s.auth(http.HandlerFunc(s.stackInit)))
 	mux.Handle("POST /stack/update", s.auth(http.HandlerFunc(s.stackUpdate)))
@@ -679,22 +689,47 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		token, ok := parseBearer(r.Header.Get("Authorization"))
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, api.ErrorResponse{Error: "unauthorized"})
 			return
 		}
-		if constantTimeEqual(token, s.config.Token) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		claims, err := s.tokens.Verify(token, audienceOperator)
-		if err != nil {
+		claims, authed := s.authenticateBearer(token)
+		if !authed {
 			writeJSON(w, http.StatusUnauthorized, api.ErrorResponse{Error: "unauthorized"})
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withActorScope(r.Context(), claims)))
+		if claims != nil {
+			r = r.WithContext(withActorScope(r.Context(), *claims))
+		}
+		next.ServeHTTP(w, r)
 	})
+}
+
+// parseBearer extracts the credential from an Authorization-style value,
+// requiring the "Bearer " scheme prefix. ok is false when the prefix is
+// absent. Shared by the HTTP auth middleware and the WebSocket InitFunc so the
+// two authentication entrypoints normalize the token identically.
+func parseBearer(value string) (token string, ok bool) {
+	token, ok = strings.CutPrefix(strings.TrimSpace(value), "Bearer ")
+	return strings.TrimSpace(token), ok
+}
+
+// authenticateBearer applies the two-tier check to a raw bearer value (already
+// stripped of the "Bearer " prefix). It returns (nil, true) for the admin
+// bearer (full, unscoped access), (claims, true) for a valid minted
+// aud=operator token, and (nil, false) otherwise. Callers must only invoke it
+// when a token is configured; with no configured token, access is open and
+// this is never reached.
+func (s *Server) authenticateBearer(raw string) (*Claims, bool) {
+	if constantTimeEqual(raw, s.config.Token) {
+		return nil, true
+	}
+	claims, err := s.tokens.Verify(raw, audienceOperator)
+	if err != nil {
+		return nil, false
+	}
+	return &claims, true
 }
 
 // constantTimeEqual reports whether got equals want without leaking length or
@@ -756,4 +791,37 @@ func isLoopback(bind string) bool {
 		return bind == "localhost"
 	}
 	return ip.IsLoopback()
+}
+
+// checkWebSocketOrigin is the upgrader's CheckOrigin: the cross-site-WebSocket-
+// hijacking guard for the GET /graphql upgrade (CrossOriginProtection does not
+// gate it). It delegates to originAllowed against the configured allowlist.
+func (s *Server) checkWebSocketOrigin(r *http.Request) bool {
+	return originAllowed(r.Header.Get("Origin"), s.config.AllowedOrigins)
+}
+
+// originAllowed reports whether a WebSocket upgrade from origin is permitted.
+// A request with no Origin header (a non-browser client that cannot forge one)
+// and any loopback origin are always allowed; otherwise the origin must match
+// a configured allowlist entry exactly (case-insensitive). This is fail-closed:
+// an unparseable or non-loopback, non-allowlisted origin is rejected.
+func originAllowed(origin string, allowed []string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	// Hostnames are case-insensitive; lowercase before the loopback check so
+	// e.g. "http://LOCALHOST:5173" is recognized as loopback.
+	if isLoopback(strings.ToLower(u.Hostname())) {
+		return true
+	}
+	for _, a := range allowed {
+		if strings.EqualFold(strings.TrimSpace(a), origin) {
+			return true
+		}
+	}
+	return false
 }
