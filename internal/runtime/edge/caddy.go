@@ -7,7 +7,13 @@ import (
 	"github.com/fyltr/angee/internal/runtime/compose"
 )
 
-const defaultCaddyImage = "lucaslorentz/caddy-docker-proxy:2.9"
+const (
+	defaultCaddyImage = "lucaslorentz/caddy-docker-proxy:2.9"
+	// defaultEdgeVerifyTarget is the forward_auth upstream (host:port) when the
+	// manifest doesn't set ingress.verify; the operator must be reachable under
+	// this name on the edge network.
+	defaultEdgeVerifyTarget = "operator:9000"
+)
 
 // CaddyBackend contributes caddy-docker-proxy ingress services, networks, and labels.
 type CaddyBackend struct {
@@ -36,6 +42,15 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		domain = stack.Operator.Domain
 	}
 
+	// verify is the forward_auth target (host:port reachable from the edge
+	// network); the operator's /edge/verify endpoint. Validated by the Caddy
+	// run-spike: a direct per-service forward_auth directive works — no global
+	// snippet is needed.
+	verify := b.cfg.Verify
+	if verify == "" {
+		verify = defaultEdgeVerifyTarget
+	}
+
 	if compiled.Networks == nil {
 		compiled.Networks = map[string]compose.Network{}
 	}
@@ -47,7 +62,8 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		compiled.Services = map[string]compose.Service{}
 	}
 	// TODO: name-collision with a user service "edge" is out of scope.
-	// TODO(spike): define the forward_auth_edge global snippet + TLS on the edge service.
+	// TLS at the edge is handled automatically by Caddy when the host is a real
+	// domain (no label needed); the spike confirmed HTTP-only works for dev.
 	compiled.Services["edge"] = compose.Service{
 		Image:    image,
 		Ports:    []string{"443:443", "80:80"},
@@ -81,7 +97,11 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		svc.Labels["caddy.reverse_proxy"] = fmt.Sprintf("{{upstreams %d}}", route.Port)
 		svc.Labels["caddy.reverse_proxy.flush_interval"] = "-1"
 		if route.Auth != "none" {
-			svc.Labels["caddy.import"] = "forward_auth_edge " + name
+			// Per-service forward_auth to the operator's /edge/verify. The
+			// client token rides ?token= and reaches /edge/verify via the
+			// X-Forwarded-Uri header that forward_auth sets (spike-validated).
+			svc.Labels["caddy.forward_auth"] = verify
+			svc.Labels["caddy.forward_auth.uri"] = "/edge/verify?service=" + name
 		}
 
 		compiled.Services[name] = svc

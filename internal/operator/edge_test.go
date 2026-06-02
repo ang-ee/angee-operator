@@ -89,6 +89,27 @@ services:
 			},
 			want: http.StatusOK,
 		},
+		{
+			// The real forward_auth shape (spike-validated): Caddy rewrites the
+			// subrequest to /edge/verify?service=<name> and puts the client's
+			// original URI (with ?token=) in X-Forwarded-Uri.
+			name: "forward_auth X-Forwarded-Uri token",
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/edge/verify?service=agent-x", nil)
+				req.Header.Set("X-Forwarded-Uri", "/?token="+routeToken.Token)
+				return req
+			},
+			want: http.StatusOK,
+		},
+		{
+			name: "forward_auth X-Forwarded-Uri wrong service rejected",
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/edge/verify?service=other", nil)
+				req.Header.Set("X-Forwarded-Uri", "/?token="+routeToken.Token)
+				return req
+			},
+			want: http.StatusUnauthorized,
+		},
 	}
 
 	for _, tt := range tests {

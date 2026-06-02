@@ -2,6 +2,7 @@ package operator
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/fyltr/angee/api"
@@ -26,6 +27,18 @@ func (s *Server) edgeVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func edgeToken(r *http.Request) string {
+	// Through Caddy forward_auth the client's original URI (carrying ?token=)
+	// arrives in X-Forwarded-Uri; r.URL is the /edge/verify subrequest itself,
+	// so its query holds ?service=, not the client token (spike-validated).
+	// Prefer X-Forwarded-Uri, then the direct request URL (non-forward_auth
+	// callers), then Authorization, then Sec-WebSocket-Protocol.
+	if xfu := r.Header.Get("X-Forwarded-Uri"); xfu != "" {
+		if u, err := url.Parse(xfu); err == nil {
+			if token := strings.TrimSpace(u.Query().Get("token")); token != "" {
+				return token
+			}
+		}
+	}
 	if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
 		return token
 	}

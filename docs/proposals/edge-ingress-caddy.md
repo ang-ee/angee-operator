@@ -388,6 +388,29 @@ expected audience from the request name avoids extra labels/reloads and reuses
 the existing `Verify()`. Keep `caddy-jwt` documented as the zero-custom-code
 fallback. (Caveat: `caddy-jwt` has no published end-to-end WebSocket test.)
 
+### Run-spike results (2026-06, validated end-to-end)
+
+A live `caddy-docker-proxy:2.9` + mock `/edge/verify` + WS echo backend spike
+confirmed the design and resolved the open items:
+
+- **A browser WebSocket upgrade authenticates and succeeds through forward_auth.**
+  Probes: HTTP+valid → 200, HTTP+bad → 401, **WS upgrade+valid → `101 Switching
+  Protocols`**, WS upgrade+bad/missing → 401 (never 101).
+- **`?token=` reaches `/edge/verify` via `X-Forwarded-Uri`, not the request URL.**
+  forward_auth rewrites the subrequest to the auth `uri` and sets
+  `X-Forwarded-Uri: <original path+query>`. So `/edge/verify` must read the token
+  from `X-Forwarded-Uri` (the implementation does; `r.URL` carries only the
+  forward_auth `?service=`).
+- **No global snippet is needed.** Direct per-service labels
+  `caddy.forward_auth: <operator-host:port>` + `caddy.forward_auth.uri:
+  /edge/verify?service=<name>` generate a working config; `forward_auth` is
+  ordered before `reverse_proxy` automatically. (This is what the backend emits —
+  the earlier `forward_auth_edge` snippet idea is dropped.)
+- **No `header_up -Connection` workaround was required** on Caddy 2.9 — the
+  `Upgrade`/`Connection` headers pass through and the 2xx-gated upgrade completes.
+- The operator must be reachable as the `caddy.forward_auth` host on the edge
+  network (default `operator:9000`, overridable via `ingress.verify`).
+
 ## Out of scope / caveats
 
 - **`runtime: local` services** can't join a Docker network; routing applies to

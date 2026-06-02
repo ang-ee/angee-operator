@@ -63,8 +63,11 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	if got, want := agent.Labels["caddy.reverse_proxy.flush_interval"], "-1"; got != want {
 		t.Fatalf(`agent.Labels["caddy.reverse_proxy.flush_interval"] = %q, want %q`, got, want)
 	}
-	if got, want := agent.Labels["caddy.import"], "forward_auth_edge agent"; got != want {
-		t.Fatalf(`agent.Labels["caddy.import"] = %q, want %q`, got, want)
+	if got, want := agent.Labels["caddy.forward_auth"], "operator:9000"; got != want {
+		t.Fatalf(`agent.Labels["caddy.forward_auth"] = %q, want %q`, got, want)
+	}
+	if got, want := agent.Labels["caddy.forward_auth.uri"], "/edge/verify?service=agent"; got != want {
+		t.Fatalf(`agent.Labels["caddy.forward_auth.uri"] = %q, want %q`, got, want)
 	}
 
 	db := file.Services["db"]

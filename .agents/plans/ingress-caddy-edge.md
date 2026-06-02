@@ -21,11 +21,16 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** ✅ ALL CHUNKS COMPLETE (A–I built by Codex, verified by
-  Claude, committed). `make check` green. Ready for review/PR. Remaining: the
-  caddy-docker-proxy global-snippet/forward_auth label + WS-through-edge
-  run-spike (TODO(spike) in `edge/caddy.go`), and the cross-repo Django +
-  service-template work (out of scope here).
+- **Current chunk:** ✅ ALL CHUNKS COMPLETE + run-spike validated. A–I built by
+  Codex, verified by Claude, committed; `make check` green. The Caddy run-spike
+  (caddy-docker-proxy 2.9 + mock /edge/verify + WS echo) **passed end-to-end**
+  (WS upgrade → 101 with valid token, 401 otherwise) and resolved the TODO:
+  - forward_auth is a **direct per-service** label (`caddy.forward_auth` +
+    `caddy.forward_auth.uri`), no global snippet — folded into `edge/caddy.go`.
+  - `/edge/verify` reads the token from **`X-Forwarded-Uri`** (forward_auth puts
+    the client URI there) — fixed in `operator/edge.go` `edgeToken`.
+  Ready for PR. Remaining is cross-repo only (Django `agentAcpEndpoint`,
+  service-template teardown) — out of scope here.
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
