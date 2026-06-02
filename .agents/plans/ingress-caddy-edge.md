@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** G (serviceEndpoint + ingressStatus)
+- **Current chunk:** H (port-lease skip)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -43,7 +43,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | D | [x] | [x] | `CaddyBackend.Contribute` (inject edge, network, labels) |
 | E | [x] | [x] | `Compile()` hook wiring the edge backend |
 | F | [x] | [x] | `/edge/verify` forward_auth endpoint |
-| G | [ ] | [ ] | `serviceEndpoint` + `ingressStatus` GraphQL |
+| G | [x] | [x] | `serviceEndpoint` + `ingressStatus` GraphQL |
 | H | [ ] | [ ] | Port-lease skip for routed services |
 | I | [ ] | [ ] | Docs + CHANGELOG + schema regen |
 
@@ -177,9 +177,11 @@ non-sandboxed env (Codex's sandbox blocks `httptest` listeners); mounted outside
   `Route` (replaces host-side compose-port-scraping). `routed=false` when
   `ingress.type == none`.
 
-**Verify (Claude):**
-- [ ] `go generate ./internal/operator` is clean; resolvers preserved.
-- [ ] Test: `ingress: none` → `serviceEndpoint.routed == false`; `ingress: caddy`
+**Verify (Claude):** ✅ done — fresh `go generate` consistent; full suite
+(service/operator/gql/api) passes `-race`; `make check` green incl. the
+`surfaces.md` exported-method guard. Types mapped to `api.*` via gqlgen.yml.
+- [x] `go generate ./internal/operator` is clean; resolvers preserved.
+- [x] Test: `ingress: none` → `serviceEndpoint.routed == false`; `ingress: caddy`
   + routed service → `wss://`-style `url`, `internalHost`/`internalPort` set;
   `ingressStatus` lists the route.
 

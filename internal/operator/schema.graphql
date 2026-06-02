@@ -191,6 +191,24 @@ type GitOpsTopology {
   summary: GitOpsSummary!
 }
 
+type ServiceEndpoint {
+  routed: Boolean!
+  url: String!
+  internalHost: String!
+  internalPort: Int!
+}
+
+type IngressStatus {
+  type: String!
+  domain: String
+  routes: [RouteRef!]!
+}
+
+type RouteRef {
+  service: String!
+  url: String!
+}
+
 type CompiledStack {
   compose: JSON
   processCompose: JSON
@@ -261,6 +279,8 @@ input WorkspaceUpdateInput {
 type Query {
   health: MutationResult
   stackStatus: StackStatus
+  serviceEndpoint(name: String!): ServiceEndpoint
+  ingressStatus: IngressStatus
   services: [ServiceState!]!
   jobs: [JobState!]!
   sources: [SourceState!]!

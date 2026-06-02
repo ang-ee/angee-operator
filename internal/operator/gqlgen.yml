@@ -105,6 +105,15 @@ models:
   ConnectionToken:
     model:
       - github.com/fyltr/angee/api.ConnectionTokenResponse
+  ServiceEndpoint:
+    model:
+      - github.com/fyltr/angee/api.ServiceEndpoint
+  IngressStatus:
+    model:
+      - github.com/fyltr/angee/api.IngressStatus
+  RouteRef:
+    model:
+      - github.com/fyltr/angee/api.RouteRef
   CommitRef:
     model:
       - github.com/fyltr/angee/api.CommitRef

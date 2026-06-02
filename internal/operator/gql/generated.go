@@ -139,6 +139,12 @@ type ComplexityRoot struct {
 		Workspaces func(childComplexity int) int
 	}
 
+	IngressStatus struct {
+		Domain func(childComplexity int) int
+		Routes func(childComplexity int) int
+		Type   func(childComplexity int) int
+	}
+
 	JobState struct {
 		Name    func(childComplexity int) int
 		Runtime func(childComplexity int) int
@@ -205,11 +211,13 @@ type ComplexityRoot struct {
 	Query struct {
 		GitOpsTopology      func(childComplexity int, withCommits *int) int
 		Health              func(childComplexity int) int
+		IngressStatus       func(childComplexity int) int
 		Jobs                func(childComplexity int) int
 		McpDescriptor       func(childComplexity int) int
 		Secret              func(childComplexity int, name string) int
 		SecretValue         func(childComplexity int, name string) int
 		Secrets             func(childComplexity int) int
+		ServiceEndpoint     func(childComplexity int, name string) int
 		ServiceLogs         func(childComplexity int, name string, limit *int) int
 		Services            func(childComplexity int) int
 		Source              func(childComplexity int, name string) int
@@ -227,6 +235,11 @@ type ComplexityRoot struct {
 		Workspaces          func(childComplexity int) int
 	}
 
+	RouteRef struct {
+		Service func(childComplexity int) int
+		URL     func(childComplexity int) int
+	}
+
 	SecretRef struct {
 		Declared  func(childComplexity int) int
 		EnvVar    func(childComplexity int) int
@@ -240,6 +253,13 @@ type ComplexityRoot struct {
 	SecretValue struct {
 		Name  func(childComplexity int) int
 		Value func(childComplexity int) int
+	}
+
+	ServiceEndpoint struct {
+		InternalHost func(childComplexity int) int
+		InternalPort func(childComplexity int) int
+		Routed       func(childComplexity int) int
+		URL          func(childComplexity int) int
 	}
 
 	ServiceState struct {
@@ -429,6 +449,8 @@ type MutationResolver interface {
 type QueryResolver interface {
 	Health(ctx context.Context) (*model.MutationResult, error)
 	StackStatus(ctx context.Context) (*api.StackStatusResponse, error)
+	ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error)
+	IngressStatus(ctx context.Context) (*api.IngressStatus, error)
 	Services(ctx context.Context) ([]*api.ServiceState, error)
 	Jobs(ctx context.Context) ([]*api.JobState, error)
 	Sources(ctx context.Context) ([]*api.SourceState, error)
@@ -907,6 +929,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.GitOpsTopology.Workspaces(childComplexity), true
+
+	case "IngressStatus.domain":
+		if e.ComplexityRoot.IngressStatus.Domain == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IngressStatus.Domain(childComplexity), true
+	case "IngressStatus.routes":
+		if e.ComplexityRoot.IngressStatus.Routes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IngressStatus.Routes(childComplexity), true
+	case "IngressStatus.type":
+		if e.ComplexityRoot.IngressStatus.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IngressStatus.Type(childComplexity), true
 
 	case "JobState.name":
 		if e.ComplexityRoot.JobState.Name == nil {
@@ -1398,6 +1439,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Health(childComplexity), true
+	case "Query.ingressStatus":
+		if e.ComplexityRoot.Query.IngressStatus == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.IngressStatus(childComplexity), true
 
 	case "Query.jobs":
 		if e.ComplexityRoot.Query.Jobs == nil {
@@ -1439,6 +1486,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Secrets(childComplexity), true
+	case "Query.serviceEndpoint":
+		if e.ComplexityRoot.Query.ServiceEndpoint == nil {
+			break
+		}
+
+		args, err := ec.field_Query_serviceEndpoint_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ServiceEndpoint(childComplexity, args["name"].(string)), true
 	case "Query.serviceLogs":
 		if e.ComplexityRoot.Query.ServiceLogs == nil {
 			break
@@ -1580,6 +1638,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Workspaces(childComplexity), true
 
+	case "RouteRef.service":
+		if e.ComplexityRoot.RouteRef.Service == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RouteRef.Service(childComplexity), true
+	case "RouteRef.url":
+		if e.ComplexityRoot.RouteRef.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RouteRef.URL(childComplexity), true
+
 	case "SecretRef.declared":
 		if e.ComplexityRoot.SecretRef.Declared == nil {
 			break
@@ -1635,6 +1706,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SecretValue.Value(childComplexity), true
+
+	case "ServiceEndpoint.internalHost":
+		if e.ComplexityRoot.ServiceEndpoint.InternalHost == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceEndpoint.InternalHost(childComplexity), true
+	case "ServiceEndpoint.internalPort":
+		if e.ComplexityRoot.ServiceEndpoint.InternalPort == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceEndpoint.InternalPort(childComplexity), true
+	case "ServiceEndpoint.routed":
+		if e.ComplexityRoot.ServiceEndpoint.Routed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceEndpoint.Routed(childComplexity), true
+	case "ServiceEndpoint.url":
+		if e.ComplexityRoot.ServiceEndpoint.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceEndpoint.URL(childComplexity), true
 
 	case "ServiceState.health":
 		if e.ComplexityRoot.ServiceState.Health == nil {
@@ -2569,6 +2665,24 @@ type GitOpsTopology {
   summary: GitOpsSummary!
 }
 
+type ServiceEndpoint {
+  routed: Boolean!
+  url: String!
+  internalHost: String!
+  internalPort: Int!
+}
+
+type IngressStatus {
+  type: String!
+  domain: String
+  routes: [RouteRef!]!
+}
+
+type RouteRef {
+  service: String!
+  url: String!
+}
+
 type CompiledStack {
   compose: JSON
   processCompose: JSON
@@ -2639,6 +2753,8 @@ input WorkspaceUpdateInput {
 type Query {
   health: MutationResult
   stackStatus: StackStatus
+  serviceEndpoint(name: String!): ServiceEndpoint
+  ingressStatus: IngressStatus
   services: [ServiceState!]!
   jobs: [JobState!]!
   sources: [SourceState!]!
@@ -2959,6 +3075,18 @@ func (ec *executionContext) childFields_GitOpsTopology(ctx context.Context, fiel
 	return nil, fmt.Errorf("no field named %q was found under type GitOpsTopology", field.Name)
 }
 
+func (ec *executionContext) childFields_IngressStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_IngressStatus_type(ctx, field)
+	case "domain":
+		return ec.fieldContext_IngressStatus_domain(ctx, field)
+	case "routes":
+		return ec.fieldContext_IngressStatus_routes(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type IngressStatus", field.Name)
+}
+
 func (ec *executionContext) childFields_JobState(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -3001,6 +3129,16 @@ func (ec *executionContext) childFields_PreflightFailure(ctx context.Context, fi
 	return nil, fmt.Errorf("no field named %q was found under type PreflightFailure", field.Name)
 }
 
+func (ec *executionContext) childFields_RouteRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "service":
+		return ec.fieldContext_RouteRef_service(ctx, field)
+	case "url":
+		return ec.fieldContext_RouteRef_url(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RouteRef", field.Name)
+}
+
 func (ec *executionContext) childFields_SecretRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -3029,6 +3167,20 @@ func (ec *executionContext) childFields_SecretValue(ctx context.Context, field g
 		return ec.fieldContext_SecretValue_value(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SecretValue", field.Name)
+}
+
+func (ec *executionContext) childFields_ServiceEndpoint(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "routed":
+		return ec.fieldContext_ServiceEndpoint_routed(ctx, field)
+	case "url":
+		return ec.fieldContext_ServiceEndpoint_url(ctx, field)
+	case "internalHost":
+		return ec.fieldContext_ServiceEndpoint_internalHost(ctx, field)
+	case "internalPort":
+		return ec.fieldContext_ServiceEndpoint_internalPort(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ServiceEndpoint", field.Name)
 }
 
 func (ec *executionContext) childFields_ServiceState(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4162,6 +4314,20 @@ func (ec *executionContext) field_Query_secretValue_args(ctx context.Context, ra
 }
 
 func (ec *executionContext) field_Query_secret_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_serviceEndpoint_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
@@ -6091,6 +6257,84 @@ func (ec *executionContext) fieldContext_GitOpsTopology_summary(_ context.Contex
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_GitOpsSummary(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IngressStatus_type(ctx context.Context, field graphql.CollectedField, obj *api.IngressStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_IngressStatus_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_IngressStatus_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("IngressStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _IngressStatus_domain(ctx context.Context, field graphql.CollectedField, obj *api.IngressStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_IngressStatus_domain(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Domain, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_IngressStatus_domain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("IngressStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _IngressStatus_routes(ctx context.Context, field graphql.CollectedField, obj *api.IngressStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_IngressStatus_routes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Routes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []api.RouteRef) graphql.Marshaler {
+			return ec.marshalNRouteRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRefᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_IngressStatus_routes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IngressStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RouteRef(ctx, field)
 		},
 	}
 	return fc, nil
@@ -8047,6 +8291,82 @@ func (ec *executionContext) fieldContext_Query_stackStatus(_ context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_serviceEndpoint(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_serviceEndpoint(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ServiceEndpoint(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.ServiceEndpoint) graphql.Marshaler {
+			return ec.marshalOServiceEndpoint2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceEndpoint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_serviceEndpoint(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceEndpoint(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_serviceEndpoint_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_ingressStatus(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_ingressStatus(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().IngressStatus(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.IngressStatus) graphql.Marshaler {
+			return ec.marshalOIngressStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐIngressStatus(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_ingressStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_IngressStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_services(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -8910,6 +9230,52 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _RouteRef_service(ctx context.Context, field graphql.CollectedField, obj *api.RouteRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RouteRef_service(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Service, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RouteRef_service(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RouteRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _RouteRef_url(ctx context.Context, field graphql.CollectedField, obj *api.RouteRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RouteRef_url(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RouteRef_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RouteRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _SecretRef_name(ctx context.Context, field graphql.CollectedField, obj *api.SecretRef) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -9115,6 +9481,98 @@ func (ec *executionContext) _SecretValue_value(ctx context.Context, field graphq
 }
 func (ec *executionContext) fieldContext_SecretValue_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("SecretValue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceEndpoint_routed(ctx context.Context, field graphql.CollectedField, obj *api.ServiceEndpoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceEndpoint_routed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Routed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceEndpoint_routed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceEndpoint", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceEndpoint_url(ctx context.Context, field graphql.CollectedField, obj *api.ServiceEndpoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceEndpoint_url(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceEndpoint_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceEndpoint", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceEndpoint_internalHost(ctx context.Context, field graphql.CollectedField, obj *api.ServiceEndpoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceEndpoint_internalHost(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.InternalHost, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceEndpoint_internalHost(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceEndpoint", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceEndpoint_internalPort(ctx context.Context, field graphql.CollectedField, obj *api.ServiceEndpoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceEndpoint_internalPort(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.InternalPort, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceEndpoint_internalPort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceEndpoint", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _ServiceState_name(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
@@ -13714,6 +14172,52 @@ func (ec *executionContext) _GitOpsTopology(ctx context.Context, sel ast.Selecti
 	return out
 }
 
+var ingressStatusImplementors = []string{"IngressStatus"}
+
+func (ec *executionContext) _IngressStatus(ctx context.Context, sel ast.SelectionSet, obj *api.IngressStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, ingressStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IngressStatus")
+		case "type":
+			out.Values[i] = ec._IngressStatus_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "domain":
+			out.Values[i] = ec._IngressStatus_domain(ctx, field, obj)
+		case "routes":
+			out.Values[i] = ec._IngressStatus_routes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var jobStateImplementors = []string{"JobState"}
 
 func (ec *executionContext) _JobState(ctx context.Context, sel ast.SelectionSet, obj *api.JobState) graphql.Marshaler {
@@ -14186,6 +14690,44 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "serviceEndpoint":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_serviceEndpoint(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "ingressStatus":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_ingressStatus(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "services":
 			field := field
 
@@ -14633,6 +15175,50 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 	return out
 }
 
+var routeRefImplementors = []string{"RouteRef"}
+
+func (ec *executionContext) _RouteRef(ctx context.Context, sel ast.SelectionSet, obj *api.RouteRef) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, routeRefImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RouteRef")
+		case "service":
+			out.Values[i] = ec._RouteRef_service(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "url":
+			out.Values[i] = ec._RouteRef_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var secretRefImplementors = []string{"SecretRef"}
 
 func (ec *executionContext) _SecretRef(ctx context.Context, sel ast.SelectionSet, obj *api.SecretRef) graphql.Marshaler {
@@ -14708,6 +15294,60 @@ func (ec *executionContext) _SecretValue(ctx context.Context, sel ast.SelectionS
 			}
 		case "value":
 			out.Values[i] = ec._SecretValue_value(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var serviceEndpointImplementors = []string{"ServiceEndpoint"}
+
+func (ec *executionContext) _ServiceEndpoint(ctx context.Context, sel ast.SelectionSet, obj *api.ServiceEndpoint) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, serviceEndpointImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ServiceEndpoint")
+		case "routed":
+			out.Values[i] = ec._ServiceEndpoint_routed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "url":
+			out.Values[i] = ec._ServiceEndpoint_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "internalHost":
+			out.Values[i] = ec._ServiceEndpoint_internalHost(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "internalPort":
+			out.Values[i] = ec._ServiceEndpoint_internalPort(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -16340,6 +16980,26 @@ func (ec *executionContext) marshalNPreflightFailure2ᚕgithubᚗcomᚋfyltrᚋa
 	return ret
 }
 
+func (ec *executionContext) marshalNRouteRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRef(ctx context.Context, sel ast.SelectionSet, v api.RouteRef) graphql.Marshaler {
+	return ec._RouteRef(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRouteRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.RouteRef) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNRouteRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRef(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNSecretRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v api.SecretRef) graphql.Marshaler {
 	return ec._SecretRef(ctx, sel, &v)
 }
@@ -16873,6 +17533,13 @@ func (ec *executionContext) marshalOGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋang
 	return ec._GitOpsTopology(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalOIngressStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐIngressStatus(ctx context.Context, sel ast.SelectionSet, v *api.IngressStatus) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._IngressStatus(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalOInt2int(ctx context.Context, v any) (int, error) {
 	res, err := graphql.UnmarshalInt(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -16958,6 +17625,13 @@ func (ec *executionContext) marshalOSecretValue2ᚖgithubᚗcomᚋfyltrᚋangee�
 		return graphql.Null
 	}
 	return ec._SecretValue(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOServiceEndpoint2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceEndpoint(ctx context.Context, sel ast.SelectionSet, v *api.ServiceEndpoint) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ServiceEndpoint(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
