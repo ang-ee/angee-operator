@@ -25,8 +25,7 @@ func FromManifest(cfg manifest.Ingress) (Backend, error) {
 	case "", "none":
 		return NoneBackend{}, nil
 	case "caddy":
-		// TODO(chunk D): return NewCaddyBackend(cfg)
-		return nil, fmt.Errorf("caddy ingress backend not yet implemented")
+		return NewCaddyBackend(cfg), nil
 	default:
 		return nil, fmt.Errorf("unsupported ingress backend %q", cfg.Type)
 	}

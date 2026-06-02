@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** D (CaddyBackend.Contribute)
+- **Current chunk:** E (Compile() hook)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -40,7 +40,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 | A | [x] | [x] | Manifest `Ingress`/`Route` types + defaults + validation |
 | B | [x] | [x] | Compose `Networks`/`Labels` fields |
 | C | [x] | [x] | `edge` backend package (interface + FromManifest + None) |
-| D | [ ] | [ ] | `CaddyBackend.Contribute` (inject edge, network, labels) |
+| D | [x] | [x] | `CaddyBackend.Contribute` (inject edge, network, labels) |
 | E | [ ] | [ ] | `Compile()` hook wiring the edge backend |
 | F | [ ] | [ ] | `/edge/verify` forward_auth endpoint |
 | G | [ ] | [ ] | `serviceEndpoint` + `ingressStatus` GraphQL |
@@ -121,9 +121,13 @@ placeholder error wired in Chunk D.
   `caddy.reverse_proxy.flush_interval -1`, forward_auth import for that service).
 - Services without a `Route` are untouched.
 
-**Verify (Claude):**
-- [ ] `go build ./...` clean + unit tests pass.
-- [ ] Test: caddy backend on a stack with one routed + one plain service →
+**Verify (Claude):** ✅ done — gofmt/build/vet/test clean; test asserts edge
+service (exact ports + docker-socket vol + net), routed service (ports cleared,
+net joined, all 4 caddy labels exact), plain service untouched. Exact
+caddy-docker-proxy global-snippet/forward_auth label syntax is best-effort
+(TODO(spike)) to validate by running Caddy.
+- [x] `go build ./...` clean + unit tests pass.
+- [x] Test: caddy backend on a stack with one routed + one plain service →
   compose has the edge service (one published port), the `<net>` network, the
   routed service stripped of `Ports` + joined to `<net>` + labeled, and the
   plain service unchanged.
