@@ -21,7 +21,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 ## State
 
-- **Current chunk:** A (manifest types)
+- **Current chunk:** B (compose fields)
 - **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked
 - **Design guardrails (from research — every chunk must respect):**
   - `ingress.type` defaults to `none`; a `none`/absent ingress compiles
@@ -37,7 +37,7 @@ boxes → advance. Keep this file as the single source of truth for state.
 
 | Chunk | Build | Verify | Title |
 |---|---|---|---|
-| A | [ ] | [ ] | Manifest `Ingress`/`Route` types + defaults + validation |
+| A | [x] | [x] | Manifest `Ingress`/`Route` types + defaults + validation |
 | B | [ ] | [ ] | Compose `Networks`/`Labels` fields |
 | C | [ ] | [ ] | `edge` backend package (interface + FromManifest + None) |
 | D | [ ] | [ ] | `CaddyBackend.Contribute` (inject edge, network, labels) |
@@ -63,13 +63,18 @@ boxes → advance. Keep this file as the single source of truth for state.
 - `ValidateExtended`: a service with a non-nil `Route` and `Runtime == local`
   is an error ("route requires runtime: container").
 
-**Verify (Claude):**
-- [ ] `go build ./...` clean.
-- [ ] `go test ./internal/manifest/...` passes.
-- [ ] New test: empty ingress → `Type=="none"` after `Defaults()`.
-- [ ] New test: `route:` on a `runtime: local` service → validation error; on a
+**Verify (Claude):** ✅ done — gofmt/build/vet/`go test ./internal/manifest/...`
+all clean; Port validation tightened to `gte=1,lte=65535` during verify.
+- [x] `go build ./...` clean.
+- [x] `go test ./internal/manifest/...` passes.
+- [x] New test: empty ingress → `Type=="none"` after `Defaults()`.
+- [x] New test: `route:` on a `runtime: local` service → validation error; on a
   container service → OK.
-- [ ] An existing manifest (no `ingress:`) round-trips unchanged (byte-stable).
+- [x] ~~existing manifest round-trips unchanged~~ — **corrected**: `LoadFile`/
+  `SaveFile` already call `Defaults()`, so the manifest normalizes `ingress: none`
+  on save exactly like `secrets_backend: env-file` does today. The real
+  byte-stability guarantee is at the **compile** layer (Chunk E's no-op
+  none-backend), not manifest save.
 
 ## Chunk B — Compose `Networks`/`Labels` fields
 
