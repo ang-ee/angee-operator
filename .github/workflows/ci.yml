@@ -205,7 +205,7 @@ jobs:
           context: .
           file: Dockerfile.operator
           push: false
-          tags: ghcr.io/fyltr/angee-operator:ci
+          tags: ghcr.io/ang-ee/angee-operator:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -215,6 +215,6 @@ jobs:
           context: .
           file: Dockerfile.cli
           push: false
-          tags: ghcr.io/fyltr/angee-cli:ci
+          tags: ghcr.io/ang-ee/angee-cli:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
