@@ -178,7 +178,7 @@ to the Host.
 
 ### `angee-django` — the first default Host
 
-[`angee-django`](https://github.com/fyltr/angee-django) is the first and
+[`angee-django`](https://github.com/ang-ee/angee-django) is the first and
 currently the default application runtime. It produces a working
 Django + GraphQL + React application:
 

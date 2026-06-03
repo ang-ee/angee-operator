@@ -1,5 +1,9 @@
 # Angee
 
+> **This is the Angee CLI and operator** — the Go control plane. Looking for the
+> runtime (the Django framework + React SDK)? See
+> **[`ang-ee/angee-django`](https://github.com/ang-ee/angee-django)**.
+
 Angee is a self-managed stack manager for agent-native applications. It
 compiles one `angee.yaml` into runtime files, resolves secrets, manages
 container and local-process services, runs jobs, provisions workspaces, and

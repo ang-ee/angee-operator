@@ -34,7 +34,7 @@ Requirements:
 - Docker, for `runtime: container` Services.
 - `process-compose`, for `runtime: local` Services.
 - `git`, for git-kind Sources.
-- A configured Host (typically [`angee-django`](https://github.com/fyltr/angee-django)) when bootstrapping with `angee init --dev`.
+- A configured Host (typically [`angee-django`](https://github.com/ang-ee/angee-django)) when bootstrapping with `angee init --dev`.
 
 ## First commands
 
@@ -58,7 +58,7 @@ angee init --dev --yes
 `--dev` resolves the `dev` Stack template through the configured
 template search paths (see [Templates](/guide/templates)). The default
 Host that ships a `dev` Stack template is
-[`angee-django`](https://github.com/fyltr/angee-django) — its
+[`angee-django`](https://github.com/ang-ee/angee-django) — its
 `templates/stacks/dev/` is what gets rendered when you run `angee init
 --dev` from inside that repo or its workspaces.
 

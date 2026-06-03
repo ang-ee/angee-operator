@@ -2,7 +2,7 @@
 
 Angee templates are how a *shape* of deployment is declared once and
 re-used. There are two kinds, both rendered with
-[copier-go](https://github.com/fyltr/copier-go):
+[copier-go](https://github.com/ang-ee/copier-go):
 
 - **Stack template** — produces an `angee.yaml` (and optionally
   generated runtime files) for a runnable Stack root.
@@ -58,7 +58,7 @@ ancestor-of-PWD/.templates/<kind>/<name>
 
 `angee init --dev` requires a local or remote `stacks/dev` template. The
 default Host that ships one is
-[`angee-django`](https://github.com/fyltr/angee-django), under
+[`angee-django`](https://github.com/ang-ee/angee-django), under
 `templates/stacks/dev/`.
 
 ## Remote Resolution
@@ -236,7 +236,7 @@ solidify.
 ### `agent-runtime`
 
 Materialises a single long-running process that an external host —
-today, [`angee-django`](https://github.com/fyltr/angee-django) —
+today, [`angee-django`](https://github.com/ang-ee/angee-django) —
 addresses over [ACP](https://github.com/anthropics/agent-client-protocol). The
 template is the contract between the operator and any host that wants
 to provision per-agent workspaces; the actual runtime binary is
