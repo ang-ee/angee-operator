@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.9 — 2026-06-02
+
 ### Stacks
 
 - `angee stack update --template` re-renders `angee.yaml` from the stack's Copier
