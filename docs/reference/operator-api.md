@@ -381,9 +381,10 @@ opaque.
 ### Ingress
 
 When a stack sets `ingress.type: caddy` (see the
-[manifest guide](../guide/manifest.md#ingress)), routed services are reached
-through one Caddy edge instead of host-published ports. Two queries expose the
-routing, replacing host-side compose-port-scraping:
+[Edge Ingress guide](../guide/ingress.md) for the full picture, or the
+[manifest reference](../guide/manifest.md#ingress) for the fields), routed
+services are reached through one Caddy edge instead of host-published ports. Two
+queries expose the routing, replacing host-side compose-port-scraping:
 
 - `serviceEndpoint(name: String!): ServiceEndpoint` — returns
   `{routed, url, internalHost, internalPort}`. `routed` is `false` when

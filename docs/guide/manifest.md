@@ -105,6 +105,10 @@ single Caddy edge (`lucaslorentz/caddy-docker-proxy`) into the compose file,
 puts routed services on a private network with **no** host-published ports, and
 authenticates inbound connections at the edge.
 
+> For the end-to-end picture — the auth model, the token kinds, WebSockets, and
+> dev setup — see the [Edge Ingress & Scoped Tokens guide](./ingress.md). This
+> section is the field reference.
+
 ```yaml
 ingress:
   type: caddy            # none (default) | caddy
