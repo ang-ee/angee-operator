@@ -21,13 +21,24 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 angee doctor
 angee init --dev [path] [--input key=value ...] [--yes] [--force]
 angee stack init <template> [path] [--input key=value ...] [--yes] [--force]
-angee stack update
+angee stack update [--template] [--dry-run]
 angee stack destroy [--purge]
 angee status
 ```
 
 `angee init --dev` is shorthand for the `dev` stack template. The template must
 be available through the local or remote template resolver.
+
+`angee stack update` regenerates the derived runtime files from `angee.yaml`.
+With `--template` it first **re-renders `angee.yaml` from the stack's Copier
+template** (so template changes — a new service, job, port, or source — reach an
+already-initialized stack), then regenerates. Template-origin sections are
+refreshed (the template wins for keys it emits), while user-added keys and
+operator-managed state (`operator`, `workspaces`, `port_leases`, and allocated
+port values) are preserved. `--dry-run` (with `--template`) prints the changes
+without writing. `--template` runs locally and needs the stack's
+`.copier-answers.yml`. This brings `stack update` to parity with
+`workspace update`, which already re-renders its templates.
 
 ## Runtime
 

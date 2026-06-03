@@ -12,6 +12,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `StackInit` | Yes | Yes | Yes | - |
 | `StackTemplateQuestions` | Yes | No | No | Interactive local prompt flow. |
 | `StackUpdate` | Yes | Yes | Yes | - |
+| `StackUpdateFromTemplate` | Yes | No | No | Local re-render of `angee.yaml` from its template behind `stack update --template`; not yet on remote surfaces. |
 | `StackDestroy` | Yes | Yes | Yes | - |
 | `StackPrepare` | Yes | Yes | Yes | - |
 | `StackCompile` | Yes | No | No | Internal compile flow; remote surfaces use `StackPrepare`. |
