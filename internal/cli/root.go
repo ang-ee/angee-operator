@@ -202,11 +202,58 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively")
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
 	cmd.AddCommand(initCmd)
-	cmd.AddCommand(&cobra.Command{
+	var updateTemplate, updateDryRun bool
+	updateCmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update generated runtime files",
-		Args:  cobra.NoArgs,
+		Short: "Update generated runtime files (with --template, re-render angee.yaml from its stack template first)",
+		Long: "Regenerate the derived runtime files from angee.yaml.\n\n" +
+			"With --template, first re-render angee.yaml from the stack's Copier template: " +
+			"template-origin sections are refreshed (template wins for keys it emits; user-added " +
+			"keys and operator/workspaces/port_leases/allocated port values are preserved), then " +
+			"the runtime files are regenerated. --template runs locally only.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if updateDryRun && !updateTemplate {
+				return fmt.Errorf("--dry-run only applies with --template")
+			}
+			if updateTemplate {
+				if operatorURL != nil && *operatorURL != "" {
+					return fmt.Errorf("--template re-renders the local stack template and is not supported with --operator")
+				}
+				controlRoot, err := stackroot.Resolve(*root)
+				if err != nil {
+					return err
+				}
+				platform, err := service.New(controlRoot)
+				if err != nil {
+					return err
+				}
+				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun})
+				if err != nil {
+					return err
+				}
+				if !res.Changed {
+					_, err = fmt.Fprintln(stdout, "stack template up to date; angee.yaml unchanged")
+					return err
+				}
+				if len(res.Changes) > 0 {
+					for _, change := range res.Changes {
+						if _, err := fmt.Fprintln(stdout, "  "+change); err != nil {
+							return err
+						}
+					}
+				} else {
+					if _, err := fmt.Fprintln(stdout, "  (template-origin sections refreshed)"); err != nil {
+						return err
+					}
+				}
+				if updateDryRun {
+					_, err = fmt.Fprintln(stdout, "dry run: angee.yaml not written")
+					return err
+				}
+				_, err = fmt.Fprintln(stdout, "stack updated from template")
+				return err
+			}
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
 				return err
@@ -217,7 +264,10 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			_, err = fmt.Fprintln(stdout, "stack updated")
 			return err
 		},
-	})
+	}
+	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render angee.yaml from the stack's Copier template before regenerating runtime files")
+	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print the manifest changes without writing")
+	cmd.AddCommand(updateCmd)
 	var purge bool
 	destroyCmd := &cobra.Command{
 		Use:   "destroy",

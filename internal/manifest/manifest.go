@@ -290,18 +290,26 @@ func LoadFile(path string) (*Stack, error) {
 }
 
 func SaveFile(path string, stack *Stack) error {
-	if stack == nil {
-		return errors.New("manifest is nil")
-	}
-	stack.Defaults()
-	if err := stack.Validate(); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(stack)
+	data, err := Marshal(stack)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// Marshal applies Defaults and Validate, then renders the manifest to the
+// canonical YAML bytes SaveFile would write — without writing. Useful for
+// computing whether a transform changed the manifest (e.g. a template
+// re-render) and for dry-run diffs.
+func Marshal(stack *Stack) ([]byte, error) {
+	if stack == nil {
+		return nil, errors.New("manifest is nil")
+	}
+	stack.Defaults()
+	if err := stack.Validate(); err != nil {
+		return nil, err
+	}
+	return yaml.Marshal(stack)
 }
 
 func Path(root string) string {

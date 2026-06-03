@@ -6,6 +6,21 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.9 — 2026-06-02
+
+### Stacks
+
+- `angee stack update --template` re-renders `angee.yaml` from the stack's Copier
+  template before regenerating the derived runtime files, so template changes (a
+  new service, job, port, or source) reach an already-initialized stack — parity
+  with `workspace update`. The merge refreshes template-origin sections (template
+  wins for keys it emits) while preserving user-added keys, allocated `ports`
+  values, and operator-managed state (`operator`, `workspaces`, `port_leases`).
+  `--dry-run` prints the additions/refreshes (`+`/`~` per section) without
+  writing. Runs locally; requires the stack's `.copier-answers.yml`. Default
+  `stack update` (derived-files-only) is unchanged. Full 3-way conflict detection
+  for locally-edited template keys is a follow-up.
+
 ## v0.5.8 — 2026-06-02
 
 ### Ingress (Caddy edge)
