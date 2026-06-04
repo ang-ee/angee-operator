@@ -3,6 +3,31 @@
   "$id": "https://docs.angee.ai/angee.schema.json/stack",
   "$ref": "#/$defs/Stack",
   "$defs": {
+    "Ingress": {
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "caddy"
+          ]
+        },
+        "domain": {
+          "type": "string"
+        },
+        "image": {
+          "type": "string"
+        },
+        "network": {
+          "type": "string"
+        },
+        "verify": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "Job": {
       "properties": {
         "runtime": {
@@ -154,6 +179,30 @@
         "range"
       ]
     },
+    "Route": {
+      "properties": {
+        "port": {
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        },
+        "host": {
+          "type": "string"
+        },
+        "auth": {
+          "type": "string",
+          "enum": [
+            "forward",
+            "none"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port"
+      ]
+    },
     "Secret": {
       "properties": {
         "generated": {
@@ -245,6 +294,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
         }
       },
       "additionalProperties": false,
@@ -345,6 +397,9 @@
         },
         "secrets_backend": {
           "$ref": "#/$defs/SecretsBackend"
+        },
+        "ingress": {
+          "$ref": "#/$defs/Ingress"
         },
         "secrets": {
           "additionalProperties": {
@@ -479,9 +534,6 @@
           "type": "array"
         },
         "chain_root": {
-          "type": "string"
-        },
-        "lifecycle": {
           "type": "string"
         },
         "allocations": {
