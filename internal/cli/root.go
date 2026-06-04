@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/operator"
+	"github.com/fyltr/angee/internal/platformclient"
 	"github.com/fyltr/angee/internal/service"
 	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
@@ -688,45 +688,59 @@ func stackInitError(template string, err error) error {
 	if errors.As(err, &conflict) && conflict.Kind == "stack-root" {
 		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(conflict.Name))
 	}
-	if remote, ok := remoteConflict(err, "stack-root"); ok {
+	if remote, ok := platformclient.AsConflict(err, "stack-root"); ok {
 		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(remote.Body.Name))
 	}
 	return err
 }
 
-func resolveStackTemplateInputs(cmd *cobra.Command, platform platformClient, template string, provided map[string]string, yes bool) (map[string]string, error) {
+func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, template string, provided map[string]string, yes bool) (map[string]string, error) {
 	if provided == nil {
 		provided = map[string]string{}
 	}
 	if yes {
 		return provided, nil
 	}
-	questions, defaults, err := platform.StackTemplateQuestions(cmd.Context(), template)
+	// Filesystem-path templates (absolute, or containing ".." segments) exist
+	// only locally and are rejected by Template()'s introspection guard, which
+	// is reachable over REST/GraphQL. StackInit resolves such paths directly,
+	// so skip descriptor-derived prompting for them and rely on --input/--yes
+	// for any non-default inputs.
+	if filepath.IsAbs(template) || strings.Contains(template, "..") {
+		return provided, nil
+	}
+	// Derive the interactive questions from the template descriptor, which is
+	// served identically over local, REST, and GraphQL transports — so this
+	// works against `--operator` too. desc.Inputs is already sorted by name.
+	//
+	// These callers always init a STACK template. Template() infers the kind
+	// from the ref's first path segment, so a bare name like "dev" needs the
+	// "stacks/" family prefix to resolve as a stack template (mirroring
+	// resolveTemplate's kind+"s" family). Already-qualified or remote refs
+	// contain "/" and pass through unchanged.
+	ref := template
+	if !strings.Contains(ref, "/") {
+		ref = "stacks/" + ref
+	}
+	desc, err := platform.Template(cmd.Context(), ref)
 	if err != nil {
 		return nil, err
 	}
-	if len(questions) == 0 {
-		return provided, nil
-	}
-	reader := bufio.NewReader(cmd.InOrStdin())
-	keys := make([]string, 0, len(questions))
-	for key := range questions {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
 	out := map[string]string{}
 	for key, value := range provided {
 		out[key] = value
 	}
-	for _, key := range keys {
+	reader := bufio.NewReader(cmd.InOrStdin())
+	for _, input := range desc.Inputs {
+		if !input.Question || input.Generated {
+			continue
+		}
+		key := input.Name
 		if _, ok := out[key]; ok {
 			continue
 		}
-		question := questions[key]
-		if question.Generated {
-			continue
-		}
-		defaultValue, hasDefault := defaults[key]
+		defaultValue := input.Default
+		hasDefault := defaultValue != ""
 		prompt := key + ": "
 		if hasDefault {
 			prompt = fmt.Sprintf("%s [%s]: ", key, defaultValue)
@@ -742,11 +756,11 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform platformClient, tem
 		if value == "" && hasDefault {
 			value = defaultValue
 		}
-		if value == "" && question.Required {
+		if value == "" && input.Required {
 			return nil, fmt.Errorf("template input %s is required; pass --input %s=value", key, key)
 		}
 		if value != "" {
-			if err := validateTemplateInputValue(key, question.Type, value); err != nil {
+			if err := validateTemplateInputValue(key, input.Type, value); err != nil {
 				return nil, err
 			}
 			out[key] = value
@@ -792,13 +806,13 @@ func displayPath(path string) string {
 	return rel
 }
 
-func localPlatform(root, operatorURL *string) (platformClient, error) {
+func localPlatform(root, operatorURL *string) (service.API, error) {
 	return localPlatformForRoot(root, operatorURL, true)
 }
 
-func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (platformClient, error) {
+func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (service.API, error) {
 	if operatorURL != nil && *operatorURL != "" {
-		return newRemotePlatform(*operatorURL), nil
+		return platformclient.New(*operatorURL), nil
 	}
 	selected := *root
 	if resolveControlRoot {
@@ -1217,11 +1231,11 @@ func workspaceStatusCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	}
 }
 
-func workspaceStatusTarget(args []string, root, operatorURL *string) (platformClient, string, error) {
+func workspaceStatusTarget(args []string, root, operatorURL *string) (service.API, string, error) {
 	return workspaceTarget(args, root, operatorURL, "status")
 }
 
-func workspaceTarget(args []string, root, operatorURL *string, command string) (platformClient, string, error) {
+func workspaceTarget(args []string, root, operatorURL *string, command string) (service.API, string, error) {
 	if len(args) == 1 {
 		platform, err := localPlatform(root, operatorURL)
 		return platform, args[0], err

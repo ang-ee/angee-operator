@@ -21,7 +21,7 @@ type TokenMinter interface {
 }
 
 type Resolver struct {
-	Platform *service.Platform
+	Platform service.API
 	Events   *EventHub
 	Tokens   TokenMinter
 }

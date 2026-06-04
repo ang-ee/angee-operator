@@ -2,7 +2,7 @@ package cli
 
 // CLI parity for the operations that previously lived only on the REST
 // + GraphQL surfaces. Each command in this file dispatches through the
-// shared platformClient (local Platform or remote operator), matching
+// shared service.API (local Platform or remote operator), matching
 // the same routing convention as the older subcommands.
 
 import (
@@ -11,6 +11,8 @@ import (
 	"io"
 
 	"github.com/fyltr/angee/api"
+	"github.com/fyltr/angee/internal/platformclient"
+	"github.com/fyltr/angee/internal/service"
 	"github.com/spf13/cobra"
 )
 
@@ -139,7 +141,7 @@ is printed to stdout; capture it carefully.`,
 			if operatorURL == nil || *operatorURL == "" {
 				return fmt.Errorf("token mint requires --operator URL")
 			}
-			remote := newRemotePlatform(*operatorURL)
+			remote := platformclient.New(*operatorURL)
 			resp, err := remote.MintConnectionToken(cmd.Context(), api.MintConnectionTokenRequest{Actor: args[0], TTL: ttl})
 			if err != nil {
 				return err
@@ -230,11 +232,11 @@ func workspacePreflightCommand(stdout io.Writer, root, operatorURL *string, json
 func workspaceSourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	cmd := &cobra.Command{Use: "source", Short: "Per-workspace source-slot git operations"}
 	cmd.AddCommand(slotStateCommand("fetch", "Fetch a workspace source slot from upstream", stdout, root, operatorURL, jsonOutput,
-		func(p platformClient, ctx context.Context, ws, slot string) (any, error) {
+		func(p service.API, ctx context.Context, ws, slot string) (any, error) {
 			return p.WorkspaceSourceFetch(ctx, ws, slot)
 		}))
 	cmd.AddCommand(slotStateCommand("pull", "Pull a workspace source slot from upstream (fast-forward)", stdout, root, operatorURL, jsonOutput,
-		func(p platformClient, ctx context.Context, ws, slot string) (any, error) {
+		func(p service.API, ctx context.Context, ws, slot string) (any, error) {
 			return p.WorkspaceSourcePull(ctx, ws, slot)
 		}))
 	cmd.AddCommand(workspaceSlotPushCommand(stdout, root, operatorURL, jsonOutput))
@@ -242,15 +244,15 @@ func workspaceSourceCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	cmd.AddCommand(workspaceSlotMergeCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceSlotRebaseCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(slotGitOpCommand("merge-abort", "Abort an in-progress merge", stdout, root, operatorURL, jsonOutput,
-		func(p platformClient, ctx context.Context, ws, slot string) (api.GitOpResult, error) {
+		func(p service.API, ctx context.Context, ws, slot string) (api.GitOpResult, error) {
 			return p.WorkspaceSourceMergeAbort(ctx, ws, slot)
 		}))
 	cmd.AddCommand(slotGitOpCommand("rebase-abort", "Abort an in-progress rebase", stdout, root, operatorURL, jsonOutput,
-		func(p platformClient, ctx context.Context, ws, slot string) (api.GitOpResult, error) {
+		func(p service.API, ctx context.Context, ws, slot string) (api.GitOpResult, error) {
 			return p.WorkspaceSourceRebaseAbort(ctx, ws, slot)
 		}))
 	cmd.AddCommand(slotGitOpCommand("rebase-continue", "Continue an in-progress rebase after resolving conflicts", stdout, root, operatorURL, jsonOutput,
-		func(p platformClient, ctx context.Context, ws, slot string) (api.GitOpResult, error) {
+		func(p service.API, ctx context.Context, ws, slot string) (api.GitOpResult, error) {
 			return p.WorkspaceSourceRebaseContinue(ctx, ws, slot)
 		}))
 	cmd.AddCommand(workspaceSlotPublishCommand(stdout, root, operatorURL, jsonOutput))
@@ -259,7 +261,7 @@ func workspaceSourceCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 
 // slotStateCommand registers a `workspace source <op> <workspace> <slot>`
 // subcommand that returns a WorkspaceSourceStatus. Used for fetch / pull.
-func slotStateCommand(name, short string, stdout io.Writer, root, operatorURL *string, jsonOutput *bool, fn func(p platformClient, ctx context.Context, ws, slot string) (any, error)) *cobra.Command {
+func slotStateCommand(name, short string, stdout io.Writer, root, operatorURL *string, jsonOutput *bool, fn func(p service.API, ctx context.Context, ws, slot string) (any, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   name + " <workspace> <slot>",
 		Short: short,
@@ -396,7 +398,7 @@ func workspaceSlotPublishCommand(stdout io.Writer, root, operatorURL *string, js
 	return cmd
 }
 
-func slotGitOpCommand(name, short string, stdout io.Writer, root, operatorURL *string, jsonOutput *bool, fn func(p platformClient, ctx context.Context, ws, slot string) (api.GitOpResult, error)) *cobra.Command {
+func slotGitOpCommand(name, short string, stdout io.Writer, root, operatorURL *string, jsonOutput *bool, fn func(p service.API, ctx context.Context, ws, slot string) (api.GitOpResult, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   name + " <workspace> <slot>",
 		Short: short,

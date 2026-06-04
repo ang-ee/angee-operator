@@ -245,6 +245,11 @@ type TemplateInputDescriptor struct {
 	Immutable bool   `json:"immutable"`
 	Generated bool   `json:"generated"`
 	Default   string `json:"default,omitempty"`
+	// Question is true for top-level Copier questions the user can answer
+	// interactively, and false for metadata-only `_angee.inputs` entries
+	// (typically generated/immutable). Interactive prompting consumes this
+	// to prompt only for real questions.
+	Question bool `json:"question"`
 }
 
 type TemplateDescriptor struct {

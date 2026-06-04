@@ -6,6 +6,31 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.10 — 2026-06-04
+
+### Architecture (single control-plane contract)
+
+- Extracted `service.API`, one exported interface that is now the single
+  control-plane contract. Both the in-process `*service.Platform` and a remote
+  HTTP client implement it, and the CLI, REST operator, and GraphQL operator all
+  dispatch through it — replacing the private, hand-maintained `cli.platformClient`
+  interface (deleted) that had drifted from the concrete type. The remote client
+  moved out of `internal/cli` into a new `internal/platformclient` package
+  (`platformclient.RemoteClient`), paired with the contract it implements.
+  Compile-time `var _ service.API` assertions on both implementations keep them
+  in lockstep.
+- Closing remote gaps so the contract is uniform across transports:
+  - Interactive `angee init` / `stack init` now works against `--operator`: the
+    prompt set is derived from the `Template(ref)` descriptor (served over local,
+    REST, and GraphQL alike) instead of a local-only call. Template input
+    descriptors gain a `question` field distinguishing answerable Copier
+    questions from generated/immutable metadata inputs.
+  - `angee up` / `angee dev` against `--operator` now stream the combined
+    foreground output via new `GET /stack/up/stream` and `GET /stack/dev/stream`
+    routes, matching local behavior.
+  - New REST routes `GET /services/{name}/endpoint` and `GET /ingress/status`
+    give the previously GraphQL-only ingress lookups full REST parity.
+
 ## v0.5.9 — 2026-06-02
 
 ### Stacks
