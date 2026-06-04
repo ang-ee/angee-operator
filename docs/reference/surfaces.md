@@ -10,7 +10,6 @@ helper used by adapters or tests and should not be exposed directly.
 | `LoadStack` | Internal | Internal | Internal | File-loading primitive; callers expose specific operations. |
 | `EmptyStack` | Internal | Internal | Internal | Construction helper for stack init/tests. |
 | `StackInit` | Yes | Yes | Yes | - |
-| `StackTemplateQuestions` | Yes | No | No | Interactive local prompt flow. |
 | `StackUpdate` | Yes | Yes | Yes | - |
 | `StackUpdateFromTemplate` | Yes | No | No | Local re-render of `angee.yaml` from its template behind `stack update --template`; not yet on remote surfaces. |
 | `StackDestroy` | Yes | Yes | Yes | - |
@@ -19,9 +18,9 @@ helper used by adapters or tests and should not be exposed directly.
 | `StackStatus` | Yes | Yes | Yes | - |
 | `StackBuild` | Yes | Yes | Yes | - |
 | `StackUp` | Yes | Yes | Yes | - |
-| `StackUpForeground` | Yes | No | No | Local-only streaming process. |
+| `StackUpForeground` | Yes | Yes | No | Foreground stream; REST `GET /stack/up/stream` streams the combined output. |
 | `StackDev` | Yes | Yes | Yes | Remote adapter calls non-foreground runtime flow. |
-| `StackDevForeground` | Yes | No | No | Local-only streaming process. |
+| `StackDevForeground` | Yes | Yes | No | Foreground stream; REST `GET /stack/dev/stream` streams the combined output. |
 | `StackDown` | Yes | Yes | Yes | - |
 | `StackLogs` | Yes | Yes | No | GraphQL uses bounded `StackLogsLimited`. |
 | `StackLogsLimited` | No | No | Yes | GraphQL snapshot guardrail. |
@@ -30,12 +29,12 @@ helper used by adapters or tests and should not be exposed directly.
 | `ServiceUpdate` | Yes | Yes | Yes | - |
 | `ServiceDestroy` | Yes | Yes | Yes | - |
 | `ServiceList` | Yes | Yes | Yes | - |
-| `ServiceEndpoint` | No | No | Yes | GraphQL `serviceEndpoint` ingress route lookup. |
+| `ServiceEndpoint` | No | Yes | Yes | REST `GET /services/{name}/endpoint`; GraphQL `serviceEndpoint` ingress route lookup. |
 | `ServiceUp` | Yes | Yes | Yes | Create-and-start; idempotent across never-created services. |
 | `ServiceStart` | Yes | Yes | Yes | - |
 | `ServiceStop` | Yes | Yes | Yes | - |
 | `ServiceRestart` | Yes | Yes | Yes | - |
-| `IngressStatus` | No | No | Yes | GraphQL `ingressStatus` route summary. |
+| `IngressStatus` | No | Yes | Yes | REST `GET /ingress/status`; GraphQL `ingressStatus` route summary. |
 | `JobList` | Yes | Yes | Yes | - |
 | `JobRun` | Yes | Yes | Yes | - |
 | `SourceList` | Yes | Yes | Yes | - |

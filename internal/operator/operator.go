@@ -37,7 +37,7 @@ type Config struct {
 
 type Server struct {
 	config           Config
-	platform         *service.Platform
+	platform         service.API
 	eventHub         *opgql.EventHub
 	tokens           *tokenMinter
 	graphqlHandler   http.Handler
@@ -133,6 +133,15 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /stack/down", s.auth(http.HandlerFunc(s.stackDown)))
 	mux.Handle("POST /stack/destroy", s.auth(http.HandlerFunc(s.stackDestroy)))
 	mux.Handle("GET /stack/logs", s.auth(http.HandlerFunc(s.stackLogs)))
+	// Foreground up/dev: chunked text/plain streams that bring services up and
+	// attach to their combined output, mirroring the local CLI's foreground
+	// behavior so `--operator` clients see the same stream. These are GET
+	// (not POST) to match the existing streaming routes and the remote
+	// client's GET-only stream reader; the bring-up side effect is guarded by
+	// auth() and is acceptable given these are not browser-reachable.
+	mux.Handle("GET /stack/up/stream", s.auth(http.HandlerFunc(s.stackUpStream)))
+	mux.Handle("GET /stack/dev/stream", s.auth(http.HandlerFunc(s.stackDevStream)))
+	mux.Handle("GET /ingress/status", s.auth(http.HandlerFunc(s.ingressStatus)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobList)))
 	mux.Handle("POST /jobs/{name}/run", s.auth(http.HandlerFunc(s.jobRun)))
 	mux.Handle("GET /jobs/{name}/logs", s.auth(http.HandlerFunc(s.jobLogs)))
@@ -146,6 +155,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /services/{name}/restart", s.auth(http.HandlerFunc(s.serviceRestart)))
 	mux.Handle("POST /services/{name}/destroy", s.auth(http.HandlerFunc(s.serviceDestroy)))
 	mux.Handle("GET /services/{name}/logs", s.auth(http.HandlerFunc(s.serviceLogs)))
+	mux.Handle("GET /services/{name}/endpoint", s.auth(http.HandlerFunc(s.serviceEndpoint)))
 	mux.Handle("GET /sources", s.auth(http.HandlerFunc(s.sourceList)))
 	mux.Handle("GET /sources/{name}/status", s.auth(http.HandlerFunc(s.sourceStatus)))
 	mux.Handle("POST /sources/{name}/fetch", s.auth(http.HandlerFunc(s.sourceFetch)))
@@ -382,6 +392,42 @@ func (s *Server) stackLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeLogStream(w, logs)
+}
+
+func (s *Server) stackUpStream(w http.ResponseWriter, r *http.Request) {
+	build := r.URL.Query().Get("build") == "true"
+	fw := startStream(w)
+	// The stream has already committed HTTP 200, so a foreground failure
+	// (including setup errors) can only be reported in-band.
+	if err := s.platform.StackUpForeground(r.Context(), r.URL.Query()["service"], build, fw, fw); err != nil {
+		fmt.Fprintf(fw, "angee: %v\n", err)
+	}
+}
+
+func (s *Server) stackDevStream(w http.ResponseWriter, r *http.Request) {
+	build := r.URL.Query().Get("build") == "true"
+	fw := startStream(w)
+	if err := s.platform.StackDevForeground(r.Context(), build, fw, fw); err != nil {
+		fmt.Fprintf(fw, "angee: %v\n", err)
+	}
+}
+
+func (s *Server) serviceEndpoint(w http.ResponseWriter, r *http.Request) {
+	endpoint, err := s.platform.ServiceEndpoint(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, endpoint)
+}
+
+func (s *Server) ingressStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := s.platform.IngressStatus(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) serviceList(w http.ResponseWriter, r *http.Request) {
@@ -779,6 +825,36 @@ func writeLogStream(w http.ResponseWriter, logs <-chan string) {
 	for line := range logs {
 		_, _ = io.WriteString(w, line)
 	}
+}
+
+// startStream commits a chunked text/plain response and returns a writer that
+// flushes after every write so foreground output reaches the client live
+// rather than buffering until the handler returns. Long-running foreground
+// up/dev streams need this; the finite writeLogStream path does not.
+func startStream(w http.ResponseWriter) io.Writer {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	return &flushWriter{w: w, flusher: asFlusher(w)}
+}
+
+func asFlusher(w http.ResponseWriter) http.Flusher {
+	if f, ok := w.(http.Flusher); ok {
+		return f
+	}
+	return nil
+}
+
+type flushWriter struct {
+	w       io.Writer
+	flusher http.Flusher
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if fw.flusher != nil {
+		fw.flusher.Flush()
+	}
+	return n, err
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

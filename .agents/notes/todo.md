@@ -54,6 +54,15 @@ client-facing reference.
   `git diff` output into an unbounded `bytes.Buffer`. Mirror the
   `*LogsLimited` pattern (max bytes cap with `[truncated]` marker)
   once a real client hits a multi-GB binary diff.
+- [ ] **`CompiledStack` JSON wire shape.** `service.CompiledStack`
+  embeds `compose.File`/`proccompose.File`, which carry only `yaml`
+  tags, so REST `POST /stack/prepare` (and the `service.API`
+  `StackPrepare`/`StackCompile` contract) serialize Go field names
+  rather than idiomatic JSON keys. It round-trips correctly between our
+  own Go client and server, but a third-party REST consumer gets
+  capitalized keys. Add `json` tags (or a `MarshalJSON`) if/when
+  `CompiledStack` needs to be a first-class wire DTO. Pre-existing; not
+  introduced by the `service.API` extraction.
 
 ## Notes
 

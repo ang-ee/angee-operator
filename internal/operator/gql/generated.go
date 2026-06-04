@@ -323,6 +323,7 @@ type ComplexityRoot struct {
 		Generated func(childComplexity int) int
 		Immutable func(childComplexity int) int
 		Name      func(childComplexity int) int
+		Question  func(childComplexity int) int
 		Required  func(childComplexity int) int
 		Type      func(childComplexity int) int
 	}
@@ -2005,6 +2006,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.Name(childComplexity), true
+	case "TemplateInputDescriptor.question":
+		if e.ComplexityRoot.TemplateInputDescriptor.Question == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Question(childComplexity), true
 	case "TemplateInputDescriptor.required":
 		if e.ComplexityRoot.TemplateInputDescriptor.Required == nil {
 			break
@@ -2847,6 +2854,7 @@ type TemplateInputDescriptor {
   immutable: Boolean!
   generated: Boolean!
   default: String
+  question: Boolean!
 }
 
 type TemplateDescriptor {
@@ -3295,6 +3303,8 @@ func (ec *executionContext) childFields_TemplateInputDescriptor(ctx context.Cont
 		return ec.fieldContext_TemplateInputDescriptor_generated(ctx, field)
 	case "default":
 		return ec.fieldContext_TemplateInputDescriptor_default(ctx, field)
+	case "question":
+		return ec.fieldContext_TemplateInputDescriptor_question(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TemplateInputDescriptor", field.Name)
 }
@@ -10704,6 +10714,29 @@ func (ec *executionContext) fieldContext_TemplateInputDescriptor_default(_ conte
 	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _TemplateInputDescriptor_question(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_question(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Question, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_question(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
 func (ec *executionContext) _WorkspaceCreatePreflight_ok(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceCreatePreflightResponse) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15823,6 +15856,11 @@ func (ec *executionContext) _TemplateInputDescriptor(ctx context.Context, sel as
 			}
 		case "default":
 			out.Values[i] = ec._TemplateInputDescriptor_default(ctx, field, obj)
+		case "question":
+			out.Values[i] = ec._TemplateInputDescriptor_question(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

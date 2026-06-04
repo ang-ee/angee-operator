@@ -32,7 +32,7 @@ const (
 // started before the first subscriber connects and stopped on server
 // shutdown.
 type EventHub struct {
-	platform     *service.Platform
+	platform     service.API
 	pollInterval time.Duration
 
 	topology *broker[*api.GitOpsTopologyResponse]
@@ -49,7 +49,7 @@ type EventHub struct {
 
 // NewEventHub constructs a hub bound to the given platform. The caller must
 // invoke Start before the first subscriber connects and Stop on shutdown.
-func NewEventHub(p *service.Platform) *EventHub {
+func NewEventHub(p service.API) *EventHub {
 	return &EventHub{
 		platform:         p,
 		pollInterval:     defaultEventPollInterval,

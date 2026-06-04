@@ -86,17 +86,6 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	return StackInitResult{Template: template, Root: preparedRoot}, nil
 }
 
-func (p *Platform) StackTemplateQuestions(ctx context.Context, template string) (map[string]copierx.Input, copierx.Inputs, error) {
-	templatePath, _, err := p.resolveTemplate(ctx, template, "stack")
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := copierx.ValidateMetadata(templatePath, "stack"); err != nil {
-		return nil, nil, err
-	}
-	return copierx.TemplateQuestions(templatePath)
-}
-
 func expectedStackRoot(targetPath string, inputs map[string]string) string {
 	if angeeRoot := inputs["ANGEE_ROOT"]; angeeRoot != "" {
 		return manifest.ResolvePath(targetPath, angeeRoot)

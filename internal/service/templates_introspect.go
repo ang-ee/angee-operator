@@ -120,12 +120,14 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 	}
 	inputs := make([]api.TemplateInputDescriptor, 0, len(defs))
 	for name, def := range defs {
+		_, isQuestion := questions[name]
 		desc := api.TemplateInputDescriptor{
 			Name:      name,
 			Type:      def.Type,
 			Required:  def.Required,
 			Immutable: def.Immutable,
 			Generated: def.Generated,
+			Question:  isQuestion,
 		}
 		if v, ok := defaults[name]; ok {
 			desc.Default = v
