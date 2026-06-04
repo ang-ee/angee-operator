@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 func (s *Server) edgeVerify(w http.ResponseWriter, r *http.Request) {

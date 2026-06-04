@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fyltr/angee/internal/git"
+	"github.com/ang-ee/angee-operator/internal/git"
 )
 
 func isRemoteTemplateRef(ref string) bool {

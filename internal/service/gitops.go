@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/git"
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 // gitOpsTopologyCommitsMax caps the per-source commit window the topology

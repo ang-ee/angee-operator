@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/manifest"
-	"github.com/fyltr/angee/internal/secrets"
-	"github.com/fyltr/angee/internal/substitute"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/secrets"
+	"github.com/ang-ee/angee-operator/internal/substitute"
 )
 
 // secretNamePattern bounds names accepted by the operator-side CRUD API.

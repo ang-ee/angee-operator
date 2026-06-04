@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fyltr/angee/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
 type recordingRunner struct {

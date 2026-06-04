@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/operator"
-	"github.com/fyltr/angee/internal/platformclient"
-	"github.com/fyltr/angee/internal/service"
-	"github.com/fyltr/angee/internal/stackroot"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/operator"
+	"github.com/ang-ee/angee-operator/internal/platformclient"
+	"github.com/ang-ee/angee-operator/internal/service"
+	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 

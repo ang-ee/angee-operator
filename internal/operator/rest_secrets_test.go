@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // TestSecretsRESTEndpointsRequireBearer locks in admin-bearer auth for

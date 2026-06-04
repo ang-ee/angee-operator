@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // Secrets CRUD REST handlers. Auth-gated identically to every other

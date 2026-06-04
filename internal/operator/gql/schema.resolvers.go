@@ -8,9 +8,9 @@ package gql
 import (
 	"context"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/operator/gql/model"
-	"github.com/fyltr/angee/internal/service"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // Compose is the resolver for the compose field.

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/copierx"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 )
 
 // Templates discovers every template under the stack root's

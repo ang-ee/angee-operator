@@ -17,8 +17,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/service"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // RemoteClient implements service.API against a remote operator over HTTP.

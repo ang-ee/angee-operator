@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/copierx"
-	"github.com/fyltr/angee/internal/fslock"
-	"github.com/fyltr/angee/internal/manifest"
-	"github.com/fyltr/angee/internal/ports"
-	"github.com/fyltr/angee/internal/substitute"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/fslock"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/ports"
+	"github.com/ang-ee/angee-operator/internal/substitute"
 	"gopkg.in/yaml.v3"
 )
 

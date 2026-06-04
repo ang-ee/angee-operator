@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/copierx"
-	"github.com/fyltr/angee/internal/git"
-	"github.com/fyltr/angee/internal/manifest"
-	mountx "github.com/fyltr/angee/internal/mount"
-	"github.com/fyltr/angee/internal/ports"
-	"github.com/fyltr/angee/internal/substitute"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	mountx "github.com/ang-ee/angee-operator/internal/mount"
+	"github.com/ang-ee/angee-operator/internal/ports"
+	"github.com/ang-ee/angee-operator/internal/substitute"
 )
 
 const (

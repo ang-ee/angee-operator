@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
 const processComposeInstallPackage = "github.com/f1bonacc1/process-compose@latest"

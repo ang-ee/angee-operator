@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 func TestWorkspaceCreatePreflightFlagsMissingRequired(t *testing.T) {

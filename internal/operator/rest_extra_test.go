@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // TestRESTParityEndpointsRequireBearerToken proves every REST endpoint

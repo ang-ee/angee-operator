@@ -1,4 +1,4 @@
-module github.com/fyltr/angee
+module github.com/ang-ee/angee-operator
 
 go 1.25.0
 

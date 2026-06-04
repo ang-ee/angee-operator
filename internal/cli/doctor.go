@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/internal/copierx"
-	"github.com/fyltr/angee/internal/manifest"
-	"github.com/fyltr/angee/internal/stackroot"
+	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 

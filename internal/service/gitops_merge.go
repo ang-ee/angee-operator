@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // WorkspaceSourceMerge merges `ref` into the workspace source slot's

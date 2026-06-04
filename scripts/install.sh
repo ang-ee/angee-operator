@@ -4,7 +4,7 @@
 set -e
 
 ANGEE_VERSION=latest
-REPO="ang-ee/angee"
+REPO="ang-ee/angee-operator"
 INSTALL_DIR="${ANGEE_INSTALL_DIR:-/usr/local/bin}"
 
 install_bin() {
@@ -110,7 +110,7 @@ if [ -z "$ANGEE_VERSION" ]; then
   }
 
   BUILD_VERSION="$(cd "$SRCDIR" && git describe --tags --always 2>/dev/null || echo dev)"
-  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/fyltr/angee/internal/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
+  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/ang-ee/angee-operator/internal/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
     echo "  ✗ Build failed."
     exit 1
   }

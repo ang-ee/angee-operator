@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {

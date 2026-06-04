@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/service"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // fakeAPI embeds service.API so that any method a test does not override is

@@ -8,6 +8,15 @@ latest tag.
 
 ## v0.5.10 — 2026-06-04
 
+### Repository & module rename
+
+- The repository is now `ang-ee/angee-operator` and the Go module path is
+  `github.com/ang-ee/angee-operator` (was `github.com/fyltr/angee`). Install with
+  `go install github.com/ang-ee/angee-operator/cmd/angee@latest` /
+  `.../cmd/angee-operator@latest`. The `angee` / `angee-operator` binary names are
+  unchanged. GitHub redirects the old repo URL, but update any pinned imports or
+  clone URLs.
+
 ### Architecture (single control-plane contract)
 
 - Extracted `service.API`, one exported interface that is now the single
@@ -82,7 +91,7 @@ latest tag.
 ### Internal
 
 - Fixed the release and CI workflows to use the `ghcr.io/ang-ee/*` container
-  image namespace (and `scripts/install.sh` to use the `ang-ee/angee` repo)
+  image namespace (and `scripts/install.sh` to use the `ang-ee/angee-operator` repo)
   after the GitHub org rename from `fyltr` to `ang-ee`. The v0.5.6 release
   published its binaries but the docker image push was denied against the old
   `fyltr` namespace; v0.5.7 re-publishes with images under the correct one.

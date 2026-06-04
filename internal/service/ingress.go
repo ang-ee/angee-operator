@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 func (p *Platform) ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error) {

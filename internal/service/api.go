@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // API is the canonical control-plane operation surface for one stack root.

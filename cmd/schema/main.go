@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/invopop/jsonschema"
 )
 
