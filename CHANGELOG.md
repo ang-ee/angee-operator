@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.10 — 2026-06-04
+
 ### Architecture (single control-plane contract)
 
 - Extracted `service.API`, one exported interface that is now the single
