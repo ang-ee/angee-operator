@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 func TestServiceEndpointIngressNone(t *testing.T) {

@@ -13,9 +13,9 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/operator/gql/model"
-	"github.com/fyltr/angee/internal/service"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/service"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -3582,7 +3582,7 @@ func (ec *executionContext) field_Mutation_jobRun_args(ctx context.Context, rawA
 	args["name"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "inputs",
 		func(ctx context.Context, v any) ([]*model.KeyValueInput, error) {
-			return ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			return ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3692,7 +3692,7 @@ func (ec *executionContext) field_Mutation_serviceCreate_args(ctx context.Contex
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.ServiceCreateInput, error) {
-			return ec.unmarshalNServiceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceCreateInput(ctx, v)
+			return ec.unmarshalNServiceCreateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceCreateInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3720,7 +3720,7 @@ func (ec *executionContext) field_Mutation_serviceInit_args(ctx context.Context,
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.ServiceInput, error) {
-			return ec.unmarshalNServiceInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx, v)
+			return ec.unmarshalNServiceInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3798,7 +3798,7 @@ func (ec *executionContext) field_Mutation_serviceUpdate_args(ctx context.Contex
 	args["name"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.ServiceInput, error) {
-			return ec.unmarshalNServiceInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx, v)
+			return ec.unmarshalNServiceInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3862,7 +3862,7 @@ func (ec *executionContext) field_Mutation_stackBuild_args(ctx context.Context, 
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (*model.StackRuntimeInput, error) {
-			return ec.unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx, v)
+			return ec.unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3890,7 +3890,7 @@ func (ec *executionContext) field_Mutation_stackDev_args(ctx context.Context, ra
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (*model.StackRuntimeInput, error) {
-			return ec.unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx, v)
+			return ec.unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3904,7 +3904,7 @@ func (ec *executionContext) field_Mutation_stackInit_args(ctx context.Context, r
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.StackInitInput, error) {
-			return ec.unmarshalNStackInitInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitInput(ctx, v)
+			return ec.unmarshalNStackInitInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3918,7 +3918,7 @@ func (ec *executionContext) field_Mutation_stackUp_args(ctx context.Context, raw
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (*model.StackRuntimeInput, error) {
-			return ec.unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx, v)
+			return ec.unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3932,7 +3932,7 @@ func (ec *executionContext) field_Mutation_workspaceCreatePreflight_args(ctx con
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.WorkspaceCreateInput, error) {
-			return ec.unmarshalNWorkspaceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx, v)
+			return ec.unmarshalNWorkspaceCreateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3946,7 +3946,7 @@ func (ec *executionContext) field_Mutation_workspaceCreate_args(ctx context.Cont
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.WorkspaceCreateInput, error) {
-			return ec.unmarshalNWorkspaceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx, v)
+			return ec.unmarshalNWorkspaceCreateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4272,7 +4272,7 @@ func (ec *executionContext) field_Mutation_workspaceUpdate_args(ctx context.Cont
 	args["name"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.WorkspaceUpdateInput, error) {
-			return ec.unmarshalNWorkspaceUpdateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceUpdateInput(ctx, v)
+			return ec.unmarshalNWorkspaceUpdateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceUpdateInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4842,7 +4842,7 @@ func (ec *executionContext) _CompiledStack_secretEnvVars(ctx context.Context, fi
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
-			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
+			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -5104,7 +5104,7 @@ func (ec *executionContext) _DiffFile_hunks(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.DiffHunk) graphql.Marshaler {
-			return ec.marshalNDiffHunk2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffHunkᚄ(ctx, selections, v)
+			return ec.marshalNDiffHunk2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffHunkᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -5366,7 +5366,7 @@ func (ec *executionContext) _GitOpResult_source(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
-			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
+			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6157,7 +6157,7 @@ func (ec *executionContext) _GitOpsTopology_sources(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.SourceState) graphql.Marshaler {
-			return ec.marshalNSourceState2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx, selections, v)
+			return ec.marshalNSourceState2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6189,7 +6189,7 @@ func (ec *executionContext) _GitOpsTopology_workspaces(ctx context.Context, fiel
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceStatusResponse) graphql.Marshaler {
-			return ec.marshalNWorkspaceStatus2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponseᚄ(ctx, selections, v)
+			return ec.marshalNWorkspaceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponseᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6221,7 +6221,7 @@ func (ec *executionContext) _GitOpsTopology_links(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.GitOpsLink) graphql.Marshaler {
-			return ec.marshalNGitOpsLink2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsLinkᚄ(ctx, selections, v)
+			return ec.marshalNGitOpsLink2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLinkᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6253,7 +6253,7 @@ func (ec *executionContext) _GitOpsTopology_summary(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v api.GitOpsSummary) graphql.Marshaler {
-			return ec.marshalNGitOpsSummary2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsSummary(ctx, selections, v)
+			return ec.marshalNGitOpsSummary2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsSummary(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6331,7 +6331,7 @@ func (ec *executionContext) _IngressStatus_routes(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.RouteRef) graphql.Marshaler {
-			return ec.marshalNRouteRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRefᚄ(ctx, selections, v)
+			return ec.marshalNRouteRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐRouteRefᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6456,7 +6456,7 @@ func (ec *executionContext) _Mutation_stackInit(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.StackInitResult) graphql.Marshaler {
-			return ec.marshalOStackInitResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitResult(ctx, selections, v)
+			return ec.marshalOStackInitResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6499,7 +6499,7 @@ func (ec *executionContext) _Mutation_stackUpdate(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6531,7 +6531,7 @@ func (ec *executionContext) _Mutation_stackPrepare(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *service.CompiledStack) graphql.Marshaler {
-			return ec.marshalOCompiledStack2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋserviceᚐCompiledStack(ctx, selections, v)
+			return ec.marshalOCompiledStack2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋserviceᚐCompiledStack(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6564,7 +6564,7 @@ func (ec *executionContext) _Mutation_stackBuild(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6608,7 +6608,7 @@ func (ec *executionContext) _Mutation_stackUp(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6652,7 +6652,7 @@ func (ec *executionContext) _Mutation_stackDev(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6695,7 +6695,7 @@ func (ec *executionContext) _Mutation_stackDown(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6728,7 +6728,7 @@ func (ec *executionContext) _Mutation_stackDestroy(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6816,7 +6816,7 @@ func (ec *executionContext) _Mutation_serviceInit(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6860,7 +6860,7 @@ func (ec *executionContext) _Mutation_serviceCreate(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
-			return ec.marshalOServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx, selections, v)
+			return ec.marshalOServiceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceState(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6904,7 +6904,7 @@ func (ec *executionContext) _Mutation_serviceUpdate(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6948,7 +6948,7 @@ func (ec *executionContext) _Mutation_serviceUp(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -6992,7 +6992,7 @@ func (ec *executionContext) _Mutation_serviceStart(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7036,7 +7036,7 @@ func (ec *executionContext) _Mutation_serviceStop(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7080,7 +7080,7 @@ func (ec *executionContext) _Mutation_serviceRestart(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7124,7 +7124,7 @@ func (ec *executionContext) _Mutation_serviceDestroy(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7168,7 +7168,7 @@ func (ec *executionContext) _Mutation_sourceFetch(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
-			return ec.marshalOSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx, selections, v)
+			return ec.marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7212,7 +7212,7 @@ func (ec *executionContext) _Mutation_sourcePull(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
-			return ec.marshalOSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx, selections, v)
+			return ec.marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7256,7 +7256,7 @@ func (ec *executionContext) _Mutation_sourcePush(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
-			return ec.marshalOSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx, selections, v)
+			return ec.marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7300,7 +7300,7 @@ func (ec *executionContext) _Mutation_workspaceCreate(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
-			return ec.marshalOWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRef(ctx, selections, v)
+			return ec.marshalOWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7344,7 +7344,7 @@ func (ec *executionContext) _Mutation_workspaceUpdate(ctx context.Context, field
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
-			return ec.marshalOWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRef(ctx, selections, v)
+			return ec.marshalOWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7388,7 +7388,7 @@ func (ec *executionContext) _Mutation_workspaceDestroy(ctx context.Context, fiel
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7432,7 +7432,7 @@ func (ec *executionContext) _Mutation_workspacePush(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
-			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx, selections, v)
+			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7476,7 +7476,7 @@ func (ec *executionContext) _Mutation_workspaceSyncBase(ctx context.Context, fie
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
-			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx, selections, v)
+			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7520,7 +7520,7 @@ func (ec *executionContext) _Mutation_workspaceSourceFetch(ctx context.Context, 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
-			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
+			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7564,7 +7564,7 @@ func (ec *executionContext) _Mutation_workspaceSourcePull(ctx context.Context, f
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
-			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
+			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7608,7 +7608,7 @@ func (ec *executionContext) _Mutation_workspaceSourcePush(ctx context.Context, f
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
-			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
+			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
 		},
 		true,
 		false,
@@ -7652,7 +7652,7 @@ func (ec *executionContext) _Mutation_workspaceCreatePreflight(ctx context.Conte
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceCreatePreflightResponse) graphql.Marshaler {
-			return ec.marshalNWorkspaceCreatePreflight2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceCreatePreflightResponse(ctx, selections, v)
+			return ec.marshalNWorkspaceCreatePreflight2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceCreatePreflightResponse(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7696,7 +7696,7 @@ func (ec *executionContext) _Mutation_mintConnectionToken(ctx context.Context, f
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.ConnectionTokenResponse) graphql.Marshaler {
-			return ec.marshalNConnectionToken2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐConnectionTokenResponse(ctx, selections, v)
+			return ec.marshalNConnectionToken2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐConnectionTokenResponse(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7740,7 +7740,7 @@ func (ec *executionContext) _Mutation_mintRouteToken(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.ConnectionTokenResponse) graphql.Marshaler {
-			return ec.marshalNConnectionToken2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐConnectionTokenResponse(ctx, selections, v)
+			return ec.marshalNConnectionToken2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐConnectionTokenResponse(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7784,7 +7784,7 @@ func (ec *executionContext) _Mutation_workspaceSourceMerge(ctx context.Context, 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
-			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7828,7 +7828,7 @@ func (ec *executionContext) _Mutation_workspaceSourceRebase(ctx context.Context,
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
-			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7872,7 +7872,7 @@ func (ec *executionContext) _Mutation_workspaceSourceMergeAbort(ctx context.Cont
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
-			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7916,7 +7916,7 @@ func (ec *executionContext) _Mutation_workspaceSourceRebaseAbort(ctx context.Con
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
-			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7960,7 +7960,7 @@ func (ec *executionContext) _Mutation_workspaceSourceRebaseContinue(ctx context.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
-			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8004,7 +8004,7 @@ func (ec *executionContext) _Mutation_workspaceSourcePublish(ctx context.Context
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
-			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx, selections, v)
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8048,7 +8048,7 @@ func (ec *executionContext) _Mutation_secretSet(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SecretRef) graphql.Marshaler {
-			return ec.marshalNSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx, selections, v)
+			return ec.marshalNSecretRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRef(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8092,7 +8092,7 @@ func (ec *executionContext) _Mutation_secretDelete(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalNMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalNMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8250,7 +8250,7 @@ func (ec *executionContext) _Query_health(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
-			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8282,7 +8282,7 @@ func (ec *executionContext) _Query_stackStatus(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.StackStatusResponse) graphql.Marshaler {
-			return ec.marshalOStackStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐStackStatusResponse(ctx, selections, v)
+			return ec.marshalOStackStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStackStatusResponse(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8315,7 +8315,7 @@ func (ec *executionContext) _Query_serviceEndpoint(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.ServiceEndpoint) graphql.Marshaler {
-			return ec.marshalOServiceEndpoint2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceEndpoint(ctx, selections, v)
+			return ec.marshalOServiceEndpoint2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceEndpoint(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8358,7 +8358,7 @@ func (ec *executionContext) _Query_ingressStatus(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.IngressStatus) graphql.Marshaler {
-			return ec.marshalOIngressStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐIngressStatus(ctx, selections, v)
+			return ec.marshalOIngressStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐIngressStatus(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8390,7 +8390,7 @@ func (ec *executionContext) _Query_services(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.ServiceState) graphql.Marshaler {
-			return ec.marshalNServiceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceStateᚄ(ctx, selections, v)
+			return ec.marshalNServiceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8422,7 +8422,7 @@ func (ec *executionContext) _Query_jobs(ctx context.Context, field graphql.Colle
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.JobState) graphql.Marshaler {
-			return ec.marshalNJobState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐJobStateᚄ(ctx, selections, v)
+			return ec.marshalNJobState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐJobStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8454,7 +8454,7 @@ func (ec *executionContext) _Query_sources(ctx context.Context, field graphql.Co
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
-			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx, selections, v)
+			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8487,7 +8487,7 @@ func (ec *executionContext) _Query_source(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
-			return ec.marshalOSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx, selections, v)
+			return ec.marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8530,7 +8530,7 @@ func (ec *executionContext) _Query_workspaces(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.WorkspaceRef) graphql.Marshaler {
-			return ec.marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRefᚄ(ctx, selections, v)
+			return ec.marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRefᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8563,7 +8563,7 @@ func (ec *executionContext) _Query_workspace(ctx context.Context, field graphql.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
-			return ec.marshalOWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRef(ctx, selections, v)
+			return ec.marshalOWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8607,7 +8607,7 @@ func (ec *executionContext) _Query_workspaceStatus(ctx context.Context, field gr
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
-			return ec.marshalOWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx, selections, v)
+			return ec.marshalOWorkspaceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8651,7 +8651,7 @@ func (ec *executionContext) _Query_workspaceGit(ctx context.Context, field graph
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
-			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx, selections, v)
+			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8695,7 +8695,7 @@ func (ec *executionContext) _Query_gitOpsTopology(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
-			return ec.marshalOGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx, selections, v)
+			return ec.marshalOGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx, selections, v)
 		},
 		true,
 		false,
@@ -8739,7 +8739,7 @@ func (ec *executionContext) _Query_sourceDiff(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.DiffFile) graphql.Marshaler {
-			return ec.marshalNDiffFile2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffFileᚄ(ctx, selections, v)
+			return ec.marshalNDiffFile2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffFileᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8783,7 +8783,7 @@ func (ec *executionContext) _Query_workspaceSourceDiff(ctx context.Context, fiel
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.DiffFile) graphql.Marshaler {
-			return ec.marshalNDiffFile2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffFileᚄ(ctx, selections, v)
+			return ec.marshalNDiffFile2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffFileᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8981,7 +8981,7 @@ func (ec *executionContext) _Query_templates(ctx context.Context, field graphql.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.TemplateDescriptor) graphql.Marshaler {
-			return ec.marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateDescriptorᚄ(ctx, selections, v)
+			return ec.marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptorᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9014,7 +9014,7 @@ func (ec *executionContext) _Query_template(ctx context.Context, field graphql.C
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.TemplateDescriptor) graphql.Marshaler {
-			return ec.marshalOTemplateDescriptor2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateDescriptor(ctx, selections, v)
+			return ec.marshalOTemplateDescriptor2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptor(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9057,7 +9057,7 @@ func (ec *executionContext) _Query_secrets(ctx context.Context, field graphql.Co
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.SecretRef) graphql.Marshaler {
-			return ec.marshalNSecretRef2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRefᚄ(ctx, selections, v)
+			return ec.marshalNSecretRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRefᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -9090,7 +9090,7 @@ func (ec *executionContext) _Query_secret(ctx context.Context, field graphql.Col
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SecretRef) graphql.Marshaler {
-			return ec.marshalOSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx, selections, v)
+			return ec.marshalOSecretRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRef(ctx, selections, v)
 		},
 		true,
 		false,
@@ -9134,7 +9134,7 @@ func (ec *executionContext) _Query_secretValue(ctx context.Context, field graphq
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.SecretValueResponse) graphql.Marshaler {
-			return ec.marshalOSecretValue2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretValueResponse(ctx, selections, v)
+			return ec.marshalOSecretValue2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretValueResponse(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10058,7 +10058,7 @@ func (ec *executionContext) _SourceState_commits(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.CommitRef) graphql.Marshaler {
-			return ec.marshalOCommitRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐCommitRefᚄ(ctx, selections, v)
+			return ec.marshalOCommitRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐCommitRefᚄ(ctx, selections, v)
 		},
 		true,
 		false,
@@ -10205,7 +10205,7 @@ func (ec *executionContext) _StackStatus_services(ctx context.Context, field gra
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.ServiceState) graphql.Marshaler {
-			return ec.marshalNServiceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceStateᚄ(ctx, selections, v)
+			return ec.marshalNServiceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10237,7 +10237,7 @@ func (ec *executionContext) _StackStatus_jobs(ctx context.Context, field graphql
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.JobState) graphql.Marshaler {
-			return ec.marshalNJobState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐJobStateᚄ(ctx, selections, v)
+			return ec.marshalNJobState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐJobStateᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10269,7 +10269,7 @@ func (ec *executionContext) _StackStatus_workspaces(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*api.WorkspaceRef) graphql.Marshaler {
-			return ec.marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRefᚄ(ctx, selections, v)
+			return ec.marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRefᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10301,7 +10301,7 @@ func (ec *executionContext) _Subscription_onGitOpsTopologyChange(ctx context.Con
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
-			return ec.marshalNGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx, selections, v)
+			return ec.marshalNGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10422,7 +10422,7 @@ func (ec *executionContext) _Subscription_onWorkspaceStatusChange(ctx context.Co
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
-			return ec.marshalNWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx, selections, v)
+			return ec.marshalNWorkspaceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10557,7 +10557,7 @@ func (ec *executionContext) _TemplateDescriptor_inputs(ctx context.Context, fiel
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.TemplateInputDescriptor) graphql.Marshaler {
-			return ec.marshalNTemplateInputDescriptor2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateInputDescriptorᚄ(ctx, selections, v)
+			return ec.marshalNTemplateInputDescriptor2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputDescriptorᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10819,7 +10819,7 @@ func (ec *executionContext) _WorkspaceCreatePreflight_effectiveInputs(ctx contex
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
-			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
+			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -10874,7 +10874,7 @@ func (ec *executionContext) _WorkspaceCreatePreflight_invalidInputs(ctx context.
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.PreflightFailure) graphql.Marshaler {
-			return ec.marshalNPreflightFailure2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐPreflightFailureᚄ(ctx, selections, v)
+			return ec.marshalNPreflightFailure2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐPreflightFailureᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11757,7 +11757,7 @@ func (ec *executionContext) _WorkspaceStatus_sources(ctx context.Context, field 
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceSourceStatus) graphql.Marshaler {
-			return ec.marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatusᚄ(ctx, selections, v)
+			return ec.marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatusᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -12019,7 +12019,7 @@ func (ec *executionContext) _WorkspaceStatus_mountedBy(ctx context.Context, fiel
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceMountRef) graphql.Marshaler {
-			return ec.marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceMountRefᚄ(ctx, selections, v)
+			return ec.marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRefᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -12051,7 +12051,7 @@ func (ec *executionContext) _WorkspaceStatus_innerStack(ctx context.Context, fie
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *api.StackStatusResponse) graphql.Marshaler {
-			return ec.marshalOStackStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐStackStatusResponse(ctx, selections, v)
+			return ec.marshalOStackStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStackStatusResponse(ctx, selections, v)
 		},
 		true,
 		false,
@@ -13223,7 +13223,7 @@ func (ec *executionContext) unmarshalInputServiceCreateInput(ctx context.Context
 			it.Workspace = data
 		case "inputs":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inputs"))
-			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -13302,7 +13302,7 @@ func (ec *executionContext) unmarshalInputServiceInput(ctx context.Context, obj 
 			it.Mounts = data
 		case "env":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("env"))
-			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -13367,7 +13367,7 @@ func (ec *executionContext) unmarshalInputStackInitInput(ctx context.Context, ob
 			it.Path = data
 		case "inputs":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inputs"))
-			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -13455,7 +13455,7 @@ func (ec *executionContext) unmarshalInputWorkspaceCreateInput(ctx context.Conte
 			it.Name = data
 		case "inputs":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inputs"))
-			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -13492,7 +13492,7 @@ func (ec *executionContext) unmarshalInputWorkspaceUpdateInput(ctx context.Conte
 		switch k {
 		case "inputs":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inputs"))
-			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -16795,15 +16795,15 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) marshalNCommitRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐCommitRef(ctx context.Context, sel ast.SelectionSet, v api.CommitRef) graphql.Marshaler {
+func (ec *executionContext) marshalNCommitRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐCommitRef(ctx context.Context, sel ast.SelectionSet, v api.CommitRef) graphql.Marshaler {
 	return ec._CommitRef(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNConnectionToken2githubᚗcomᚋfyltrᚋangeeᚋapiᚐConnectionTokenResponse(ctx context.Context, sel ast.SelectionSet, v api.ConnectionTokenResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNConnectionToken2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐConnectionTokenResponse(ctx context.Context, sel ast.SelectionSet, v api.ConnectionTokenResponse) graphql.Marshaler {
 	return ec._ConnectionToken(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNConnectionToken2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐConnectionTokenResponse(ctx context.Context, sel ast.SelectionSet, v *api.ConnectionTokenResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNConnectionToken2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐConnectionTokenResponse(ctx context.Context, sel ast.SelectionSet, v *api.ConnectionTokenResponse) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16813,11 +16813,11 @@ func (ec *executionContext) marshalNConnectionToken2ᚖgithubᚗcomᚋfyltrᚋan
 	return ec._ConnectionToken(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNDiffFile2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffFileᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.DiffFile) graphql.Marshaler {
+func (ec *executionContext) marshalNDiffFile2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffFileᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.DiffFile) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNDiffFile2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffFile(ctx, sel, v[i])
+		return ec.marshalNDiffFile2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffFile(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -16829,7 +16829,7 @@ func (ec *executionContext) marshalNDiffFile2ᚕᚖgithubᚗcomᚋfyltrᚋangee�
 	return ret
 }
 
-func (ec *executionContext) marshalNDiffFile2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffFile(ctx context.Context, sel ast.SelectionSet, v *api.DiffFile) graphql.Marshaler {
+func (ec *executionContext) marshalNDiffFile2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffFile(ctx context.Context, sel ast.SelectionSet, v *api.DiffFile) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16839,15 +16839,15 @@ func (ec *executionContext) marshalNDiffFile2ᚖgithubᚗcomᚋfyltrᚋangeeᚋa
 	return ec._DiffFile(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNDiffHunk2githubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffHunk(ctx context.Context, sel ast.SelectionSet, v api.DiffHunk) graphql.Marshaler {
+func (ec *executionContext) marshalNDiffHunk2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffHunk(ctx context.Context, sel ast.SelectionSet, v api.DiffHunk) graphql.Marshaler {
 	return ec._DiffHunk(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNDiffHunk2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffHunkᚄ(ctx context.Context, sel ast.SelectionSet, v []api.DiffHunk) graphql.Marshaler {
+func (ec *executionContext) marshalNDiffHunk2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffHunkᚄ(ctx context.Context, sel ast.SelectionSet, v []api.DiffHunk) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNDiffHunk2githubᚗcomᚋfyltrᚋangeeᚋapiᚐDiffHunk(ctx, sel, v[i])
+		return ec.marshalNDiffHunk2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐDiffHunk(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -16859,11 +16859,11 @@ func (ec *executionContext) marshalNDiffHunk2ᚕgithubᚗcomᚋfyltrᚋangeeᚋa
 	return ret
 }
 
-func (ec *executionContext) marshalNGitOpResult2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v api.GitOpResult) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpResult2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v api.GitOpResult) graphql.Marshaler {
 	return ec._GitOpResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16873,15 +16873,15 @@ func (ec *executionContext) marshalNGitOpResult2ᚖgithubᚗcomᚋfyltrᚋangee�
 	return ec._GitOpResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNGitOpsLink2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsLink(ctx context.Context, sel ast.SelectionSet, v api.GitOpsLink) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpsLink2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLink(ctx context.Context, sel ast.SelectionSet, v api.GitOpsLink) graphql.Marshaler {
 	return ec._GitOpsLink(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNGitOpsLink2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []api.GitOpsLink) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpsLink2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []api.GitOpsLink) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNGitOpsLink2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsLink(ctx, sel, v[i])
+		return ec.marshalNGitOpsLink2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLink(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -16893,15 +16893,15 @@ func (ec *executionContext) marshalNGitOpsLink2ᚕgithubᚗcomᚋfyltrᚋangee�
 	return ret
 }
 
-func (ec *executionContext) marshalNGitOpsSummary2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsSummary(ctx context.Context, sel ast.SelectionSet, v api.GitOpsSummary) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpsSummary2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsSummary(ctx context.Context, sel ast.SelectionSet, v api.GitOpsSummary) graphql.Marshaler {
 	return ec._GitOpsSummary(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNGitOpsTopology2githubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v api.GitOpsTopologyResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpsTopology2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v api.GitOpsTopologyResponse) graphql.Marshaler {
 	return ec._GitOpsTopology(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16927,11 +16927,11 @@ func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.Selecti
 	return res
 }
 
-func (ec *executionContext) marshalNJobState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐJobStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.JobState) graphql.Marshaler {
+func (ec *executionContext) marshalNJobState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐJobStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.JobState) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNJobState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐJobState(ctx, sel, v[i])
+		return ec.marshalNJobState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐJobState(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -16943,7 +16943,7 @@ func (ec *executionContext) marshalNJobState2ᚕᚖgithubᚗcomᚋfyltrᚋangee�
 	return ret
 }
 
-func (ec *executionContext) marshalNJobState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐJobState(ctx context.Context, sel ast.SelectionSet, v *api.JobState) graphql.Marshaler {
+func (ec *executionContext) marshalNJobState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐJobState(ctx context.Context, sel ast.SelectionSet, v *api.JobState) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16953,11 +16953,11 @@ func (ec *executionContext) marshalNJobState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋa
 	return ec._JobState(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNKeyValue2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
+func (ec *executionContext) marshalNKeyValue2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNKeyValue2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValue(ctx, sel, v[i])
+		return ec.marshalNKeyValue2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValue(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -16969,7 +16969,7 @@ func (ec *executionContext) marshalNKeyValue2ᚕᚖgithubᚗcomᚋfyltrᚋangee�
 	return ret
 }
 
-func (ec *executionContext) marshalNKeyValue2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValue(ctx context.Context, sel ast.SelectionSet, v *model.KeyValue) graphql.Marshaler {
+func (ec *executionContext) marshalNKeyValue2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValue(ctx context.Context, sel ast.SelectionSet, v *model.KeyValue) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16979,16 +16979,16 @@ func (ec *executionContext) marshalNKeyValue2ᚖgithubᚗcomᚋfyltrᚋangeeᚋi
 	return ec._KeyValue(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNKeyValueInput2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInput(ctx context.Context, v any) (*model.KeyValueInput, error) {
+func (ec *executionContext) unmarshalNKeyValueInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInput(ctx context.Context, v any) (*model.KeyValueInput, error) {
 	res, err := ec.unmarshalInputKeyValueInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNMutationResult2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v model.MutationResult) graphql.Marshaler {
+func (ec *executionContext) marshalNMutationResult2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v model.MutationResult) graphql.Marshaler {
 	return ec._MutationResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
+func (ec *executionContext) marshalNMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -16998,15 +16998,15 @@ func (ec *executionContext) marshalNMutationResult2ᚖgithubᚗcomᚋfyltrᚋang
 	return ec._MutationResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNPreflightFailure2githubᚗcomᚋfyltrᚋangeeᚋapiᚐPreflightFailure(ctx context.Context, sel ast.SelectionSet, v api.PreflightFailure) graphql.Marshaler {
+func (ec *executionContext) marshalNPreflightFailure2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐPreflightFailure(ctx context.Context, sel ast.SelectionSet, v api.PreflightFailure) graphql.Marshaler {
 	return ec._PreflightFailure(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNPreflightFailure2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐPreflightFailureᚄ(ctx context.Context, sel ast.SelectionSet, v []api.PreflightFailure) graphql.Marshaler {
+func (ec *executionContext) marshalNPreflightFailure2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐPreflightFailureᚄ(ctx context.Context, sel ast.SelectionSet, v []api.PreflightFailure) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNPreflightFailure2githubᚗcomᚋfyltrᚋangeeᚋapiᚐPreflightFailure(ctx, sel, v[i])
+		return ec.marshalNPreflightFailure2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐPreflightFailure(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17018,15 +17018,15 @@ func (ec *executionContext) marshalNPreflightFailure2ᚕgithubᚗcomᚋfyltrᚋa
 	return ret
 }
 
-func (ec *executionContext) marshalNRouteRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRef(ctx context.Context, sel ast.SelectionSet, v api.RouteRef) graphql.Marshaler {
+func (ec *executionContext) marshalNRouteRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐRouteRef(ctx context.Context, sel ast.SelectionSet, v api.RouteRef) graphql.Marshaler {
 	return ec._RouteRef(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRouteRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.RouteRef) graphql.Marshaler {
+func (ec *executionContext) marshalNRouteRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐRouteRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.RouteRef) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNRouteRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐRouteRef(ctx, sel, v[i])
+		return ec.marshalNRouteRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐRouteRef(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17038,15 +17038,15 @@ func (ec *executionContext) marshalNRouteRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋa
 	return ret
 }
 
-func (ec *executionContext) marshalNSecretRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v api.SecretRef) graphql.Marshaler {
+func (ec *executionContext) marshalNSecretRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v api.SecretRef) graphql.Marshaler {
 	return ec._SecretRef(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNSecretRef2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRefᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.SecretRef) graphql.Marshaler {
+func (ec *executionContext) marshalNSecretRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRefᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.SecretRef) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx, sel, v[i])
+		return ec.marshalNSecretRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRef(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17058,7 +17058,7 @@ func (ec *executionContext) marshalNSecretRef2ᚕᚖgithubᚗcomᚋfyltrᚋangee
 	return ret
 }
 
-func (ec *executionContext) marshalNSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v *api.SecretRef) graphql.Marshaler {
+func (ec *executionContext) marshalNSecretRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v *api.SecretRef) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17068,21 +17068,21 @@ func (ec *executionContext) marshalNSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋ
 	return ec._SecretRef(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNServiceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceCreateInput(ctx context.Context, v any) (model.ServiceCreateInput, error) {
+func (ec *executionContext) unmarshalNServiceCreateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceCreateInput(ctx context.Context, v any) (model.ServiceCreateInput, error) {
 	res, err := ec.unmarshalInputServiceCreateInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalNServiceInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx context.Context, v any) (model.ServiceInput, error) {
+func (ec *executionContext) unmarshalNServiceInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceInput(ctx context.Context, v any) (model.ServiceInput, error) {
 	res, err := ec.unmarshalInputServiceInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNServiceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.ServiceState) graphql.Marshaler {
+func (ec *executionContext) marshalNServiceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.ServiceState) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx, sel, v[i])
+		return ec.marshalNServiceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceState(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17094,7 +17094,7 @@ func (ec *executionContext) marshalNServiceState2ᚕᚖgithubᚗcomᚋfyltrᚋan
 	return ret
 }
 
-func (ec *executionContext) marshalNServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
+func (ec *executionContext) marshalNServiceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17104,15 +17104,15 @@ func (ec *executionContext) marshalNServiceState2ᚖgithubᚗcomᚋfyltrᚋangee
 	return ec._ServiceState(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNSourceState2githubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v api.SourceState) graphql.Marshaler {
+func (ec *executionContext) marshalNSourceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v api.SourceState) graphql.Marshaler {
 	return ec._SourceState(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNSourceState2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []api.SourceState) graphql.Marshaler {
+func (ec *executionContext) marshalNSourceState2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []api.SourceState) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNSourceState2githubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx, sel, v[i])
+		return ec.marshalNSourceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17124,11 +17124,11 @@ func (ec *executionContext) marshalNSourceState2ᚕgithubᚗcomᚋfyltrᚋangee�
 	return ret
 }
 
-func (ec *executionContext) marshalNSourceState2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
+func (ec *executionContext) marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx, sel, v[i])
+		return ec.marshalNSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17140,7 +17140,7 @@ func (ec *executionContext) marshalNSourceState2ᚕᚖgithubᚗcomᚋfyltrᚋang
 	return ret
 }
 
-func (ec *executionContext) marshalNSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
+func (ec *executionContext) marshalNSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17150,7 +17150,7 @@ func (ec *executionContext) marshalNSourceState2ᚖgithubᚗcomᚋfyltrᚋangee�
 	return ec._SourceState(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNStackInitInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitInput(ctx context.Context, v any) (model.StackInitInput, error) {
+func (ec *executionContext) unmarshalNStackInitInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitInput(ctx context.Context, v any) (model.StackInitInput, error) {
 	res, err := ec.unmarshalInputStackInitInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
@@ -17201,11 +17201,11 @@ func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel
 	return ret
 }
 
-func (ec *executionContext) marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateDescriptorᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.TemplateDescriptor) graphql.Marshaler {
+func (ec *executionContext) marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptorᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.TemplateDescriptor) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTemplateDescriptor2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateDescriptor(ctx, sel, v[i])
+		return ec.marshalNTemplateDescriptor2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptor(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17217,7 +17217,7 @@ func (ec *executionContext) marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋfylt
 	return ret
 }
 
-func (ec *executionContext) marshalNTemplateDescriptor2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateDescriptor(ctx context.Context, sel ast.SelectionSet, v *api.TemplateDescriptor) graphql.Marshaler {
+func (ec *executionContext) marshalNTemplateDescriptor2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptor(ctx context.Context, sel ast.SelectionSet, v *api.TemplateDescriptor) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17227,15 +17227,15 @@ func (ec *executionContext) marshalNTemplateDescriptor2ᚖgithubᚗcomᚋfyltr�
 	return ec._TemplateDescriptor(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNTemplateInputDescriptor2githubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateInputDescriptor(ctx context.Context, sel ast.SelectionSet, v api.TemplateInputDescriptor) graphql.Marshaler {
+func (ec *executionContext) marshalNTemplateInputDescriptor2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputDescriptor(ctx context.Context, sel ast.SelectionSet, v api.TemplateInputDescriptor) graphql.Marshaler {
 	return ec._TemplateInputDescriptor(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTemplateInputDescriptor2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateInputDescriptorᚄ(ctx context.Context, sel ast.SelectionSet, v []api.TemplateInputDescriptor) graphql.Marshaler {
+func (ec *executionContext) marshalNTemplateInputDescriptor2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputDescriptorᚄ(ctx context.Context, sel ast.SelectionSet, v []api.TemplateInputDescriptor) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTemplateInputDescriptor2githubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateInputDescriptor(ctx, sel, v[i])
+		return ec.marshalNTemplateInputDescriptor2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputDescriptor(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17247,16 +17247,16 @@ func (ec *executionContext) marshalNTemplateInputDescriptor2ᚕgithubᚗcomᚋfy
 	return ret
 }
 
-func (ec *executionContext) unmarshalNWorkspaceCreateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx context.Context, v any) (model.WorkspaceCreateInput, error) {
+func (ec *executionContext) unmarshalNWorkspaceCreateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx context.Context, v any) (model.WorkspaceCreateInput, error) {
 	res, err := ec.unmarshalInputWorkspaceCreateInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNWorkspaceCreatePreflight2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceCreatePreflightResponse(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceCreatePreflightResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceCreatePreflight2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceCreatePreflightResponse(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceCreatePreflightResponse) graphql.Marshaler {
 	return ec._WorkspaceCreatePreflight(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkspaceCreatePreflight2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceCreatePreflightResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceCreatePreflightResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceCreatePreflight2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceCreatePreflightResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceCreatePreflightResponse) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17266,15 +17266,15 @@ func (ec *executionContext) marshalNWorkspaceCreatePreflight2ᚖgithubᚗcomᚋf
 	return ec._WorkspaceCreatePreflight(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNWorkspaceMountRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceMountRef(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceMountRef) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceMountRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRef(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceMountRef) graphql.Marshaler {
 	return ec._WorkspaceMountRef(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceMountRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceMountRef) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceMountRef) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceMountRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceMountRef(ctx, sel, v[i])
+		return ec.marshalNWorkspaceMountRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRef(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17286,11 +17286,11 @@ func (ec *executionContext) marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋfyltrᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRefᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.WorkspaceRef) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRefᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.WorkspaceRef) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRef(ctx, sel, v[i])
+		return ec.marshalNWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17302,7 +17302,7 @@ func (ec *executionContext) marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋfyltrᚋan
 	return ret
 }
 
-func (ec *executionContext) marshalNWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRef(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17312,15 +17312,15 @@ func (ec *executionContext) marshalNWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangee
 	return ec._WorkspaceRef(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNWorkspaceSourceStatus2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceSourceStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceSourceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceSourceStatus) graphql.Marshaler {
 	return ec._WorkspaceSourceStatus(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceSourceStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceSourceStatus) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceSourceStatus2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx, sel, v[i])
+		return ec.marshalNWorkspaceSourceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17332,15 +17332,15 @@ func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋfylt
 	return ret
 }
 
-func (ec *executionContext) marshalNWorkspaceStatus2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceStatusResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceStatusResponse) graphql.Marshaler {
 	return ec._WorkspaceStatus(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkspaceStatus2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponseᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceStatusResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponseᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceStatusResponse) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceStatus2githubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx, sel, v[i])
+		return ec.marshalNWorkspaceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17352,7 +17352,7 @@ func (ec *executionContext) marshalNWorkspaceStatus2ᚕgithubᚗcomᚋfyltrᚋan
 	return ret
 }
 
-func (ec *executionContext) marshalNWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -17362,7 +17362,7 @@ func (ec *executionContext) marshalNWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋan
 	return ec._WorkspaceStatus(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNWorkspaceUpdateInput2githubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceUpdateInput(ctx context.Context, v any) (model.WorkspaceUpdateInput, error) {
+func (ec *executionContext) unmarshalNWorkspaceUpdateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceUpdateInput(ctx context.Context, v any) (model.WorkspaceUpdateInput, error) {
 	res, err := ec.unmarshalInputWorkspaceUpdateInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
@@ -17538,14 +17538,14 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
-func (ec *executionContext) marshalOCommitRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋapiᚐCommitRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.CommitRef) graphql.Marshaler {
+func (ec *executionContext) marshalOCommitRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐCommitRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.CommitRef) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNCommitRef2githubᚗcomᚋfyltrᚋangeeᚋapiᚐCommitRef(ctx, sel, v[i])
+		return ec.marshalNCommitRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐCommitRef(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -17557,21 +17557,21 @@ func (ec *executionContext) marshalOCommitRef2ᚕgithubᚗcomᚋfyltrᚋangeeᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalOCompiledStack2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋserviceᚐCompiledStack(ctx context.Context, sel ast.SelectionSet, v *service.CompiledStack) graphql.Marshaler {
+func (ec *executionContext) marshalOCompiledStack2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋserviceᚐCompiledStack(ctx context.Context, sel ast.SelectionSet, v *service.CompiledStack) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._CompiledStack(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOGitOpsTopology2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
+func (ec *executionContext) marshalOGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._GitOpsTopology(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOIngressStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐIngressStatus(ctx context.Context, sel ast.SelectionSet, v *api.IngressStatus) graphql.Marshaler {
+func (ec *executionContext) marshalOIngressStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐIngressStatus(ctx context.Context, sel ast.SelectionSet, v *api.IngressStatus) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -17626,7 +17626,7 @@ func (ec *executionContext) marshalOJSON2map(ctx context.Context, sel ast.Select
 	return res
 }
 
-func (ec *executionContext) unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx context.Context, v any) ([]*model.KeyValueInput, error) {
+func (ec *executionContext) unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx context.Context, v any) ([]*model.KeyValueInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -17636,7 +17636,7 @@ func (ec *executionContext) unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltr�
 	res := make([]*model.KeyValueInput, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNKeyValueInput2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInput(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNKeyValueInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInput(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -17644,56 +17644,56 @@ func (ec *executionContext) unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋfyltr�
 	return res, nil
 }
 
-func (ec *executionContext) marshalOMutationResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
+func (ec *executionContext) marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._MutationResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOSecretRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v *api.SecretRef) graphql.Marshaler {
+func (ec *executionContext) marshalOSecretRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRef(ctx context.Context, sel ast.SelectionSet, v *api.SecretRef) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._SecretRef(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOSecretValue2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSecretValueResponse(ctx context.Context, sel ast.SelectionSet, v *api.SecretValueResponse) graphql.Marshaler {
+func (ec *executionContext) marshalOSecretValue2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretValueResponse(ctx context.Context, sel ast.SelectionSet, v *api.SecretValueResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._SecretValue(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOServiceEndpoint2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceEndpoint(ctx context.Context, sel ast.SelectionSet, v *api.ServiceEndpoint) graphql.Marshaler {
+func (ec *executionContext) marshalOServiceEndpoint2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceEndpoint(ctx context.Context, sel ast.SelectionSet, v *api.ServiceEndpoint) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ServiceEndpoint(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOServiceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
+func (ec *executionContext) marshalOServiceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v *api.ServiceState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ServiceState(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOSourceState2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
+func (ec *executionContext) marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._SourceState(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOStackInitResult2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitResult(ctx context.Context, sel ast.SelectionSet, v *model.StackInitResult) graphql.Marshaler {
+func (ec *executionContext) marshalOStackInitResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitResult(ctx context.Context, sel ast.SelectionSet, v *model.StackInitResult) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._StackInitResult(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋfyltrᚋangeeᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx context.Context, v any) (*model.StackRuntimeInput, error) {
+func (ec *executionContext) unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackRuntimeInput(ctx context.Context, v any) (*model.StackRuntimeInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -17701,7 +17701,7 @@ func (ec *executionContext) unmarshalOStackRuntimeInput2ᚖgithubᚗcomᚋfyltr�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOStackStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐStackStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.StackStatusResponse) graphql.Marshaler {
+func (ec *executionContext) marshalOStackStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStackStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.StackStatusResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -17774,28 +17774,28 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 	return res
 }
 
-func (ec *executionContext) marshalOTemplateDescriptor2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐTemplateDescriptor(ctx context.Context, sel ast.SelectionSet, v *api.TemplateDescriptor) graphql.Marshaler {
+func (ec *executionContext) marshalOTemplateDescriptor2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptor(ctx context.Context, sel ast.SelectionSet, v *api.TemplateDescriptor) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._TemplateDescriptor(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOWorkspaceRef2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceRef(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
+func (ec *executionContext) marshalOWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._WorkspaceRef(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
+func (ec *executionContext) marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._WorkspaceSourceStatus(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOWorkspaceStatus2ᚖgithubᚗcomᚋfyltrᚋangeeᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
+func (ec *executionContext) marshalOWorkspaceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}

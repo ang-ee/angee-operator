@@ -1,8 +1,8 @@
 package gql
 
 import (
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/service"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // This file will not be regenerated automatically.

@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/fyltr/angee/internal/manifest"
-	"github.com/fyltr/angee/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
 const defaultProcessComposeControlPort = 8080

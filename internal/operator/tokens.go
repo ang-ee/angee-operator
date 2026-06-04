@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/golang-jwt/jwt/v5"
 )
 

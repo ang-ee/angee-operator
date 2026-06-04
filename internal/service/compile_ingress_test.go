@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 func TestCompileIngress_NoneIsInert(t *testing.T) {

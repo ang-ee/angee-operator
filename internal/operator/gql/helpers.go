@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"gopkg.in/yaml.v3"
 )
 

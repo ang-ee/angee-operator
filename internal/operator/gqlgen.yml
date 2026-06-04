@@ -27,37 +27,37 @@ models:
       - github.com/99designs/gqlgen/graphql.Int
   ServiceState:
     model:
-      - github.com/fyltr/angee/api.ServiceState
+      - github.com/ang-ee/angee-operator/api.ServiceState
   JobState:
     model:
-      - github.com/fyltr/angee/api.JobState
+      - github.com/ang-ee/angee-operator/api.JobState
   SourceState:
     model:
-      - github.com/fyltr/angee/api.SourceState
+      - github.com/ang-ee/angee-operator/api.SourceState
   WorkspaceSourceStatus:
     model:
-      - github.com/fyltr/angee/api.WorkspaceSourceStatus
+      - github.com/ang-ee/angee-operator/api.WorkspaceSourceStatus
   WorkspaceMountRef:
     model:
-      - github.com/fyltr/angee/api.WorkspaceMountRef
+      - github.com/ang-ee/angee-operator/api.WorkspaceMountRef
   GitOpsLink:
     model:
-      - github.com/fyltr/angee/api.GitOpsLink
+      - github.com/ang-ee/angee-operator/api.GitOpsLink
   GitOpsSummary:
     model:
-      - github.com/fyltr/angee/api.GitOpsSummary
+      - github.com/ang-ee/angee-operator/api.GitOpsSummary
   GitOpsTopology:
     model:
-      - github.com/fyltr/angee/api.GitOpsTopologyResponse
+      - github.com/ang-ee/angee-operator/api.GitOpsTopologyResponse
   WorkspaceRef:
     model:
-      - github.com/fyltr/angee/api.WorkspaceRef
+      - github.com/ang-ee/angee-operator/api.WorkspaceRef
     fields:
       ttlExpiresAt:
         resolver: true
   WorkspaceStatus:
     model:
-      - github.com/fyltr/angee/api.WorkspaceStatusResponse
+      - github.com/ang-ee/angee-operator/api.WorkspaceStatusResponse
     fields:
       inputs:
         resolver: true
@@ -69,7 +69,7 @@ models:
         resolver: true
   StackStatus:
     model:
-      - github.com/fyltr/angee/api.StackStatusResponse
+      - github.com/ang-ee/angee-operator/api.StackStatusResponse
     fields:
       services:
         resolver: true
@@ -79,7 +79,7 @@ models:
         resolver: true
   CompiledStack:
     model:
-      - github.com/fyltr/angee/internal/service.CompiledStack
+      - github.com/ang-ee/angee-operator/internal/service.CompiledStack
     fields:
       compose:
         resolver: true
@@ -89,46 +89,46 @@ models:
         resolver: true
   WorkspaceCreatePreflight:
     model:
-      - github.com/fyltr/angee/api.WorkspaceCreatePreflightResponse
+      - github.com/ang-ee/angee-operator/api.WorkspaceCreatePreflightResponse
     fields:
       effectiveInputs:
         resolver: true
   PreflightFailure:
     model:
-      - github.com/fyltr/angee/api.PreflightFailure
+      - github.com/ang-ee/angee-operator/api.PreflightFailure
   TemplateDescriptor:
     model:
-      - github.com/fyltr/angee/api.TemplateDescriptor
+      - github.com/ang-ee/angee-operator/api.TemplateDescriptor
   TemplateInputDescriptor:
     model:
-      - github.com/fyltr/angee/api.TemplateInputDescriptor
+      - github.com/ang-ee/angee-operator/api.TemplateInputDescriptor
   ConnectionToken:
     model:
-      - github.com/fyltr/angee/api.ConnectionTokenResponse
+      - github.com/ang-ee/angee-operator/api.ConnectionTokenResponse
   ServiceEndpoint:
     model:
-      - github.com/fyltr/angee/api.ServiceEndpoint
+      - github.com/ang-ee/angee-operator/api.ServiceEndpoint
   IngressStatus:
     model:
-      - github.com/fyltr/angee/api.IngressStatus
+      - github.com/ang-ee/angee-operator/api.IngressStatus
   RouteRef:
     model:
-      - github.com/fyltr/angee/api.RouteRef
+      - github.com/ang-ee/angee-operator/api.RouteRef
   CommitRef:
     model:
-      - github.com/fyltr/angee/api.CommitRef
+      - github.com/ang-ee/angee-operator/api.CommitRef
   DiffFile:
     model:
-      - github.com/fyltr/angee/api.DiffFile
+      - github.com/ang-ee/angee-operator/api.DiffFile
   DiffHunk:
     model:
-      - github.com/fyltr/angee/api.DiffHunk
+      - github.com/ang-ee/angee-operator/api.DiffHunk
   GitOpResult:
     model:
-      - github.com/fyltr/angee/api.GitOpResult
+      - github.com/ang-ee/angee-operator/api.GitOpResult
   SecretRef:
     model:
-      - github.com/fyltr/angee/api.SecretRef
+      - github.com/ang-ee/angee-operator/api.SecretRef
   SecretValue:
     model:
-      - github.com/fyltr/angee/api.SecretValueResponse
+      - github.com/ang-ee/angee-operator/api.SecretValueResponse

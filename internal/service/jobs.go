@@ -7,11 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/manifest"
-	mountx "github.com/fyltr/angee/internal/mount"
-	"github.com/fyltr/angee/internal/secrets"
-	"github.com/fyltr/angee/internal/substitute"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	mountx "github.com/ang-ee/angee-operator/internal/mount"
+	"github.com/ang-ee/angee-operator/internal/secrets"
+	"github.com/ang-ee/angee-operator/internal/substitute"
 )
 
 func (p *Platform) JobList(ctx context.Context) ([]api.JobState, error) {

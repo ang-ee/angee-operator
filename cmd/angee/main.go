@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/fyltr/angee/internal/cli"
+	"github.com/ang-ee/angee-operator/internal/cli"
 )
 
 func main() {

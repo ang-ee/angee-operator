@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 type EnvLookup func(string) (string, bool)

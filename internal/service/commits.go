@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )

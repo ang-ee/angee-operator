@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 	copier "github.com/fyltr/copier-go"
 	"gopkg.in/yaml.v3"
 )

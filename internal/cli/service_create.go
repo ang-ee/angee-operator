@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/spf13/cobra"
 )
 

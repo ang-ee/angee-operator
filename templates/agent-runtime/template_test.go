@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/fyltr/angee/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 )
 
 // TestAgentRuntimeTemplateMetadata is the single canary that the bundled

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/fyltr/angee/api"
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // REST parity handlers for operations previously reachable only via GraphQL.

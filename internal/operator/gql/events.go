@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/service"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // errSubscriptionsUnavailable is returned when a subscription resolver fires

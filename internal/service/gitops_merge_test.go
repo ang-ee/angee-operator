@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fyltr/angee/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 // gitMergeFixture builds a stack with one git source (`app`) and one

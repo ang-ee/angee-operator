@@ -3,8 +3,8 @@ package edge
 import (
 	"fmt"
 
-	"github.com/fyltr/angee/internal/manifest"
-	"github.com/fyltr/angee/internal/runtime/compose"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/runtime/compose"
 )
 
 const (

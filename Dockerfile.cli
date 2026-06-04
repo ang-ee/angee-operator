@@ -13,7 +13,7 @@ ARG TARGETARCH=amd64
 ARG VERSION=dev
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w -X github.com/fyltr/angee/internal/cli.Version=${VERSION}" \
+    -ldflags="-s -w -X github.com/ang-ee/angee-operator/internal/cli.Version=${VERSION}" \
     -o angee \
     ./cmd/angee
 

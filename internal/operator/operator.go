@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee/api"
-	opgql "github.com/fyltr/angee/internal/operator/gql"
-	"github.com/fyltr/angee/internal/service"
-	"github.com/fyltr/angee/internal/stackroot"
+	"github.com/ang-ee/angee-operator/api"
+	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
+	"github.com/ang-ee/angee-operator/internal/service"
+	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 

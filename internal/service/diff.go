@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
-	"github.com/fyltr/angee/api"
 )
 
 // SourceDiff returns the unified-diff hunks for a top-level source. With

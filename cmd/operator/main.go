@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/fyltr/angee/internal/operator"
+	"github.com/ang-ee/angee-operator/internal/operator"
 )
 
 func main() {
