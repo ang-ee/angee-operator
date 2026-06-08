@@ -6,17 +6,17 @@ require (
 	github.com/fyltr/copier-go v0.0.0-20260506181622-12e6fe84de57
 	github.com/gosimple/slug v1.15.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/99designs/gqlgen v0.17.90
 	github.com/bluekeyes/go-gitdiff v0.8.1
-	github.com/go-git/go-git/v5 v5.19.0
-	github.com/go-playground/validator/v10 v10.30.2
+	github.com/go-git/go-git/v5 v5.19.1
+	github.com/go-playground/validator/v10 v10.30.3
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/invopop/jsonschema v0.14.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 )
