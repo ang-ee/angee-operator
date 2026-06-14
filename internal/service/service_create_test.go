@@ -306,6 +306,69 @@ func TestServiceDestroyReleasesLeaseAndBuildContext(t *testing.T) {
 	}
 }
 
+// TestServiceCreateDeclaresReferencedSecret is the end-to-end counterpart to
+// the helper test below: it proves a referenced `${secret.NAME}` lands in the
+// persisted manifest as a value-less declaration and that the post-create
+// compose render resolves it from the backend. This is the exact scenario the
+// commit fixes — a per-agent token set via secretSet (never declared in a
+// template) that previously failed with `secret "…" is not resolved`.
+func TestServiceCreateDeclaresReferencedSecret(t *testing.T) {
+	p, _ := setupServiceCreateFixture(t)
+	ctx := context.Background()
+
+	// Seed the per-agent token in the backend only — no manifest declaration.
+	if _, err := p.SecretSet(ctx, "agent-token", "s3cr3t"); err != nil {
+		t.Fatalf("SecretSet: %v", err)
+	}
+
+	// A service template that references the secret in its env. Templates are
+	// forbidden from declaring secrets, so ServiceCreate must declare it.
+	tmpl := filepath.Join(p.root, ".templates", "services", "secret-ref")
+	if err := os.MkdirAll(filepath.Join(tmpl, "template"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, "copier.yml"), []byte(`_subdirectory: template
+_templates_suffix: .jinja
+_angee:
+  kind: service
+  name: secret-ref
+  name_pattern: "agent-${workspace.name}"
+  ensure:
+    operator.port_pool.acp:
+      range: "3000-3999"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, "template", "service.yaml.jinja"), []byte(`services:
+  {{ service_name }}:
+    runtime: container
+    image: nginx
+    env:
+      AGENT_TOKEN: "${secret.agent-token}"
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(service.yaml.jinja): %v", err)
+	}
+
+	// Succeeds only because the referenced secret is now declared and resolves;
+	// before this behavior the post-create compose render would error.
+	if _, err := p.ServiceCreate(ctx, api.ServiceCreateRequest{Template: tmpl, Workspace: "my-pa"}); err != nil {
+		t.Fatalf("ServiceCreate: %v", err)
+	}
+
+	stack, err := manifest.LoadFile(manifest.Path(p.root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	spec, ok := stack.Secrets["agent-token"]
+	if !ok {
+		t.Fatalf("referenced secret not declared in persisted manifest: %#v", stack.Secrets)
+	}
+	// The declaration carries no value semantics — referencing grants no value.
+	if spec.Generated || spec.Import != "" || spec.Required {
+		t.Fatalf("declared secret carries value semantics: %#v", spec)
+	}
+}
+
 func TestEnsureServiceSecretsDeclaresReferenced(t *testing.T) {
 	stack := &manifest.Stack{Secrets: map[string]manifest.Secret{"existing": {}}}
 	svc := manifest.Service{

@@ -15,6 +15,14 @@ client-facing reference.
 
 ## Open follow-ups
 
+- [ ] **Declare secrets a *job* references, mirroring ServiceCreate.**
+  `ServiceCreate` now declares each `${secret.NAME}` a service references
+  (`ensureServiceSecrets`), so a per-agent token set via `secretSet` resolves
+  at compile time without a template declaration. Jobs are not covered: `Compile`
+  resolves job env/command/mounts/workdir against the same `resolvedSecrets`, so
+  a job referencing an undeclared secret still fails with `secret "…" is not
+  resolved`. The asymmetry is intentional for now (this commit is scoped to
+  services) — close the gap when a job needs to reference a backend-only secret.
 - [ ] **Wire the agent-runtime template's `ACP_PORT` allocation into the
   default Stack template's port pool.** The template assumes the host
   stack declares `operator.port_pool.acp` — `templates/default/` doesn't

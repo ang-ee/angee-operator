@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -203,11 +205,12 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		releaseServicePortLeases(stack, serviceName)
 	}
 
-	// On failure after this point, also wipe the build context and
-	// remove the in-memory service entry so the deferred rollback's
-	// SaveFile doesn't persist a half-installed service. Order matters:
-	// release leases → wipe build context → drop services map entry →
-	// persist clean state.
+	// On failure after this point, also drop the newly-declared secrets,
+	// wipe the build context, and remove the in-memory service entry so the
+	// deferred rollback's SaveFile doesn't persist a half-installed service.
+	// Order matters: drop newly-declared secrets → wipe build context →
+	// drop services map entry → release leases → persist clean state.
+	//
 	// Declare any secrets the service references (`${secret.NAME}`) that the stack
 	// does not yet declare. A service template is forbidden from declaring secrets
 	// itself (blast radius), so the operator declares what it references — as plain
@@ -268,12 +271,14 @@ func ensureServiceSecrets(stack *manifest.Stack, s manifest.Service) []string {
 // and workdir — the same set Compile resolves.
 func serviceSecretStrings(s manifest.Service) []string {
 	strs := make([]string, 0, len(s.Env)+len(s.Command)+len(s.Ports)+len(s.Mounts)+1)
-	for _, v := range s.Env {
-		strs = append(strs, v)
+	// Iterate env keys in sorted order so the referenced-secret discovery
+	// order is deterministic (Go map iteration is randomized).
+	for _, k := range slices.Sorted(maps.Keys(s.Env)) {
+		strs = append(strs, s.Env[k])
 	}
 	strs = append(strs, s.Command...)
-	strs = append(strs, []string(s.Ports)...)
-	strs = append(strs, []string(s.Mounts)...)
+	strs = append(strs, s.Ports...)
+	strs = append(strs, s.Mounts...)
 	strs = append(strs, s.Workdir)
 	return strs
 }
