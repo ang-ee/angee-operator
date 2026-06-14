@@ -373,19 +373,34 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 	logsCmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
 
 	var devBuild bool
+	var devDetach bool
 	devCmd := &cobra.Command{
 		Use:   "dev",
 		Short: "Run the local development stack",
-		Args:  cobra.NoArgs,
+		Long: "Run the local development stack, streaming logs from every service\n" +
+			"regardless of runtime (container and local) into one foreground stream.\n\n" +
+			"Examples:\n" +
+			"  angee dev            # bring everything up and stream all logs\n" +
+			"  angee dev --build    # rebuild container images first, then stream\n" +
+			"  angee dev -d         # start the stack in the background and return",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
+				return err
+			}
+			if devDetach {
+				if err := platform.StackDev(cmd.Context(), devBuild); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintln(stdout, "dev stack started in background")
 				return err
 			}
 			return platform.StackDevForeground(cmd.Context(), devBuild, stdout, cmd.ErrOrStderr())
 		},
 	}
 	devCmd.Flags().BoolVar(&devBuild, "build", false, "build container images before starting")
+	devCmd.Flags().BoolVarP(&devDetach, "detach", "d", false, "start the stack in the background and return")
 
 	return []*cobra.Command{buildCmd, upCmd, devCmd, downCmd, startCmd, stopCmd, restartCmd, logsCmd}
 }

@@ -3,13 +3,26 @@ package runtime
 import (
 	"context"
 	"io"
+	"time"
 )
 
+// GracefulWaitDelay bounds how long a foreground runtime process has to exit
+// after being interrupted before exec force-kills it. Shared by the compose and
+// process-compose foreground runners so the grace period can't drift between
+// them.
+const GracefulWaitDelay = 10 * time.Second
+
 type Target struct {
-	Root        string
-	Services    []string
-	Build       bool
-	EnvFile     string
+	Root     string
+	Services []string
+	Build    bool
+	EnvFile  string
+	// Attached, when set on a foreground Up, keeps the supervisor in the
+	// foreground streaming logs instead of detaching (`docker compose up`
+	// without `-d`). Used by `angee dev` so container logs interleave with
+	// the process-compose stream. Ignored by backends that always stream
+	// in the foreground (process-compose).
+	Attached    bool
 	ControlPort int
 }
 

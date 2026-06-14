@@ -33,6 +33,33 @@ func TestBackendUpCommand(t *testing.T) {
 	}
 }
 
+func TestBackendUpForegroundDetached(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	err := backend.UpForeground(context.Background(), runtime.Target{Root: "/stack", EnvFile: "/stack/.env"}, nil, nil)
+	if err != nil {
+		t.Fatalf("UpForeground() error = %v", err)
+	}
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "--env-file", "/stack/.env", "up", "-d"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestBackendUpForegroundAttached(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	err := backend.UpForeground(context.Background(), runtime.Target{Root: "/stack", EnvFile: "/stack/.env", Attached: true, Build: true}, nil, nil)
+	if err != nil {
+		t.Fatalf("UpForeground() error = %v", err)
+	}
+	// Attached omits -d so the stream stays in the foreground; --build still applies.
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "--env-file", "/stack/.env", "up", "--build"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
 func TestParsePS(t *testing.T) {
 	got := parsePS([]byte(`{"Service":"web","State":"running","Health":"healthy"}
 {"Service":"db","State":"running","Health":"unhealthy"}

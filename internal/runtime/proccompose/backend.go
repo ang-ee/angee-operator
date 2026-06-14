@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
@@ -259,7 +258,7 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 		}
 		return cmd.Process.Signal(os.Interrupt)
 	}
-	cmd.WaitDelay = 10 * time.Second
+	cmd.WaitDelay = runtime.GracefulWaitDelay
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil

@@ -6,6 +6,18 @@ latest tag.
 
 ## Unreleased
 
+### Improvements
+
+- `angee dev` now streams logs from **every** service regardless of runtime. It
+  previously ran container services detached (`docker compose up -d`) and let
+  process-compose own the foreground, so a mixed stack's container/agent logs
+  never appeared. `dev` now brings both runtimes up attached and concurrently —
+  `docker compose up` (no `-d`) interleaving its native per-service coloured
+  output with the process-compose stream — and a shared context ties them
+  together so Ctrl-C (or either backend exiting) shuts the other down cleanly.
+  New `angee dev -d`/`--detach` starts the whole stack in the background and
+  returns.
+
 ### Fixes
 
 - `service create` now declares the secrets its service references. A service

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -59,12 +60,17 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
 	args := b.baseArgs(target.Root, target.EnvFile)
-	args = append(args, "up", "-d")
+	args = append(args, "up")
+	// Attached: stay in the foreground streaming container logs (for `angee
+	// dev`). Detached: stream the build/pull progress then return (`angee up`).
+	if !target.Attached {
+		args = append(args, "-d")
+	}
 	if target.Build {
 		args = append(args, "--build")
 	}
 	args = append(args, target.Services...)
-	return b.runForeground(ctx, target.Root, stdout, stderr, args...)
+	return b.runForeground(ctx, target.Root, stdout, stderr, target.Attached, args...)
 }
 
 func (b Backend) Down(ctx context.Context, target runtime.Target) error {
@@ -157,12 +163,37 @@ func (b Backend) runLimited(ctx context.Context, root string, maxBytes int, args
 	return buf.Bytes(), nil
 }
 
-func (b Backend) runForeground(ctx context.Context, root string, stdout io.Writer, stderr io.Writer, args ...string) error {
+func (b Backend) runForeground(ctx context.Context, root string, stdout io.Writer, stderr io.Writer, graceful bool, args ...string) error {
+	// A test Runner can't stream a live process, so route through it (capturing
+	// the command) instead of shelling out. The real ExecRunner streams below.
+	if b.Runner != nil && !isExecRunner(b.Runner) {
+		_, err := b.run(ctx, root, args...)
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = root
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if graceful {
+		// An attached `docker compose up` is interrupted, not killed, so it
+		// gets to stop containers cleanly. WaitDelay bounds the grace period
+		// before the process is force-killed. Mirrors the process-compose
+		// foreground runner (which is always attached).
+		cmd.Cancel = func() error {
+			if cmd.Process == nil {
+				return nil
+			}
+			return cmd.Process.Signal(os.Interrupt)
+		}
+		cmd.WaitDelay = runtime.GracefulWaitDelay
+	}
 	if err := cmd.Run(); err != nil {
+		// A graceful shutdown via context cancellation (Ctrl-C, or a sibling
+		// backend exiting) is the expected way out of an attached run — not an
+		// error to surface.
+		if graceful && ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
 	}
 	return nil

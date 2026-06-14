@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"golang.org/x/sync/errgroup"
 )
 
 const defaultProcessComposeControlPort = 8080
@@ -115,24 +118,99 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 	if err != nil {
 		return err
 	}
-	if len(compiled.Compose.Services) > 0 {
-		if err := p.composeBackend.UpForeground(ctx, runtime.Target{Root: p.root, Build: build, EnvFile: p.runtimeEnvFile(stack)}, stdout, stderr); err != nil {
+	hasContainers := len(compiled.Compose.Services) > 0
+	hasLocal := len(compiled.ProcessCompose.Processes) > 0
+
+	// Nothing rendered to run yet: fall back to following whatever logs the
+	// backends can produce so `angee dev` against an empty stack still tails.
+	if !hasContainers && !hasLocal {
+		logs, err := p.StackLogs(ctx, nil, true)
+		if err != nil {
+			return err
+		}
+		for line := range logs {
+			if _, err := io.WriteString(stdout, line); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Build container images up front when requested, before any service
+	// starts. Building inside the concurrent group would race a local service
+	// that depends on a freshly-built container against the build itself.
+	if build && hasContainers {
+		if err := p.composeBackend.Build(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
 			return err
 		}
 	}
-	if len(compiled.ProcessCompose.Processes) > 0 {
-		return p.procBackend.UpForeground(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, stdout, stderr)
-	}
-	logs, err := p.StackLogs(ctx, nil, true)
-	if err != nil {
-		return err
-	}
-	for line := range logs {
-		if _, err := io.WriteString(stdout, line); err != nil {
-			return err
+
+	// stdout/stderr may be a single shared writer (the operator streams both
+	// through one HTTP response). os/exec hands a child the terminal directly
+	// only when the sink is an *os.File; for anything else it runs a copier
+	// goroutine, so the two backends would race on the shared writer. Guard
+	// non-file sinks with a mutex, but pass *os.File sinks through untouched so
+	// the children keep the real TTY — and with it docker compose's and
+	// process-compose's per-service colouring.
+	so, se := stdout, stderr
+	if stdout == stderr {
+		if w := guardDevSink(stdout); w != stdout {
+			so, se = w, w
 		}
+	} else {
+		so = guardDevSink(stdout)
+		se = guardDevSink(stderr)
 	}
-	return nil
+
+	// Run both runtimes attached in the foreground so logs from every service
+	// stream together — docker compose keeps its native per-service coloured
+	// prefix, process-compose streams its own aggregated output. Each call
+	// blocks until interrupted, so they run concurrently. The derived cancel
+	// makes the first backend to exit — cleanly or not — tear the other down:
+	// errgroup's own context only cancels on a non-nil error, and an attached
+	// compose run returns nil on graceful shutdown, so we can't rely on it.
+	groupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g, gctx := errgroup.WithContext(groupCtx)
+	if hasContainers {
+		g.Go(func() error {
+			defer cancel()
+			return p.composeBackend.UpForeground(gctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Attached: true}, so, se)
+		})
+	}
+	if hasLocal {
+		g.Go(func() error {
+			defer cancel()
+			return p.procBackend.UpForeground(gctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, so, se)
+		})
+	}
+	return g.Wait()
+}
+
+// guardDevSink wraps w so concurrent writes from the two dev backends serialize,
+// unless w is an *os.File: exec passes those to each child as the real terminal
+// fd (no parent-side copier goroutine, so no Go-level race), and the children
+// need that TTY to keep their colouring.
+func guardDevSink(w io.Writer) io.Writer {
+	if _, ok := w.(*os.File); ok {
+		return w
+	}
+	return &syncWriter{w: w}
+}
+
+// syncWriter serializes concurrent writes from the two dev backends to a
+// shared, non-*os.File sink (e.g. the operator's HTTP response writer). os/exec
+// runs a copier goroutine per child process for such sinks, so without this the
+// two streams race on the underlying writer.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 func (p *Platform) StackDown(ctx context.Context) error {
