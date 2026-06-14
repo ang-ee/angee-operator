@@ -6,6 +6,19 @@ latest tag.
 
 ## Unreleased
 
+### Fixes
+
+- `service create` now declares the secrets its service references. A service
+  template is (correctly) forbidden from declaring `secrets:` itself, but a
+  service legitimately references `${secret.NAME}` in its env/command — so the
+  operator now declares those referenced secrets in the stack on the service's
+  behalf, as plain external entries whose value comes from the secrets backend
+  (e.g. a prior `secretSet`). Previously such a reference failed the post-create
+  compose re-render with `secret "…" is not resolved` (only declared secrets are
+  resolvable), which blocked agent provisioning whose per-agent token secret is
+  set via the REST API rather than declared in a stack template. Referencing a
+  secret grants no value: resolution still fails if none was ever set.
+
 ## v0.5.12 — 2026-06-14
 
 ### Fixes

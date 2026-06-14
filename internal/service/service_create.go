@@ -208,8 +208,18 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	// SaveFile doesn't persist a half-installed service. Order matters:
 	// release leases → wipe build context → drop services map entry →
 	// persist clean state.
+	// Declare any secrets the service references (`${secret.NAME}`) that the stack
+	// does not yet declare. A service template is forbidden from declaring secrets
+	// itself (blast radius), so the operator declares what it references — as plain
+	// external entries whose value comes from the secrets backend (e.g. secretSet).
+	// Referencing grants no value: resolution still fails if none was ever set.
+	declaredSecrets := ensureServiceSecrets(stack, renderedService)
+
 	prevRollback := rollback
 	rollback = func() {
+		for _, name := range declaredSecrets {
+			delete(stack.Secrets, name)
+		}
 		_ = os.RemoveAll(buildContext)
 		delete(stack.Services, serviceName)
 		prevRollback()
@@ -232,6 +242,40 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	// reachable through StackStatus.
 	_ = workspace
 	return api.ServiceState{Name: serviceName, Runtime: string(renderedService.Runtime), Status: "declared"}, nil
+}
+
+// ensureServiceSecrets declares any `${secret.NAME}` the service references that
+// the stack does not already declare, returning the names newly added (so a
+// rollback can drop them). New entries are plain external secrets — value-less
+// declarations resolved from the secrets backend; referencing one grants no value.
+func ensureServiceSecrets(stack *manifest.Stack, s manifest.Service) []string {
+	var added []string
+	for _, name := range substitute.SecretRefs(serviceSecretStrings(s)...) {
+		if _, ok := stack.Secrets[name]; ok {
+			continue
+		}
+		if stack.Secrets == nil {
+			stack.Secrets = map[string]manifest.Secret{}
+		}
+		stack.Secrets[name] = manifest.Secret{}
+		added = append(added, name)
+	}
+	return added
+}
+
+// serviceSecretStrings returns the service strings that undergo substitution
+// (and so may reference `${secret.NAME}`): env values, command, ports, mounts,
+// and workdir — the same set Compile resolves.
+func serviceSecretStrings(s manifest.Service) []string {
+	strs := make([]string, 0, len(s.Env)+len(s.Command)+len(s.Ports)+len(s.Mounts)+1)
+	for _, v := range s.Env {
+		strs = append(strs, v)
+	}
+	strs = append(strs, s.Command...)
+	strs = append(strs, []string(s.Ports)...)
+	strs = append(strs, []string(s.Mounts)...)
+	strs = append(strs, s.Workdir)
+	return strs
 }
 
 // resolveServiceName picks the resolved service name from (in order):

@@ -305,3 +305,32 @@ func TestServiceDestroyReleasesLeaseAndBuildContext(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureServiceSecretsDeclaresReferenced(t *testing.T) {
+	stack := &manifest.Stack{Secrets: map[string]manifest.Secret{"existing": {}}}
+	svc := manifest.Service{
+		Env:     map[string]string{"TOKEN": "${secret.agent-x-inference}", "OTHER": "${secret.existing}"},
+		Command: []string{"run", "${secret.cmd-secret}"},
+	}
+
+	added := ensureServiceSecrets(stack, svc)
+
+	for _, name := range []string{"agent-x-inference", "cmd-secret"} {
+		if _, ok := stack.Secrets[name]; !ok {
+			t.Fatalf("ensureServiceSecrets did not declare %q", name)
+		}
+	}
+	if len(added) != 2 {
+		t.Fatalf("added = %v, want 2 new secrets", added)
+	}
+	// An already-declared secret is left untouched and not reported as added.
+	for _, name := range added {
+		if name == "existing" {
+			t.Fatal("ensureServiceSecrets re-declared an existing secret")
+		}
+	}
+	// Idempotent: a second pass with the same service adds nothing.
+	if again := ensureServiceSecrets(stack, svc); len(again) != 0 {
+		t.Fatalf("second ensureServiceSecrets added %v, want none", again)
+	}
+}

@@ -90,6 +90,37 @@ func ResolveSlice(input []string, ctx Context) ([]string, error) {
 	return out, nil
 }
 
+// SecretRefs returns the distinct secret names referenced as `${secret.NAME}`
+// across inputs, in first-seen order. It parses the same marker grammar as
+// Resolve (pipe filters after the name are ignored), so callers discover
+// exactly the secrets resolution will require.
+func SecretRefs(inputs ...string) []string {
+	seen := map[string]struct{}{}
+	var names []string
+	for _, input := range inputs {
+		for _, match := range expressionRE.FindAllStringSubmatch(input, -1) {
+			parts := splitPipes(strings.TrimSpace(match[1]))
+			if len(parts) == 0 {
+				continue
+			}
+			ns, rest, ok := strings.Cut(strings.TrimSpace(parts[0]), ".")
+			if !ok || ns != "secret" {
+				continue
+			}
+			name := strings.TrimSpace(rest)
+			if name == "" {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func eval(expr string, ctx Context) (string, error) {
 	parts := splitPipes(expr)
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {

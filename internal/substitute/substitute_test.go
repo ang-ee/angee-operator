@@ -1,6 +1,23 @@
 package substitute
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestSecretRefs(t *testing.T) {
+	got := SecretRefs(
+		"CLAUDE_CODE_OAUTH_TOKEN=${secret.agent-x-inference}",
+		"${secret.agent-x-inference}",           // duplicate, deduped
+		"${secret.shared | required('set me')}", // pipe filter ignored
+		"plain ${inputs.branch} ${ports.web}",   // non-secret namespaces ignored
+		"${secret.}",                            // empty name ignored
+	)
+	want := []string{"agent-x-inference", "shared"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SecretRefs() = %v, want %v", got, want)
+	}
+}
 
 func TestResolveSubstitutionsAndFilters(t *testing.T) {
 	ctx := Context{
