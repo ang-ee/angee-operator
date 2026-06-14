@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
@@ -38,7 +42,7 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 		Template: &manifest.Template{Active: "stacks/dev", AnswersFile: ".copier-answers.yml"},
 	}
 
-	merged := mergeStackFromTemplate(ours, theirs)
+	merged := mergeStackFromTemplate(ours, theirs, false)
 
 	if got := merged.Services["web"].Image; got != "nginx:2.0" {
 		t.Fatalf("web image = %q, want refreshed nginx:2.0", got)
@@ -170,6 +174,204 @@ services:
     runtime: container
     image: vite:latest
 `
+
+// TestStackUpdateFromTemplateReconcilesWorkspacePorts covers the workspace
+// inner-stack case: `stack update --template` must re-derive the workspace's
+// allocated ports from the parent stack's authoritative record, not from the
+// inner stack's frozen answers file — which copier can reset to template
+// defaults, silently dropping the allocation.
+func TestStackUpdateFromTemplateReconcilesWorkspacePorts(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeWorkspacePortStackTemplate(t, root)
+	writeWorkspacePortWorkspaceTemplate(t, root)
+
+	host, err := New(root)
+	if err != nil {
+		t.Fatalf("New(root): %v", err)
+	}
+	host.portUnavailable = func(int) bool { return false } // deterministic allocation
+
+	ref, err := host.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: "workspaces/dev", Name: "ws1"})
+	if err != nil {
+		t.Fatalf("WorkspaceCreate: %v", err)
+	}
+	alloc := ref.Allocations["web"]
+	if alloc < 8000 || alloc > 8099 {
+		t.Fatalf("allocated web port %d outside pool range 8000-8099", alloc)
+	}
+
+	innerRoot := filepath.Join(ref.Path, ".angee")
+	sp, err := New(innerRoot)
+	if err != nil {
+		t.Fatalf("New(innerRoot): %v", err)
+	}
+
+	// The freshly created inner stack already carries the allocation, the
+	// chain-injected non-port input (extra=topic), and the path input resolved
+	// once relative to ANGEE_ROOT.
+	inner, err := sp.LoadStack()
+	if err != nil {
+		t.Fatalf("LoadStack: %v", err)
+	}
+	if got := inner.Ports["web"].Value; got != alloc {
+		t.Fatalf("inner web port = %d, want allocated %d", got, alloc)
+	}
+	projectPath := inner.Services["web"].Env["PROJECT_PATH"]
+	if !strings.Contains(projectPath, "..") {
+		// The path branch is only meaningful if the resolved path has an
+		// ANGEE_ROOT escape that a stray re-resolution would double.
+		t.Fatalf("inner PROJECT_PATH env = %q, want a path with a `..` escape", projectPath)
+	}
+
+	// Simulate the inner stack drifting back to template defaults: the answers
+	// file and the manifest both lose the allocation (the reported bug), and the
+	// non-port input is changed too. The path input is left as-is so the test
+	// can detect re-resolution (path doubling) across the update.
+	answersPath := filepath.Join(ref.Path, ".copier-answers.yml")
+	driftFile(t, answersPath, fmt.Sprintf("web_port: %d", alloc), "web_port: 9999")
+	driftFile(t, answersPath, "extra: dev", "extra: drifted-extra")
+	inner.Ports["web"] = manifest.Port{Value: 9999, ExportEnv: "WEB_PORT"}
+	if svc, ok := inner.Services["web"]; ok {
+		svc.Env = map[string]string{"WEB_PORT": "9999", "EXTRA": "drifted-extra", "PROJECT_PATH": projectPath}
+		inner.Services["web"] = svc
+	}
+	if err := manifest.SaveFile(manifest.Path(innerRoot), inner); err != nil {
+		t.Fatalf("SaveFile(drift): %v", err)
+	}
+
+	// A template re-render must restore the workspace's allocated port from the
+	// parent record, not honour the drifted default.
+	if _, err := sp.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+		t.Fatalf("StackUpdateFromTemplate: %v", err)
+	}
+	got, err := sp.LoadStack()
+	if err != nil {
+		t.Fatalf("LoadStack after update: %v", err)
+	}
+	if got.Ports["web"].Value != alloc {
+		t.Fatalf("web port after update = %d, want reconciled %d", got.Ports["web"].Value, alloc)
+	}
+	if got.Ports["web"].ExportEnv != "WEB_PORT" {
+		t.Fatalf("web port export_env = %q, want WEB_PORT (port struct refreshed from template)", got.Ports["web"].ExportEnv)
+	}
+	if env := got.Services["web"].Env["WEB_PORT"]; env != strconv.Itoa(alloc) {
+		t.Fatalf("service WEB_PORT env = %q, want reconciled %d", env, alloc)
+	}
+	// Non-port chain inputs are NOT authoritative from the parent record: the
+	// drifted answers value wins, not the record's topic ("dev").
+	if env := got.Services["web"].Env["EXTRA"]; env != "drifted-extra" {
+		t.Fatalf("service EXTRA env = %q, want drifted-extra (answers-sourced, not record)", env)
+	}
+	// Path inputs are reused verbatim from the answers file, not re-resolved
+	// against the scratch dir (which would double the ANGEE_ROOT escape).
+	if env := got.Services["web"].Env["PROJECT_PATH"]; env != projectPath {
+		t.Fatalf("service PROJECT_PATH env = %q, want unchanged %q (no path re-resolution)", env, projectPath)
+	}
+}
+
+func writeWorkspacePortStackTemplate(t *testing.T, root string) {
+	t.Helper()
+	tmpl := filepath.Join(root, ".templates", "stacks", "dev")
+	inner := filepath.Join(tmpl, "template", "{{ ANGEE_ROOT }}")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatalf("mkdir stack template: %v", err)
+	}
+	copierYML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: stack
+  name: dev
+ANGEE_ROOT:
+  type: str
+  default: .angee
+web_port:
+  type: int
+  default: 9999
+extra:
+  type: str
+  default: default-extra
+project_path:
+  type: path
+  default: "."
+`
+	if err := os.WriteFile(filepath.Join(tmpl, "copier.yml"), []byte(copierYML), 0o644); err != nil {
+		t.Fatalf("write stack copier.yml: %v", err)
+	}
+	manifestBody := `version: 1
+kind: stack
+name: demo
+template:
+  active: stacks/dev
+  answers_file: .copier-answers.yml
+ports:
+  web: { value: {{ web_port }}, export_env: WEB_PORT }
+services:
+  web:
+    runtime: container
+    image: demo:latest
+    env:
+      WEB_PORT: "{{ web_port }}"
+      EXTRA: "{{ extra }}"
+      PROJECT_PATH: "{{ project_path }}"
+`
+	if err := os.WriteFile(filepath.Join(inner, "angee.yaml.jinja"), []byte(manifestBody), 0o644); err != nil {
+		t.Fatalf("write stack angee.yaml.jinja: %v", err)
+	}
+}
+
+func writeWorkspacePortWorkspaceTemplate(t *testing.T, root string) {
+	t.Helper()
+	tmpl := filepath.Join(root, ".templates", "workspaces", "dev")
+	if err := os.MkdirAll(filepath.Join(tmpl, "template"), 0o755); err != nil {
+		t.Fatalf("mkdir workspace template: %v", err)
+	}
+	copierYML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: dev
+  inputs:
+    topic:
+      type: str
+      default: dev
+  ensure:
+    operator.port_pool.web: { range: "8000-8099" }
+  chain_root: .angee
+  chain:
+    - template: stacks/dev
+      root: .
+      inputs:
+        web_port: "${alloc.web}"
+        extra: "${inputs.topic}"
+topic:
+  type: str
+  default: dev
+`
+	if err := os.WriteFile(filepath.Join(tmpl, "copier.yml"), []byte(copierYML), 0o644); err != nil {
+		t.Fatalf("write workspace copier.yml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpl, "template", "README.md.jinja"), []byte("workspace {{ topic }}\n"), 0o644); err != nil {
+		t.Fatalf("write workspace README.md.jinja: %v", err)
+	}
+}
+
+func driftFile(t *testing.T, path, old, new string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	out := strings.Replace(string(data), old, new, 1)
+	if out == string(data) {
+		t.Fatalf("drift target %q not found in %s", old, path)
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
 
 func TestStackUpdateFromTemplateEndToEnd(t *testing.T) {
 	ctx := context.Background()
