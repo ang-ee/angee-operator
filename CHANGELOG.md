@@ -6,6 +6,23 @@ latest tag.
 
 ## Unreleased
 
+## v0.5.12 — 2026-06-14
+
+### Fixes
+
+- `angee stack update --template` now honours a workspace's allocated ports when
+  re-rendering a workspace's inner stack. Previously the re-render sourced its
+  inputs solely from the inner stack's frozen `.copier-answers.yml`; if that file
+  drifted to template defaults (e.g. a stray direct re-render reset it), the
+  update silently baked the default ports into the inner stack, colliding with
+  the host stack and other workspaces. The update now detects a managed workspace
+  inner stack (`<root>/workspaces/<name>/<chain_root>`) and overlays the
+  authoritative `${alloc.*}`-derived port inputs from the parent stack's
+  `workspaces.<name>.resolved.allocations` record. Only allocation-bearing inputs
+  are reconciled — project/source inputs still come from the answers file, so a
+  stale workspace record cannot repoint them — and the answers' already-resolved
+  path inputs are reused verbatim instead of being re-resolved.
+
 ## v0.5.10 — 2026-06-04
 
 ### Repository & module rename
