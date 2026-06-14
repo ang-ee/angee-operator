@@ -79,6 +79,14 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 		if err != nil {
 			return err
 		}
+		// Ensure the stack's declared persist dirs exist before anything runs.
+		// These are gitignored local state (the SQLite db, caches, browser
+		// profiles) that no other step creates — SQLite, for one, never creates
+		// its file's parent directory. Subpaths are relative to the stack dir
+		// (the parent of ANGEE_ROOT), matching the workspace-create convention.
+		if err := materializePersistPaths(filepath.Dir(p.root), stack.Persist); err != nil {
+			return err
+		}
 		backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
 		if err != nil {
 			return err

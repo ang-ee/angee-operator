@@ -40,6 +40,7 @@ type Stack struct {
 	Secrets        map[string]Secret      `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Ports          map[string]Port        `yaml:"ports,omitempty" json:"ports,omitempty"`
 	Volumes        map[string]Volume      `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	Persist        map[string]PersistPath `yaml:"persist,omitempty" json:"persist,omitempty"`
 	Sources        map[string]Source      `yaml:"sources,omitempty" json:"sources,omitempty"`
 	Workspaces     map[string]Workspace   `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
 	Services       map[string]Service     `yaml:"services,omitempty" json:"services,omitempty"`
@@ -449,6 +450,9 @@ func (s *Stack) initMaps() {
 	}
 	if s.Volumes == nil {
 		s.Volumes = map[string]Volume{}
+	}
+	if s.Persist == nil {
+		s.Persist = map[string]PersistPath{}
 	}
 	if s.Sources == nil {
 		s.Sources = map[string]Source{}
