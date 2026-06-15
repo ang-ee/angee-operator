@@ -125,6 +125,147 @@ func TestValidateAllowsCleanCaddyRoutedService(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsCleanCaddyPathRoute(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "clean-path",
+		Ingress: Ingress{Type: "caddy", Routing: "path", TLS: "off", Domain: "localhost"},
+		Services: map[string]Service{
+			"agent": {
+				Runtime: RuntimeContainer,
+				Image:   "example/agent:latest",
+				Route:   &Route{Port: 3008, Path: "/agent"},
+			},
+		},
+	}
+
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsRouteHostAndPathTogether(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "host-and-path",
+		Ingress: Ingress{Type: "caddy", Routing: "path", Domain: "localhost"},
+		Services: map[string]Service{
+			"agent": {
+				Runtime: RuntimeContainer,
+				Image:   "example/agent:latest",
+				Route:   &Route{Port: 3008, Host: "agent.localhost", Path: "/agent"},
+			},
+		},
+	}
+
+	err := stack.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("Validate() error = %q, want mutually-exclusive rejection", err.Error())
+	}
+}
+
+func TestValidatePathModeRequiresDomain(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "path-no-domain",
+		Ingress: Ingress{Type: "caddy", Routing: "path"},
+		Services: map[string]Service{
+			"agent": {
+				Runtime: RuntimeContainer,
+				Image:   "example/agent:latest",
+				Route:   &Route{Port: 3008},
+			},
+		},
+	}
+
+	err := stack.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "domain") {
+		t.Fatalf("Validate() error = %q, want domain requirement", err.Error())
+	}
+}
+
+func TestValidateRejectsRoutePathWithCaddyMeta(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "bad-path",
+		Ingress: Ingress{Type: "caddy", Routing: "path", Domain: "localhost"},
+		Services: map[string]Service{
+			"agent": {
+				Runtime: RuntimeContainer,
+				Image:   "example/agent:latest",
+				Route:   &Route{Port: 3008, Path: "/agent { respond 200 }"},
+			},
+		},
+	}
+
+	err := stack.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "route.path") {
+		t.Fatalf("Validate() error = %q, want route.path rejection", err.Error())
+	}
+}
+
+func TestValidateRejectsUnknownRoutingMode(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "bad-routing",
+		Ingress: Ingress{Type: "caddy", Routing: "subdomain", Domain: "localhost"},
+	}
+
+	if err := stack.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want error for unknown routing mode")
+	}
+}
+
+func TestRoutingAndTLSModeDefaults(t *testing.T) {
+	var ing Ingress
+	if got := ing.RoutingMode(); got != "host" {
+		t.Fatalf("RoutingMode() = %q, want host", got)
+	}
+	if got := ing.TLSMode(); got != "auto" {
+		t.Fatalf("TLSMode() = %q, want auto", got)
+	}
+	ing = Ingress{Routing: "path", TLS: "off"}
+	if got := ing.RoutingMode(); got != "path" {
+		t.Fatalf("RoutingMode() = %q, want path", got)
+	}
+	if got := ing.TLSMode(); got != "off" {
+		t.Fatalf("TLSMode() = %q, want off", got)
+	}
+}
+
+func TestRoutePathPrefix(t *testing.T) {
+	tests := []struct {
+		path    string
+		service string
+		want    string
+	}{
+		{path: "", service: "agent", want: "/agent"},
+		{path: "/agent", service: "agent", want: "/agent"},
+		{path: "agent", service: "agent", want: "/agent"},
+		{path: "/v1/agent/", service: "agent", want: "/v1/agent"},
+	}
+	for _, tt := range tests {
+		r := &Route{Port: 3008, Path: tt.path}
+		if got := r.PathPrefix(tt.service); got != tt.want {
+			t.Fatalf("PathPrefix(%q, path=%q) = %q, want %q", tt.service, tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestValidateAllowsBadRouteHostWhenIngressNone(t *testing.T) {
 	stack := &Stack{
 		Version: VersionCurrent,

@@ -4,6 +4,22 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Improvements
+
+- `ingress` gained two edge-routing controls. `ingress.routing` selects how the
+  Caddy edge matches inbound requests: `host` (default, unchanged) gives one
+  subdomain per service (`wss://<service>.<domain>/`), while `path` puts every
+  routed service under one shared host with a stripped prefix
+  (`wss://<domain>/<service>/`, override per service with `route.path`).
+  `ingress.tls: off` drops the edge to plain HTTP so URLs become `ws://…` and
+  the edge publishes only `:80`. Together (`routing: path`, `tls: off`,
+  `domain: localhost`) they give a zero-setup local dev path —
+  `ws://localhost/<service>/` with no wildcard DNS and no local-CA cert trust —
+  while the defaults keep existing `host`/`auto` stacks byte-identical. The same
+  per-service `forward_auth → /edge/verify` auth model applies in both modes.
+
 ## v0.5.13 — 2026-06-15
 
 ### Improvements

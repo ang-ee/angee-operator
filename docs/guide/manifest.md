@@ -112,6 +112,8 @@ authenticates inbound connections at the edge.
 ```yaml
 ingress:
   type: caddy            # none (default) | caddy
+  routing: host          # host (default) | path
+  tls: auto              # auto (default, Caddy HTTPS) | off (plain ws://)
   domain: agents.localhost  # base domain; defaults to operator.domain
   # image:   lucaslorentz/caddy-docker-proxy:2.9   # override the edge image
   # network: <name>_edge                            # override the private network
@@ -128,14 +130,46 @@ services:
     image: angee/agent:latest
     route:
       port: 3008              # container port the edge proxies to
-      host: agent.agents.localhost  # default: <service>.<ingress.domain>
+      # host: agent.agents.localhost  # host mode override (default: <service>.<ingress.domain>)
+      # path: /agent                  # path mode override (default: /<service>)
       # auth: forward          # forward (default) | none
 ```
 
 A routed service publishes no host port and takes no lease from
-`operator.port_pool` — only the edge publishes (`:443`/`:80`). `route:` on a
-`runtime: local` service is rejected (it can't join a Docker network).
-TLS terminates at the edge; backends stay plaintext on the private network.
+`operator.port_pool` — only the edge publishes (`:443`/`:80`, or `:80` with
+`tls: off`). `route:` on a `runtime: local` service is rejected (it can't join a
+Docker network). TLS terminates at the edge; backends stay plaintext on the
+private network.
+
+### Routing modes
+
+`ingress.routing` selects how the edge matches inbound requests:
+
+- **`host`** (default) — one subdomain per routed service:
+  `wss://<service>.<ingress.domain>/`. The edge matches on the `Host` header.
+  Override the subdomain per service with `route.host`. Best for production:
+  one wildcard cert, clean per-service TLS, no path coupling.
+- **`path`** — one shared host with a prefix per service:
+  `wss://<ingress.domain>/<service>/`. The edge matches a path prefix and
+  **strips** it before proxying, so the backend still sees `/`. Override the
+  prefix per service with `route.path` (default `/<service>`). `routing: path`
+  requires a domain (`ingress.domain` or `operator.domain`).
+
+`route.host` and `route.path` are mutually exclusive on a single service.
+
+`ingress.tls: off` drops the edge to plain HTTP, so URLs become `ws://…`
+instead of `wss://…` and the edge publishes only `:80`. Combined with
+`routing: path` and `domain: localhost`, this is the zero-setup local dev path —
+`localhost` always resolves and no local-CA cert needs trusting:
+
+```yaml
+ingress:
+  type: caddy
+  routing: path
+  tls: off
+  domain: localhost   # a freshly provisioned agent is reachable at
+                      # ws://localhost/<service>/ with no DNS or cert setup
+```
 
 > **Operational note:** every container start/stop reconciles
 > caddy-docker-proxy, which reloads Caddy and severs active WebSockets. Use
