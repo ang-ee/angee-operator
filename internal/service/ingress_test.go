@@ -84,6 +84,117 @@ func TestServiceEndpointIngressCaddy(t *testing.T) {
 	}
 }
 
+func TestServiceEndpointIngressPath(t *testing.T) {
+	platform := newIngressTestPlatform(t, &manifest.Stack{
+		Name:    "demo",
+		Ingress: manifest.Ingress{Type: "caddy", Routing: "path", TLS: "off", Domain: "localhost"},
+		Services: map[string]manifest.Service{
+			"agent": {
+				Runtime: manifest.RuntimeContainer,
+				Image:   "nginx:latest",
+				Route:   &manifest.Route{Port: 3008},
+			},
+		},
+	})
+
+	endpoint, err := platform.ServiceEndpoint(context.Background(), "agent")
+	if err != nil {
+		t.Fatalf("ServiceEndpoint() error = %v", err)
+	}
+	if !endpoint.Routed {
+		t.Fatalf("ServiceEndpoint().Routed = false, want true")
+	}
+	if endpoint.URL != "ws://localhost/agent/" {
+		t.Fatalf("ServiceEndpoint().URL = %q, want ws://localhost/agent/", endpoint.URL)
+	}
+
+	status, err := platform.IngressStatus(context.Background())
+	if err != nil {
+		t.Fatalf("IngressStatus() error = %v", err)
+	}
+	if len(status.Routes) != 1 {
+		t.Fatalf("IngressStatus().Routes = %#v, want one route", status.Routes)
+	}
+	if status.Routes[0].Service != "agent" || status.Routes[0].URL != "ws://localhost/agent/" {
+		t.Fatalf("IngressStatus().Routes[0] = %#v, want agent path route", status.Routes[0])
+	}
+}
+
+func TestRouteURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		ingress manifest.Ingress
+		service string
+		route   *manifest.Route
+		domain  string
+		want    string
+	}{
+		{
+			name:    "host default subdomain",
+			ingress: manifest.Ingress{Type: "caddy"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "agents.localhost",
+			want:    "wss://agent.agents.localhost/",
+		},
+		{
+			name:    "host no domain",
+			ingress: manifest.Ingress{Type: "caddy"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "",
+			want:    "wss://agent/",
+		},
+		{
+			name:    "host custom",
+			ingress: manifest.Ingress{Type: "caddy"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008, Host: "custom.example.com"},
+			domain:  "agents.localhost",
+			want:    "wss://custom.example.com/",
+		},
+		{
+			name:    "path default prefix",
+			ingress: manifest.Ingress{Type: "caddy", Routing: "path"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "notes.localhost",
+			want:    "wss://notes.localhost/agent/",
+		},
+		{
+			name:    "path custom prefix",
+			ingress: manifest.Ingress{Type: "caddy", Routing: "path"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008, Path: "custom"},
+			domain:  "notes.localhost",
+			want:    "wss://notes.localhost/custom/",
+		},
+		{
+			name:    "path tls off",
+			ingress: manifest.Ingress{Type: "caddy", Routing: "path", TLS: "off"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "localhost",
+			want:    "ws://localhost/agent/",
+		},
+		{
+			name:    "host tls off",
+			ingress: manifest.Ingress{Type: "caddy", TLS: "off"},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "agents.localhost",
+			want:    "ws://agent.agents.localhost/",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := routeURL(tt.ingress, tt.service, tt.route, tt.domain); got != tt.want {
+				t.Fatalf("routeURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestServiceEndpointMissing(t *testing.T) {
 	platform := newIngressTestPlatform(t, &manifest.Stack{
 		Name: "demo",

@@ -2,6 +2,7 @@ package edge
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime/compose"
@@ -51,6 +52,24 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		verify = defaultEdgeVerifyTarget
 	}
 
+	routing := b.cfg.RoutingMode()
+	tls := b.cfg.TLSMode()
+
+	// addr prefixes the Caddy site address. tls: off forces plain HTTP (no
+	// automatic HTTPS), so the edge speaks ws:// on port 80.
+	addr := ""
+	edgePorts := []string{"443:443", "80:80"}
+	if tls == "off" {
+		addr = "http://"
+		edgePorts = []string{"80:80"}
+	}
+
+	// Path mode contributes one handle_path block per routed service to a single
+	// shared site. Each block's label keys must be unique across containers so
+	// caddy-docker-proxy merges (rather than overwrites) them; a deterministic
+	// per-service index drives caddy-docker-proxy's numeric order prefix.
+	routedIndex := routedServiceIndex(stack)
+
 	if compiled.Networks == nil {
 		compiled.Networks = map[string]compose.Network{}
 	}
@@ -66,7 +85,7 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	// domain (no label needed); the spike confirmed HTTP-only works for dev.
 	compiled.Services["edge"] = compose.Service{
 		Image:    image,
-		Ports:    []string{"443:443", "80:80"},
+		Ports:    edgePorts,
 		Volumes:  []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
 		Networks: []string{network},
 	}
@@ -84,16 +103,24 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 			svc.Labels = map[string]string{}
 		}
 
-		host := route.Host
-		if host == "" {
-			if domain != "" {
-				host = name + "." + domain
-			} else {
-				host = name
+		if routing == "path" {
+			// One shared site (caddy: <domain>) with a prefix-stripping
+			// handle_path per service. handle_path strips the matched prefix, so
+			// the backend serving at / sees / regardless of the public prefix.
+			hp := fmt.Sprintf("caddy.%d_handle_path", routedIndex[name])
+			svc.Labels["caddy"] = addr + domain
+			svc.Labels[hp] = route.PathPrefix(name) + "/*"
+			svc.Labels[hp+".reverse_proxy"] = fmt.Sprintf("{{upstreams %d}}", route.Port)
+			svc.Labels[hp+".reverse_proxy.flush_interval"] = "-1"
+			if route.Auth != "none" {
+				svc.Labels[hp+".forward_auth"] = verify
+				svc.Labels[hp+".forward_auth.uri"] = "/edge/verify?service=" + name
 			}
+			compiled.Services[name] = svc
+			continue
 		}
 
-		svc.Labels["caddy"] = host
+		svc.Labels["caddy"] = addr + route.HostName(name, domain)
 		svc.Labels["caddy.reverse_proxy"] = fmt.Sprintf("{{upstreams %d}}", route.Port)
 		svc.Labels["caddy.reverse_proxy.flush_interval"] = "-1"
 		if route.Auth != "none" {
@@ -108,6 +135,24 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	}
 
 	return nil
+}
+
+// routedServiceIndex assigns a stable 0-based index to each routed service,
+// ordered by service name. Path mode uses it as caddy-docker-proxy's directive
+// order prefix so that each container's handle_path label keys are unique.
+func routedServiceIndex(stack *manifest.Stack) map[string]int {
+	names := make([]string, 0, len(stack.Services))
+	for name, svc := range stack.Services {
+		if svc.Route != nil {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	index := make(map[string]int, len(names))
+	for i, name := range names {
+		index[name] = i
+	}
+	return index
 }
 
 func appendUnique(items []string, item string) []string {

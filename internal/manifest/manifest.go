@@ -81,10 +81,31 @@ type SecretsBackend struct {
 
 type Ingress struct {
 	Type    string `yaml:"type,omitempty" json:"type,omitempty" validate:"omitempty,oneof=none caddy" jsonschema:"enum=none,enum=caddy"`
+	Routing string `yaml:"routing,omitempty" json:"routing,omitempty" validate:"omitempty,oneof=host path" jsonschema:"enum=host,enum=path"`
+	TLS     string `yaml:"tls,omitempty" json:"tls,omitempty" validate:"omitempty,oneof=auto off" jsonschema:"enum=auto,enum=off"`
 	Domain  string `yaml:"domain,omitempty" json:"domain,omitempty"`
 	Image   string `yaml:"image,omitempty" json:"image,omitempty"`
 	Network string `yaml:"network,omitempty" json:"network,omitempty"`
 	Verify  string `yaml:"verify,omitempty" json:"verify,omitempty"`
+}
+
+// RoutingMode reports the edge routing mode, defaulting to "host" when unset.
+// Defaulting happens at read time (not in Defaults) so existing manifests
+// re-save byte-for-byte unchanged.
+func (i Ingress) RoutingMode() string {
+	if i.Routing == "" {
+		return "host"
+	}
+	return i.Routing
+}
+
+// TLSMode reports the edge TLS mode, defaulting to "auto" (Caddy automatic
+// HTTPS) when unset. "off" drops the edge to plain HTTP / ws://.
+func (i Ingress) TLSMode() string {
+	if i.TLS == "" {
+		return "auto"
+	}
+	return i.TLS
 }
 
 type Secret struct {
@@ -183,7 +204,33 @@ type Service struct {
 type Route struct {
 	Port int    `yaml:"port" json:"port" validate:"required,gte=1,lte=65535" jsonschema:"required,minimum=1,maximum=65535"`
 	Host string `yaml:"host,omitempty" json:"host,omitempty"`
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
 	Auth string `yaml:"auth,omitempty" json:"auth,omitempty" validate:"omitempty,oneof=forward none" jsonschema:"enum=forward,enum=none"`
+}
+
+// PathPrefix returns the normalized public prefix for path routing: a single
+// leading slash and no trailing slash (e.g. "/agent"). It defaults to
+// "/<serviceName>" when route.path is unset.
+func (r *Route) PathPrefix(serviceName string) string {
+	p := r.Path
+	if p == "" {
+		p = serviceName
+	}
+	return "/" + strings.Trim(p, "/")
+}
+
+// HostName returns the host for host-mode routing: route.host when set,
+// otherwise "<serviceName>.<domain>" ("<serviceName>" when domain is empty).
+// Shared by the URL resolver and the edge label generator so the URL a consumer
+// sees and the host the edge actually matches on cannot drift.
+func (r *Route) HostName(serviceName, domain string) string {
+	if r.Host != "" {
+		return r.Host
+	}
+	if domain != "" {
+		return serviceName + "." + domain
+	}
+	return serviceName
 }
 
 type Job struct {
@@ -397,6 +444,9 @@ func (s *Stack) ValidateExtended() error {
 				return fmt.Errorf("ingress.%s contains invalid characters", field.name)
 			}
 		}
+		if s.Ingress.RoutingMode() == "path" && s.Ingress.Domain == "" && s.Operator.Domain == "" {
+			return errors.New("ingress.routing: path requires ingress.domain or operator.domain")
+		}
 		for name, service := range s.Services {
 			if service.Route == nil {
 				continue
@@ -407,8 +457,23 @@ func (s *Stack) ValidateExtended() error {
 			if !routeNamePattern.MatchString(name) {
 				return fmt.Errorf("service %q: name not allowed for ingress routing (must match %s)", name, routeNamePattern.String())
 			}
+			if service.Route.Host != "" && service.Route.Path != "" {
+				return fmt.Errorf("service %q: route.host and route.path are mutually exclusive", name)
+			}
+			// Reject the override that the active routing mode ignores, so a
+			// mode-mismatched field surfaces as an error instead of a silent
+			// no-op.
+			if s.Ingress.RoutingMode() == "host" && service.Route.Path != "" {
+				return fmt.Errorf("service %q: route.path requires ingress.routing: path", name)
+			}
+			if s.Ingress.RoutingMode() == "path" && service.Route.Host != "" {
+				return fmt.Errorf("service %q: route.host requires ingress.routing: host", name)
+			}
 			if service.Route.Host != "" && !routeHostPattern.MatchString(service.Route.Host) {
 				return fmt.Errorf("service %q: route.host %q contains invalid characters", name, service.Route.Host)
+			}
+			if hasCaddyMeta(service.Route.Path) {
+				return fmt.Errorf("service %q: route.path %q contains invalid characters", name, service.Route.Path)
 			}
 		}
 	}

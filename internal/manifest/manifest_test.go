@@ -57,6 +57,75 @@ func TestManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIngressRoutingRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "angee.yaml")
+
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "routed",
+		Ingress: Ingress{Type: "caddy", Routing: "path", TLS: "off", Domain: "localhost"},
+		Services: map[string]Service{
+			"agent": {
+				Runtime: RuntimeContainer,
+				Image:   "example/agent:latest",
+				Route:   &Route{Port: 3008, Path: "/agent"},
+			},
+		},
+	}
+
+	if err := SaveFile(path, stack); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if loaded.Ingress.Routing != "path" {
+		t.Fatalf("Ingress.Routing = %q, want path", loaded.Ingress.Routing)
+	}
+	if loaded.Ingress.TLS != "off" {
+		t.Fatalf("Ingress.TLS = %q, want off", loaded.Ingress.TLS)
+	}
+	if got := loaded.Services["agent"].Route.Path; got != "/agent" {
+		t.Fatalf("Route.Path = %q, want /agent", got)
+	}
+}
+
+// TestIngressByteStableWithoutRoutingFields guards the read-time-default
+// decision: a caddy stack that omits routing/tls must marshal without emitting
+// those keys, so existing manifests re-save unchanged.
+func TestIngressByteStableWithoutRoutingFields(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "host-routed",
+		Ingress: Ingress{Type: "caddy", Domain: "agents.localhost"},
+		Services: map[string]Service{
+			"agent": {
+				Runtime: RuntimeContainer,
+				Image:   "example/agent:latest",
+				Route:   &Route{Port: 3008},
+			},
+		},
+	}
+
+	data, err := Marshal(stack)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if bytes.Contains(data, []byte("routing:")) {
+		t.Fatalf("Marshal() emitted routing key:\n%s", data)
+	}
+	if bytes.Contains(data, []byte("tls:")) {
+		t.Fatalf("Marshal() emitted tls key:\n%s", data)
+	}
+	if bytes.Contains(data, []byte("path:")) {
+		t.Fatalf("Marshal() emitted route.path key:\n%s", data)
+	}
+}
+
 func TestManifestRejectsInvalidLocalService(t *testing.T) {
 	stack := &Stack{
 		Version: VersionCurrent,

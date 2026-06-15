@@ -12,6 +12,20 @@
             "caddy"
           ]
         },
+        "routing": {
+          "type": "string",
+          "enum": [
+            "host",
+            "path"
+          ]
+        },
+        "tls": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ]
+        },
         "domain": {
           "type": "string"
         },
@@ -187,6 +201,9 @@
           "minimum": 1
         },
         "host": {
+          "type": "string"
+        },
+        "path": {
           "type": "string"
         },
         "auth": {
@@ -416,6 +433,12 @@
         "volumes": {
           "additionalProperties": {
             "$ref": "#/$defs/Volume"
+          },
+          "type": "object"
+        },
+        "persist": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PersistPath"
           },
           "type": "object"
         },

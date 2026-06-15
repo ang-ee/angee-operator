@@ -28,7 +28,7 @@ func (p *Platform) ServiceEndpoint(ctx context.Context, name string) (*api.Servi
 		endpoint.InternalPort = service.Route.Port
 	}
 	if endpoint.Routed {
-		endpoint.URL = routeURL(name, service.Route, ingressDomain(stack))
+		endpoint.URL = routeURL(stack.Ingress, name, service.Route, ingressDomain(stack))
 	}
 	return endpoint, nil
 }
@@ -59,7 +59,7 @@ func (p *Platform) IngressStatus(ctx context.Context) (*api.IngressStatus, error
 		}
 		status.Routes = append(status.Routes, api.RouteRef{
 			Service: name,
-			URL:     routeURL(name, service.Route, domain),
+			URL:     routeURL(stack.Ingress, name, service.Route, domain),
 		})
 	}
 	return status, nil
@@ -77,15 +77,20 @@ func isRouted(stack *manifest.Stack, service manifest.Service) bool {
 }
 
 // routeURL assumes routed endpoints are WebSocket agent endpoints and therefore
-// uses wss:// because manifest.Route does not carry a scheme today.
-func routeURL(serviceName string, route *manifest.Route, domain string) string {
-	host := route.Host
-	if host == "" {
-		if domain != "" {
-			host = serviceName + "." + domain
-		} else {
-			host = serviceName
-		}
+// uses ws(s):// because manifest.Route does not carry a scheme today. The scheme
+// follows ingress.tls (auto -> wss, off -> ws) and the shape follows
+// ingress.routing: host mode yields one subdomain per service
+// (wss://<service>.<domain>/), path mode yields one shared host with a prefix
+// per service (wss://<domain>/<service>/).
+func routeURL(ing manifest.Ingress, serviceName string, route *manifest.Route, domain string) string {
+	scheme := "wss"
+	if ing.TLSMode() == "off" {
+		scheme = "ws"
 	}
-	return "wss://" + host + "/"
+	if ing.RoutingMode() == "path" {
+		// Path mode requires a domain; ValidateExtended enforces that at load
+		// time, so domain is non-empty for any manifest that reached here.
+		return scheme + "://" + domain + route.PathPrefix(serviceName) + "/"
+	}
+	return scheme + "://" + route.HostName(serviceName, domain) + "/"
 }
