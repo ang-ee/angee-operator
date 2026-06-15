@@ -4,7 +4,7 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
-## Unreleased
+## v0.5.15 — 2026-06-16
 
 ### Fixes
 
