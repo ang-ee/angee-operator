@@ -29,6 +29,48 @@ install_bin() {
   fi
 }
 
+# build_from_source clones the repo and builds the CLI with Go. Used only as a
+# fallback when no prebuilt binary can be downloaded.
+build_from_source() {
+  echo ""
+  echo "  Falling back to building from source."
+  echo ""
+
+  if ! command -v go >/dev/null 2>&1; then
+    echo "  ✗ Go is required to build from source."
+    echo "    Install Go: https://go.dev/dl/"
+    echo "    Or download a release manually: https://github.com/${REPO}/releases"
+    exit 1
+  fi
+
+  echo "  Building angee CLI..."
+  SRCDIR="$(mktemp -d)"
+  trap 'rm -rf "${TMP:-}" "$SRCDIR"' EXIT
+
+  git clone --depth 1 "https://github.com/${REPO}.git" "$SRCDIR" 2>/dev/null || {
+    echo "  ✗ Failed to clone repository."
+    echo "    Build from a local checkout instead: make build && ANGEE_DIST_DIR=dist sh scripts/install.sh"
+    exit 1
+  }
+
+  BUILD_VERSION="$(cd "$SRCDIR" && git describe --tags --always 2>/dev/null || echo dev)"
+  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/ang-ee/angee-operator/internal/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
+    echo "  ✗ Build failed."
+    exit 1
+  }
+
+  install_bin "${SRCDIR}/angee" "${INSTALL_DIR}/angee"
+
+  echo ""
+  echo "  ✔ angee ${BUILD_VERSION} installed to ${INSTALL_DIR}/angee"
+  echo ""
+  echo "  Get started:"
+  echo "    angee init --dev --yes"
+  echo "    angee dev"
+  echo ""
+  exit 0
+}
+
 # Detect OS and arch
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -80,68 +122,37 @@ if [ -n "${ANGEE_DIST_DIR:-}" ]; then
   exit 0
 fi
 
-# Resolve latest version if needed
-if [ "$ANGEE_VERSION" = "latest" ]; then
-  ANGEE_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-    | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')" || true
-fi
-
-if [ -z "$ANGEE_VERSION" ]; then
-  echo ""
-  echo "  No releases found on GitHub. Building from source instead."
-  echo ""
-
-  # Check prerequisites
-  if ! command -v go >/dev/null 2>&1; then
-    echo "  ✗ Go is required to build from source."
-    echo "    Install Go: https://go.dev/dl/"
-    echo "    Or set ANGEE_VERSION to a specific release tag."
-    exit 1
-  fi
-
-  echo "  Building angee CLI..."
-  SRCDIR="$(mktemp -d)"
-  trap 'rm -rf "$SRCDIR"' EXIT
-
-  git clone --depth 1 "https://github.com/${REPO}.git" "$SRCDIR" 2>/dev/null || {
-    echo "  ✗ Failed to clone repository. Install from local checkout instead:"
-    echo "    make build-cli && sudo cp dist/angee /usr/local/bin/"
-    exit 1
-  }
-
-  BUILD_VERSION="$(cd "$SRCDIR" && git describe --tags --always 2>/dev/null || echo dev)"
-  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/ang-ee/angee-operator/internal/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
-    echo "  ✗ Build failed."
-    exit 1
-  }
-
-  install_bin "${SRCDIR}/angee" "${INSTALL_DIR}/angee"
-
-  echo ""
-  echo "  ✔ angee ${BUILD_VERSION} installed to ${INSTALL_DIR}/angee"
-  echo ""
-  echo "  Get started:"
-  echo "    angee init --dev --yes"
-  echo "    angee dev"
-  echo ""
-  exit 0
-fi
-
 FILENAME="angee-${OS}-${ARCH}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${ANGEE_VERSION}/${FILENAME}"
 
-echo "Installing angee v${ANGEE_VERSION} (${OS}/${ARCH})..."
+# Resolve the download URL WITHOUT the GitHub REST API. The unauthenticated API
+# (api.github.com) is rate limited to 60 requests/hr/IP, so on shared or CI
+# networks the old "resolve latest via the API" step returned an empty version
+# and the installer silently fell back to a source build (which fails without
+# Go). GitHub's /releases/latest/download redirect needs no API call and is not
+# rate limited.
+if [ "$ANGEE_VERSION" = "latest" ]; then
+  URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
+  # Best-effort: read the resolved tag from the /releases/latest redirect, for
+  # the progress message only. Never fatal — the download does not depend on it.
+  RESOLVED="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null \
+    | sed -n -E 's#.*/releases/tag/v?([^/]+)/?$#\1#p')" || true
+  if [ -n "$RESOLVED" ]; then VERSION_LABEL="v${RESOLVED}"; else VERSION_LABEL="latest"; fi
+else
+  URL="https://github.com/${REPO}/releases/download/v${ANGEE_VERSION}/${FILENAME}"
+  VERSION_LABEL="v${ANGEE_VERSION}"
+fi
+
+echo "Installing angee ${VERSION_LABEL} (${OS}/${ARCH})..."
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-curl -fsSL "$URL" -o "${TMP}/${FILENAME}" || {
+if ! curl -fsSL "$URL" -o "${TMP}/${FILENAME}"; then
   echo ""
   echo "  ✗ Download failed: ${URL}"
-  echo "    The release may not have a binary for ${OS}/${ARCH}."
-  echo "    Build from source: git clone https://github.com/${REPO} && cd angee && make build-cli"
-  exit 1
-}
+  echo "    No prebuilt binary for ${OS}/${ARCH}, or GitHub is unreachable."
+  build_from_source
+fi
 tar -xzf "${TMP}/${FILENAME}" -C "$TMP"
 
 # As of v0.2.0+ the tarball contains plain `angee` and `angee-operator`
@@ -164,9 +175,9 @@ if [ -f "${TMP}/angee-operator" ]; then
 fi
 
 echo ""
-echo "  ✔ angee v${ANGEE_VERSION} installed to ${INSTALL_DIR}/angee"
+echo "  ✔ angee ${VERSION_LABEL} installed to ${INSTALL_DIR}/angee"
 if [ -f "${INSTALL_DIR}/angee-operator" ]; then
-  echo "  ✔ angee-operator v${ANGEE_VERSION} installed to ${INSTALL_DIR}/angee-operator"
+  echo "  ✔ angee-operator ${VERSION_LABEL} installed to ${INSTALL_DIR}/angee-operator"
 fi
 echo ""
 echo "  Get started:"

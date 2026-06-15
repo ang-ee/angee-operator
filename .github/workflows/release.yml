@@ -234,8 +234,11 @@ jobs:
 
       - name: Pin install script to this version
         run: |
+          # github.ref_name is like "v0.5.14"; the script builds the download
+          # URL as ".../download/v${ANGEE_VERSION}/...", so strip the leading
+          # "v" to avoid a doubled "vv" tag.
           VERSION="${{ github.ref_name }}"
-          sed -i.bak "s/^ANGEE_VERSION=.*/ANGEE_VERSION=${VERSION}/" scripts/install.sh
+          sed -i.bak "s/^ANGEE_VERSION=.*/ANGEE_VERSION=${VERSION#v}/" scripts/install.sh
           rm -f scripts/install.sh.bak
 
       - name: Upload install script to release

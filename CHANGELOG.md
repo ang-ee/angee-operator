@@ -4,6 +4,20 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Fixes
+
+- `scripts/install.sh` no longer calls the GitHub REST API to resolve the latest
+  release. The unauthenticated API is rate limited to 60 requests/hr/IP, so on
+  shared or CI networks (or after a few retries) the lookup returned an empty
+  version and the installer silently fell back to building from source — which
+  fails outright when Go isn't installed. It now downloads straight from
+  `…/releases/latest/download/`, which needs no API call and isn't rate limited;
+  building from source is now only a fallback when the binary download itself
+  fails. Also fixed the release workflow's version pin, which stamped
+  `ANGEE_VERSION=v0.5.14` and produced a doubled `vv0.5.14` download URL.
+
 ## v0.5.14 — 2026-06-15
 
 ### Improvements
