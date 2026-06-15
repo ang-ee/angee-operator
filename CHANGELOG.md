@@ -8,6 +8,14 @@ latest tag.
 
 ### Fixes
 
+- Template rendering no longer HTML-escapes manifest and config values. The
+  `copier-go` engine (pongo2) shipped with autoescape on by default, so a
+  rendered value containing `"`, `<`, `>`, or `&` came out as `&quot;` / `&amp;`
+  — corrupting non-HTML output such as a quoted `angee.yaml` value, which then
+  failed to parse. Bumped `github.com/fyltr/copier-go` to the build that
+  disables autoescape globally to match Jinja2 / Python Copier semantics
+  (templates that genuinely emit HTML can still opt in with
+  `{% autoescape on %}`).
 - `scripts/install.sh` no longer calls the GitHub REST API to resolve the latest
   release. The unauthenticated API is rate limited to 60 requests/hr/IP, so on
   shared or CI networks (or after a few retries) the lookup returned an empty

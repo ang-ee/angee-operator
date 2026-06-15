@@ -3,7 +3,7 @@ module github.com/ang-ee/angee-operator
 go 1.25.0
 
 require (
-	github.com/fyltr/copier-go v0.0.0-20260506181622-12e6fe84de57
+	github.com/fyltr/copier-go v0.0.0-20260615213950-5a55ba2e7116
 	github.com/gosimple/slug v1.15.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.45.0
