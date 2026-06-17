@@ -229,7 +229,10 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 
 	compiled := &CompiledStack{
 		Compose: compose.File{
-			Name:     stack.Name,
+			// Project identity is derived from the absolute root, not stack.Name:
+			// the Compose project is a daemon-global namespace and stack.Name is a
+			// non-unique display label. See composeProjectName.
+			Name:     composeProjectName(stack.Name, root),
 			Services: map[string]compose.Service{},
 			Volumes:  map[string]compose.Volume{},
 		},
