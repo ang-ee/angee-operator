@@ -29,6 +29,11 @@
         "domain": {
           "type": "string"
         },
+        "port": {
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        },
         "image": {
           "type": "string"
         },

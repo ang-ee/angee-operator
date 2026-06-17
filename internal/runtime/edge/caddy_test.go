@@ -82,6 +82,60 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	}
 }
 
+func TestCaddyBackend_ContributeCustomEdgePort(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "demo",
+		Ingress: manifest.Ingress{
+			Type:    "caddy",
+			Routing: "path",
+			TLS:     "off",
+			Domain:  "localhost",
+			Port:    7003,
+		},
+		Services: map[string]manifest.Service{
+			"agent": {Runtime: "container", Route: &manifest.Route{Port: 3008}},
+		},
+	}
+	file := compose.File{
+		Services: map[string]compose.Service{"agent": {Ports: []string{"3008:3008"}}},
+	}
+
+	if err := NewCaddyBackend(stack.Ingress).Contribute(stack, &file); err != nil {
+		t.Fatalf("Contribute() error = %v", err)
+	}
+
+	// ingress.port maps the chosen host port to the edge's container :80, so
+	// parallel stacks on one host each bind a distinct edge port instead of :80.
+	edge := file.Services["edge"]
+	if want := []string{"7003:80"}; !reflect.DeepEqual(edge.Ports, want) {
+		t.Fatalf("edge.Ports = %#v, want %#v", edge.Ports, want)
+	}
+}
+
+func TestCaddyBackend_ContributePortIgnoredWithTLS(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "demo",
+		// ingress.port only applies to the plain ws:// (tls: off) edge; with the
+		// default tls: auto the prod edge keeps 443/80 and ignores it.
+		Ingress: manifest.Ingress{Type: "caddy", Domain: "agents.localhost", Port: 7003},
+		Services: map[string]manifest.Service{
+			"agent": {Runtime: "container", Route: &manifest.Route{Port: 3008}},
+		},
+	}
+	file := compose.File{
+		Services: map[string]compose.Service{"agent": {Ports: []string{"3008:3008"}}},
+	}
+
+	if err := NewCaddyBackend(stack.Ingress).Contribute(stack, &file); err != nil {
+		t.Fatalf("Contribute() error = %v", err)
+	}
+
+	edge := file.Services["edge"]
+	if want := []string{"443:443", "80:80"}; !reflect.DeepEqual(edge.Ports, want) {
+		t.Fatalf("edge.Ports = %#v, want %#v", edge.Ports, want)
+	}
+}
+
 func TestCaddyBackend_ContributePathMode(t *testing.T) {
 	stack := &manifest.Stack{
 		Name: "demo",
