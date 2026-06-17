@@ -4,6 +4,16 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.6.1 — 2026-06-17
+
+### Improvements
+
+- The per-service log socket (`GET /services/{name}/logs/stream`) accepts
+  `?tail=<n>` (alias `?n=<n>`) to replay the last `n` still-available lines
+  before the live follow begins — mapped to the compose / process-compose
+  `--tail` flag. The value is clamped to `[0, 10000]`; `0`, a missing param, or a
+  non-numeric value defers to the backend's default backlog.
+
 ## v0.6.0 — 2026-06-17
 
 ### Features
