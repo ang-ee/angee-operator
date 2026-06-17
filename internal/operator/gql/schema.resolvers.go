@@ -582,6 +582,14 @@ func (r *subscriptionResolver) OnWorkspaceStatusChange(ctx context.Context, name
 	return r.Events.SubscribeWorkspaceStatus(ctx, name), nil
 }
 
+// OnStackSnapshotChange is the resolver for the onStackSnapshotChange field.
+func (r *subscriptionResolver) OnStackSnapshotChange(ctx context.Context) (<-chan *model.StackSnapshot, error) {
+	if r.Events == nil {
+		return nil, errSubscriptionsUnavailable
+	}
+	return r.Events.SubscribeSnapshot(ctx), nil
+}
+
 // EffectiveInputs is the resolver for the effectiveInputs field.
 func (r *workspaceCreatePreflightResolver) EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error) {
 	if obj == nil {

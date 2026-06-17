@@ -279,17 +279,25 @@ Available subscription operations:
 
 | Operation | Argument | Payload |
 | --- | --- | --- |
+| `onStackSnapshotChange` | — | `StackSnapshot` aggregate (health, stackStatus, services, jobs, sources, workspaces, templates, secrets, gitOpsTopology), emitted when the aggregate hash changes. |
 | `onGitOpsTopologyChange` | — | `GitOpsTopology` snapshot, emitted when the polled topology hash changes. |
 | `onWorkspaceStatusChange` | `name: String!` | `WorkspaceStatus` snapshot for that workspace, emitted on change. |
 | `onServiceLogs` | `name: String!` | Service log lines, follow-tailed from the runtime backend. |
 | `onWorkspaceLogs` | `name: String!` | Workspace log lines, follow-tailed from the runtime backend. |
 
-Snapshot subscriptions (`onGitOpsTopologyChange`,
+`onStackSnapshotChange` is the aggregate the web console reads as one — it
+fans out the same Query-root reads (`stackStatus`, `services`, `jobs`,
+`sources`, `workspaces`, `templates`, `secrets`, `gitOpsTopology`) on a single
+daemon-side poller, so one server poll replaces a per-browser-tab refetch loop.
+`secrets` carries `SecretRef` metadata only — secret values are never part of
+the snapshot and remain behind the separately-gated `secretValue` query.
+
+Snapshot subscriptions (`onStackSnapshotChange`, `onGitOpsTopologyChange`,
 `onWorkspaceStatusChange`) poll their underlying query on a 2 s tick and
 publish only when the result hash changes. **No initial snapshot is
-emitted on connect** — issue a one-shot `gitOpsTopology` /
-`workspaceStatus` query alongside the subscription if you need the
-current state at startup. Log subscriptions stream directly from the
+emitted on connect** — issue a one-shot snapshot query (the aggregate fields,
+`gitOpsTopology`, or `workspaceStatus`) alongside the subscription if you need
+the current state at startup. Log subscriptions stream directly from the
 runtime backend's follow channel; cancelling the subscription tears down
 the underlying `logs --follow` process.
 

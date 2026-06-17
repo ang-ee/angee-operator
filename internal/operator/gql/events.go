@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -36,6 +37,7 @@ type EventHub struct {
 	pollInterval time.Duration
 
 	topology *broker[*api.GitOpsTopologyResponse]
+	snapshot *broker[*model.StackSnapshot]
 
 	mu               sync.Mutex
 	workspaceBrokers map[string]*broker[*api.WorkspaceStatusResponse]
@@ -54,6 +56,7 @@ func NewEventHub(p service.API) *EventHub {
 		platform:         p,
 		pollInterval:     defaultEventPollInterval,
 		topology:         newBroker[*api.GitOpsTopologyResponse](),
+		snapshot:         newBroker[*model.StackSnapshot](),
 		workspaceBrokers: make(map[string]*broker[*api.WorkspaceStatusResponse]),
 	}
 }
@@ -67,16 +70,17 @@ func (h *EventHub) SetPollInterval(d time.Duration) {
 	}
 }
 
-// Start launches the topology poller. Per-workspace status pollers are
-// started lazily on first subscribe. Idempotent: subsequent calls are
-// no-ops, even across goroutines.
+// Start launches the topology and aggregate-snapshot pollers. Per-workspace
+// status pollers are started lazily on first subscribe. Idempotent: subsequent
+// calls are no-ops, even across goroutines.
 func (h *EventHub) Start() {
 	h.startOnce.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		h.rootCtx = ctx
 		h.cancel = cancel
-		h.wg.Add(1)
+		h.wg.Add(2)
 		go h.pollTopology(ctx)
+		go h.pollSnapshot(ctx)
 	})
 }
 
@@ -101,6 +105,7 @@ func (h *EventHub) Stop() {
 	h.wg.Wait()
 
 	h.topology.Close()
+	h.snapshot.Close()
 	h.mu.Lock()
 	for _, b := range h.workspaceBrokers {
 		b.Close()
@@ -138,6 +143,95 @@ func (h *EventHub) pollTopology(ctx context.Context) {
 		last = next
 		h.topology.Publish(&topo)
 	}
+}
+
+// pollSnapshot fans out the Query-root reads the web console assembles into one
+// aggregate, hashes it, and publishes the changed snapshot to subscribers. It
+// mirrors pollTopology: a single daemon-side poller replaces a per-tab client
+// poll, and the hasSubscribers guard means zero platform reads when nothing is
+// connected.
+func (h *EventHub) pollSnapshot(ctx context.Context) {
+	defer h.wg.Done()
+	ticker := time.NewTicker(h.pollInterval)
+	defer ticker.Stop()
+	var (
+		last    [32]byte
+		lastErr string
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if !h.snapshot.hasSubscribers() {
+			continue
+		}
+		snap, err := h.buildSnapshot(ctx)
+		lastErr = reportPollError("snapshot", err, lastErr)
+		if err != nil {
+			continue
+		}
+		next, ok := hashJSON(snap)
+		if !ok || next == last {
+			continue
+		}
+		last = next
+		h.snapshot.Publish(snap)
+	}
+}
+
+// buildSnapshot assembles the aggregate stack snapshot from the same service.API
+// methods the corresponding Query-root resolvers use. The first failing read
+// aborts the build so a transient platform error skips the tick rather than
+// publishing a partial snapshot.
+func (h *EventHub) buildSnapshot(ctx context.Context) (*model.StackSnapshot, error) {
+	status, err := h.platform.StackStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	services, err := h.platform.ServiceList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	jobs, err := h.platform.JobList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sources, err := h.platform.SourceList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	workspaces, err := h.platform.WorkspaceList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	templates, err := h.platform.Templates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := h.platform.SecretsList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	topo, err := h.platform.GitOpsTopology(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StackSnapshot{
+		// Health mirrors the Query-root health resolver: an unconditional "ok"
+		// liveness ping, not a measure of stack health. Reaching here means the
+		// eight reads above succeeded, so the snapshot is fully assembled.
+		Health:         actionResult("ok"),
+		StackStatus:    &status,
+		Services:       ptrSlice(services),
+		Jobs:           ptrSlice(jobs),
+		Sources:        ptrSlice(sources),
+		Workspaces:     ptrSlice(workspaces),
+		Templates:      ptrSlice(templates),
+		Secrets:        ptrSlice(secrets),
+		GitOpsTopology: &topo,
+	}, nil
 }
 
 func (h *EventHub) pollWorkspaceStatus(ctx context.Context, name string, b *broker[*api.WorkspaceStatusResponse]) {
@@ -197,6 +291,15 @@ func reportPollError(prefix string, err error, lastErr string) string {
 // the current state on connect.
 func (h *EventHub) SubscribeTopology(ctx context.Context) <-chan *api.GitOpsTopologyResponse {
 	return h.topology.Subscribe(ctx, subscriberBuffer)
+}
+
+// SubscribeSnapshot returns a channel that receives the aggregate stack
+// snapshot every time the polled aggregate changes. Same contract as
+// SubscribeTopology: the channel closes when ctx is done or the hub stops, and
+// subscribers do NOT receive an initial snapshot — issue the one-shot snapshot
+// query alongside the subscription for current state on connect.
+func (h *EventHub) SubscribeSnapshot(ctx context.Context) <-chan *model.StackSnapshot {
+	return h.snapshot.Subscribe(ctx, subscriberBuffer)
 }
 
 // SubscribeWorkspaceStatus subscribes to status snapshot changes for one

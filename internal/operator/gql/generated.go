@@ -295,6 +295,18 @@ type ComplexityRoot struct {
 		Template func(childComplexity int) int
 	}
 
+	StackSnapshot struct {
+		GitOpsTopology func(childComplexity int) int
+		Health         func(childComplexity int) int
+		Jobs           func(childComplexity int) int
+		Secrets        func(childComplexity int) int
+		Services       func(childComplexity int) int
+		Sources        func(childComplexity int) int
+		StackStatus    func(childComplexity int) int
+		Templates      func(childComplexity int) int
+		Workspaces     func(childComplexity int) int
+	}
+
 	StackStatus struct {
 		Jobs       func(childComplexity int) int
 		Name       func(childComplexity int) int
@@ -306,6 +318,7 @@ type ComplexityRoot struct {
 	Subscription struct {
 		OnGitOpsTopologyChange  func(childComplexity int) int
 		OnServiceLogs           func(childComplexity int, name string) int
+		OnStackSnapshotChange   func(childComplexity int) int
 		OnWorkspaceLogs         func(childComplexity int, name string) int
 		OnWorkspaceStatusChange func(childComplexity int, name string) int
 	}
@@ -483,6 +496,7 @@ type SubscriptionResolver interface {
 	OnServiceLogs(ctx context.Context, name string) (<-chan string, error)
 	OnWorkspaceLogs(ctx context.Context, name string) (<-chan string, error)
 	OnWorkspaceStatusChange(ctx context.Context, name string) (<-chan *api.WorkspaceStatusResponse, error)
+	OnStackSnapshotChange(ctx context.Context) (<-chan *model.StackSnapshot, error)
 }
 type WorkspaceCreatePreflightResolver interface {
 	EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error)
@@ -1880,6 +1894,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StackInitResult.Template(childComplexity), true
 
+	case "StackSnapshot.gitOpsTopology":
+		if e.ComplexityRoot.StackSnapshot.GitOpsTopology == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.GitOpsTopology(childComplexity), true
+	case "StackSnapshot.health":
+		if e.ComplexityRoot.StackSnapshot.Health == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Health(childComplexity), true
+	case "StackSnapshot.jobs":
+		if e.ComplexityRoot.StackSnapshot.Jobs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Jobs(childComplexity), true
+	case "StackSnapshot.secrets":
+		if e.ComplexityRoot.StackSnapshot.Secrets == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Secrets(childComplexity), true
+	case "StackSnapshot.services":
+		if e.ComplexityRoot.StackSnapshot.Services == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Services(childComplexity), true
+	case "StackSnapshot.sources":
+		if e.ComplexityRoot.StackSnapshot.Sources == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Sources(childComplexity), true
+	case "StackSnapshot.stackStatus":
+		if e.ComplexityRoot.StackSnapshot.StackStatus == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.StackStatus(childComplexity), true
+	case "StackSnapshot.templates":
+		if e.ComplexityRoot.StackSnapshot.Templates == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Templates(childComplexity), true
+	case "StackSnapshot.workspaces":
+		if e.ComplexityRoot.StackSnapshot.Workspaces == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSnapshot.Workspaces(childComplexity), true
+
 	case "StackStatus.jobs":
 		if e.ComplexityRoot.StackStatus.Jobs == nil {
 			break
@@ -1928,6 +1997,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.OnServiceLogs(childComplexity, args["name"].(string)), true
+	case "Subscription.onStackSnapshotChange":
+		if e.ComplexityRoot.Subscription.OnStackSnapshotChange == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Subscription.OnStackSnapshotChange(childComplexity), true
 	case "Subscription.onWorkspaceLogs":
 		if e.ComplexityRoot.Subscription.OnWorkspaceLogs == nil {
 			break
@@ -2831,6 +2906,25 @@ type Subscription {
   onServiceLogs(name: String!): String!
   onWorkspaceLogs(name: String!): String!
   onWorkspaceStatusChange(name: String!): WorkspaceStatus!
+  "Emitted whenever the aggregate stack snapshot's hash changes."
+  onStackSnapshotChange: StackSnapshot!
+}
+
+"""
+The stack overview aggregate — the root fields the web console reads as one.
+Mirrors the Query-root types so a client can subscribe to the whole snapshot
+and field-prune via its selection set.
+"""
+type StackSnapshot {
+  health: MutationResult
+  stackStatus: StackStatus
+  services: [ServiceState!]!
+  jobs: [JobState!]!
+  sources: [SourceState!]!
+  workspaces: [WorkspaceRef!]!
+  templates: [TemplateDescriptor!]!
+  secrets: [SecretRef!]!
+  gitOpsTopology: GitOpsTopology
 }
 
 type PreflightFailure {
@@ -3255,6 +3349,30 @@ func (ec *executionContext) childFields_StackInitResult(ctx context.Context, fie
 		return ec.fieldContext_StackInitResult_root(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type StackInitResult", field.Name)
+}
+
+func (ec *executionContext) childFields_StackSnapshot(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "health":
+		return ec.fieldContext_StackSnapshot_health(ctx, field)
+	case "stackStatus":
+		return ec.fieldContext_StackSnapshot_stackStatus(ctx, field)
+	case "services":
+		return ec.fieldContext_StackSnapshot_services(ctx, field)
+	case "jobs":
+		return ec.fieldContext_StackSnapshot_jobs(ctx, field)
+	case "sources":
+		return ec.fieldContext_StackSnapshot_sources(ctx, field)
+	case "workspaces":
+		return ec.fieldContext_StackSnapshot_workspaces(ctx, field)
+	case "templates":
+		return ec.fieldContext_StackSnapshot_templates(ctx, field)
+	case "secrets":
+		return ec.fieldContext_StackSnapshot_secrets(ctx, field)
+	case "gitOpsTopology":
+		return ec.fieldContext_StackSnapshot_gitOpsTopology(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StackSnapshot", field.Name)
 }
 
 func (ec *executionContext) childFields_StackStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -10146,6 +10264,294 @@ func (ec *executionContext) fieldContext_StackInitResult_root(_ context.Context,
 	return graphql.NewScalarFieldContext("StackInitResult", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _StackSnapshot_health(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_health(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Health, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {
+			return ec.marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_health(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationResult(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_stackStatus(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_stackStatus(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StackStatus, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.StackStatusResponse) graphql.Marshaler {
+			return ec.marshalOStackStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStackStatusResponse(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_stackStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StackStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_services(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_services(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Services, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.ServiceState) graphql.Marshaler {
+			return ec.marshalNServiceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceStateᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_services(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceState(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_jobs(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_jobs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Jobs, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.JobState) graphql.Marshaler {
+			return ec.marshalNJobState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐJobStateᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_jobs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_JobState(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_sources(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_sources(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Sources, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
+			return ec.marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SourceState(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_workspaces(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_workspaces(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Workspaces, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.WorkspaceRef) graphql.Marshaler {
+			return ec.marshalNWorkspaceRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRefᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_workspaces(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceRef(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_templates(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_templates(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Templates, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.TemplateDescriptor) graphql.Marshaler {
+			return ec.marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_templates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateDescriptor(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_secrets(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_secrets(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Secrets, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.SecretRef) graphql.Marshaler {
+			return ec.marshalNSecretRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSecretRefᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_secrets(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SecretRef(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSnapshot_gitOpsTopology(ctx context.Context, field graphql.CollectedField, obj *model.StackSnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSnapshot_gitOpsTopology(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.GitOpsTopology, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
+			return ec.marshalOGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_StackSnapshot_gitOpsTopology(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpsTopology(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StackStatus_root(ctx context.Context, field graphql.CollectedField, obj *api.StackStatusResponse) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -10448,6 +10854,38 @@ func (ec *executionContext) fieldContext_Subscription_onWorkspaceStatusChange(ct
 	if fc.Args, err = ec.field_Subscription_onWorkspaceStatusChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_onStackSnapshotChange(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_onStackSnapshotChange(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Subscription().OnStackSnapshotChange(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.StackSnapshot) graphql.Marshaler {
+			return ec.marshalNStackSnapshot2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackSnapshot(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_onStackSnapshotChange(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StackSnapshot(ctx, field)
+		},
 	}
 	return fc, nil
 }
@@ -15587,6 +16025,76 @@ func (ec *executionContext) _StackInitResult(ctx context.Context, sel ast.Select
 	return out
 }
 
+var stackSnapshotImplementors = []string{"StackSnapshot"}
+
+func (ec *executionContext) _StackSnapshot(ctx context.Context, sel ast.SelectionSet, obj *model.StackSnapshot) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, stackSnapshotImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StackSnapshot")
+		case "health":
+			out.Values[i] = ec._StackSnapshot_health(ctx, field, obj)
+		case "stackStatus":
+			out.Values[i] = ec._StackSnapshot_stackStatus(ctx, field, obj)
+		case "services":
+			out.Values[i] = ec._StackSnapshot_services(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "jobs":
+			out.Values[i] = ec._StackSnapshot_jobs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sources":
+			out.Values[i] = ec._StackSnapshot_sources(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaces":
+			out.Values[i] = ec._StackSnapshot_workspaces(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "templates":
+			out.Values[i] = ec._StackSnapshot_templates(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "secrets":
+			out.Values[i] = ec._StackSnapshot_secrets(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "gitOpsTopology":
+			out.Values[i] = ec._StackSnapshot_gitOpsTopology(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var stackStatusImplementors = []string{"StackStatus"}
 
 func (ec *executionContext) _StackStatus(ctx context.Context, sel ast.SelectionSet, obj *api.StackStatusResponse) graphql.Marshaler {
@@ -15760,6 +16268,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_onWorkspaceLogs(ctx, fields[0])
 	case "onWorkspaceStatusChange":
 		return ec._Subscription_onWorkspaceStatusChange(ctx, fields[0])
+	case "onStackSnapshotChange":
+		return ec._Subscription_onStackSnapshotChange(ctx, fields[0])
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}
@@ -17153,6 +17663,20 @@ func (ec *executionContext) marshalNSourceState2ᚖgithubᚗcomᚋangᚑeeᚋang
 func (ec *executionContext) unmarshalNStackInitInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitInput(ctx context.Context, v any) (model.StackInitInput, error) {
 	res, err := ec.unmarshalInputStackInitInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNStackSnapshot2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackSnapshot(ctx context.Context, sel ast.SelectionSet, v model.StackSnapshot) graphql.Marshaler {
+	return ec._StackSnapshot(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNStackSnapshot2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackSnapshot(ctx context.Context, sel ast.SelectionSet, v *model.StackSnapshot) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StackSnapshot(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {

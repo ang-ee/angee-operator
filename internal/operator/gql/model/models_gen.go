@@ -2,6 +2,10 @@
 
 package model
 
+import (
+	"github.com/ang-ee/angee-operator/api"
+)
+
 type KeyValue struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -60,6 +64,21 @@ type StackInitResult struct {
 type StackRuntimeInput struct {
 	Services []string `json:"services,omitempty"`
 	Build    *bool    `json:"build,omitempty"`
+}
+
+// The stack overview aggregate — the root fields the web console reads as one.
+// Mirrors the Query-root types so a client can subscribe to the whole snapshot
+// and field-prune via its selection set.
+type StackSnapshot struct {
+	Health         *MutationResult             `json:"health,omitempty"`
+	StackStatus    *api.StackStatusResponse    `json:"stackStatus,omitempty"`
+	Services       []*api.ServiceState         `json:"services"`
+	Jobs           []*api.JobState             `json:"jobs"`
+	Sources        []*api.SourceState          `json:"sources"`
+	Workspaces     []*api.WorkspaceRef         `json:"workspaces"`
+	Templates      []*api.TemplateDescriptor   `json:"templates"`
+	Secrets        []*api.SecretRef            `json:"secrets"`
+	GitOpsTopology *api.GitOpsTopologyResponse `json:"gitOpsTopology,omitempty"`
 }
 
 type Subscription struct {

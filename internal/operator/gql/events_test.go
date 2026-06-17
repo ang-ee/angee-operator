@@ -2,8 +2,13 @@ package gql
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 func TestEventHubSubscribeAfterStopReturnsClosedChan(t *testing.T) {
@@ -73,3 +78,113 @@ func TestReportPollErrorTransitions(t *testing.T) {
 type errFake string
 
 func (e errFake) Error() string { return string(e) }
+
+// snapshotPlatform is a service.API whose JobList result the test can mutate
+// between polls, so we can assert the aggregate poller publishes on change and
+// stays quiet otherwise. Every other read buildSnapshot performs returns an
+// empty-but-non-erroring value; methods left unimplemented would panic, which
+// is what we want — it pins buildSnapshot's read surface.
+type snapshotPlatform struct {
+	service.API
+	mu       sync.Mutex
+	jobs     []api.JobState
+	jobCalls int
+}
+
+func (p *snapshotPlatform) setJobs(jobs []api.JobState) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.jobs = jobs
+}
+
+func (p *snapshotPlatform) jobListCalls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.jobCalls
+}
+
+func (p *snapshotPlatform) StackStatus(context.Context) (api.StackStatusResponse, error) {
+	return api.StackStatusResponse{}, nil
+}
+func (p *snapshotPlatform) ServiceList(context.Context) ([]api.ServiceState, error) { return nil, nil }
+func (p *snapshotPlatform) JobList(context.Context) ([]api.JobState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.jobCalls++
+	return p.jobs, nil
+}
+func (p *snapshotPlatform) SourceList(context.Context) ([]api.SourceState, error) { return nil, nil }
+func (p *snapshotPlatform) WorkspaceList(context.Context) ([]api.WorkspaceRef, error) {
+	return nil, nil
+}
+func (p *snapshotPlatform) Templates(context.Context) ([]api.TemplateDescriptor, error) {
+	return nil, nil
+}
+func (p *snapshotPlatform) SecretsList(context.Context) ([]api.SecretRef, error) { return nil, nil }
+func (p *snapshotPlatform) GitOpsTopology(context.Context) (api.GitOpsTopologyResponse, error) {
+	return api.GitOpsTopologyResponse{}, nil
+}
+
+func recvSnapshot(t *testing.T, ch <-chan *model.StackSnapshot) *model.StackSnapshot {
+	t.Helper()
+	select {
+	case snap, ok := <-ch:
+		if !ok {
+			t.Fatal("snapshot channel closed before a value arrived")
+		}
+		return snap
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a snapshot publish")
+		return nil
+	}
+}
+
+func TestEventHubPublishesSnapshotOnChange(t *testing.T) {
+	p := &snapshotPlatform{jobs: []api.JobState{{Name: "seed", Runtime: "container"}}}
+	h := NewEventHub(p)
+	h.SetPollInterval(20 * time.Millisecond)
+	defer h.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := h.SubscribeSnapshot(ctx)
+	h.Start()
+
+	first := recvSnapshot(t, ch)
+	if first.Health == nil || first.Health.Status != "ok" {
+		t.Fatalf("first snapshot health = %#v, want status ok", first.Health)
+	}
+	if len(first.Jobs) != 1 || first.Jobs[0].Name != "seed" {
+		t.Fatalf("first snapshot jobs = %#v, want one job seed", first.Jobs)
+	}
+
+	// Unchanged aggregate must not re-publish across several ticks.
+	select {
+	case snap := <-ch:
+		t.Fatalf("unexpected publish with no change: %#v", snap)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// A changed aggregate publishes the new snapshot.
+	p.setJobs([]api.JobState{{Name: "seed", Runtime: "container"}, {Name: "added", Runtime: "local"}})
+	second := recvSnapshot(t, ch)
+	if len(second.Jobs) != 2 {
+		t.Fatalf("second snapshot jobs = %#v, want two jobs", second.Jobs)
+	}
+}
+
+func TestEventHubSnapshotGuardSkipsReadsWithoutSubscribers(t *testing.T) {
+	// With no subscriber attached, pollSnapshot must not touch the platform —
+	// the hasSubscribers guard holds, matching pollTopology. Several ticks pass
+	// with no subscribe, and JobList must never have been called.
+	p := &snapshotPlatform{}
+	h := NewEventHub(p)
+	h.SetPollInterval(20 * time.Millisecond)
+	h.Start()
+	time.Sleep(120 * time.Millisecond)
+	h.Stop()
+
+	if calls := p.jobListCalls(); calls != 0 {
+		t.Fatalf("JobList called %d times with no subscriber, want 0", calls)
+	}
+}
