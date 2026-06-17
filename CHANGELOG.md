@@ -4,6 +4,20 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.5.17 — 2026-06-17
+
+### Improvements
+
+- `ingress` gained an optional `port` field for the plain-HTTP dev edge. With
+  `tls: off`, the Caddy edge previously always published `:80`, so two stacks on
+  one host (e.g. parallel dev workspaces) both tried to bind `:80` and the second
+  failed. Setting `ingress.port: <n>` maps the chosen host port to the edge's
+  container `:80`, letting each stack bind a distinct edge port; the consumer
+  route URL carries the same port (`ws://<host>:<n>/…`) whenever it is
+  non-default. The prod (`tls: auto`) edge keeps the standard `443`/`80` and
+  ignores the field. The field validates to `1–65535` in both the Go loader and
+  the published JSON schema.
+
 ## v0.5.15 — 2026-06-16
 
 ### Fixes
