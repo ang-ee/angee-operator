@@ -4,6 +4,29 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.6.2 — 2026-06-17
+
+### Fixes
+
+- The Docker Compose **project name** is now derived from the absolute stack
+  root instead of the manifest `name:` verbatim. The project name is a
+  daemon-global namespace keying container, network, and volume names, but
+  `name:` is a non-unique display label — every dev workspace defaults to the
+  same example name. Two stacks sharing a `name:` were merged into one Compose
+  project even across different roots and operator daemons, so the second to
+  come up clobbered the first's containers (seen as a cross-wired edge closing
+  the agent WebSocket with `1006`). `stack.Name` stays the friendly label for
+  the API, gitops, and console; containers now read like
+  `notes-angee-1a2b3c4d-edge-1` (readable base, bounded to 30 chars, plus a
+  stable 8-hex per-root suffix). No other compose path is affected — every
+  subcommand resolves the project from the rendered file's `name:`.
+
+  **Upgrade note:** the rename re-namespaces a stack's containers, networks,
+  and volumes; the old project's containers linger as orphans after the first
+  `up`. Run `angee down` with the old binary before upgrading to clean them up.
+  App data persisted via bind `persist:` subpaths under the stack root is
+  unaffected; any genuinely named Docker volume would be recreated empty.
+
 ## v0.6.1 — 2026-06-17
 
 ### Improvements
