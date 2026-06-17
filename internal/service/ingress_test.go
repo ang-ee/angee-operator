@@ -185,6 +185,30 @@ func TestRouteURL(t *testing.T) {
 			domain:  "agents.localhost",
 			want:    "ws://agent.agents.localhost/",
 		},
+		{
+			name:    "path tls off custom edge port",
+			ingress: manifest.Ingress{Type: "caddy", Routing: "path", TLS: "off", Port: 7003},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "localhost",
+			want:    "ws://localhost:7003/agent/",
+		},
+		{
+			name:    "host tls off custom edge port",
+			ingress: manifest.Ingress{Type: "caddy", TLS: "off", Port: 7003},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "agents.localhost",
+			want:    "ws://agent.agents.localhost:7003/",
+		},
+		{
+			name:    "explicit default port 80 stays bare",
+			ingress: manifest.Ingress{Type: "caddy", Routing: "path", TLS: "off", Port: 80},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008},
+			domain:  "localhost",
+			want:    "ws://localhost/agent/",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -84,6 +84,7 @@ type Ingress struct {
 	Routing string `yaml:"routing,omitempty" json:"routing,omitempty" validate:"omitempty,oneof=host path" jsonschema:"enum=host,enum=path"`
 	TLS     string `yaml:"tls,omitempty" json:"tls,omitempty" validate:"omitempty,oneof=auto off" jsonschema:"enum=auto,enum=off"`
 	Domain  string `yaml:"domain,omitempty" json:"domain,omitempty"`
+	Port    int    `yaml:"port,omitempty" json:"port,omitempty" validate:"omitempty,min=1,max=65535" jsonschema:"minimum=1,maximum=65535"`
 	Image   string `yaml:"image,omitempty" json:"image,omitempty"`
 	Network string `yaml:"network,omitempty" json:"network,omitempty"`
 	Verify  string `yaml:"verify,omitempty" json:"verify,omitempty"`
@@ -106,6 +107,18 @@ func (i Ingress) TLSMode() string {
 		return "auto"
 	}
 	return i.TLS
+}
+
+// HostPort reports the host port the edge publishes for the plain ws:// (tls:
+// off) edge, defaulting to 80 when ingress.port is unset. It lets each stack on
+// one host (e.g. parallel dev workspaces) bind a distinct edge port instead of
+// every edge contending for :80; the consumer URL carries the same port. The
+// prod (tls: auto) edge keeps the standard 443/80 and ignores this.
+func (i Ingress) HostPort() int {
+	if i.Port != 0 {
+		return i.Port
+	}
+	return 80
 }
 
 type Secret struct {

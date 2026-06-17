@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -84,13 +85,20 @@ func isRouted(stack *manifest.Stack, service manifest.Service) bool {
 // per service (wss://<domain>/<service>/).
 func routeURL(ing manifest.Ingress, serviceName string, route *manifest.Route, domain string) string {
 	scheme := "wss"
+	// The edge port (ingress.port) appears in the URL only for the plain ws://
+	// (tls: off) edge and only when it is non-default, so default URLs stay bare
+	// (ws://host/…); the prod wss:// edge keeps the standard 443.
+	hostPort := ""
 	if ing.TLSMode() == "off" {
 		scheme = "ws"
+		if p := ing.HostPort(); p != 80 {
+			hostPort = fmt.Sprintf(":%d", p)
+		}
 	}
 	if ing.RoutingMode() == "path" {
 		// Path mode requires a domain; ValidateExtended enforces that at load
 		// time, so domain is non-empty for any manifest that reached here.
-		return scheme + "://" + domain + route.PathPrefix(serviceName) + "/"
+		return scheme + "://" + domain + hostPort + route.PathPrefix(serviceName) + "/"
 	}
-	return scheme + "://" + route.HostName(serviceName, domain) + "/"
+	return scheme + "://" + route.HostName(serviceName, domain) + hostPort + "/"
 }

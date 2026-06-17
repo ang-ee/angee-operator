@@ -56,12 +56,14 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	tls := b.cfg.TLSMode()
 
 	// addr prefixes the Caddy site address. tls: off forces plain HTTP (no
-	// automatic HTTPS), so the edge speaks ws:// on port 80.
+	// automatic HTTPS), so the edge speaks ws:// on its host port (default 80,
+	// overridable via ingress.port so parallel stacks on one host don't all
+	// contend for :80 — the consumer URL carries the same port).
 	addr := ""
 	edgePorts := []string{"443:443", "80:80"}
 	if tls == "off" {
 		addr = "http://"
-		edgePorts = []string{"80:80"}
+		edgePorts = []string{fmt.Sprintf("%d:80", b.cfg.HostPort())}
 	}
 
 	// Path mode contributes one handle_path block per routed service to a single
