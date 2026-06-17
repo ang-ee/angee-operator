@@ -51,7 +51,50 @@ POST  /services/{name}/stop
 POST  /services/{name}/restart
 POST  /services/{name}/destroy
 GET   /services/{name}/logs
+GET   /services/{name}/logs/stream   live per-service log WebSocket
+GET   /services/{name}/endpoint      service endpoint + log-stream descriptor
 ```
+
+### Per-service live log socket
+
+`GET /services/{name}/logs/stream` is a WebSocket that streams a single
+service's logs live, one JSON `LogLine` (`service`, `runtime`, `message`,
+optional `level`) per frame, as the runtime produces them. Because the socket
+is scoped to one service the attribution is exact and no log prefix is parsed.
+
+Like the `GET /graphql` upgrade it carries no `Authorization` header, so auth
+runs in the handshake: present a per-service route token (`aud=svc:<name>`, see
+[Connection and route tokens](#connection-and-route-tokens)) or the admin
+bearer / a minted `aud=operator` token, via `?token=`, the
+`Sec-WebSocket-Protocol` header, or `Authorization`. The upgrader enforces the
+same `Origin` allowlist as the GraphQL WebSocket. The stream is opened before
+the upgrade, so an unknown service or an unconfigured production backend
+surfaces as a plain HTTP error rather than a socket close; closing the socket
+(or any read error) tears down the upstream follow.
+
+The operator routes each service's socket to a backend it owns — in
+development an **ephemeral** live proxy (no persistence); in production a
+configured durable backend (stubbed today). `GET /services/{name}/endpoint`
+advertises the resolved socket in a `log_stream` descriptor so a consumer can
+connect without guessing the URL or minting its own token:
+
+```json
+{
+  "routed": false,
+  "internal_host": "web",
+  "log_stream": {
+    "url": "ws://127.0.0.1:9000/services/web/logs/stream",
+    "target": "operator",
+    "protocol": "ws",
+    "token": "<short-lived route token>",
+    "expires_at": "2026-06-17T12:00:00Z"
+  }
+}
+```
+
+`target` is informational (`operator` | `edge` | `production`); connecting is
+identical regardless. In open dev (no configured operator token) the descriptor
+omits the credential.
 
 `POST /services/create` body:
 

@@ -290,16 +290,24 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 			return nil, err
 		}
 	}
+	// follow streams line-by-line (StreamLogs) so subscribers see logs live;
+	// a bounded read (follow=false) keeps the buffered Logs path unchanged.
+	logsFor := func(backend runtime.Backend, req runtime.LogsRequest) (<-chan string, error) {
+		if follow {
+			return backend.StreamLogs(ctx, req)
+		}
+		return backend.Logs(ctx, req)
+	}
 	var channels []<-chan string
 	if len(compiled.Compose.Services) > 0 && len(container) > 0 {
-		ch, err := p.composeBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
+		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
 		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, ch)
 	}
 	if len(compiled.ProcessCompose.Processes) > 0 && len(local) > 0 {
-		ch, err := p.procBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
+		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
 		}
@@ -311,6 +319,29 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		return ch, nil
 	}
 	out := make(chan string)
+	if follow {
+		// Interleave the backends concurrently so a live stream from one
+		// doesn't wait for the other to drain.
+		var wg sync.WaitGroup
+		for _, ch := range channels {
+			wg.Add(1)
+			go func(ch <-chan string) {
+				defer wg.Done()
+				for line := range ch {
+					select {
+					case out <- line:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}(ch)
+		}
+		go func() {
+			wg.Wait()
+			close(out)
+		}()
+		return out, nil
+	}
 	go func() {
 		defer close(out)
 		for _, ch := range channels {

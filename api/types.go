@@ -267,10 +267,33 @@ type ConnectionTokenResponse struct {
 }
 
 type ServiceEndpoint struct {
-	Routed       bool   `json:"routed"`
-	URL          string `json:"url"`
-	InternalHost string `json:"internal_host"`
-	InternalPort int    `json:"internal_port"`
+	Routed       bool       `json:"routed"`
+	URL          string     `json:"url"`
+	InternalHost string     `json:"internal_host"`
+	InternalPort int        `json:"internal_port"`
+	LogStream    *LogStream `json:"log_stream,omitempty"`
+}
+
+// LogStream is the descriptor a consumer uses to open a service's live log
+// socket: the operator resolves the endpoint (its own port, the Caddy edge, or
+// a production backend) and hands back the matching short-lived credential.
+// Connecting is identical regardless of Target.
+type LogStream struct {
+	URL       string `json:"url"`
+	Target    string `json:"target"`
+	Protocol  string `json:"protocol"`
+	Token     string `json:"token,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// LogLine is one structured log line from a single service's live stream.
+// Service is known from the per-service socket (no parsing); Level is
+// best-effort inferred and nil when it can't be determined.
+type LogLine struct {
+	Service string  `json:"service"`
+	Runtime string  `json:"runtime"`
+	Message string  `json:"message"`
+	Level   *string `json:"level,omitempty"`
 }
 
 type IngressStatus struct {

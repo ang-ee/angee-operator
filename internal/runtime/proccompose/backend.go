@@ -132,6 +132,44 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 	return ch, nil
 }
 
+// StreamLogs runs `process-compose process logs [--follow]` and streams its
+// combined output one line per channel element, closing on process exit or ctx
+// cancel. Unlike Logs it never buffers, so a `--follow` stream surfaces lines
+// live.
+func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+	args := b.clientArgs(req.ControlPort)
+	args = append(args, "process", "logs")
+	if req.Follow {
+		args = append(args, "--follow")
+	}
+	args = append(args, req.Services...)
+	// A test Runner can't stream a live process, so capture through it and
+	// replay by line. The real ExecRunner streams below.
+	if b.Runner != nil && !isExecRunner(b.Runner) {
+		out, err := b.run(ctx, req.Root, req.EnvFile, args...)
+		if err != nil {
+			return nil, err
+		}
+		return runtime.ReplayLines(ctx, out), nil
+	}
+	name, err := b.processComposeBinary(ctx, nil, nil, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	env, err := readEnvFile(req.EnvFile)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = req.Root
+	cmd.Env = append(os.Environ(), env...)
+	ch, err := runtime.StreamCommand(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return ch, nil
+}
+
 func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
 	args := b.clientArgs(req.ControlPort)
 	args = append(args, "list", "-o", "json")
