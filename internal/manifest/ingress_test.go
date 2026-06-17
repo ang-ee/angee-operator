@@ -145,6 +145,62 @@ func TestValidateAllowsCleanCaddyPathRoute(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsIngressPortWithTLSOff(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "edge-port",
+		Ingress: Ingress{Type: "caddy", Routing: "path", TLS: "off", Domain: "localhost", Port: 7003},
+		Services: map[string]Service{
+			"agent": {Runtime: RuntimeContainer, Image: "example/agent:latest", Route: &Route{Port: 3008}},
+		},
+	}
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsIngressPortWithoutTLSOff(t *testing.T) {
+	// tls defaults to auto; a port there would be a silent no-op, so reject it.
+	stack := &Stack{
+		Version:  VersionCurrent,
+		Kind:     KindStack,
+		Name:     "edge-port-tls-auto",
+		Ingress:  Ingress{Type: "caddy", Domain: "localhost", Port: 7003},
+		Services: map[string]Service{"agent": {Runtime: RuntimeContainer, Image: "x:latest", Route: &Route{Port: 3008}}},
+	}
+	err := stack.Validate()
+	if err == nil || !strings.Contains(err.Error(), "ingress.tls: off") {
+		t.Fatalf("Validate() error = %v, want ingress.tls: off rejection", err)
+	}
+}
+
+func TestValidateRejectsIngressPortWhenTypeNotCaddy(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "edge-port-no-edge",
+		Ingress: Ingress{Type: "none", Port: 7003},
+	}
+	err := stack.Validate()
+	if err == nil || !strings.Contains(err.Error(), "ingress.type: caddy") {
+		t.Fatalf("Validate() error = %v, want ingress.type: caddy rejection", err)
+	}
+}
+
+func TestValidateRejectsIngressPortOutOfRange(t *testing.T) {
+	stack := &Stack{
+		Version:  VersionCurrent,
+		Kind:     KindStack,
+		Name:     "edge-port-range",
+		Ingress:  Ingress{Type: "caddy", Routing: "path", TLS: "off", Domain: "localhost", Port: 70000},
+		Services: map[string]Service{"agent": {Runtime: RuntimeContainer, Image: "x:latest", Route: &Route{Port: 3008}}},
+	}
+	if err := stack.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want out-of-range port rejection")
+	}
+}
+
 func TestValidateRejectsRouteHostAndPathTogether(t *testing.T) {
 	stack := &Stack{
 		Version: VersionCurrent,

@@ -115,6 +115,7 @@ ingress:
   routing: host          # host (default) | path
   tls: auto              # auto (default, Caddy HTTPS) | off (plain ws://)
   domain: agents.localhost  # base domain; defaults to operator.domain
+  # port: 8080            # tls: off only — host port for the plain ws:// edge (default 80)
   # image:   lucaslorentz/caddy-docker-proxy:2.9   # override the edge image
   # network: <name>_edge                            # override the private network
   # verify:  http://operator/edge/verify            # forward_auth target
@@ -136,8 +137,9 @@ services:
 ```
 
 A routed service publishes no host port and takes no lease from
-`operator.port_pool` — only the edge publishes (`:443`/`:80`, or `:80` with
-`tls: off`). `route:` on a `runtime: local` service is rejected (it can't join a
+`operator.port_pool` — only the edge publishes (`:443`/`:80`, or a single
+plain-HTTP host port with `tls: off` — `:80` by default, `ingress.port` to
+override). `route:` on a `runtime: local` service is rejected (it can't join a
 Docker network). TLS terminates at the edge; backends stay plaintext on the
 private network.
 
@@ -158,7 +160,10 @@ private network.
 `route.host` and `route.path` are mutually exclusive on a single service.
 
 `ingress.tls: off` drops the edge to plain HTTP, so URLs become `ws://…`
-instead of `wss://…` and the edge publishes only `:80`. Combined with
+instead of `wss://…` and the edge publishes a single plain-HTTP host port
+(`:80` by default; set `ingress.port: <n>` to bind another so parallel stacks on
+one host don't all contend for `:80` — the route URL then carries it,
+`ws://<host>:<n>/…`). Combined with
 `routing: path` and `domain: localhost`, this is the zero-setup local dev path —
 `localhost` always resolves and no local-CA cert needs trusting:
 

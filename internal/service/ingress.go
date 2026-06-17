@@ -91,7 +91,7 @@ func routeURL(ing manifest.Ingress, serviceName string, route *manifest.Route, d
 	hostPort := ""
 	if ing.TLSMode() == "off" {
 		scheme = "ws"
-		if p := ing.HostPort(); p != 80 {
+		if p := ing.HostPort(); p != manifest.DefaultEdgePort {
 			hostPort = fmt.Sprintf(":%d", p)
 		}
 	}
