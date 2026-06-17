@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -21,7 +22,7 @@ var errLogBackendNotConfigured = errors.New("production log backend is not confi
 // implementation per service/environment; the WebSocket handler is agnostic to
 // which one it streams from.
 type LogStreamer interface {
-	StreamService(ctx context.Context, service string) (<-chan api.LogLine, error)
+	StreamService(ctx context.Context, service string, tail int) (<-chan api.LogLine, error)
 }
 
 // ephemeralStreamer is the development backend: it proxies the platform's live
@@ -31,8 +32,8 @@ type ephemeralStreamer struct {
 	platform service.API
 }
 
-func (e ephemeralStreamer) StreamService(ctx context.Context, service string) (<-chan api.LogLine, error) {
-	return e.platform.StreamServiceLogs(ctx, service)
+func (e ephemeralStreamer) StreamService(ctx context.Context, service string, tail int) (<-chan api.LogLine, error) {
+	return e.platform.StreamServiceLogs(ctx, service, tail)
 }
 
 // prodStreamer is the production backend stub. A real implementation would tail
@@ -40,7 +41,7 @@ func (e ephemeralStreamer) StreamService(ctx context.Context, service string) (<
 // to the service; until then it fails closed so the seam is observable.
 type prodStreamer struct{}
 
-func (prodStreamer) StreamService(context.Context, string) (<-chan api.LogLine, error) {
+func (prodStreamer) StreamService(context.Context, string, int) (<-chan api.LogLine, error) {
 	return nil, errLogBackendNotConfigured
 }
 
@@ -67,7 +68,7 @@ func (s *Server) serviceLogsStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	lines, err := s.logStreamer.StreamService(ctx, name)
+	lines, err := s.logStreamer.StreamService(ctx, name, logTailParam(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -115,6 +116,31 @@ func (s *Server) serviceLogsStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// maxLogTail caps the requested backlog so a client can't ask the backend to
+// replay an unbounded number of lines before the live follow begins.
+const maxLogTail = 10000
+
+// logTailParam reads the `tail` (or `n` alias) query parameter — the number of
+// trailing lines to replay before following live. It clamps to [0, maxLogTail];
+// a missing, non-numeric, or negative value means no backlog cap (0).
+func logTailParam(r *http.Request) int {
+	raw := r.URL.Query().Get("tail")
+	if raw == "" {
+		raw = r.URL.Query().Get("n")
+	}
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	if n > maxLogTail {
+		return maxLogTail
+	}
+	return n
 }
 
 // authorizeServiceSocket gates the per-service log socket. With no configured

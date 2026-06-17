@@ -57,6 +57,20 @@ func TestBackendStreamLogsCommandAndReplay(t *testing.T) {
 	}
 }
 
+func TestBackendStreamLogsTail(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if _, err := backend.StreamLogs(context.Background(), runtime.LogsRequest{
+		Root: "/stack", Services: []string{"web"}, Follow: true, Tail: 50,
+	}); err != nil {
+		t.Fatalf("StreamLogs() error = %v", err)
+	}
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "logs", "--follow", "--tail", "50", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
 func TestBackendStreamLogsOmitsNoLogPrefixWhenUnset(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}
