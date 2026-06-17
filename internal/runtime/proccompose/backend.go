@@ -142,6 +142,9 @@ func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-cha
 	if req.Follow {
 		args = append(args, "--follow")
 	}
+	if req.Tail > 0 {
+		args = append(args, "--tail", strconv.Itoa(req.Tail))
+	}
 	args = append(args, req.Services...)
 	// A test Runner can't stream a live process, so capture through it and
 	// replay by line. The real ExecRunner streams below.

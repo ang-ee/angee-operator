@@ -36,7 +36,11 @@ type LogsRequest struct {
 	// (docker compose `--no-log-prefix`). Used for single-service streams
 	// where the service is already known from the request. Backends without
 	// such a prefix ignore it.
-	NoPrefix    bool
+	NoPrefix bool
+	// Tail, when > 0, limits the initial backlog to the last N lines before a
+	// follow stream continues live (docker compose / process-compose `--tail`).
+	// Zero omits the flag and defers to the backend's default backlog.
+	Tail        int
 	ControlPort int
 }
 

@@ -86,6 +86,20 @@ func TestBackendUpCommand(t *testing.T) {
 	}
 }
 
+func TestBackendStreamLogsTail(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if _, err := backend.StreamLogs(context.Background(), runtime.LogsRequest{
+		Root: "/stack", Services: []string{"web"}, Follow: true, Tail: 50, ControlPort: 10004,
+	}); err != nil {
+		t.Fatalf("StreamLogs() error = %v", err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", "10004", "process", "logs", "--follow", "--tail", "50", "web"}
+	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
+	}
+}
+
 func TestBackendDownUsesControlPort(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}

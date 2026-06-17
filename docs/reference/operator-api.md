@@ -62,6 +62,10 @@ service's logs live, one JSON `LogLine` (`service`, `runtime`, `message`,
 optional `level`) per frame, as the runtime produces them. Because the socket
 is scoped to one service the attribution is exact and no log prefix is parsed.
 
+Pass `?tail=<n>` (alias `?n=<n>`) to replay the last `n` lines that are still
+available before the live follow begins (maps to the backends' `--tail`); it is
+clamped to `[0, 10000]`, and `0` / omitted means no backlog cap.
+
 Like the `GET /graphql` upgrade it carries no `Authorization` header, so auth
 runs in the handshake: present a per-service route token (`aud=svc:<name>`, see
 [Connection and route tokens](#connection-and-route-tokens)) or the admin

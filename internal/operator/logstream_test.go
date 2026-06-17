@@ -14,12 +14,16 @@ import (
 )
 
 type fakeLogStreamer struct {
-	frames []api.LogLine
-	err    error
-	follow bool // when true, block until ctx is done after emitting frames
+	frames  []api.LogLine
+	err     error
+	follow  bool // when true, block until ctx is done after emitting frames
+	gotTail *int // when non-nil, records the tail value the handler passed
 }
 
-func (f fakeLogStreamer) StreamService(ctx context.Context, _ string) (<-chan api.LogLine, error) {
+func (f fakeLogStreamer) StreamService(ctx context.Context, _ string, tail int) (<-chan api.LogLine, error) {
+	if f.gotTail != nil {
+		*f.gotTail = tail
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -146,6 +150,50 @@ func TestServiceLogsSocketProdStubErrorsBeforeUpgrade(t *testing.T) {
 	}
 	if resp == nil || resp.StatusCode == http.StatusSwitchingProtocols {
 		t.Fatalf("expected a non-101 HTTP error, got %v", resp)
+	}
+}
+
+func TestLogTailParam(t *testing.T) {
+	cases := []struct {
+		query string
+		want  int
+	}{
+		{"", 0},
+		{"tail=5", 5},
+		{"n=7", 7},                  // alias
+		{"tail=3&n=9", 3},           // tail wins over n
+		{"tail=abc", 0},             // non-numeric
+		{"tail=-4", 0},              // negative
+		{"tail=999999", maxLogTail}, // clamped
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest(http.MethodGet, "http://op/services/web/logs/stream?"+c.query, nil)
+		if got := logTailParam(r); got != c.want {
+			t.Errorf("logTailParam(%q) = %d, want %d", c.query, got, c.want)
+		}
+	}
+}
+
+func TestServiceLogsSocketPassesTail(t *testing.T) {
+	var tail int
+	// The fake records the tail and emits one frame; reading that frame over
+	// the socket establishes a happens-before edge before we read `tail`.
+	ts, _ := newLogStreamTestServer(t, "", fakeLogStreamer{
+		frames:  []api.LogLine{{Service: "web", Message: "hi"}},
+		gotTail: &tail,
+	})
+	conn, _, err := websocket.DefaultDialer.Dial(socketURL(ts, "web", "")+"?tail=42", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var got api.LogLine
+	if err := conn.ReadJSON(&got); err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+	if tail != 42 {
+		t.Fatalf("handler passed tail = %d, want 42", tail)
 	}
 }
 

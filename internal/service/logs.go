@@ -17,7 +17,11 @@ import (
 // argument, not from parsing a prefix — and the backend is chosen by the
 // service's runtime. The channel closes when the underlying stream ends or ctx
 // is done; cancelling ctx tears down the upstream follow process.
-func (p *Platform) StreamServiceLogs(ctx context.Context, service string) (<-chan api.LogLine, error) {
+//
+// tail, when > 0, replays the last N lines before the live follow begins
+// (docker compose / process-compose `--tail`); 0 defers to the backend's
+// default backlog.
+func (p *Platform) StreamServiceLogs(ctx context.Context, service string, tail int) (<-chan api.LogLine, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -35,6 +39,7 @@ func (p *Platform) StreamServiceLogs(ctx context.Context, service string) (<-cha
 		Services: []string{service},
 		Follow:   true,
 		NoPrefix: true,
+		Tail:     tail,
 		EnvFile:  p.runtimeEnvFile(stack),
 	}
 	var lines <-chan string

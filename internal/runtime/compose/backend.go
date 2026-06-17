@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/internal/runtime"
@@ -140,6 +141,9 @@ func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-cha
 	}
 	if req.NoPrefix {
 		args = append(args, "--no-log-prefix")
+	}
+	if req.Tail > 0 {
+		args = append(args, "--tail", strconv.Itoa(req.Tail))
 	}
 	args = append(args, req.Services...)
 	// A test Runner can't stream a live process, so capture through it and

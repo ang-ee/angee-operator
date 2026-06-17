@@ -146,7 +146,9 @@ existing mux, `internal/operator/operator.go:115`), upgrading to a WebSocket
 that emits JSON `LogLine` frames. It reuses `checkWebSocketOrigin`
 (`operator.go:877`) and the same token extraction as `/edge/verify`
 (`edge.go:29`). An optional `?color=false` strips ANSI from `Message`; the
-default preserves it for terminal-style rendering. Client disconnect cancels the
+default preserves it for terminal-style rendering. `?tail=<n>` (alias `?n=`)
+replays the last `n` available lines before the live follow (clamped to
+`[0, 10000]`; maps to the backends' `--tail`). Client disconnect cancels the
 context, which tears down the upstream follow process.
 
 ### 5. Service-info descriptor + minted credential

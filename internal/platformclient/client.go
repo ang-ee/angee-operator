@@ -148,7 +148,7 @@ func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, 
 // structured log stream is served over the operator's
 // /services/{name}/logs/stream WebSocket, which a consumer connects to directly
 // using the descriptor + token from the service-info endpoint.
-func (p *RemoteClient) StreamServiceLogs(_ context.Context, _ string) (<-chan api.LogLine, error) {
+func (p *RemoteClient) StreamServiceLogs(_ context.Context, _ string, _ int) (<-chan api.LogLine, error) {
 	return nil, errors.New("per-service log streaming is served over the operator WebSocket, not the remote client")
 }
 
