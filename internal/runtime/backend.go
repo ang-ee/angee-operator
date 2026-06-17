@@ -27,11 +27,16 @@ type Target struct {
 }
 
 type LogsRequest struct {
-	Root        string
-	Services    []string
-	Follow      bool
-	EnvFile     string
-	MaxBytes    int
+	Root     string
+	Services []string
+	Follow   bool
+	EnvFile  string
+	MaxBytes int
+	// NoPrefix asks the backend to omit its per-line service-name prefix
+	// (docker compose `--no-log-prefix`). Used for single-service streams
+	// where the service is already known from the request. Backends without
+	// such a prefix ignore it.
+	NoPrefix    bool
 	ControlPort int
 }
 
@@ -59,5 +64,10 @@ type Backend interface {
 	Stop(ctx context.Context, target Target) error
 	Restart(ctx context.Context, target Target) error
 	Logs(ctx context.Context, req LogsRequest) (<-chan string, error)
+	// StreamLogs is the live-follow counterpart to Logs: it yields one line
+	// per channel element as the runtime produces it, rather than buffering
+	// the whole output and delivering it on exit. Used for log subscriptions
+	// and per-service log sockets; Logs remains the bounded-read path.
+	StreamLogs(ctx context.Context, req LogsRequest) (<-chan string, error)
 	Status(ctx context.Context, req StatusRequest) ([]ServiceStatus, error)
 }

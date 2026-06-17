@@ -144,6 +144,14 @@ func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, 
 	return p.StackLogs(ctx, services, false)
 }
 
+// StreamServiceLogs is not proxied by the HTTP remote client: the per-service
+// structured log stream is served over the operator's
+// /services/{name}/logs/stream WebSocket, which a consumer connects to directly
+// using the descriptor + token from the service-info endpoint.
+func (p *RemoteClient) StreamServiceLogs(_ context.Context, _ string) (<-chan api.LogLine, error) {
+	return nil, errors.New("per-service log streaming is served over the operator WebSocket, not the remote client")
+}
+
 func (p *RemoteClient) StackStatus(ctx context.Context) (api.StackStatusResponse, error) {
 	var status api.StackStatusResponse
 	if err := p.doJSON(ctx, http.MethodGet, "/stack/status", nil, nil, &status); err != nil {

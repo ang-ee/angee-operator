@@ -65,6 +65,8 @@ type RuntimeAPI interface {
 	StackDown(ctx context.Context) error
 	StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error)
 	StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error)
+	// StreamServiceLogs opens a live, structured per-service log stream.
+	StreamServiceLogs(ctx context.Context, service string) (<-chan api.LogLine, error)
 	ServiceUp(ctx context.Context, names []string) error
 	ServiceStart(ctx context.Context, names []string) error
 	ServiceStop(ctx context.Context, names []string) error

@@ -33,6 +33,44 @@ func TestBackendUpCommand(t *testing.T) {
 	}
 }
 
+func TestBackendStreamLogsCommandAndReplay(t *testing.T) {
+	runner := &recordingRunner{out: []byte("line1\nline2\n")}
+	backend := Backend{Runner: runner}
+	ch, err := backend.StreamLogs(context.Background(), runtime.LogsRequest{
+		Root: "/stack", EnvFile: "/stack/.env", Services: []string{"web"}, Follow: true, NoPrefix: true,
+	})
+	if err != nil {
+		t.Fatalf("StreamLogs() error = %v", err)
+	}
+	// NoPrefix appends --no-log-prefix; follow appends --follow.
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "--env-file", "/stack/.env", "logs", "--follow", "--no-log-prefix", "web"}
+	if runner.name != "docker" || !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("command = %s %v, want docker %v", runner.name, runner.args, want)
+	}
+	// A non-exec Runner replays the captured output one line per element.
+	var got []string
+	for line := range ch {
+		got = append(got, line)
+	}
+	if !reflect.DeepEqual(got, []string{"line1\n", "line2\n"}) {
+		t.Fatalf("replayed lines = %q, want line1/line2", got)
+	}
+}
+
+func TestBackendStreamLogsOmitsNoLogPrefixWhenUnset(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if _, err := backend.StreamLogs(context.Background(), runtime.LogsRequest{
+		Root: "/stack", Services: []string{"web"}, Follow: false,
+	}); err != nil {
+		t.Fatalf("StreamLogs() error = %v", err)
+	}
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "logs", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
 func TestBackendUpForegroundDetached(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}

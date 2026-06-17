@@ -30,6 +30,11 @@ func (b stubStatusBackend) Logs(context.Context, runtime.LogsRequest) (<-chan st
 	close(ch)
 	return ch, nil
 }
+func (b stubStatusBackend) StreamLogs(context.Context, runtime.LogsRequest) (<-chan string, error) {
+	ch := make(chan string)
+	close(ch)
+	return ch, nil
+}
 func (b stubStatusBackend) Status(context.Context, runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
 	return b.statuses, nil
 }

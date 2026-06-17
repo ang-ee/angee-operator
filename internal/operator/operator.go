@@ -40,6 +40,7 @@ type Server struct {
 	platform         service.API
 	eventHub         *opgql.EventHub
 	tokens           *tokenMinter
+	logStreamer      LogStreamer
 	graphqlHandler   http.Handler
 	graphqlWSHandler http.Handler
 	server           *http.Server
@@ -103,7 +104,9 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 	eventHub := opgql.NewEventHub(platform)
-	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter}
+	// Dev default: ephemeral live-proxy. A configured production log backend
+	// would replace this with a prodStreamer.
+	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter, logStreamer: ephemeralStreamer{platform: platform}}
 	fmt.Fprintf(os.Stderr, "operator: jwt signing key fingerprint=%s\n", minter.Fingerprint())
 	graphqlHandler, graphqlWSHandler, err := newGraphQLHandler(s)
 	if err != nil {
@@ -155,6 +158,10 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /services/{name}/restart", s.auth(http.HandlerFunc(s.serviceRestart)))
 	mux.Handle("POST /services/{name}/destroy", s.auth(http.HandlerFunc(s.serviceDestroy)))
 	mux.Handle("GET /services/{name}/logs", s.auth(http.HandlerFunc(s.serviceLogs)))
+	// The per-service log socket is a GET WebSocket upgrade: like GET /graphql
+	// it carries no Authorization header, so auth runs in-handler and the
+	// upgrader's origin allowlist is the cross-site guard. Not wrapped in s.auth.
+	mux.Handle("GET /services/{name}/logs/stream", http.HandlerFunc(s.serviceLogsStream))
 	mux.Handle("GET /services/{name}/endpoint", s.auth(http.HandlerFunc(s.serviceEndpoint)))
 	mux.Handle("GET /sources", s.auth(http.HandlerFunc(s.sourceList)))
 	mux.Handle("GET /sources/{name}/status", s.auth(http.HandlerFunc(s.sourceStatus)))
@@ -413,11 +420,15 @@ func (s *Server) stackDevStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serviceEndpoint(w http.ResponseWriter, r *http.Request) {
-	endpoint, err := s.platform.ServiceEndpoint(r.Context(), r.PathValue("name"))
+	name := r.PathValue("name")
+	endpoint, err := s.platform.ServiceEndpoint(r.Context(), name)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	// Advertise the live log socket + credential alongside the service endpoint
+	// so a consumer can open the stream without a second round trip.
+	endpoint.LogStream = s.logStreamDescriptor(r, name)
 	writeJSON(w, http.StatusOK, endpoint)
 }
 

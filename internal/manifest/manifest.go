@@ -109,16 +109,23 @@ func (i Ingress) TLSMode() string {
 	return i.TLS
 }
 
+// DefaultEdgePort is the host port the plain ws:// (tls: off) edge publishes
+// when ingress.port is unset. Shared by HostPort and the route-URL builder so
+// the "is this the default port" decision lives in one place.
+const DefaultEdgePort = 80
+
 // HostPort reports the host port the edge publishes for the plain ws:// (tls:
-// off) edge, defaulting to 80 when ingress.port is unset. It lets each stack on
-// one host (e.g. parallel dev workspaces) bind a distinct edge port instead of
-// every edge contending for :80; the consumer URL carries the same port. The
-// prod (tls: auto) edge keeps the standard 443/80 and ignores this.
+// off) edge, defaulting to DefaultEdgePort when ingress.port is unset. It lets
+// each stack on one host (e.g. parallel dev workspaces) bind a distinct edge
+// port instead of every edge contending for :80; the consumer URL carries the
+// same port. The prod (tls: auto) edge keeps the standard 443/80 and ignores
+// this — ValidateExtended rejects ingress.port outside tls: off so the field is
+// never a silent no-op.
 func (i Ingress) HostPort() int {
 	if i.Port != 0 {
 		return i.Port
 	}
-	return 80
+	return DefaultEdgePort
 }
 
 type Secret struct {
@@ -440,6 +447,17 @@ func (s *Stack) ValidateExtended() error {
 		}
 		if err := validateRunnable("service", name, service.Runtime, service.Image, service.Build, service.Command); err != nil {
 			return err
+		}
+	}
+	// ingress.port only has meaning for the plain-HTTP (tls: off) Caddy edge.
+	// Reject it elsewhere rather than silently ignoring it, matching how the
+	// mode-mismatched route.host/route.path overrides below are handled.
+	if s.Ingress.Port != 0 {
+		if s.Ingress.Type != "caddy" {
+			return errors.New("ingress.port requires ingress.type: caddy")
+		}
+		if s.Ingress.TLSMode() != "off" {
+			return errors.New("ingress.port requires ingress.tls: off (the tls: auto edge uses 443/80)")
 		}
 	}
 	if s.Ingress.Type == "caddy" {

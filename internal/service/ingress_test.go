@@ -154,6 +154,14 @@ func TestRouteURL(t *testing.T) {
 			want:    "wss://custom.example.com/",
 		},
 		{
+			name:    "host custom subdomain with custom edge port",
+			ingress: manifest.Ingress{Type: "caddy", TLS: "off", Port: 7003},
+			service: "agent",
+			route:   &manifest.Route{Port: 3008, Host: "custom.example.com"},
+			domain:  "agents.localhost",
+			want:    "ws://custom.example.com:7003/",
+		},
+		{
 			name:    "path default prefix",
 			ingress: manifest.Ingress{Type: "caddy", Routing: "path"},
 			service: "agent",
