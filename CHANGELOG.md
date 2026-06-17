@@ -4,6 +4,38 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.6.0 — 2026-06-17
+
+### Features
+
+- Live per-service log streaming. The operator serves a WebSocket per service at
+  `GET /services/{name}/logs/stream` that streams structured `LogLine` frames
+  (`service`, `runtime`, `message`, best-effort `level`) as the runtime produces
+  them. Because each socket is scoped to one service, attribution is exact —
+  no log-prefix parsing. `GET /services/{name}/endpoint` advertises the socket
+  in a `log_stream` descriptor (resolved URL, `target` of
+  `operator`/`edge`/`production`, and a short-lived minted route token) so a
+  consumer connects without minting its own credential. Auth runs in the
+  handshake (per-service route token `aud=svc:<name>` or the admin/operator
+  tier) behind the same `Origin` allowlist as the GraphQL WebSocket. In
+  development the operator proxies the live follow stream ephemerally (no
+  persistence); a pluggable production backend is stubbed for a future durable
+  store.
+
+### Fixes
+
+- Follow-mode logs now actually stream. The compose and process-compose backends
+  buffered `logs --follow` via `CombinedOutput`/`cmd.Run`, delivering nothing
+  until the stream was torn down — which also meant the `onServiceLogs` /
+  `onWorkspaceLogs` GraphQL subscriptions never emitted live. A line-by-line
+  streaming runner (and concurrent cross-backend fan-in for whole-stack follows)
+  fixes both.
+- `ingress.port` is now rejected unless `ingress.type: caddy` and
+  `ingress.tls: off`. It only affects the plain-HTTP edge, but a port set under
+  `tls: auto` (or `type: none`) was silently accepted as a dead no-op; it now
+  surfaces as a validation error, matching the existing mode-mismatch rejections
+  for `route.host`/`route.path`. Also documented the field in the manifest guide.
+
 ## v0.5.17 — 2026-06-17
 
 ### Improvements
@@ -17,6 +49,17 @@ latest tag.
   non-default. The prod (`tls: auto`) edge keeps the standard `443`/`80` and
   ignores the field. The field validates to `1–65535` in both the Go loader and
   the published JSON schema.
+
+## v0.5.16 — 2026-06-17
+
+### Features
+
+- `onStackSnapshotChange` GraphQL subscription. A single subscription emits the
+  aggregate stack snapshot (`stackStatus`, services, jobs, sources, workspaces,
+  templates, secrets, `gitOpsTopology`, health) whenever the daemon-polled
+  aggregate's hash changes, so the web console can drop its client-side snapshot
+  poll. One server-side poller (the existing 2 s hash-and-publish `EventHub`)
+  serves every subscriber; secret values are never part of the payload.
 
 ## v0.5.15 — 2026-06-16
 
