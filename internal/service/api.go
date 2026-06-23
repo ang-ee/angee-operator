@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/query"
 )
 
 // API is the canonical control-plane operation surface for one stack root.
@@ -76,7 +77,7 @@ type RuntimeAPI interface {
 
 // ServiceAPI covers service manifest CRUD and template-based creation.
 type ServiceAPI interface {
-	ServiceList(ctx context.Context) ([]api.ServiceState, error)
+	ServiceList(ctx context.Context, q query.Args) ([]api.ServiceState, int, error)
 	ServiceInit(ctx context.Context, req api.ServiceInitRequest) error
 	ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error
 	ServiceDestroy(ctx context.Context, name string, stop bool) error
@@ -85,14 +86,14 @@ type ServiceAPI interface {
 
 // JobAPI covers job discovery and invocation.
 type JobAPI interface {
-	JobList(ctx context.Context) ([]api.JobState, error)
+	JobList(ctx context.Context, q query.Args) ([]api.JobState, int, error)
 	JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error)
 }
 
 // WorkspaceAPI covers workspace lifecycle, status, logs, and aggregate git ops.
 type WorkspaceAPI interface {
 	WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceRef, error)
-	WorkspaceList(ctx context.Context) ([]api.WorkspaceRef, error)
+	WorkspaceList(ctx context.Context, q query.Args) ([]api.WorkspaceRef, int, error)
 	WorkspaceGet(ctx context.Context, name string) (api.WorkspaceRef, error)
 	WorkspaceStatus(ctx context.Context, name string) (api.WorkspaceStatusResponse, error)
 	WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error)
@@ -107,7 +108,7 @@ type WorkspaceAPI interface {
 
 // SourceAPI covers top-level source materialization and git inspection.
 type SourceAPI interface {
-	SourceList(ctx context.Context) ([]api.SourceState, error)
+	SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error)
 	SourceStatus(ctx context.Context, name string) (api.SourceState, error)
 	SourceFetch(ctx context.Context, name string) (api.SourceState, error)
 	SourcePull(ctx context.Context, name string) (api.SourceState, error)
@@ -137,7 +138,7 @@ type GitOpsAPI interface {
 
 // SecretsAPI covers secret declaration metadata and backend mutation.
 type SecretsAPI interface {
-	SecretsList(ctx context.Context) ([]api.SecretRef, error)
+	SecretsList(ctx context.Context, q query.Args) ([]api.SecretRef, int, error)
 	SecretGet(ctx context.Context, name string) (api.SecretRef, error)
 	SecretValue(ctx context.Context, name string) (api.SecretValueResponse, error)
 	SecretSet(ctx context.Context, name, value string) (api.SecretRef, error)
@@ -152,7 +153,7 @@ type IngressAPI interface {
 
 // TemplateAPI covers template discovery and descriptor introspection.
 type TemplateAPI interface {
-	Templates(ctx context.Context) ([]api.TemplateDescriptor, error)
+	Templates(ctx context.Context, q query.Args) ([]api.TemplateDescriptor, int, error)
 	Template(ctx context.Context, ref string) (api.TemplateDescriptor, error)
 }
 

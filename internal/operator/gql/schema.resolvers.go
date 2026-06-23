@@ -408,12 +408,11 @@ func (r *queryResolver) IngressStatus(ctx context.Context) (*api.IngressStatus, 
 
 // Services is the resolver for the services field.
 func (r *queryResolver) Services(ctx context.Context, filter *model.ServiceStateFilter, sorting []*model.ServiceStateSort, paging *model.OffsetPaging) (*model.ServiceStateConnection, error) {
-	items, err := r.Platform.ServiceList(ctx)
+	args := query.Args{Filter: bindServiceFilter(filter), Sorting: bindServiceSorts(sorting), Paging: bindPaging(paging)}
+	page, total, err := r.Platform.ServiceList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	args := query.Args{Filter: bindServiceFilter(filter), Sorting: bindServiceSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, serviceFields)
 	return &model.ServiceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
@@ -424,12 +423,11 @@ func (r *queryResolver) Service(ctx context.Context, id string) (*api.ServiceSta
 
 // Jobs is the resolver for the jobs field.
 func (r *queryResolver) Jobs(ctx context.Context, filter *model.JobStateFilter, sorting []*model.JobStateSort, paging *model.OffsetPaging) (*model.JobStateConnection, error) {
-	items, err := r.Platform.JobList(ctx)
+	args := query.Args{Filter: bindJobFilter(filter), Sorting: bindJobSorts(sorting), Paging: bindPaging(paging)}
+	page, total, err := r.Platform.JobList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	args := query.Args{Filter: bindJobFilter(filter), Sorting: bindJobSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, jobFields)
 	return &model.JobStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
@@ -440,12 +438,11 @@ func (r *queryResolver) Job(ctx context.Context, id string) (*api.JobState, erro
 
 // Sources is the resolver for the sources field.
 func (r *queryResolver) Sources(ctx context.Context, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) (*model.SourceStateConnection, error) {
-	items, err := r.Platform.SourceList(ctx)
+	args := query.Args{Filter: bindSourceFilter(filter), Sorting: bindSourceSorts(sorting), Paging: bindPaging(paging)}
+	page, total, err := r.Platform.SourceList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	args := query.Args{Filter: bindSourceFilter(filter), Sorting: bindSourceSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, sourceFields)
 	return &model.SourceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
@@ -457,12 +454,11 @@ func (r *queryResolver) Source(ctx context.Context, id string) (*api.SourceState
 
 // Workspaces is the resolver for the workspaces field.
 func (r *queryResolver) Workspaces(ctx context.Context, filter *model.WorkspaceRefFilter, sorting []*model.WorkspaceRefSort, paging *model.OffsetPaging) (*model.WorkspaceRefConnection, error) {
-	items, err := r.Platform.WorkspaceList(ctx)
+	args := query.Args{Filter: bindWorkspaceFilter(filter), Sorting: bindWorkspaceSorts(sorting), Paging: bindPaging(paging)}
+	page, total, err := r.Platform.WorkspaceList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	args := query.Args{Filter: bindWorkspaceFilter(filter), Sorting: bindWorkspaceSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, workspaceFields)
 	return &model.WorkspaceRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
@@ -557,12 +553,11 @@ func (r *queryResolver) McpDescriptor(ctx context.Context) (map[string]any, erro
 
 // Templates is the resolver for the templates field.
 func (r *queryResolver) Templates(ctx context.Context, filter *model.TemplateDescriptorFilter, sorting []*model.TemplateDescriptorSort, paging *model.OffsetPaging) (*model.TemplateDescriptorConnection, error) {
-	items, err := r.Platform.Templates(ctx)
+	args := query.Args{Filter: bindTemplateFilter(filter), Sorting: bindTemplateSorts(sorting), Paging: bindPaging(paging)}
+	page, total, err := r.Platform.Templates(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	args := query.Args{Filter: bindTemplateFilter(filter), Sorting: bindTemplateSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, templateFields)
 	return &model.TemplateDescriptorConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
@@ -577,12 +572,11 @@ func (r *queryResolver) Template(ctx context.Context, id string) (*api.TemplateD
 
 // Secrets is the resolver for the secrets field.
 func (r *queryResolver) Secrets(ctx context.Context, filter *model.SecretRefFilter, sorting []*model.SecretRefSort, paging *model.OffsetPaging) (*model.SecretRefConnection, error) {
-	items, err := r.Platform.SecretsList(ctx)
+	args := query.Args{Filter: bindSecretFilter(filter), Sorting: bindSecretSorts(sorting), Paging: bindPaging(paging)}
+	page, total, err := r.Platform.SecretsList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	args := query.Args{Filter: bindSecretFilter(filter), Sorting: bindSecretSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, secretFields)
 	return &model.SecretRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 

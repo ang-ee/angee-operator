@@ -2,6 +2,7 @@ package query
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -59,6 +60,24 @@ func BoolPtr(b *bool) Value {
 // IsNull reports whether the value holds no scalar.
 func (v Value) IsNull() bool {
 	return v.Str == nil && v.Num == nil && v.Bool == nil
+}
+
+// ValueString renders a value as a string for group keys and wire encoding. A
+// null value renders as "" (matching the FieldMap "empty == absent" convention).
+func ValueString(v Value) string {
+	switch {
+	case v.Str != nil:
+		return *v.Str
+	case v.Bool != nil:
+		if *v.Bool {
+			return "true"
+		}
+		return "false"
+	case v.Num != nil:
+		return strconv.FormatFloat(*v.Num, 'f', -1, 64)
+	default:
+		return ""
+	}
 }
 
 // valueEqual reports equality of two values of the same kind. Mismatched kinds

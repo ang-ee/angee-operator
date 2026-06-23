@@ -8,6 +8,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -106,21 +107,27 @@ func (p *snapshotPlatform) jobListCalls() int {
 func (p *snapshotPlatform) StackStatus(context.Context) (api.StackStatusResponse, error) {
 	return api.StackStatusResponse{}, nil
 }
-func (p *snapshotPlatform) ServiceList(context.Context) ([]api.ServiceState, error) { return nil, nil }
-func (p *snapshotPlatform) JobList(context.Context) ([]api.JobState, error) {
+func (p *snapshotPlatform) ServiceList(context.Context, query.Args) ([]api.ServiceState, int, error) {
+	return nil, 0, nil
+}
+func (p *snapshotPlatform) JobList(_ context.Context, _ query.Args) ([]api.JobState, int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.jobCalls++
-	return p.jobs, nil
+	return p.jobs, len(p.jobs), nil
 }
-func (p *snapshotPlatform) SourceList(context.Context) ([]api.SourceState, error) { return nil, nil }
-func (p *snapshotPlatform) WorkspaceList(context.Context) ([]api.WorkspaceRef, error) {
-	return nil, nil
+func (p *snapshotPlatform) SourceList(context.Context, query.Args) ([]api.SourceState, int, error) {
+	return nil, 0, nil
 }
-func (p *snapshotPlatform) Templates(context.Context) ([]api.TemplateDescriptor, error) {
-	return nil, nil
+func (p *snapshotPlatform) WorkspaceList(context.Context, query.Args) ([]api.WorkspaceRef, int, error) {
+	return nil, 0, nil
 }
-func (p *snapshotPlatform) SecretsList(context.Context) ([]api.SecretRef, error) { return nil, nil }
+func (p *snapshotPlatform) Templates(context.Context, query.Args) ([]api.TemplateDescriptor, int, error) {
+	return nil, 0, nil
+}
+func (p *snapshotPlatform) SecretsList(context.Context, query.Args) ([]api.SecretRef, int, error) {
+	return nil, 0, nil
+}
 func (p *snapshotPlatform) GitOpsTopology(context.Context) (api.GitOpsTopologyResponse, error) {
 	return api.GitOpsTopologyResponse{}, nil
 }

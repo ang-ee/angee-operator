@@ -19,6 +19,8 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/spf13/cobra"
@@ -442,21 +444,31 @@ func (s *Server) ingressStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serviceList(w http.ResponseWriter, r *http.Request) {
-	services, err := s.platform.ServiceList(r.Context())
+	q, err := parseListQuery(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, services)
+	nodes, total, err := s.platform.ServiceList(r.Context(), q)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.ServiceListResponse{Nodes: nodes, TotalCount: total})
 }
 
 func (s *Server) jobList(w http.ResponseWriter, r *http.Request) {
-	jobs, err := s.platform.JobList(r.Context())
+	q, err := parseListQuery(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	nodes, total, err := s.platform.JobList(r.Context(), q)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.JobListResponse{Nodes: nodes, TotalCount: total})
 }
 
 func (s *Server) jobRun(w http.ResponseWriter, r *http.Request) {
@@ -574,12 +586,17 @@ func (s *Server) serviceLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sourceList(w http.ResponseWriter, r *http.Request) {
-	sources, err := s.platform.SourceList(r.Context())
+	q, err := parseListQuery(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sources)
+	nodes, total, err := s.platform.SourceList(r.Context(), q)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.SourceListResponse{Nodes: nodes, TotalCount: total})
 }
 
 func (s *Server) sourceStatus(w http.ResponseWriter, r *http.Request) {
@@ -624,12 +641,17 @@ func (s *Server) sourcePush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceList(w http.ResponseWriter, r *http.Request) {
-	refs, err := s.platform.WorkspaceList(r.Context())
+	q, err := parseListQuery(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, refs)
+	nodes, total, err := s.platform.WorkspaceList(r.Context(), q)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.WorkspaceListResponse{Nodes: nodes, TotalCount: total})
 }
 
 func (s *Server) workspaceCreate(w http.ResponseWriter, r *http.Request) {
@@ -806,6 +828,22 @@ func writeError(w http.ResponseWriter, err error) {
 
 func writeBadRequest(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusBadRequest, api.ErrorResponse{Error: err.Error()})
+}
+
+// parseListQuery reads the optional `?query=<url-encoded JSON>` filter/sort/paging
+// spec a list endpoint accepts. An absent parameter yields the match-all Args;
+// malformed JSON is an invalid-input error (400). Unknown filter/sort fields are
+// rejected later by the platform's query.Validate.
+func parseListQuery(r *http.Request) (query.Args, error) {
+	raw := r.URL.Query().Get("query")
+	if raw == "" {
+		return query.Args{}, nil
+	}
+	var lq api.ListQuery
+	if err := json.Unmarshal([]byte(raw), &lq); err != nil {
+		return query.Args{}, &service.InvalidInputError{Field: "query", Reason: "invalid list query JSON"}
+	}
+	return queryfields.ToArgs(lq), nil
 }
 
 // maxRESTBodyBytes caps the size of a REST request body to keep a hostile

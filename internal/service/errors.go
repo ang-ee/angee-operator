@@ -1,6 +1,11 @@
 package service
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/ang-ee/angee-operator/internal/query"
+)
 
 type NotFoundError struct {
 	Kind string
@@ -41,4 +46,15 @@ func (e *InvalidInputError) Error() string {
 		return e.Reason
 	}
 	return fmt.Sprintf("%s: %s", e.Field, e.Reason)
+}
+
+// invalidQueryError maps a *query.FieldError (unknown filter/sort field) to an
+// *InvalidInputError so the surface layer renders it as 400 / a GraphQL error.
+// Any other error passes through unchanged.
+func invalidQueryError(err error) error {
+	var fe *query.FieldError
+	if errors.As(err, &fe) {
+		return &InvalidInputError{Field: fe.Field, Reason: "unknown " + fe.Kind + " field"}
+	}
+	return err
 }

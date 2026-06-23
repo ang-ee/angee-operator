@@ -85,64 +85,8 @@ func offsetPageInfo(p query.Paging, total, pageLen int) *model.OffsetPageInfo {
 	return &model.OffsetPageInfo{HasNextPage: &hasNext, HasPreviousPage: &hasPrev}
 }
 
-// strOrNull maps an omitempty string field to a null Value when empty, so
-// filtering and sorting treat "" as absent.
-func strOrNull(s string) query.Value {
-	if s == "" {
-		return query.Value{}
-	}
-	return query.Str(s)
-}
-
-// --- per-entity FieldMaps ----------------------------------------------------
-
-var serviceFields = query.FieldMap[api.ServiceState]{
-	"id":      func(s api.ServiceState) query.Value { return query.Str(s.Name) },
-	"name":    func(s api.ServiceState) query.Value { return query.Str(s.Name) },
-	"runtime": func(s api.ServiceState) query.Value { return query.Str(s.Runtime) },
-	"status":  func(s api.ServiceState) query.Value { return query.Str(s.Status) },
-	"health":  func(s api.ServiceState) query.Value { return strOrNull(s.Health) },
-}
-
-var jobFields = query.FieldMap[api.JobState]{
-	"id":      func(j api.JobState) query.Value { return query.Str(j.Name) },
-	"name":    func(j api.JobState) query.Value { return query.Str(j.Name) },
-	"runtime": func(j api.JobState) query.Value { return query.Str(j.Runtime) },
-}
-
-var sourceFields = query.FieldMap[api.SourceState]{
-	"id":     func(s api.SourceState) query.Value { return query.Str(s.Name) },
-	"name":   func(s api.SourceState) query.Value { return query.Str(s.Name) },
-	"kind":   func(s api.SourceState) query.Value { return query.Str(s.Kind) },
-	"state":  func(s api.SourceState) query.Value { return strOrNull(s.State) },
-	"branch": func(s api.SourceState) query.Value { return strOrNull(s.Branch) },
-	"exists": func(s api.SourceState) query.Value { return query.Bool(s.Exists) },
-	"dirty":  func(s api.SourceState) query.Value { return query.Bool(s.Dirty) },
-	"pushed": func(s api.SourceState) query.Value { return query.Bool(s.Pushed) },
-}
-
-var workspaceFields = query.FieldMap[api.WorkspaceRef]{
-	"id":       func(w api.WorkspaceRef) query.Value { return query.Str(w.Name) },
-	"name":     func(w api.WorkspaceRef) query.Value { return query.Str(w.Name) },
-	"template": func(w api.WorkspaceRef) query.Value { return query.Str(w.Template) },
-}
-
-var templateFields = query.FieldMap[api.TemplateDescriptor]{
-	"id":   func(t api.TemplateDescriptor) query.Value { return query.Str(t.Ref) },
-	"ref":  func(t api.TemplateDescriptor) query.Value { return query.Str(t.Ref) },
-	"kind": func(t api.TemplateDescriptor) query.Value { return query.Str(t.Kind) },
-	"name": func(t api.TemplateDescriptor) query.Value { return strOrNull(t.Name) },
-}
-
-var secretFields = query.FieldMap[api.SecretRef]{
-	"id":        func(s api.SecretRef) query.Value { return query.Str(s.Name) },
-	"name":      func(s api.SecretRef) query.Value { return query.Str(s.Name) },
-	"envVar":    func(s api.SecretRef) query.Value { return strOrNull(s.EnvVar) },
-	"declared":  func(s api.SecretRef) query.Value { return query.Bool(s.Declared) },
-	"hasValue":  func(s api.SecretRef) query.Value { return query.Bool(s.HasValue) },
-	"required":  func(s api.SecretRef) query.Value { return query.Bool(s.Required) },
-	"generated": func(s api.SecretRef) query.Value { return query.Bool(s.Generated) },
-}
+// FieldMaps were moved to internal/queryfields so service.Platform applies the
+// query (push-down); this file keeps only the gqlgen model -> query.Args binders.
 
 // --- per-entity filter binders -----------------------------------------------
 
@@ -385,7 +329,7 @@ func bindSecretSorts(in []*model.SecretRefSort) []query.Sort {
 // --- single-entity lookups (no service.API getter exists for these) ----------
 
 func (r *Resolver) serviceByID(ctx context.Context, id string) (*api.ServiceState, error) {
-	items, err := r.Platform.ServiceList(ctx)
+	items, _, err := r.Platform.ServiceList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +342,7 @@ func (r *Resolver) serviceByID(ctx context.Context, id string) (*api.ServiceStat
 }
 
 func (r *Resolver) jobByID(ctx context.Context, id string) (*api.JobState, error) {
-	items, err := r.Platform.JobList(ctx)
+	items, _, err := r.Platform.JobList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}

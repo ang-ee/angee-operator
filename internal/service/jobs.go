@@ -10,20 +10,26 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 )
 
-func (p *Platform) JobList(ctx context.Context) ([]api.JobState, error) {
+func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, int, error) {
 	status, err := p.StackStatus(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	jobs := make([]api.JobState, 0, len(status.Jobs))
 	for _, name := range sortedKeys(status.Jobs) {
 		jobs = append(jobs, status.Jobs[name])
 	}
-	return jobs, nil
+	if err := query.Validate(q, queryfields.Job); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
+	page, total := query.Apply(jobs, q, queryfields.Job)
+	return page, total, nil
 }
 
 func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {

@@ -7,6 +7,8 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -24,12 +26,16 @@ type fakeAPI struct {
 	workspaces []api.WorkspaceRef
 }
 
-func (f fakeAPI) ServiceList(context.Context) ([]api.ServiceState, error) {
-	return f.services, nil
+// ServiceList / SecretsList apply the real engine so resolver tests exercise the
+// same filter/sort/paging path the production Platform uses.
+func (f fakeAPI) ServiceList(_ context.Context, q query.Args) ([]api.ServiceState, int, error) {
+	page, total := query.Apply(f.services, q, queryfields.Service)
+	return page, total, nil
 }
 
-func (f fakeAPI) SecretsList(context.Context) ([]api.SecretRef, error) {
-	return f.secrets, nil
+func (f fakeAPI) SecretsList(_ context.Context, q query.Args) ([]api.SecretRef, int, error) {
+	page, total := query.Apply(f.secrets, q, queryfields.Secret)
+	return page, total, nil
 }
 
 // SecretGet mirrors the real backend: a zero-ish ref (no error) for an unknown

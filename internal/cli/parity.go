@@ -12,6 +12,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/platformclient"
+	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -73,7 +74,7 @@ func templateListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 			if err != nil {
 				return err
 			}
-			descs, err := platform.Templates(cmd.Context())
+			descs, _, err := platform.Templates(cmd.Context(), query.Args{})
 			if err != nil {
 				return err
 			}

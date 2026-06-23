@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ang-ee/angee-operator/internal/query"
 )
 
 func TestTemplatesDiscoversBothDirectoryConventions(t *testing.T) {
@@ -40,7 +42,7 @@ func TestTemplatesDiscoversBothDirectoryConventions(t *testing.T) {
 	}
 
 	p, _ := New(root)
-	descs, err := p.Templates(context.Background())
+	descs, _, err := p.Templates(context.Background(), query.Args{})
 	if err != nil {
 		t.Fatalf("Templates() error = %v", err)
 	}
@@ -91,7 +93,7 @@ func TestTemplateReturnsInputDescriptors(t *testing.T) {
 func TestTemplatesEmptyRoot(t *testing.T) {
 	root := t.TempDir()
 	p, _ := New(root)
-	descs, err := p.Templates(context.Background())
+	descs, _, err := p.Templates(context.Background(), query.Args{})
 	if err != nil {
 		t.Fatalf("Templates() error = %v", err)
 	}

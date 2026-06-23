@@ -18,8 +18,24 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
+
+// listQueryValues encodes a query.Args as the `?query=<json>` parameter the
+// operator's list endpoints accept. An empty Args yields no parameter.
+func listQueryValues(q query.Args) url.Values {
+	lq := queryfields.FromArgs(q)
+	if lq.Filter == nil && len(lq.Sorting) == 0 && lq.Paging == nil {
+		return nil
+	}
+	data, err := json.Marshal(lq)
+	if err != nil {
+		return nil
+	}
+	return url.Values{"query": []string{string(data)}}
+}
 
 // RemoteClient implements service.API against a remote operator over HTTP.
 type RemoteClient struct {
@@ -195,12 +211,12 @@ func (p *RemoteClient) ServiceDestroy(ctx context.Context, name string, _ bool) 
 	return p.doJSON(ctx, http.MethodPost, "/services/"+url.PathEscape(name)+"/destroy", nil, nil, nil)
 }
 
-func (p *RemoteClient) ServiceList(ctx context.Context) ([]api.ServiceState, error) {
-	var services []api.ServiceState
-	if err := p.doJSON(ctx, http.MethodGet, "/services", nil, nil, &services); err != nil {
-		return nil, err
+func (p *RemoteClient) ServiceList(ctx context.Context, q query.Args) ([]api.ServiceState, int, error) {
+	var resp api.ServiceListResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/services", listQueryValues(q), nil, &resp); err != nil {
+		return nil, 0, err
 	}
-	return services, nil
+	return resp.Nodes, resp.TotalCount, nil
 }
 
 func (p *RemoteClient) ServiceUp(ctx context.Context, names []string) error {
@@ -244,24 +260,24 @@ func (p *RemoteClient) IngressStatus(ctx context.Context) (*api.IngressStatus, e
 	return &status, nil
 }
 
-func (p *RemoteClient) JobList(ctx context.Context) ([]api.JobState, error) {
-	var jobs []api.JobState
-	if err := p.doJSON(ctx, http.MethodGet, "/jobs", nil, nil, &jobs); err != nil {
-		return nil, err
+func (p *RemoteClient) JobList(ctx context.Context, q query.Args) ([]api.JobState, int, error) {
+	var resp api.JobListResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/jobs", listQueryValues(q), nil, &resp); err != nil {
+		return nil, 0, err
 	}
-	return jobs, nil
+	return resp.Nodes, resp.TotalCount, nil
 }
 
 func (p *RemoteClient) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {
 	return p.doBytes(ctx, http.MethodPost, "/jobs/"+url.PathEscape(name)+"/run", nil, api.JobRunRequest{Inputs: inputs})
 }
 
-func (p *RemoteClient) SourceList(ctx context.Context) ([]api.SourceState, error) {
-	var sources []api.SourceState
-	if err := p.doJSON(ctx, http.MethodGet, "/sources", nil, nil, &sources); err != nil {
-		return nil, err
+func (p *RemoteClient) SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error) {
+	var resp api.SourceListResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/sources", listQueryValues(q), nil, &resp); err != nil {
+		return nil, 0, err
 	}
-	return sources, nil
+	return resp.Nodes, resp.TotalCount, nil
 }
 
 func (p *RemoteClient) SourceFetch(ctx context.Context, name string) (api.SourceState, error) {
@@ -304,12 +320,12 @@ func (p *RemoteClient) WorkspaceCreate(ctx context.Context, req api.WorkspaceCre
 	return ref, nil
 }
 
-func (p *RemoteClient) WorkspaceList(ctx context.Context) ([]api.WorkspaceRef, error) {
-	var refs []api.WorkspaceRef
-	if err := p.doJSON(ctx, http.MethodGet, "/workspaces", nil, nil, &refs); err != nil {
-		return nil, err
+func (p *RemoteClient) WorkspaceList(ctx context.Context, q query.Args) ([]api.WorkspaceRef, int, error) {
+	var resp api.WorkspaceListResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/workspaces", listQueryValues(q), nil, &resp); err != nil {
+		return nil, 0, err
 	}
-	return refs, nil
+	return resp.Nodes, resp.TotalCount, nil
 }
 
 func (p *RemoteClient) WorkspaceGet(ctx context.Context, name string) (api.WorkspaceRef, error) {
@@ -380,12 +396,12 @@ func (p *RemoteClient) WorkspaceSyncBase(ctx context.Context, name string, metho
 	return states, nil
 }
 
-func (p *RemoteClient) SecretsList(ctx context.Context) ([]api.SecretRef, error) {
-	var refs []api.SecretRef
-	if err := p.doJSON(ctx, http.MethodGet, "/secrets", nil, nil, &refs); err != nil {
-		return nil, err
+func (p *RemoteClient) SecretsList(ctx context.Context, q query.Args) ([]api.SecretRef, int, error) {
+	var resp api.SecretListResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/secrets", listQueryValues(q), nil, &resp); err != nil {
+		return nil, 0, err
 	}
-	return refs, nil
+	return resp.Nodes, resp.TotalCount, nil
 }
 
 func (p *RemoteClient) SecretGet(ctx context.Context, name string) (api.SecretRef, error) {
@@ -516,12 +532,12 @@ func (p *RemoteClient) GitOpsTopologyWithCommits(ctx context.Context, withCommit
 	return topo, nil
 }
 
-func (p *RemoteClient) Templates(ctx context.Context) ([]api.TemplateDescriptor, error) {
-	var refs []api.TemplateDescriptor
-	if err := p.doJSON(ctx, http.MethodGet, "/templates", nil, nil, &refs); err != nil {
-		return nil, err
+func (p *RemoteClient) Templates(ctx context.Context, q query.Args) ([]api.TemplateDescriptor, int, error) {
+	var resp api.TemplateListResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/templates", listQueryValues(q), nil, &resp); err != nil {
+		return nil, 0, err
 	}
-	return refs, nil
+	return resp.Nodes, resp.TotalCount, nil
 }
 
 // MintConnectionToken is not part of service.API: minting belongs to the

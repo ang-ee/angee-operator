@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/query"
 )
 
 func setupSecretsFixture(t *testing.T) *Platform {
@@ -39,7 +40,7 @@ func TestSecretsListShowsDeclaredOnly(t *testing.T) {
 	if _, err := p.SecretSet(context.Background(), "unrelated-key", "value"); err != nil {
 		t.Fatalf("SecretSet(undeclared) error = %v", err)
 	}
-	refs, err := p.SecretsList(context.Background())
+	refs, _, err := p.SecretsList(context.Background(), query.Args{})
 	if err != nil {
 		t.Fatalf("SecretsList error = %v", err)
 	}

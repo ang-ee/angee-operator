@@ -18,6 +18,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator"
 	"github.com/ang-ee/angee-operator/internal/platformclient"
+	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/spf13/cobra"
@@ -517,7 +518,7 @@ func jobListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 			if err != nil {
 				return err
 			}
-			jobs, err := platform.JobList(cmd.Context())
+			jobs, _, err := platform.JobList(cmd.Context(), query.Args{})
 			if err != nil {
 				return err
 			}
@@ -656,7 +657,7 @@ func serviceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput 
 			if err != nil {
 				return err
 			}
-			services, err := platform.ServiceList(cmd.Context())
+			services, _, err := platform.ServiceList(cmd.Context(), query.Args{})
 			if err != nil {
 				return err
 			}
@@ -853,7 +854,7 @@ func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool
 			if err != nil {
 				return err
 			}
-			sources, err := platform.SourceList(cmd.Context())
+			sources, _, err := platform.SourceList(cmd.Context(), query.Args{})
 			if err != nil {
 				return err
 			}
@@ -1184,7 +1185,7 @@ func workspaceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 			if err != nil {
 				return err
 			}
-			refs, err := platform.WorkspaceList(cmd.Context())
+			refs, _, err := platform.WorkspaceList(cmd.Context(), query.Args{})
 			if err != nil {
 				return err
 			}
