@@ -451,9 +451,8 @@ func workspaceInsertRequest(o model.WorkspacesInsertInput) api.WorkspaceCreateRe
 // --- sources aggregate numeric fields ----------------------------------------
 
 func sourcesAggregateFields(total int, items []*api.SourceState) *model.SourcesAggregateFields {
-	out := &model.SourcesAggregateFields{Count: total}
-	if total == 0 {
-		return out
+	if total == 0 || len(items) == 0 {
+		return &model.SourcesAggregateFields{Count: total}
 	}
 	rows := make([]api.SourceState, len(items))
 	for i, it := range items {
@@ -461,14 +460,10 @@ func sourcesAggregateFields(total int, items []*api.SourceState) *model.SourcesA
 	}
 	groups := query.Aggregate(rows, query.Filter{}, nil, queryfields.Source, queryfields.SourceNumeric, []string{"ahead", "behind"})
 	if len(groups) == 0 {
-		return out
+		return &model.SourcesAggregateFields{Count: total}
 	}
-	g := groups[0]
-	out.Sum = &model.SourcesSumFields{Ahead: aggInt(g.Sum["ahead"]), Behind: aggInt(g.Sum["behind"])}
-	out.Min = &model.SourcesMinFields{Ahead: aggInt(g.Min["ahead"]), Behind: aggInt(g.Min["behind"])}
-	out.Max = &model.SourcesMaxFields{Ahead: aggInt(g.Max["ahead"]), Behind: aggInt(g.Max["behind"])}
-	n := float64(g.Count)
-	out.Avg = &model.SourcesAvgFields{Ahead: aggFloat(g.Sum["ahead"] / n), Behind: aggFloat(g.Sum["behind"] / n)}
+	out := sourcesAggregateFromGroup(groups[0])
+	out.Count = total // count reflects the full filtered set the caller measured
 	return out
 }
 
@@ -479,3 +474,50 @@ func aggInt(f float64) *int {
 }
 
 func aggFloat(f float64) *float64 { return &f }
+
+// sourcesAggregateFromGroup builds the per-group sources aggregate (count plus
+// the numeric reducers) from one engine group — shared by the ungrouped
+// sources_aggregate and the grouped sources_groups roots.
+func sourcesAggregateFromGroup(g query.Group) *model.SourcesAggregateFields {
+	out := &model.SourcesAggregateFields{Count: g.Count}
+	if g.Count == 0 || len(g.Sum) == 0 {
+		return out
+	}
+	out.Sum = &model.SourcesSumFields{Ahead: aggInt(g.Sum["ahead"]), Behind: aggInt(g.Sum["behind"])}
+	out.Min = &model.SourcesMinFields{Ahead: aggInt(g.Min["ahead"]), Behind: aggInt(g.Min["behind"])}
+	out.Max = &model.SourcesMaxFields{Ahead: aggInt(g.Max["ahead"]), Behind: aggInt(g.Max["behind"])}
+	n := float64(g.Count)
+	out.Avg = &model.SourcesAvgFields{Ahead: aggFloat(g.Sum["ahead"] / n), Behind: aggFloat(g.Sum["behind"] / n)}
+	return out
+}
+
+// --- NDC grouping helpers ----------------------------------------------------
+
+// serviceGroups / sourceGroups run the grouped aggregation through the engine,
+// keeping the queryfields FieldMaps out of the generated resolver file.
+func serviceGroups(items []api.ServiceState, where *model.ServicesBoolExp, dims []model.ServicesGroupDimension) []query.Group {
+	return query.Aggregate(items, bindServicesWhere(where), dimensionStrings(dims), queryfields.Service, nil, nil)
+}
+
+func sourceGroups(items []api.SourceState, where *model.SourcesBoolExp, dims []model.SourcesGroupDimension) []query.Group {
+	return query.Aggregate(items, bindSourcesWhere(where), dimensionStrings(dims), queryfields.Source, queryfields.SourceNumeric, []string{"ahead", "behind"})
+}
+
+// groupDimensionsKV renders an engine group key as the NDC group `dimensions`
+// (ordered field/value pairs).
+func groupDimensionsKV(kvs []query.KV) []*model.KeyValue {
+	out := make([]*model.KeyValue, len(kvs))
+	for i, kv := range kvs {
+		out[i] = &model.KeyValue{Key: kv.Field, Value: kv.Value}
+	}
+	return out
+}
+
+// dimensionStrings flattens a group_by dimension enum slice to field names.
+func dimensionStrings[T ~string](in []T) []string {
+	out := make([]string, len(in))
+	for i, d := range in {
+		out[i] = string(d)
+	}
+	return out
+}

@@ -36,6 +36,15 @@ latest tag.
   - The generic in-memory `internal/query` engine (filter/sort/paging/aggregate)
     is reused; the `service.API` push-down stays, so the REST surface still
     filters via `?query=<json>` → `{nodes,total_count}` (REST contract unchanged).
+  - **Grouped aggregation (NDC shape):** alongside the ungrouped Hasura
+    `<t>_aggregate`, `services_groups` / `sources_groups` custom roots return a
+    list of groups (`dimensions` key + per-group `aggregates`) shaped on the
+    NDC grouping structure — the emerging Hasura v3/DDN group-by standard
+    (graphql-engine #10786). This gives one forward-compatible grouped shape
+    across the operator and the Django (`<model>_groups`) backends for a shared
+    `useGroupBy`/`useFacets` hook (consumed via refine `useCustom`, since no
+    stock provider supports group-by). Deferred toward full NDC: `having`
+    predicates and order-by-on-aggregate.
 
 ### Added
 

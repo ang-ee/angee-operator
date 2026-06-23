@@ -210,6 +210,11 @@ type ServicesBoolExp struct {
 	Health  *StringComparisonExp `json:"health,omitempty"`
 }
 
+type ServicesGroup struct {
+	Dimensions []*KeyValue              `json:"dimensions"`
+	Aggregates *ServicesAggregateFields `json:"aggregates"`
+}
+
 type ServicesInsertInput struct {
 	Template  string           `json:"template"`
 	Workspace string           `json:"workspace"`
@@ -273,6 +278,11 @@ type SourcesBoolExp struct {
 	Pushed *BooleanComparisonExp `json:"pushed,omitempty"`
 	Ahead  *IntComparisonExp     `json:"ahead,omitempty"`
 	Behind *IntComparisonExp     `json:"behind,omitempty"`
+}
+
+type SourcesGroup struct {
+	Dimensions []*KeyValue             `json:"dimensions"`
+	Aggregates *SourcesAggregateFields `json:"aggregates"`
 }
 
 type SourcesMaxFields struct {
@@ -424,6 +434,124 @@ func (e *OrderBy) UnmarshalJSON(b []byte) error {
 }
 
 func (e OrderBy) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ServicesGroupDimension string
+
+const (
+	ServicesGroupDimensionStatus  ServicesGroupDimension = "status"
+	ServicesGroupDimensionRuntime ServicesGroupDimension = "runtime"
+	ServicesGroupDimensionHealth  ServicesGroupDimension = "health"
+)
+
+var AllServicesGroupDimension = []ServicesGroupDimension{
+	ServicesGroupDimensionStatus,
+	ServicesGroupDimensionRuntime,
+	ServicesGroupDimensionHealth,
+}
+
+func (e ServicesGroupDimension) IsValid() bool {
+	switch e {
+	case ServicesGroupDimensionStatus, ServicesGroupDimensionRuntime, ServicesGroupDimensionHealth:
+		return true
+	}
+	return false
+}
+
+func (e ServicesGroupDimension) String() string {
+	return string(e)
+}
+
+func (e *ServicesGroupDimension) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ServicesGroupDimension(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid services_group_dimension", str)
+	}
+	return nil
+}
+
+func (e ServicesGroupDimension) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ServicesGroupDimension) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ServicesGroupDimension) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SourcesGroupDimension string
+
+const (
+	SourcesGroupDimensionKind   SourcesGroupDimension = "kind"
+	SourcesGroupDimensionState  SourcesGroupDimension = "state"
+	SourcesGroupDimensionBranch SourcesGroupDimension = "branch"
+	SourcesGroupDimensionDirty  SourcesGroupDimension = "dirty"
+	SourcesGroupDimensionPushed SourcesGroupDimension = "pushed"
+)
+
+var AllSourcesGroupDimension = []SourcesGroupDimension{
+	SourcesGroupDimensionKind,
+	SourcesGroupDimensionState,
+	SourcesGroupDimensionBranch,
+	SourcesGroupDimensionDirty,
+	SourcesGroupDimensionPushed,
+}
+
+func (e SourcesGroupDimension) IsValid() bool {
+	switch e {
+	case SourcesGroupDimensionKind, SourcesGroupDimensionState, SourcesGroupDimensionBranch, SourcesGroupDimensionDirty, SourcesGroupDimensionPushed:
+		return true
+	}
+	return false
+}
+
+func (e SourcesGroupDimension) String() string {
+	return string(e)
+}
+
+func (e *SourcesGroupDimension) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SourcesGroupDimension(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid sources_group_dimension", str)
+	}
+	return nil
+}
+
+func (e SourcesGroupDimension) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SourcesGroupDimension) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SourcesGroupDimension) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

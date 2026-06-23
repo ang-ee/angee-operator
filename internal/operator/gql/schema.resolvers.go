@@ -584,6 +584,42 @@ func (r *queryResolver) SecretsAggregate(ctx context.Context, where *model.Secre
 	return &model.SecretsAggregate{Aggregate: &model.SecretsAggregateFields{Count: total}, Nodes: ptrSlice(page)}, nil
 }
 
+// ServicesGroups is the resolver for the services_groups field. NDC-shaped
+// grouped aggregation: each group carries its dimension key + per-group
+// aggregates. limit/offset page the group list.
+func (r *queryResolver) ServicesGroups(ctx context.Context, where *model.ServicesBoolExp, dimensions []model.ServicesGroupDimension, limit *int, offset *int) ([]*model.ServicesGroup, error) {
+	items, _, err := r.Platform.ServiceList(ctx, query.Args{})
+	if err != nil {
+		return nil, err
+	}
+	groups := serviceGroups(items, where, dimensions)
+	out := make([]*model.ServicesGroup, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, &model.ServicesGroup{
+			Dimensions: groupDimensionsKV(g.Key),
+			Aggregates: &model.ServicesAggregateFields{Count: g.Count},
+		})
+	}
+	return windowSlice(out, pagingFrom(limit, offset)), nil
+}
+
+// SourcesGroups is the resolver for the sources_groups field.
+func (r *queryResolver) SourcesGroups(ctx context.Context, where *model.SourcesBoolExp, dimensions []model.SourcesGroupDimension, limit *int, offset *int) ([]*model.SourcesGroup, error) {
+	items, _, err := r.Platform.SourceList(ctx, query.Args{})
+	if err != nil {
+		return nil, err
+	}
+	groups := sourceGroups(items, where, dimensions)
+	out := make([]*model.SourcesGroup, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, &model.SourcesGroup{
+			Dimensions: groupDimensionsKV(g.Key),
+			Aggregates: sourcesAggregateFromGroup(g),
+		})
+	}
+	return windowSlice(out, pagingFrom(limit, offset)), nil
+}
+
 // WorkspaceStatus is the resolver for the workspaceStatus field.
 func (r *queryResolver) WorkspaceStatus(ctx context.Context, name string) (*api.WorkspaceStatusResponse, error) {
 	status, err := r.Platform.WorkspaceStatus(ctx, name)

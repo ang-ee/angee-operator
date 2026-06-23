@@ -58,6 +58,19 @@ func TestHasuraProviderDocumentsValidate(t *testing.T) {
 		"filterOps": `query Filter($where: sources_bool_exp) {
 			sources(where: $where) { id name }
 		}`,
+		// NDC-shaped grouped aggregation (useGroupBy / useFacets via useCustom).
+		"groupBy": `query GroupBy($where: services_bool_exp, $dimensions: [services_group_dimension!]!, $limit: Int, $offset: Int) {
+			services_groups(where: $where, dimensions: $dimensions, limit: $limit, offset: $offset) {
+				dimensions { key value }
+				aggregates { count }
+			}
+		}`,
+		"groupBySourcesNumeric": `query GroupBySources($dimensions: [sources_group_dimension!]!) {
+			sources_groups(dimensions: $dimensions) {
+				dimensions { key value }
+				aggregates { count sum { ahead } avg { ahead } min { ahead } max { ahead } }
+			}
+		}`,
 	}
 
 	for name, doc := range docs {

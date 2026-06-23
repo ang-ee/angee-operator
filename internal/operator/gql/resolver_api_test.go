@@ -123,6 +123,31 @@ func TestDeleteSecretsByPkNotFound(t *testing.T) {
 	}
 }
 
+// TestServicesGroupsByStatus drives the NDC-shaped grouped aggregation: group
+// by status, each group carrying its dimension key + per-group count.
+func TestServicesGroupsByStatus(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "a", Runtime: "container", Status: "running"},
+		{Name: "b", Runtime: "container", Status: "running"},
+		{Name: "c", Runtime: "local", Status: "exited"},
+	}}}
+	groups, err := r.Query().ServicesGroups(context.Background(), nil,
+		[]model.ServicesGroupDimension{model.ServicesGroupDimensionStatus}, nil, nil)
+	if err != nil {
+		t.Fatalf("ServicesGroups() error = %v", err)
+	}
+	got := map[string]int{}
+	for _, g := range groups {
+		if len(g.Dimensions) != 1 || g.Dimensions[0].Key != "status" {
+			t.Fatalf("group dimensions = %#v, want one status dimension", g.Dimensions)
+		}
+		got[g.Dimensions[0].Value] = g.Aggregates.Count
+	}
+	if got["running"] != 2 || got["exited"] != 1 {
+		t.Fatalf("grouped counts = %#v, want running:2 exited:1", got)
+	}
+}
+
 // TestSecretsByPkNotFound: getOne on an unknown secret resolves to null, not a
 // fabricated row (Hasura getOne semantics; SecretGet synthesizes a zero ref).
 func TestSecretsByPkNotFound(t *testing.T) {

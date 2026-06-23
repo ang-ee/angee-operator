@@ -195,6 +195,8 @@ type Query {
 	secrets(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): [SecretRef!]!
 	secrets_by_pk(id: String!): SecretRef
 	secrets_aggregate(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): secrets_aggregate!
+	services_groups(where: services_bool_exp, dimensions: [services_group_dimension!]!, limit: Int, offset: Int): [services_group!]!
+	sources_groups(where: sources_bool_exp, dimensions: [sources_group_dimension!]!, limit: Int, offset: Int): [sources_group!]!
 	workspaceStatus(name: String!): WorkspaceStatus
 	workspaceGit(name: String!): [SourceState!]!
 	gitOpsTopology(withCommits: Int): GitOpsTopology
@@ -509,6 +511,15 @@ input services_bool_exp {
 	status: String_comparison_exp
 	health: String_comparison_exp
 }
+type services_group {
+	dimensions: [KeyValue!]!
+	aggregates: services_aggregate_fields!
+}
+enum services_group_dimension {
+	status
+	runtime
+	health
+}
 input services_insert_input {
 	template: String!
 	workspace: String!
@@ -565,6 +576,17 @@ input sources_bool_exp {
 	pushed: Boolean_comparison_exp
 	ahead: Int_comparison_exp
 	behind: Int_comparison_exp
+}
+type sources_group {
+	dimensions: [KeyValue!]!
+	aggregates: sources_aggregate_fields!
+}
+enum sources_group_dimension {
+	kind
+	state
+	branch
+	dirty
+	pushed
 }
 type sources_max_fields {
 	ahead: Int
