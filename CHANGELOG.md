@@ -34,10 +34,22 @@ latest tag.
     consumed via refine custom operations.
   - `StackSnapshot` keeps bare-array list fields — it is a console aggregate,
     not a refine resource.
-  - Filtering/sorting/paging is evaluated in-process by the new generic
-    `internal/query` engine; the `service.API` interface, REST endpoints, and
-    CLI are unchanged. Exposing the same filter/sort/paging over REST is a
-    planned follow-up. See
+  - Filtering/sorting/paging is applied in `service.Platform` (the generic
+    `internal/query` engine), so **REST and GraphQL share one filter path**.
+    REST list endpoints now accept a `?query=<url-encoded JSON>` filter/sort/
+    paging spec and return `{nodes,total_count}` (breaking: previously a bare
+    array). The `service.API` list methods gained a `query.Args` argument;
+    unknown filter/sort fields are now a `400` / GraphQL error rather than
+    silently matching nothing. The CLI is unaffected (in-process).
+  - **Relations:** `GitOpsTopology.{sources,workspaces,links}` and
+    `WorkspaceStatus.{sources,mountedBy}` are now nestjs-query nested
+    connections (filter/sorting/paging args, `{nodes,totalCount,pageInfo}`);
+    `WorkspaceStatus` gained `id: ID!` (aliasing `name`). `StackStatus.*` stays
+    a bare list.
+  - **Aggregations:** new `serviceAggregate` and `sourceAggregate` queries
+    provide groupBy + count (plus min/max/sum over numeric source fields),
+    generalizing the curated `GitOpsSummary` (which is retained as the
+    fast-path). See
     [`docs/proposals/graphql-nestjs-query-shape.md`](docs/proposals/graphql-nestjs-query-shape.md).
 
 ### Added

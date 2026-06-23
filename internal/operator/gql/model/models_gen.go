@@ -173,6 +173,14 @@ type ServiceInput struct {
 	Start   *bool            `json:"start,omitempty"`
 }
 
+type ServiceStateAggregateGroup struct {
+	Group []*KeyValue `json:"group"`
+	Count int         `json:"count"`
+	Min   []*KeyValue `json:"min,omitempty"`
+	Max   []*KeyValue `json:"max,omitempty"`
+	Sum   []*KeyValue `json:"sum,omitempty"`
+}
+
 type ServiceStateConnection struct {
 	Nodes      []*api.ServiceState `json:"nodes"`
 	TotalCount int                 `json:"totalCount"`
@@ -193,6 +201,14 @@ type ServiceStateSort struct {
 	Field     ServiceStateSortFields `json:"field"`
 	Direction SortDirection          `json:"direction"`
 	Nulls     *SortNulls             `json:"nulls,omitempty"`
+}
+
+type SourceStateAggregateGroup struct {
+	Group []*KeyValue `json:"group"`
+	Count int         `json:"count"`
+	Min   []*KeyValue `json:"min,omitempty"`
+	Max   []*KeyValue `json:"max,omitempty"`
+	Sum   []*KeyValue `json:"sum,omitempty"`
 }
 
 type SourceStateConnection struct {
@@ -596,6 +612,63 @@ func (e SecretRefSortFields) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type ServiceStateGroupByFields string
+
+const (
+	ServiceStateGroupByFieldsStatus  ServiceStateGroupByFields = "status"
+	ServiceStateGroupByFieldsRuntime ServiceStateGroupByFields = "runtime"
+	ServiceStateGroupByFieldsHealth  ServiceStateGroupByFields = "health"
+)
+
+var AllServiceStateGroupByFields = []ServiceStateGroupByFields{
+	ServiceStateGroupByFieldsStatus,
+	ServiceStateGroupByFieldsRuntime,
+	ServiceStateGroupByFieldsHealth,
+}
+
+func (e ServiceStateGroupByFields) IsValid() bool {
+	switch e {
+	case ServiceStateGroupByFieldsStatus, ServiceStateGroupByFieldsRuntime, ServiceStateGroupByFieldsHealth:
+		return true
+	}
+	return false
+}
+
+func (e ServiceStateGroupByFields) String() string {
+	return string(e)
+}
+
+func (e *ServiceStateGroupByFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ServiceStateGroupByFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ServiceStateGroupByFields", str)
+	}
+	return nil
+}
+
+func (e ServiceStateGroupByFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ServiceStateGroupByFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ServiceStateGroupByFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type ServiceStateSortFields string
 
 const (
@@ -762,6 +835,67 @@ func (e *SortNulls) UnmarshalJSON(b []byte) error {
 }
 
 func (e SortNulls) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SourceStateGroupByFields string
+
+const (
+	SourceStateGroupByFieldsKind   SourceStateGroupByFields = "kind"
+	SourceStateGroupByFieldsState  SourceStateGroupByFields = "state"
+	SourceStateGroupByFieldsBranch SourceStateGroupByFields = "branch"
+	SourceStateGroupByFieldsDirty  SourceStateGroupByFields = "dirty"
+	SourceStateGroupByFieldsPushed SourceStateGroupByFields = "pushed"
+)
+
+var AllSourceStateGroupByFields = []SourceStateGroupByFields{
+	SourceStateGroupByFieldsKind,
+	SourceStateGroupByFieldsState,
+	SourceStateGroupByFieldsBranch,
+	SourceStateGroupByFieldsDirty,
+	SourceStateGroupByFieldsPushed,
+}
+
+func (e SourceStateGroupByFields) IsValid() bool {
+	switch e {
+	case SourceStateGroupByFieldsKind, SourceStateGroupByFieldsState, SourceStateGroupByFieldsBranch, SourceStateGroupByFieldsDirty, SourceStateGroupByFieldsPushed:
+		return true
+	}
+	return false
+}
+
+func (e SourceStateGroupByFields) String() string {
+	return string(e)
+}
+
+func (e *SourceStateGroupByFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SourceStateGroupByFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SourceStateGroupByFields", str)
+	}
+	return nil
+}
+
+func (e SourceStateGroupByFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SourceStateGroupByFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SourceStateGroupByFields) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

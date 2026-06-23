@@ -588,6 +588,38 @@ type WorkspaceMountRefConnection {
   pageInfo: OffsetPageInfo!
 }
 
+# --- aggregations (groupBy + count) ------------------------------------------
+
+enum ServiceStateGroupByFields {
+  status
+  runtime
+  health
+}
+
+type ServiceStateAggregateGroup {
+  group: [KeyValue!]!
+  count: Int!
+  min: [KeyValue!]
+  max: [KeyValue!]
+  sum: [KeyValue!]
+}
+
+enum SourceStateGroupByFields {
+  kind
+  state
+  branch
+  dirty
+  pushed
+}
+
+type SourceStateAggregateGroup {
+  group: [KeyValue!]!
+  count: Int!
+  min: [KeyValue!]
+  max: [KeyValue!]
+  sum: [KeyValue!]
+}
+
 # --- inputs -------------------------------------------------------------------
 
 input KeyValueInput {
@@ -717,6 +749,8 @@ type Query {
   secrets(filter: SecretRefFilter, sorting: [SecretRefSort!], paging: OffsetPaging): SecretRefConnection!
   secret(id: ID!): SecretRef
   secretValue(name: String!): SecretValue
+  serviceAggregate(filter: ServiceStateFilter, groupBy: [ServiceStateGroupByFields!]!): [ServiceStateAggregateGroup!]!
+  sourceAggregate(filter: SourceStateFilter, groupBy: [SourceStateGroupByFields!]!): [SourceStateAggregateGroup!]!
 }
 
 type Mutation {

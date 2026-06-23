@@ -632,6 +632,46 @@ func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.Secr
 	return &resp, nil
 }
 
+// ServiceAggregate is the resolver for the serviceAggregate field.
+func (r *queryResolver) ServiceAggregate(ctx context.Context, filter *model.ServiceStateFilter, groupBy []model.ServiceStateGroupByFields) ([]*model.ServiceStateAggregateGroup, error) {
+	items, _, err := r.Platform.ServiceList(ctx, query.Args{})
+	if err != nil {
+		return nil, err
+	}
+	groups := query.Aggregate(items, bindServiceFilter(filter), enumStrings(groupBy), queryfields.Service, nil, nil)
+	out := make([]*model.ServiceStateAggregateGroup, len(groups))
+	for i, g := range groups {
+		out[i] = &model.ServiceStateAggregateGroup{
+			Group: aggregateKeyValues(g.Key),
+			Count: g.Count,
+			Min:   numericKeyValues(g.Min),
+			Max:   numericKeyValues(g.Max),
+			Sum:   numericKeyValues(g.Sum),
+		}
+	}
+	return out, nil
+}
+
+// SourceAggregate is the resolver for the sourceAggregate field.
+func (r *queryResolver) SourceAggregate(ctx context.Context, filter *model.SourceStateFilter, groupBy []model.SourceStateGroupByFields) ([]*model.SourceStateAggregateGroup, error) {
+	items, _, err := r.Platform.SourceList(ctx, query.Args{})
+	if err != nil {
+		return nil, err
+	}
+	groups := query.Aggregate(items, bindSourceFilter(filter), enumStrings(groupBy), queryfields.Source, queryfields.SourceNumeric, []string{"ahead", "behind"})
+	out := make([]*model.SourceStateAggregateGroup, len(groups))
+	for i, g := range groups {
+		out[i] = &model.SourceStateAggregateGroup{
+			Group: aggregateKeyValues(g.Key),
+			Count: g.Count,
+			Min:   numericKeyValues(g.Min),
+			Max:   numericKeyValues(g.Max),
+			Sum:   numericKeyValues(g.Sum),
+		}
+	}
+	return out, nil
+}
+
 // ID is the resolver for the id field.
 func (r *secretRefResolver) ID(ctx context.Context, obj *api.SecretRef) (string, error) {
 	return obj.Name, nil

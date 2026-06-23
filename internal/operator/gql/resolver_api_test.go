@@ -144,6 +144,31 @@ func TestWorkspaceCRUD(t *testing.T) {
 	}
 }
 
+// TestServiceAggregateGroupByStatus drives the aggregate surface: group services
+// by status and count each group.
+func TestServiceAggregateGroupByStatus(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "a", Runtime: "container", Status: "running"},
+		{Name: "b", Runtime: "container", Status: "running"},
+		{Name: "c", Runtime: "local", Status: "exited"},
+	}}}
+	groups, err := r.Query().ServiceAggregate(context.Background(), nil,
+		[]model.ServiceStateGroupByFields{model.ServiceStateGroupByFieldsStatus})
+	if err != nil {
+		t.Fatalf("ServiceAggregate() error = %v", err)
+	}
+	byStatus := map[string]int{}
+	for _, g := range groups {
+		if len(g.Group) != 1 || g.Group[0].Key != "status" {
+			t.Fatalf("group key = %+v, want one status key", g.Group)
+		}
+		byStatus[g.Group[0].Value] = g.Count
+	}
+	if byStatus["running"] != 2 || byStatus["exited"] != 1 {
+		t.Fatalf("counts = %+v, want running:2 exited:1", byStatus)
+	}
+}
+
 // TestGitOpsTopologyLinksRelation drives a nested relation connection: filtering
 // GitOpsTopology.links over the slice already on the parent object.
 func TestGitOpsTopologyLinksRelation(t *testing.T) {

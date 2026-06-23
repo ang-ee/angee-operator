@@ -2,11 +2,48 @@ package gql
 
 import (
 	"context"
+	"sort"
+	"strconv"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/query"
 )
+
+// aggregateKeyValues renders an aggregate group key as KeyValue pairs.
+func aggregateKeyValues(kvs []query.KV) []*model.KeyValue {
+	out := make([]*model.KeyValue, len(kvs))
+	for i, kv := range kvs {
+		out[i] = &model.KeyValue{Key: kv.Field, Value: kv.Value}
+	}
+	return out
+}
+
+// numericKeyValues renders a numeric reducer map (min/max/sum) as KeyValue pairs
+// in a deterministic field order; nil when no numeric reducers were computed.
+func numericKeyValues(m map[string]float64) []*model.KeyValue {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]*model.KeyValue, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, &model.KeyValue{Key: k, Value: strconv.FormatFloat(m[k], 'f', -1, 64)})
+	}
+	return out
+}
+
+func enumStrings[T ~string](in []T) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = string(v)
+	}
+	return out
+}
 
 // This file binds the nestjs-query-shaped GraphQL collection arguments
 // (filter / sorting / paging) onto the generic in-memory engine in
