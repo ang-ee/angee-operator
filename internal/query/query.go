@@ -33,6 +33,10 @@ type Comparison struct {
 	Is    *bool // boolean-field equality (and refine's only common null-ish op)
 	IsNot *bool
 
+	// IsNull is the Hasura `_is_null` operator: true matches null values, false
+	// matches non-null.
+	IsNull *bool
+
 	Eq  *Value
 	Neq *Value
 	Gt  *Value
@@ -117,6 +121,9 @@ func matchFilter[T any](f Filter, item T, fm FieldMap[T]) bool {
 }
 
 func matchComparison(c Comparison, v Value) bool {
+	if c.IsNull != nil && *c.IsNull != v.IsNull() {
+		return false
+	}
 	if c.Is != nil && (v.Bool == nil || *v.Bool != *c.Is) {
 		return false
 	}

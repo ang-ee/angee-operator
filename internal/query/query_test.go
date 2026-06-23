@@ -63,6 +63,8 @@ func TestFilterComparisons(t *testing.T) {
 		{"bool-is", map[string]Comparison{"ready": {Is: ptr(true)}}, []string{"api", "worker"}},
 		{"bool-isNot", map[string]Comparison{"ready": {IsNot: ptr(true)}}, []string{"web"}},
 		{"null-eq-skips", map[string]Comparison{"health": {Eq: ptr(Str("healthy"))}}, []string{"api"}},
+		{"is-null", map[string]Comparison{"health": {IsNull: ptr(true)}}, []string{"worker"}},
+		{"is-not-null", map[string]Comparison{"health": {IsNull: ptr(false)}}, []string{"api", "web"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

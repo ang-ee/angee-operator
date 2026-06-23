@@ -12,7 +12,6 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/query"
-	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -38,39 +37,6 @@ func (r *compiledStackResolver) SecretEnvVars(ctx context.Context, obj *service.
 		return nil, nil
 	}
 	return keyValueList(obj.SecretEnvVars), nil
-}
-
-// Sources is the resolver for the sources field.
-func (r *gitOpsTopologyResolver) Sources(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) (*model.SourceStateConnection, error) {
-	var items []api.SourceState
-	if obj != nil {
-		items = obj.Sources
-	}
-	args := query.Args{Filter: bindSourceFilter(filter), Sorting: bindSourceSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, queryfields.Source)
-	return &model.SourceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
-// Workspaces is the resolver for the workspaces field.
-func (r *gitOpsTopologyResolver) Workspaces(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.WorkspaceStatusFilter, sorting []*model.WorkspaceStatusSort, paging *model.OffsetPaging) (*model.WorkspaceStatusConnection, error) {
-	var items []api.WorkspaceStatusResponse
-	if obj != nil {
-		items = obj.Workspaces
-	}
-	args := query.Args{Filter: bindWorkspaceStatusFilter(filter), Sorting: bindWorkspaceStatusSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, queryfields.WorkspaceStatus)
-	return &model.WorkspaceStatusConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
-// Links is the resolver for the links field.
-func (r *gitOpsTopologyResolver) Links(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.GitOpsLinkFilter, sorting []*model.GitOpsLinkSort, paging *model.OffsetPaging) (*model.GitOpsLinkConnection, error) {
-	var items []api.GitOpsLink
-	if obj != nil {
-		items = obj.Links
-	}
-	args := query.Args{Filter: bindGitOpsLinkFilter(filter), Sorting: bindGitOpsLinkSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, queryfields.GitOpsLink)
-	return &model.GitOpsLinkConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // ID is the resolver for the id field.
@@ -161,42 +127,40 @@ func (r *mutationResolver) ServiceInit(ctx context.Context, input model.ServiceI
 	return namedActionResult("created", req.Name), nil
 }
 
-// CreateOneService is the resolver for the createOneService field.
-func (r *mutationResolver) CreateOneService(ctx context.Context, input model.CreateOneServiceInput) (*api.ServiceState, error) {
-	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(*input.Service))
+// InsertServicesOne is the resolver for the insert_services_one field.
+func (r *mutationResolver) InsertServicesOne(ctx context.Context, object model.ServicesInsertInput) (*api.ServiceState, error) {
+	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(object))
 	if err != nil {
 		return nil, err
 	}
 	return &state, nil
 }
 
-// UpdateOneService is the resolver for the updateOneService field.
-func (r *mutationResolver) UpdateOneService(ctx context.Context, input model.UpdateOneServiceInput) (*api.ServiceState, error) {
-	req := serviceRequestFrom(*input.Update)
-	req.Name = input.ID
-	if err := r.Platform.ServiceUpdate(ctx, req); err != nil {
+// UpdateServicesByPk is the resolver for the update_services_by_pk field.
+func (r *mutationResolver) UpdateServicesByPk(ctx context.Context, pkColumns model.ServicesPkColumnsInput, set model.ServicesSetInput) (*api.ServiceState, error) {
+	if err := r.Platform.ServiceUpdate(ctx, serviceSetRequest(pkColumns.ID, set)); err != nil {
 		return nil, err
 	}
-	state, err := r.serviceByID(ctx, input.ID)
+	state, err := r.serviceByID(ctx, pkColumns.ID)
 	if err != nil {
 		return nil, err
 	}
 	if state == nil {
-		return nil, fmt.Errorf("service %q not found after update", input.ID)
+		return nil, fmt.Errorf("service %q not found after update", pkColumns.ID)
 	}
 	return state, nil
 }
 
-// DeleteOneService is the resolver for the deleteOneService field.
-func (r *mutationResolver) DeleteOneService(ctx context.Context, input model.DeleteOneServiceInput) (*api.ServiceState, error) {
-	prev, err := r.serviceByID(ctx, input.ID)
+// DeleteServicesByPk is the resolver for the delete_services_by_pk field.
+func (r *mutationResolver) DeleteServicesByPk(ctx context.Context, id string) (*api.ServiceState, error) {
+	prev, err := r.serviceByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if prev == nil {
-		return nil, fmt.Errorf("service %q not found", input.ID)
+		return nil, fmt.Errorf("service %q not found", id)
 	}
-	if err := r.Platform.ServiceDestroy(ctx, input.ID, true); err != nil {
+	if err := r.Platform.ServiceDestroy(ctx, id, true); err != nil {
 		return nil, err
 	}
 	return prev, nil
@@ -252,33 +216,31 @@ func (r *mutationResolver) SourcePush(ctx context.Context, name string, ref *str
 	return &state, err
 }
 
-// CreateOneWorkspace is the resolver for the createOneWorkspace field.
-func (r *mutationResolver) CreateOneWorkspace(ctx context.Context, input model.CreateOneWorkspaceInput) (*api.WorkspaceRef, error) {
-	ref, err := r.Platform.WorkspaceCreate(ctx, workspaceCreateRequestFrom(*input.Workspace))
+// InsertWorkspacesOne is the resolver for the insert_workspaces_one field.
+func (r *mutationResolver) InsertWorkspacesOne(ctx context.Context, object model.WorkspacesInsertInput) (*api.WorkspaceRef, error) {
+	ref, err := r.Platform.WorkspaceCreate(ctx, workspaceInsertRequest(object))
 	if err != nil {
 		return nil, err
 	}
 	return &ref, nil
 }
 
-// UpdateOneWorkspace is the resolver for the updateOneWorkspace field.
-func (r *mutationResolver) UpdateOneWorkspace(ctx context.Context, input model.UpdateOneWorkspaceInput) (*api.WorkspaceRef, error) {
-	ref, err := r.Platform.WorkspaceUpdate(ctx, input.ID, keyValuesFrom(input.Update.Inputs), stringPtrValue(input.Update.TTL))
+// UpdateWorkspacesByPk is the resolver for the update_workspaces_by_pk field.
+func (r *mutationResolver) UpdateWorkspacesByPk(ctx context.Context, pkColumns model.WorkspacesPkColumnsInput, set model.WorkspacesSetInput) (*api.WorkspaceRef, error) {
+	ref, err := r.Platform.WorkspaceUpdate(ctx, pkColumns.ID, keyValuesFrom(set.Inputs), stringPtrValue(set.TTL))
 	if err != nil {
 		return nil, err
 	}
 	return &ref, nil
 }
 
-// DeleteOneWorkspace is the resolver for the deleteOneWorkspace field.
-func (r *mutationResolver) DeleteOneWorkspace(ctx context.Context, input model.DeleteOneWorkspaceInput) (*api.WorkspaceRef, error) {
-	// WorkspaceGet returns a not-found error for an unknown name, so capturing
-	// the pre-delete record doubles as the existence check deleteOne implies.
-	prev, err := r.Platform.WorkspaceGet(ctx, input.ID)
+// DeleteWorkspacesByPk is the resolver for the delete_workspaces_by_pk field.
+func (r *mutationResolver) DeleteWorkspacesByPk(ctx context.Context, id string) (*api.WorkspaceRef, error) {
+	prev, err := r.Platform.WorkspaceGet(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.Platform.WorkspaceDestroy(ctx, input.ID, boolPtrValue(input.Purge)); err != nil {
+	if err := r.Platform.WorkspaceDestroy(ctx, id, false); err != nil {
 		return nil, err
 	}
 	return &prev, nil
@@ -383,37 +345,34 @@ func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace
 	return &res, err
 }
 
-// CreateOneSecret is the resolver for the createOneSecret field.
-func (r *mutationResolver) CreateOneSecret(ctx context.Context, input model.CreateOneSecretInput) (*api.SecretRef, error) {
-	ref, err := r.Platform.SecretSet(ctx, input.Secret.Name, input.Secret.Value)
+// InsertSecretsOne is the resolver for the insert_secrets_one field.
+func (r *mutationResolver) InsertSecretsOne(ctx context.Context, object model.SecretsInsertInput) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretSet(ctx, object.Name, object.Value)
 	if err != nil {
 		return nil, err
 	}
 	return &ref, nil
 }
 
-// UpdateOneSecret is the resolver for the updateOneSecret field.
-func (r *mutationResolver) UpdateOneSecret(ctx context.Context, input model.UpdateOneSecretInput) (*api.SecretRef, error) {
-	ref, err := r.Platform.SecretSet(ctx, input.ID, input.Update.Value)
+// UpdateSecretsByPk is the resolver for the update_secrets_by_pk field.
+func (r *mutationResolver) UpdateSecretsByPk(ctx context.Context, pkColumns model.SecretsPkColumnsInput, set model.SecretsSetInput) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretSet(ctx, pkColumns.ID, stringPtrValue(set.Value))
 	if err != nil {
 		return nil, err
 	}
 	return &ref, nil
 }
 
-// DeleteOneSecret is the resolver for the deleteOneSecret field.
-func (r *mutationResolver) DeleteOneSecret(ctx context.Context, input model.DeleteOneSecretInput) (*api.SecretRef, error) {
-	// SecretGet returns a zero-ish ref (not an error) for an unknown name, and
-	// SecretDelete is idempotent — so guard for "exists" the way DeleteOneService
-	// does, rather than reporting a fabricated delete of a secret that never was.
-	prev, err := r.Platform.SecretGet(ctx, input.ID)
+// DeleteSecretsByPk is the resolver for the delete_secrets_by_pk field.
+func (r *mutationResolver) DeleteSecretsByPk(ctx context.Context, id string) (*api.SecretRef, error) {
+	prev, err := r.Platform.SecretGet(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if !prev.Declared && !prev.HasValue && !prev.Required && !prev.Generated {
-		return nil, fmt.Errorf("secret %q not found", input.ID)
+		return nil, fmt.Errorf("secret %q not found", id)
 	}
-	if err := r.Platform.SecretDelete(ctx, input.ID); err != nil {
+	if err := r.Platform.SecretDelete(ctx, id); err != nil {
 		return nil, err
 	}
 	return &prev, nil
@@ -441,65 +400,167 @@ func (r *queryResolver) IngressStatus(ctx context.Context) (*api.IngressStatus, 
 }
 
 // Services is the resolver for the services field.
-func (r *queryResolver) Services(ctx context.Context, filter *model.ServiceStateFilter, sorting []*model.ServiceStateSort, paging *model.OffsetPaging) (*model.ServiceStateConnection, error) {
-	args := query.Args{Filter: bindServiceFilter(filter), Sorting: bindServiceSorts(sorting), Paging: bindPaging(paging)}
+func (r *queryResolver) Services(ctx context.Context, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) ([]*api.ServiceState, error) {
+	args := query.Args{Filter: bindServicesWhere(where), Sorting: bindServicesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, _, err := r.Platform.ServiceList(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return ptrSlice(page), nil
+}
+
+// ServicesByPk is the resolver for the services_by_pk field.
+func (r *queryResolver) ServicesByPk(ctx context.Context, id string) (*api.ServiceState, error) {
+	return r.serviceByID(ctx, id)
+}
+
+// ServicesAggregate is the resolver for the services_aggregate field.
+func (r *queryResolver) ServicesAggregate(ctx context.Context, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) (*model.ServicesAggregate, error) {
+	args := query.Args{Filter: bindServicesWhere(where), Sorting: bindServicesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
 	page, total, err := r.Platform.ServiceList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	return &model.ServiceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
-// Service is the resolver for the service field.
-func (r *queryResolver) Service(ctx context.Context, id string) (*api.ServiceState, error) {
-	return r.serviceByID(ctx, id)
+	return &model.ServicesAggregate{Aggregate: &model.ServicesAggregateFields{Count: total}, Nodes: ptrSlice(page)}, nil
 }
 
 // Jobs is the resolver for the jobs field.
-func (r *queryResolver) Jobs(ctx context.Context, filter *model.JobStateFilter, sorting []*model.JobStateSort, paging *model.OffsetPaging) (*model.JobStateConnection, error) {
-	args := query.Args{Filter: bindJobFilter(filter), Sorting: bindJobSorts(sorting), Paging: bindPaging(paging)}
+func (r *queryResolver) Jobs(ctx context.Context, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) ([]*api.JobState, error) {
+	args := query.Args{Filter: bindJobsWhere(where), Sorting: bindJobsOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, _, err := r.Platform.JobList(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return ptrSlice(page), nil
+}
+
+// JobsByPk is the resolver for the jobs_by_pk field.
+func (r *queryResolver) JobsByPk(ctx context.Context, id string) (*api.JobState, error) {
+	return r.jobByID(ctx, id)
+}
+
+// JobsAggregate is the resolver for the jobs_aggregate field.
+func (r *queryResolver) JobsAggregate(ctx context.Context, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) (*model.JobsAggregate, error) {
+	args := query.Args{Filter: bindJobsWhere(where), Sorting: bindJobsOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
 	page, total, err := r.Platform.JobList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	return &model.JobStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
-// Job is the resolver for the job field.
-func (r *queryResolver) Job(ctx context.Context, id string) (*api.JobState, error) {
-	return r.jobByID(ctx, id)
+	return &model.JobsAggregate{Aggregate: &model.JobsAggregateFields{Count: total}, Nodes: ptrSlice(page)}, nil
 }
 
 // Sources is the resolver for the sources field.
-func (r *queryResolver) Sources(ctx context.Context, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) (*model.SourceStateConnection, error) {
-	args := query.Args{Filter: bindSourceFilter(filter), Sorting: bindSourceSorts(sorting), Paging: bindPaging(paging)}
-	page, total, err := r.Platform.SourceList(ctx, args)
+func (r *queryResolver) Sources(ctx context.Context, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) ([]*api.SourceState, error) {
+	args := query.Args{Filter: bindSourcesWhere(where), Sorting: bindSourcesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, _, err := r.Platform.SourceList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	return &model.SourceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+	return ptrSlice(page), nil
 }
 
-// Source is the resolver for the source field.
-func (r *queryResolver) Source(ctx context.Context, id string) (*api.SourceState, error) {
+// SourcesByPk is the resolver for the sources_by_pk field.
+func (r *queryResolver) SourcesByPk(ctx context.Context, id string) (*api.SourceState, error) {
 	state, err := r.Platform.SourceStatus(ctx, id)
 	return &state, err
 }
 
+// SourcesAggregate is the resolver for the sources_aggregate field.
+func (r *queryResolver) SourcesAggregate(ctx context.Context, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) (*model.SourcesAggregate, error) {
+	args := query.Args{Filter: bindSourcesWhere(where), Sorting: bindSourcesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, total, err := r.Platform.SourceList(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	nodes := ptrSlice(page)
+	return &model.SourcesAggregate{Aggregate: sourcesAggregateFields(total, nodes), Nodes: nodes}, nil
+}
+
 // Workspaces is the resolver for the workspaces field.
-func (r *queryResolver) Workspaces(ctx context.Context, filter *model.WorkspaceRefFilter, sorting []*model.WorkspaceRefSort, paging *model.OffsetPaging) (*model.WorkspaceRefConnection, error) {
-	args := query.Args{Filter: bindWorkspaceFilter(filter), Sorting: bindWorkspaceSorts(sorting), Paging: bindPaging(paging)}
+func (r *queryResolver) Workspaces(ctx context.Context, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) ([]*api.WorkspaceRef, error) {
+	args := query.Args{Filter: bindWorkspacesWhere(where), Sorting: bindWorkspacesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, _, err := r.Platform.WorkspaceList(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return ptrSlice(page), nil
+}
+
+// WorkspacesByPk is the resolver for the workspaces_by_pk field.
+func (r *queryResolver) WorkspacesByPk(ctx context.Context, id string) (*api.WorkspaceRef, error) {
+	ws, err := r.Platform.WorkspaceGet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &ws, nil
+}
+
+// WorkspacesAggregate is the resolver for the workspaces_aggregate field.
+func (r *queryResolver) WorkspacesAggregate(ctx context.Context, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) (*model.WorkspacesAggregate, error) {
+	args := query.Args{Filter: bindWorkspacesWhere(where), Sorting: bindWorkspacesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
 	page, total, err := r.Platform.WorkspaceList(ctx, args)
 	if err != nil {
 		return nil, err
 	}
-	return &model.WorkspaceRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+	return &model.WorkspacesAggregate{Aggregate: &model.WorkspacesAggregateFields{Count: total}, Nodes: ptrSlice(page)}, nil
 }
 
-// Workspace is the resolver for the workspace field.
-func (r *queryResolver) Workspace(ctx context.Context, id string) (*api.WorkspaceRef, error) {
-	workspace, err := r.Platform.WorkspaceGet(ctx, id)
-	return &workspace, err
+// Templates is the resolver for the templates field.
+func (r *queryResolver) Templates(ctx context.Context, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) ([]*api.TemplateDescriptor, error) {
+	args := query.Args{Filter: bindTemplatesWhere(where), Sorting: bindTemplatesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, _, err := r.Platform.Templates(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return ptrSlice(page), nil
+}
+
+// TemplatesByPk is the resolver for the templates_by_pk field.
+func (r *queryResolver) TemplatesByPk(ctx context.Context, id string) (*api.TemplateDescriptor, error) {
+	desc, err := r.Platform.Template(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &desc, nil
+}
+
+// TemplatesAggregate is the resolver for the templates_aggregate field.
+func (r *queryResolver) TemplatesAggregate(ctx context.Context, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) (*model.TemplatesAggregate, error) {
+	args := query.Args{Filter: bindTemplatesWhere(where), Sorting: bindTemplatesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, total, err := r.Platform.Templates(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return &model.TemplatesAggregate{Aggregate: &model.TemplatesAggregateFields{Count: total}, Nodes: ptrSlice(page)}, nil
+}
+
+// Secrets is the resolver for the secrets field.
+func (r *queryResolver) Secrets(ctx context.Context, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) ([]*api.SecretRef, error) {
+	args := query.Args{Filter: bindSecretsWhere(where), Sorting: bindSecretsOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, _, err := r.Platform.SecretsList(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return ptrSlice(page), nil
+}
+
+// SecretsByPk is the resolver for the secrets_by_pk field.
+func (r *queryResolver) SecretsByPk(ctx context.Context, id string) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretGet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+// SecretsAggregate is the resolver for the secrets_aggregate field.
+func (r *queryResolver) SecretsAggregate(ctx context.Context, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) (*model.SecretsAggregate, error) {
+	args := query.Args{Filter: bindSecretsWhere(where), Sorting: bindSecretsOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	page, total, err := r.Platform.SecretsList(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	return &model.SecretsAggregate{Aggregate: &model.SecretsAggregateFields{Count: total}, Nodes: ptrSlice(page)}, nil
 }
 
 // WorkspaceStatus is the resolver for the workspaceStatus field.
@@ -585,44 +646,6 @@ func (r *queryResolver) McpDescriptor(ctx context.Context) (map[string]any, erro
 	return mcpDescriptor(), nil
 }
 
-// Templates is the resolver for the templates field.
-func (r *queryResolver) Templates(ctx context.Context, filter *model.TemplateDescriptorFilter, sorting []*model.TemplateDescriptorSort, paging *model.OffsetPaging) (*model.TemplateDescriptorConnection, error) {
-	args := query.Args{Filter: bindTemplateFilter(filter), Sorting: bindTemplateSorts(sorting), Paging: bindPaging(paging)}
-	page, total, err := r.Platform.Templates(ctx, args)
-	if err != nil {
-		return nil, err
-	}
-	return &model.TemplateDescriptorConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
-// Template is the resolver for the template field.
-func (r *queryResolver) Template(ctx context.Context, id string) (*api.TemplateDescriptor, error) {
-	desc, err := r.Platform.Template(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return &desc, nil
-}
-
-// Secrets is the resolver for the secrets field.
-func (r *queryResolver) Secrets(ctx context.Context, filter *model.SecretRefFilter, sorting []*model.SecretRefSort, paging *model.OffsetPaging) (*model.SecretRefConnection, error) {
-	args := query.Args{Filter: bindSecretFilter(filter), Sorting: bindSecretSorts(sorting), Paging: bindPaging(paging)}
-	page, total, err := r.Platform.SecretsList(ctx, args)
-	if err != nil {
-		return nil, err
-	}
-	return &model.SecretRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
-// Secret is the resolver for the secret field.
-func (r *queryResolver) Secret(ctx context.Context, id string) (*api.SecretRef, error) {
-	ref, err := r.Platform.SecretGet(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return &ref, nil
-}
-
 // SecretValue is the resolver for the secretValue field.
 func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.SecretValueResponse, error) {
 	resp, err := r.Platform.SecretValue(ctx, name)
@@ -630,46 +653,6 @@ func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.Secr
 		return nil, err
 	}
 	return &resp, nil
-}
-
-// ServiceAggregate is the resolver for the serviceAggregate field.
-func (r *queryResolver) ServiceAggregate(ctx context.Context, filter *model.ServiceStateFilter, groupBy []model.ServiceStateGroupByFields) ([]*model.ServiceStateAggregateGroup, error) {
-	items, _, err := r.Platform.ServiceList(ctx, query.Args{})
-	if err != nil {
-		return nil, err
-	}
-	groups := query.Aggregate(items, bindServiceFilter(filter), enumStrings(groupBy), queryfields.Service, nil, nil)
-	out := make([]*model.ServiceStateAggregateGroup, len(groups))
-	for i, g := range groups {
-		out[i] = &model.ServiceStateAggregateGroup{
-			Group: aggregateKeyValues(g.Key),
-			Count: g.Count,
-			Min:   numericKeyValues(g.Min),
-			Max:   numericKeyValues(g.Max),
-			Sum:   numericKeyValues(g.Sum),
-		}
-	}
-	return out, nil
-}
-
-// SourceAggregate is the resolver for the sourceAggregate field.
-func (r *queryResolver) SourceAggregate(ctx context.Context, filter *model.SourceStateFilter, groupBy []model.SourceStateGroupByFields) ([]*model.SourceStateAggregateGroup, error) {
-	items, _, err := r.Platform.SourceList(ctx, query.Args{})
-	if err != nil {
-		return nil, err
-	}
-	groups := query.Aggregate(items, bindSourceFilter(filter), enumStrings(groupBy), queryfields.Source, queryfields.SourceNumeric, []string{"ahead", "behind"})
-	out := make([]*model.SourceStateAggregateGroup, len(groups))
-	for i, g := range groups {
-		out[i] = &model.SourceStateAggregateGroup{
-			Group: aggregateKeyValues(g.Key),
-			Count: g.Count,
-			Min:   numericKeyValues(g.Min),
-			Max:   numericKeyValues(g.Max),
-			Sum:   numericKeyValues(g.Sum),
-		}
-	}
-	return out, nil
 }
 
 // ID is the resolver for the id field.
@@ -709,6 +692,78 @@ func (r *stackStatusResolver) Workspaces(ctx context.Context, obj *api.StackStat
 		return nil, nil
 	}
 	return ptrSlice(sortedMapValues(obj.Workspaces)), nil
+}
+
+// Services is the resolver for the services field.
+func (r *subscriptionResolver) Services(ctx context.Context, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) (<-chan []*api.ServiceState, error) {
+	args := query.Args{Filter: bindServicesWhere(where), Sorting: bindServicesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	return liveList(ctx, liveSubInterval, func(ctx context.Context) ([]*api.ServiceState, error) {
+		page, _, err := r.Platform.ServiceList(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return ptrSlice(page), nil
+	}), nil
+}
+
+// Jobs is the resolver for the jobs field.
+func (r *subscriptionResolver) Jobs(ctx context.Context, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) (<-chan []*api.JobState, error) {
+	args := query.Args{Filter: bindJobsWhere(where), Sorting: bindJobsOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	return liveList(ctx, liveSubInterval, func(ctx context.Context) ([]*api.JobState, error) {
+		page, _, err := r.Platform.JobList(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return ptrSlice(page), nil
+	}), nil
+}
+
+// Sources is the resolver for the sources field.
+func (r *subscriptionResolver) Sources(ctx context.Context, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) (<-chan []*api.SourceState, error) {
+	args := query.Args{Filter: bindSourcesWhere(where), Sorting: bindSourcesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	return liveList(ctx, liveSubInterval, func(ctx context.Context) ([]*api.SourceState, error) {
+		page, _, err := r.Platform.SourceList(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return ptrSlice(page), nil
+	}), nil
+}
+
+// Workspaces is the resolver for the workspaces field.
+func (r *subscriptionResolver) Workspaces(ctx context.Context, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) (<-chan []*api.WorkspaceRef, error) {
+	args := query.Args{Filter: bindWorkspacesWhere(where), Sorting: bindWorkspacesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	return liveList(ctx, liveSubInterval, func(ctx context.Context) ([]*api.WorkspaceRef, error) {
+		page, _, err := r.Platform.WorkspaceList(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return ptrSlice(page), nil
+	}), nil
+}
+
+// Templates is the resolver for the templates field.
+func (r *subscriptionResolver) Templates(ctx context.Context, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) (<-chan []*api.TemplateDescriptor, error) {
+	args := query.Args{Filter: bindTemplatesWhere(where), Sorting: bindTemplatesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	return liveList(ctx, liveSubInterval, func(ctx context.Context) ([]*api.TemplateDescriptor, error) {
+		page, _, err := r.Platform.Templates(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return ptrSlice(page), nil
+	}), nil
+}
+
+// Secrets is the resolver for the secrets field.
+func (r *subscriptionResolver) Secrets(ctx context.Context, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) (<-chan []*api.SecretRef, error) {
+	args := query.Args{Filter: bindSecretsWhere(where), Sorting: bindSecretsOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
+	return liveList(ctx, liveSubInterval, func(ctx context.Context) ([]*api.SecretRef, error) {
+		page, _, err := r.Platform.SecretsList(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return ptrSlice(page), nil
+	}), nil
 }
 
 // OnGitOpsTopologyChange is the resolver for the onGitOpsTopologyChange field.
@@ -793,17 +848,6 @@ func (r *workspaceStatusResolver) Inputs(ctx context.Context, obj *api.Workspace
 	return stringMapJSON(obj.Inputs), nil
 }
 
-// Sources is the resolver for the sources field.
-func (r *workspaceStatusResolver) Sources(ctx context.Context, obj *api.WorkspaceStatusResponse, filter *model.WorkspaceSourceStatusFilter, sorting []*model.WorkspaceSourceStatusSort, paging *model.OffsetPaging) (*model.WorkspaceSourceStatusConnection, error) {
-	var items []api.WorkspaceSourceStatus
-	if obj != nil {
-		items = obj.Sources
-	}
-	args := query.Args{Filter: bindWorkspaceSourceStatusFilter(filter), Sorting: bindWorkspaceSourceStatusSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, queryfields.WorkspaceSource)
-	return &model.WorkspaceSourceStatusConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
 // Allocations is the resolver for the allocations field.
 func (r *workspaceStatusResolver) Allocations(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error) {
 	if obj == nil {
@@ -828,22 +872,8 @@ func (r *workspaceStatusResolver) TTLExpiresAt(ctx context.Context, obj *api.Wor
 	return formatGraphQLTime(obj.TTLExpiresAt), nil
 }
 
-// MountedBy is the resolver for the mountedBy field.
-func (r *workspaceStatusResolver) MountedBy(ctx context.Context, obj *api.WorkspaceStatusResponse, filter *model.WorkspaceMountRefFilter, sorting []*model.WorkspaceMountRefSort, paging *model.OffsetPaging) (*model.WorkspaceMountRefConnection, error) {
-	var items []api.WorkspaceMountRef
-	if obj != nil {
-		items = obj.MountedBy
-	}
-	args := query.Args{Filter: bindWorkspaceMountRefFilter(filter), Sorting: bindWorkspaceMountRefSorts(sorting), Paging: bindPaging(paging)}
-	page, total := query.Apply(items, args, queryfields.WorkspaceMount)
-	return &model.WorkspaceMountRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
-}
-
 // CompiledStack returns CompiledStackResolver implementation.
 func (r *Resolver) CompiledStack() CompiledStackResolver { return &compiledStackResolver{r} }
-
-// GitOpsTopology returns GitOpsTopologyResolver implementation.
-func (r *Resolver) GitOpsTopology() GitOpsTopologyResolver { return &gitOpsTopologyResolver{r} }
 
 // JobState returns JobStateResolver implementation.
 func (r *Resolver) JobState() JobStateResolver { return &jobStateResolver{r} }
@@ -886,7 +916,6 @@ func (r *Resolver) WorkspaceRef() WorkspaceRefResolver { return &workspaceRefRes
 func (r *Resolver) WorkspaceStatus() WorkspaceStatusResolver { return &workspaceStatusResolver{r} }
 
 type compiledStackResolver struct{ *Resolver }
-type gitOpsTopologyResolver struct{ *Resolver }
 type jobStateResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }

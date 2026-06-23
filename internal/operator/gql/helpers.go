@@ -42,7 +42,7 @@ func workspaceCreateRequestFrom(input model.WorkspaceCreateInput) api.WorkspaceC
 	}
 }
 
-func serviceCreateRequestFrom(input model.ServiceCreateInput) api.ServiceCreateRequest {
+func serviceCreateRequestFrom(input model.ServicesInsertInput) api.ServiceCreateRequest {
 	return api.ServiceCreateRequest{
 		Template:  input.Template,
 		Workspace: input.Workspace,

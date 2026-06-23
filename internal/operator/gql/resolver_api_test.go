@@ -14,11 +14,8 @@ import (
 
 func strptr(s string) *string { return &s }
 
-// fakeAPI embeds service.API so that any method a test does not override is
-// left nil and panics if called — letting a test pin down exactly the
-// contract surface it exercises. This is the testability win of routing every
-// adapter through service.API: resolvers and handlers can now be driven by a
-// fake instead of a real *service.Platform backed by an on-disk stack.
+// fakeAPI embeds service.API so any method a test does not override is left nil
+// and panics if called — pinning down exactly the contract surface exercised.
 type fakeAPI struct {
 	service.API
 	services   []api.ServiceState
@@ -49,12 +46,14 @@ func (f fakeAPI) SecretGet(_ context.Context, name string) (api.SecretRef, error
 	return api.SecretRef{Name: name}, nil
 }
 
+func (f fakeAPI) SecretDelete(context.Context, string) error { return nil }
+
 func (f fakeAPI) WorkspaceCreate(_ context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceRef, error) {
 	return api.WorkspaceRef{Name: req.Name, Template: req.Template}, nil
 }
 
 // WorkspaceGet errors for an unknown name (unlike SecretGet), which is what the
-// deleteOneWorkspace not-found path relies on.
+// delete_workspaces_by_pk not-found path relies on.
 func (f fakeAPI) WorkspaceGet(_ context.Context, name string) (api.WorkspaceRef, error) {
 	for _, w := range f.workspaces {
 		if w.Name == name {
@@ -66,124 +65,80 @@ func (f fakeAPI) WorkspaceGet(_ context.Context, name string) (api.WorkspaceRef,
 
 func (f fakeAPI) WorkspaceDestroy(context.Context, string, bool) error { return nil }
 
-func TestQueryServicesDispatchesThroughAPI(t *testing.T) {
-	want := []api.ServiceState{{Name: "web", Runtime: "container", Status: "running"}}
-	r := &Resolver{Platform: fakeAPI{services: want}}
-
-	got, err := r.Query().Services(context.Background(), nil, nil, nil)
+// TestServicesListFilter drives the Hasura where binding (status._eq) through the
+// engine and back as a plain array.
+func TestServicesListFilter(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "web", Runtime: "container", Status: "running"},
+		{Name: "api", Runtime: "container", Status: "exited"},
+	}}}
+	eq := "running"
+	where := &model.ServicesBoolExp{Status: &model.StringComparisonExp{Eq: &eq}}
+	got, err := r.Query().Services(context.Background(), where, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Services() error = %v", err)
 	}
-	if got.TotalCount != 1 || len(got.Nodes) != 1 || got.Nodes[0].Name != "web" || got.Nodes[0].Runtime != "container" {
-		t.Fatalf("Services() = %#v, want one service web/container", got)
+	if len(got) != 1 || got[0].Name != "web" {
+		t.Fatalf("Services(status _eq running) = %#v, want [web]", got)
 	}
 }
 
-// TestQuerySecretsFilterSortPage drives the whole nestjs-query binding path:
-// model filter/sort/paging -> internal/query engine -> offset connection.
-func TestQuerySecretsFilterSortPage(t *testing.T) {
-	secrets := []api.SecretRef{
+// TestSecretsListSortPageAggregate covers where + order_by + limit on the list and
+// the filtered count from _aggregate.
+func TestSecretsListSortPageAggregate(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{secrets: []api.SecretRef{
 		{Name: "db-password", Declared: true, HasValue: true},
 		{Name: "api-key", Declared: true, HasValue: true},
 		{Name: "unset-token", Declared: true, HasValue: false},
-	}
-	r := &Resolver{Platform: fakeAPI{secrets: secrets}}
-
+	}}}
 	yes := true
-	filter := &model.SecretRefFilter{HasValue: &model.BooleanFieldComparison{Is: &yes}}
-	sorting := []*model.SecretRefSort{{Field: model.SecretRefSortFieldsName, Direction: model.SortDirectionAsc}}
+	asc := model.OrderByAsc
 	limit := 1
-	paging := &model.OffsetPaging{Limit: &limit}
+	where := &model.SecretsBoolExp{HasValue: &model.BooleanComparisonExp{Eq: &yes}}
+	orderBy := []*model.SecretsOrderBy{{Name: &asc}}
 
-	got, err := r.Query().Secrets(context.Background(), filter, sorting, paging)
+	got, err := r.Query().Secrets(context.Background(), where, orderBy, &limit, nil)
 	if err != nil {
 		t.Fatalf("Secrets() error = %v", err)
 	}
-	// hasValue==true leaves 2 secrets; name-ASC orders api-key before db-password;
-	// limit 1 returns the first page with hasNextPage true.
-	if got.TotalCount != 2 {
-		t.Fatalf("TotalCount = %d, want 2 (pre-page total)", got.TotalCount)
+	// hasValue _eq true leaves 2; name asc -> api-key first; limit 1 -> [api-key].
+	if len(got) != 1 || got[0].Name != "api-key" {
+		t.Fatalf("Secrets = %#v, want [api-key]", got)
 	}
-	if len(got.Nodes) != 1 || got.Nodes[0].Name != "api-key" {
-		t.Fatalf("Nodes = %#v, want [api-key]", got.Nodes)
+
+	agg, err := r.Query().SecretsAggregate(context.Background(), where, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("SecretsAggregate() error = %v", err)
 	}
-	if got.PageInfo == nil || got.PageInfo.HasNextPage == nil || !*got.PageInfo.HasNextPage {
-		t.Fatalf("PageInfo.HasNextPage = %#v, want true", got.PageInfo)
+	if agg.Aggregate == nil || agg.Aggregate.Count != 2 {
+		t.Fatalf("SecretsAggregate count = %#v, want 2", agg.Aggregate)
 	}
 }
 
-// TestDeleteOneSecretNotFound verifies the existence guard: deleting a name that
-// was never declared and has no value is an error, not a fabricated success.
-func TestDeleteOneSecretNotFound(t *testing.T) {
+// TestDeleteSecretsByPkNotFound verifies the existence guard.
+func TestDeleteSecretsByPkNotFound(t *testing.T) {
 	r := &Resolver{Platform: fakeAPI{}}
-	if _, err := r.Mutation().DeleteOneSecret(context.Background(), model.DeleteOneSecretInput{ID: "ghost"}); err == nil {
-		t.Fatal("DeleteOneSecret(ghost) error = nil, want not-found")
+	if _, err := r.Mutation().DeleteSecretsByPk(context.Background(), "ghost"); err == nil {
+		t.Fatal("DeleteSecretsByPk(ghost) error = nil, want not-found")
 	}
 }
 
-// TestWorkspaceCRUD covers the nestjs-query createOne/deleteOne workspace path:
-// create returns the new ref, delete returns the pre-delete ref, and deleting a
-// missing workspace surfaces WorkspaceGet's not-found error.
-func TestWorkspaceCRUD(t *testing.T) {
+// TestWorkspaceInsertDelete covers insert_one and delete_by_pk (returns pre-delete
+// row; missing workspace surfaces WorkspaceGet's not-found error).
+func TestWorkspaceInsertDelete(t *testing.T) {
 	r := &Resolver{Platform: fakeAPI{workspaces: []api.WorkspaceRef{{Name: "feat", Template: "dev-pr"}}}}
 
-	created, err := r.Mutation().CreateOneWorkspace(context.Background(), model.CreateOneWorkspaceInput{
-		Workspace: &model.WorkspaceCreateInput{Template: "dev-pr", Name: strptr("feat2")},
-	})
+	created, err := r.Mutation().InsertWorkspacesOne(context.Background(), model.WorkspacesInsertInput{Template: "dev-pr", Name: strptr("feat2")})
 	if err != nil || created == nil || created.Name != "feat2" || created.Template != "dev-pr" {
-		t.Fatalf("CreateOneWorkspace = %#v, err = %v", created, err)
+		t.Fatalf("InsertWorkspacesOne = %#v, err = %v", created, err)
 	}
 
-	deleted, err := r.Mutation().DeleteOneWorkspace(context.Background(), model.DeleteOneWorkspaceInput{ID: "feat"})
+	deleted, err := r.Mutation().DeleteWorkspacesByPk(context.Background(), "feat")
 	if err != nil || deleted == nil || deleted.Name != "feat" {
-		t.Fatalf("DeleteOneWorkspace = %#v, err = %v", deleted, err)
+		t.Fatalf("DeleteWorkspacesByPk = %#v, err = %v", deleted, err)
 	}
 
-	if _, err := r.Mutation().DeleteOneWorkspace(context.Background(), model.DeleteOneWorkspaceInput{ID: "ghost"}); err == nil {
-		t.Fatal("DeleteOneWorkspace(ghost) error = nil, want not-found")
-	}
-}
-
-// TestServiceAggregateGroupByStatus drives the aggregate surface: group services
-// by status and count each group.
-func TestServiceAggregateGroupByStatus(t *testing.T) {
-	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
-		{Name: "a", Runtime: "container", Status: "running"},
-		{Name: "b", Runtime: "container", Status: "running"},
-		{Name: "c", Runtime: "local", Status: "exited"},
-	}}}
-	groups, err := r.Query().ServiceAggregate(context.Background(), nil,
-		[]model.ServiceStateGroupByFields{model.ServiceStateGroupByFieldsStatus})
-	if err != nil {
-		t.Fatalf("ServiceAggregate() error = %v", err)
-	}
-	byStatus := map[string]int{}
-	for _, g := range groups {
-		if len(g.Group) != 1 || g.Group[0].Key != "status" {
-			t.Fatalf("group key = %+v, want one status key", g.Group)
-		}
-		byStatus[g.Group[0].Value] = g.Count
-	}
-	if byStatus["running"] != 2 || byStatus["exited"] != 1 {
-		t.Fatalf("counts = %+v, want running:2 exited:1", byStatus)
-	}
-}
-
-// TestGitOpsTopologyLinksRelation drives a nested relation connection: filtering
-// GitOpsTopology.links over the slice already on the parent object.
-func TestGitOpsTopologyLinksRelation(t *testing.T) {
-	r := &Resolver{}
-	obj := &api.GitOpsTopologyResponse{Links: []api.GitOpsLink{
-		{ID: "w:app", Workspace: "w", Slot: "app", State: "dirty", Dirty: true},
-		{ID: "w:lib", Workspace: "w", Slot: "lib", State: "clean", Dirty: false},
-	}}
-	yes := true
-	conn, err := r.GitOpsTopology().Links(context.Background(), obj,
-		&model.GitOpsLinkFilter{Dirty: &model.BooleanFieldComparison{Is: &yes}}, nil, nil)
-	if err != nil {
-		t.Fatalf("Links() error = %v", err)
-	}
-	if conn.TotalCount != 1 || len(conn.Nodes) != 1 || conn.Nodes[0].Slot != "app" {
-		t.Fatalf("links(dirty) = %+v, want only the dirty app link", conn)
+	if _, err := r.Mutation().DeleteWorkspacesByPk(context.Background(), "ghost"); err == nil {
+		t.Fatal("DeleteWorkspacesByPk(ghost) error = nil, want not-found")
 	}
 }
