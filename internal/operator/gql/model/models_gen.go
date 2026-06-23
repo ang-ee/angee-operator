@@ -3,8 +3,63 @@
 package model
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"strconv"
+
 	"github.com/ang-ee/angee-operator/api"
 )
+
+type BooleanFieldComparison struct {
+	Is    *bool `json:"is,omitempty"`
+	IsNot *bool `json:"isNot,omitempty"`
+}
+
+type CreateOneSecretInput struct {
+	Secret *SecretCreateInput `json:"secret"`
+}
+
+type CreateOneServiceInput struct {
+	Service *ServiceCreateInput `json:"service"`
+}
+
+type CreateOneWorkspaceInput struct {
+	Workspace *WorkspaceCreateInput `json:"workspace"`
+}
+
+type DeleteOneSecretInput struct {
+	ID string `json:"id"`
+}
+
+type DeleteOneServiceInput struct {
+	ID string `json:"id"`
+}
+
+type DeleteOneWorkspaceInput struct {
+	ID    string `json:"id"`
+	Purge *bool  `json:"purge,omitempty"`
+}
+
+type JobStateConnection struct {
+	Nodes      []*api.JobState `json:"nodes"`
+	TotalCount int             `json:"totalCount"`
+	PageInfo   *OffsetPageInfo `json:"pageInfo"`
+}
+
+type JobStateFilter struct {
+	And     []*JobStateFilter      `json:"and,omitempty"`
+	Or      []*JobStateFilter      `json:"or,omitempty"`
+	ID      *StringFieldComparison `json:"id,omitempty"`
+	Name    *StringFieldComparison `json:"name,omitempty"`
+	Runtime *StringFieldComparison `json:"runtime,omitempty"`
+}
+
+type JobStateSort struct {
+	Field     JobStateSortFields `json:"field"`
+	Direction SortDirection      `json:"direction"`
+	Nulls     *SortNulls         `json:"nulls,omitempty"`
+}
 
 type KeyValue struct {
 	Key   string `json:"key"`
@@ -25,7 +80,50 @@ type MutationResult struct {
 	Message *string `json:"message,omitempty"`
 }
 
+type OffsetPageInfo struct {
+	HasNextPage     *bool `json:"hasNextPage,omitempty"`
+	HasPreviousPage *bool `json:"hasPreviousPage,omitempty"`
+}
+
+type OffsetPaging struct {
+	Limit  *int `json:"limit,omitempty"`
+	Offset *int `json:"offset,omitempty"`
+}
+
 type Query struct {
+}
+
+type SecretCreateInput struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type SecretRefConnection struct {
+	Nodes      []*api.SecretRef `json:"nodes"`
+	TotalCount int              `json:"totalCount"`
+	PageInfo   *OffsetPageInfo  `json:"pageInfo"`
+}
+
+type SecretRefFilter struct {
+	And       []*SecretRefFilter      `json:"and,omitempty"`
+	Or        []*SecretRefFilter      `json:"or,omitempty"`
+	ID        *StringFieldComparison  `json:"id,omitempty"`
+	Name      *StringFieldComparison  `json:"name,omitempty"`
+	EnvVar    *StringFieldComparison  `json:"envVar,omitempty"`
+	Declared  *BooleanFieldComparison `json:"declared,omitempty"`
+	HasValue  *BooleanFieldComparison `json:"hasValue,omitempty"`
+	Required  *BooleanFieldComparison `json:"required,omitempty"`
+	Generated *BooleanFieldComparison `json:"generated,omitempty"`
+}
+
+type SecretRefSort struct {
+	Field     SecretRefSortFields `json:"field"`
+	Direction SortDirection       `json:"direction"`
+	Nulls     *SortNulls          `json:"nulls,omitempty"`
+}
+
+type SecretUpdateInput struct {
+	Value string `json:"value"`
 }
 
 type ServiceCreateInput struct {
@@ -48,6 +146,53 @@ type ServiceInput struct {
 	Start   *bool            `json:"start,omitempty"`
 }
 
+type ServiceStateConnection struct {
+	Nodes      []*api.ServiceState `json:"nodes"`
+	TotalCount int                 `json:"totalCount"`
+	PageInfo   *OffsetPageInfo     `json:"pageInfo"`
+}
+
+type ServiceStateFilter struct {
+	And     []*ServiceStateFilter  `json:"and,omitempty"`
+	Or      []*ServiceStateFilter  `json:"or,omitempty"`
+	ID      *StringFieldComparison `json:"id,omitempty"`
+	Name    *StringFieldComparison `json:"name,omitempty"`
+	Runtime *StringFieldComparison `json:"runtime,omitempty"`
+	Status  *StringFieldComparison `json:"status,omitempty"`
+	Health  *StringFieldComparison `json:"health,omitempty"`
+}
+
+type ServiceStateSort struct {
+	Field     ServiceStateSortFields `json:"field"`
+	Direction SortDirection          `json:"direction"`
+	Nulls     *SortNulls             `json:"nulls,omitempty"`
+}
+
+type SourceStateConnection struct {
+	Nodes      []*api.SourceState `json:"nodes"`
+	TotalCount int                `json:"totalCount"`
+	PageInfo   *OffsetPageInfo    `json:"pageInfo"`
+}
+
+type SourceStateFilter struct {
+	And    []*SourceStateFilter    `json:"and,omitempty"`
+	Or     []*SourceStateFilter    `json:"or,omitempty"`
+	ID     *StringFieldComparison  `json:"id,omitempty"`
+	Name   *StringFieldComparison  `json:"name,omitempty"`
+	Kind   *StringFieldComparison  `json:"kind,omitempty"`
+	State  *StringFieldComparison  `json:"state,omitempty"`
+	Branch *StringFieldComparison  `json:"branch,omitempty"`
+	Exists *BooleanFieldComparison `json:"exists,omitempty"`
+	Dirty  *BooleanFieldComparison `json:"dirty,omitempty"`
+	Pushed *BooleanFieldComparison `json:"pushed,omitempty"`
+}
+
+type SourceStateSort struct {
+	Field     SourceStateSortFields `json:"field"`
+	Direction SortDirection         `json:"direction"`
+	Nulls     *SortNulls            `json:"nulls,omitempty"`
+}
+
 type StackInitInput struct {
 	Template string           `json:"template"`
 	Path     *string          `json:"path,omitempty"`
@@ -67,8 +212,8 @@ type StackRuntimeInput struct {
 }
 
 // The stack overview aggregate — the root fields the web console reads as one.
-// Mirrors the Query-root types so a client can subscribe to the whole snapshot
-// and field-prune via its selection set.
+// Mirrors the Query-root entity lists (as plain arrays, not connections) so a
+// client can subscribe to the whole snapshot and field-prune via its selection set.
 type StackSnapshot struct {
 	Health         *MutationResult             `json:"health,omitempty"`
 	StackStatus    *api.StackStatusResponse    `json:"stackStatus,omitempty"`
@@ -81,7 +226,60 @@ type StackSnapshot struct {
 	GitOpsTopology *api.GitOpsTopologyResponse `json:"gitOpsTopology,omitempty"`
 }
 
+type StringFieldComparison struct {
+	Is       *bool    `json:"is,omitempty"`
+	IsNot    *bool    `json:"isNot,omitempty"`
+	Eq       *string  `json:"eq,omitempty"`
+	Neq      *string  `json:"neq,omitempty"`
+	Gt       *string  `json:"gt,omitempty"`
+	Gte      *string  `json:"gte,omitempty"`
+	Lt       *string  `json:"lt,omitempty"`
+	Lte      *string  `json:"lte,omitempty"`
+	Like     *string  `json:"like,omitempty"`
+	NotLike  *string  `json:"notLike,omitempty"`
+	ILike    *string  `json:"iLike,omitempty"`
+	NotILike *string  `json:"notILike,omitempty"`
+	In       []string `json:"in,omitempty"`
+	NotIn    []string `json:"notIn,omitempty"`
+}
+
 type Subscription struct {
+}
+
+type TemplateDescriptorConnection struct {
+	Nodes      []*api.TemplateDescriptor `json:"nodes"`
+	TotalCount int                       `json:"totalCount"`
+	PageInfo   *OffsetPageInfo           `json:"pageInfo"`
+}
+
+type TemplateDescriptorFilter struct {
+	And  []*TemplateDescriptorFilter `json:"and,omitempty"`
+	Or   []*TemplateDescriptorFilter `json:"or,omitempty"`
+	ID   *StringFieldComparison      `json:"id,omitempty"`
+	Ref  *StringFieldComparison      `json:"ref,omitempty"`
+	Kind *StringFieldComparison      `json:"kind,omitempty"`
+	Name *StringFieldComparison      `json:"name,omitempty"`
+}
+
+type TemplateDescriptorSort struct {
+	Field     TemplateDescriptorSortFields `json:"field"`
+	Direction SortDirection                `json:"direction"`
+	Nulls     *SortNulls                   `json:"nulls,omitempty"`
+}
+
+type UpdateOneSecretInput struct {
+	ID     string             `json:"id"`
+	Update *SecretUpdateInput `json:"update"`
+}
+
+type UpdateOneServiceInput struct {
+	ID     string        `json:"id"`
+	Update *ServiceInput `json:"update"`
+}
+
+type UpdateOneWorkspaceInput struct {
+	ID     string                `json:"id"`
+	Update *WorkspaceUpdateInput `json:"update"`
 }
 
 type WorkspaceCreateInput struct {
@@ -91,7 +289,493 @@ type WorkspaceCreateInput struct {
 	TTL      *string          `json:"ttl,omitempty"`
 }
 
+type WorkspaceRefConnection struct {
+	Nodes      []*api.WorkspaceRef `json:"nodes"`
+	TotalCount int                 `json:"totalCount"`
+	PageInfo   *OffsetPageInfo     `json:"pageInfo"`
+}
+
+type WorkspaceRefFilter struct {
+	And      []*WorkspaceRefFilter  `json:"and,omitempty"`
+	Or       []*WorkspaceRefFilter  `json:"or,omitempty"`
+	ID       *StringFieldComparison `json:"id,omitempty"`
+	Name     *StringFieldComparison `json:"name,omitempty"`
+	Template *StringFieldComparison `json:"template,omitempty"`
+}
+
+type WorkspaceRefSort struct {
+	Field     WorkspaceRefSortFields `json:"field"`
+	Direction SortDirection          `json:"direction"`
+	Nulls     *SortNulls             `json:"nulls,omitempty"`
+}
+
 type WorkspaceUpdateInput struct {
 	Inputs []*KeyValueInput `json:"inputs,omitempty"`
 	TTL    *string          `json:"ttl,omitempty"`
+}
+
+type JobStateSortFields string
+
+const (
+	JobStateSortFieldsID      JobStateSortFields = "id"
+	JobStateSortFieldsName    JobStateSortFields = "name"
+	JobStateSortFieldsRuntime JobStateSortFields = "runtime"
+)
+
+var AllJobStateSortFields = []JobStateSortFields{
+	JobStateSortFieldsID,
+	JobStateSortFieldsName,
+	JobStateSortFieldsRuntime,
+}
+
+func (e JobStateSortFields) IsValid() bool {
+	switch e {
+	case JobStateSortFieldsID, JobStateSortFieldsName, JobStateSortFieldsRuntime:
+		return true
+	}
+	return false
+}
+
+func (e JobStateSortFields) String() string {
+	return string(e)
+}
+
+func (e *JobStateSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = JobStateSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid JobStateSortFields", str)
+	}
+	return nil
+}
+
+func (e JobStateSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *JobStateSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e JobStateSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SecretRefSortFields string
+
+const (
+	SecretRefSortFieldsID       SecretRefSortFields = "id"
+	SecretRefSortFieldsName     SecretRefSortFields = "name"
+	SecretRefSortFieldsEnvVar   SecretRefSortFields = "envVar"
+	SecretRefSortFieldsDeclared SecretRefSortFields = "declared"
+	SecretRefSortFieldsHasValue SecretRefSortFields = "hasValue"
+)
+
+var AllSecretRefSortFields = []SecretRefSortFields{
+	SecretRefSortFieldsID,
+	SecretRefSortFieldsName,
+	SecretRefSortFieldsEnvVar,
+	SecretRefSortFieldsDeclared,
+	SecretRefSortFieldsHasValue,
+}
+
+func (e SecretRefSortFields) IsValid() bool {
+	switch e {
+	case SecretRefSortFieldsID, SecretRefSortFieldsName, SecretRefSortFieldsEnvVar, SecretRefSortFieldsDeclared, SecretRefSortFieldsHasValue:
+		return true
+	}
+	return false
+}
+
+func (e SecretRefSortFields) String() string {
+	return string(e)
+}
+
+func (e *SecretRefSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SecretRefSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SecretRefSortFields", str)
+	}
+	return nil
+}
+
+func (e SecretRefSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SecretRefSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SecretRefSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ServiceStateSortFields string
+
+const (
+	ServiceStateSortFieldsID      ServiceStateSortFields = "id"
+	ServiceStateSortFieldsName    ServiceStateSortFields = "name"
+	ServiceStateSortFieldsRuntime ServiceStateSortFields = "runtime"
+	ServiceStateSortFieldsStatus  ServiceStateSortFields = "status"
+	ServiceStateSortFieldsHealth  ServiceStateSortFields = "health"
+)
+
+var AllServiceStateSortFields = []ServiceStateSortFields{
+	ServiceStateSortFieldsID,
+	ServiceStateSortFieldsName,
+	ServiceStateSortFieldsRuntime,
+	ServiceStateSortFieldsStatus,
+	ServiceStateSortFieldsHealth,
+}
+
+func (e ServiceStateSortFields) IsValid() bool {
+	switch e {
+	case ServiceStateSortFieldsID, ServiceStateSortFieldsName, ServiceStateSortFieldsRuntime, ServiceStateSortFieldsStatus, ServiceStateSortFieldsHealth:
+		return true
+	}
+	return false
+}
+
+func (e ServiceStateSortFields) String() string {
+	return string(e)
+}
+
+func (e *ServiceStateSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ServiceStateSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ServiceStateSortFields", str)
+	}
+	return nil
+}
+
+func (e ServiceStateSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ServiceStateSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ServiceStateSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SortDirection string
+
+const (
+	SortDirectionAsc  SortDirection = "ASC"
+	SortDirectionDesc SortDirection = "DESC"
+)
+
+var AllSortDirection = []SortDirection{
+	SortDirectionAsc,
+	SortDirectionDesc,
+}
+
+func (e SortDirection) IsValid() bool {
+	switch e {
+	case SortDirectionAsc, SortDirectionDesc:
+		return true
+	}
+	return false
+}
+
+func (e SortDirection) String() string {
+	return string(e)
+}
+
+func (e *SortDirection) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SortDirection(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SortDirection", str)
+	}
+	return nil
+}
+
+func (e SortDirection) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SortDirection) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SortDirection) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SortNulls string
+
+const (
+	SortNullsNullsFirst SortNulls = "NULLS_FIRST"
+	SortNullsNullsLast  SortNulls = "NULLS_LAST"
+)
+
+var AllSortNulls = []SortNulls{
+	SortNullsNullsFirst,
+	SortNullsNullsLast,
+}
+
+func (e SortNulls) IsValid() bool {
+	switch e {
+	case SortNullsNullsFirst, SortNullsNullsLast:
+		return true
+	}
+	return false
+}
+
+func (e SortNulls) String() string {
+	return string(e)
+}
+
+func (e *SortNulls) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SortNulls(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SortNulls", str)
+	}
+	return nil
+}
+
+func (e SortNulls) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SortNulls) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SortNulls) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SourceStateSortFields string
+
+const (
+	SourceStateSortFieldsID     SourceStateSortFields = "id"
+	SourceStateSortFieldsName   SourceStateSortFields = "name"
+	SourceStateSortFieldsKind   SourceStateSortFields = "kind"
+	SourceStateSortFieldsState  SourceStateSortFields = "state"
+	SourceStateSortFieldsBranch SourceStateSortFields = "branch"
+)
+
+var AllSourceStateSortFields = []SourceStateSortFields{
+	SourceStateSortFieldsID,
+	SourceStateSortFieldsName,
+	SourceStateSortFieldsKind,
+	SourceStateSortFieldsState,
+	SourceStateSortFieldsBranch,
+}
+
+func (e SourceStateSortFields) IsValid() bool {
+	switch e {
+	case SourceStateSortFieldsID, SourceStateSortFieldsName, SourceStateSortFieldsKind, SourceStateSortFieldsState, SourceStateSortFieldsBranch:
+		return true
+	}
+	return false
+}
+
+func (e SourceStateSortFields) String() string {
+	return string(e)
+}
+
+func (e *SourceStateSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SourceStateSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SourceStateSortFields", str)
+	}
+	return nil
+}
+
+func (e SourceStateSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SourceStateSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SourceStateSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type TemplateDescriptorSortFields string
+
+const (
+	TemplateDescriptorSortFieldsID   TemplateDescriptorSortFields = "id"
+	TemplateDescriptorSortFieldsRef  TemplateDescriptorSortFields = "ref"
+	TemplateDescriptorSortFieldsKind TemplateDescriptorSortFields = "kind"
+	TemplateDescriptorSortFieldsName TemplateDescriptorSortFields = "name"
+)
+
+var AllTemplateDescriptorSortFields = []TemplateDescriptorSortFields{
+	TemplateDescriptorSortFieldsID,
+	TemplateDescriptorSortFieldsRef,
+	TemplateDescriptorSortFieldsKind,
+	TemplateDescriptorSortFieldsName,
+}
+
+func (e TemplateDescriptorSortFields) IsValid() bool {
+	switch e {
+	case TemplateDescriptorSortFieldsID, TemplateDescriptorSortFieldsRef, TemplateDescriptorSortFieldsKind, TemplateDescriptorSortFieldsName:
+		return true
+	}
+	return false
+}
+
+func (e TemplateDescriptorSortFields) String() string {
+	return string(e)
+}
+
+func (e *TemplateDescriptorSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = TemplateDescriptorSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid TemplateDescriptorSortFields", str)
+	}
+	return nil
+}
+
+func (e TemplateDescriptorSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *TemplateDescriptorSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e TemplateDescriptorSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WorkspaceRefSortFields string
+
+const (
+	WorkspaceRefSortFieldsID       WorkspaceRefSortFields = "id"
+	WorkspaceRefSortFieldsName     WorkspaceRefSortFields = "name"
+	WorkspaceRefSortFieldsTemplate WorkspaceRefSortFields = "template"
+)
+
+var AllWorkspaceRefSortFields = []WorkspaceRefSortFields{
+	WorkspaceRefSortFieldsID,
+	WorkspaceRefSortFieldsName,
+	WorkspaceRefSortFieldsTemplate,
+}
+
+func (e WorkspaceRefSortFields) IsValid() bool {
+	switch e {
+	case WorkspaceRefSortFieldsID, WorkspaceRefSortFieldsName, WorkspaceRefSortFieldsTemplate:
+		return true
+	}
+	return false
+}
+
+func (e WorkspaceRefSortFields) String() string {
+	return string(e)
+}
+
+func (e *WorkspaceRefSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WorkspaceRefSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WorkspaceRefSortFields", str)
+	}
+	return nil
+}
+
+func (e WorkspaceRefSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WorkspaceRefSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WorkspaceRefSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }

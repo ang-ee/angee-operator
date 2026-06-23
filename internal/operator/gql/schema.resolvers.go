@@ -7,9 +7,11 @@ package gql
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -35,6 +37,11 @@ func (r *compiledStackResolver) SecretEnvVars(ctx context.Context, obj *service.
 		return nil, nil
 	}
 	return keyValueList(obj.SecretEnvVars), nil
+}
+
+// ID is the resolver for the id field.
+func (r *jobStateResolver) ID(ctx context.Context, obj *api.JobState) (string, error) {
+	return obj.Name, nil
 }
 
 // StackInit is the resolver for the stackInit field.
@@ -120,23 +127,45 @@ func (r *mutationResolver) ServiceInit(ctx context.Context, input model.ServiceI
 	return namedActionResult("created", req.Name), nil
 }
 
-// ServiceCreate is the resolver for the serviceCreate field.
-func (r *mutationResolver) ServiceCreate(ctx context.Context, input model.ServiceCreateInput) (*api.ServiceState, error) {
-	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(input))
+// CreateOneService is the resolver for the createOneService field.
+func (r *mutationResolver) CreateOneService(ctx context.Context, input model.CreateOneServiceInput) (*api.ServiceState, error) {
+	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(*input.Service))
 	if err != nil {
 		return nil, err
 	}
 	return &state, nil
 }
 
-// ServiceUpdate is the resolver for the serviceUpdate field.
-func (r *mutationResolver) ServiceUpdate(ctx context.Context, name string, input model.ServiceInput) (*model.MutationResult, error) {
-	req := serviceRequestFrom(input)
-	req.Name = name
+// UpdateOneService is the resolver for the updateOneService field.
+func (r *mutationResolver) UpdateOneService(ctx context.Context, input model.UpdateOneServiceInput) (*api.ServiceState, error) {
+	req := serviceRequestFrom(*input.Update)
+	req.Name = input.ID
 	if err := r.Platform.ServiceUpdate(ctx, req); err != nil {
 		return nil, err
 	}
-	return namedActionResult("updated", req.Name), nil
+	state, err := r.serviceByID(ctx, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		return nil, fmt.Errorf("service %q not found after update", input.ID)
+	}
+	return state, nil
+}
+
+// DeleteOneService is the resolver for the deleteOneService field.
+func (r *mutationResolver) DeleteOneService(ctx context.Context, input model.DeleteOneServiceInput) (*api.ServiceState, error) {
+	prev, err := r.serviceByID(ctx, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if prev == nil {
+		return nil, fmt.Errorf("service %q not found", input.ID)
+	}
+	if err := r.Platform.ServiceDestroy(ctx, input.ID, true); err != nil {
+		return nil, err
+	}
+	return prev, nil
 }
 
 // ServiceUp is the resolver for the serviceUp field.
@@ -171,14 +200,6 @@ func (r *mutationResolver) ServiceRestart(ctx context.Context, name string) (*mo
 	return namedActionResult("restarted", name), nil
 }
 
-// ServiceDestroy is the resolver for the serviceDestroy field.
-func (r *mutationResolver) ServiceDestroy(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.ServiceDestroy(ctx, name, true); err != nil {
-		return nil, err
-	}
-	return namedActionResult("destroyed", name), nil
-}
-
 // SourceFetch is the resolver for the sourceFetch field.
 func (r *mutationResolver) SourceFetch(ctx context.Context, name string) (*api.SourceState, error) {
 	state, err := r.Platform.SourceFetch(ctx, name)
@@ -197,24 +218,36 @@ func (r *mutationResolver) SourcePush(ctx context.Context, name string, ref *str
 	return &state, err
 }
 
-// WorkspaceCreate is the resolver for the workspaceCreate field.
-func (r *mutationResolver) WorkspaceCreate(ctx context.Context, input model.WorkspaceCreateInput) (*api.WorkspaceRef, error) {
-	ref, err := r.Platform.WorkspaceCreate(ctx, workspaceCreateRequestFrom(input))
-	return &ref, err
-}
-
-// WorkspaceUpdate is the resolver for the workspaceUpdate field.
-func (r *mutationResolver) WorkspaceUpdate(ctx context.Context, name string, input model.WorkspaceUpdateInput) (*api.WorkspaceRef, error) {
-	ref, err := r.Platform.WorkspaceUpdate(ctx, name, keyValuesFrom(input.Inputs), stringPtrValue(input.TTL))
-	return &ref, err
-}
-
-// WorkspaceDestroy is the resolver for the workspaceDestroy field.
-func (r *mutationResolver) WorkspaceDestroy(ctx context.Context, name string, purge *bool) (*model.MutationResult, error) {
-	if err := r.Platform.WorkspaceDestroy(ctx, name, boolPtrValue(purge)); err != nil {
+// CreateOneWorkspace is the resolver for the createOneWorkspace field.
+func (r *mutationResolver) CreateOneWorkspace(ctx context.Context, input model.CreateOneWorkspaceInput) (*api.WorkspaceRef, error) {
+	ref, err := r.Platform.WorkspaceCreate(ctx, workspaceCreateRequestFrom(*input.Workspace))
+	if err != nil {
 		return nil, err
 	}
-	return namedActionResult("destroyed", name), nil
+	return &ref, nil
+}
+
+// UpdateOneWorkspace is the resolver for the updateOneWorkspace field.
+func (r *mutationResolver) UpdateOneWorkspace(ctx context.Context, input model.UpdateOneWorkspaceInput) (*api.WorkspaceRef, error) {
+	ref, err := r.Platform.WorkspaceUpdate(ctx, input.ID, keyValuesFrom(input.Update.Inputs), stringPtrValue(input.Update.TTL))
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
+// DeleteOneWorkspace is the resolver for the deleteOneWorkspace field.
+func (r *mutationResolver) DeleteOneWorkspace(ctx context.Context, input model.DeleteOneWorkspaceInput) (*api.WorkspaceRef, error) {
+	// WorkspaceGet returns a not-found error for an unknown name, so capturing
+	// the pre-delete record doubles as the existence check deleteOne implies.
+	prev, err := r.Platform.WorkspaceGet(ctx, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.Platform.WorkspaceDestroy(ctx, input.ID, boolPtrValue(input.Purge)); err != nil {
+		return nil, err
+	}
+	return &prev, nil
 }
 
 // WorkspacePush is the resolver for the workspacePush field.
@@ -316,21 +349,40 @@ func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace
 	return &res, err
 }
 
-// SecretSet is the resolver for the secretSet field.
-func (r *mutationResolver) SecretSet(ctx context.Context, name string, value string) (*api.SecretRef, error) {
-	ref, err := r.Platform.SecretSet(ctx, name, value)
+// CreateOneSecret is the resolver for the createOneSecret field.
+func (r *mutationResolver) CreateOneSecret(ctx context.Context, input model.CreateOneSecretInput) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretSet(ctx, input.Secret.Name, input.Secret.Value)
 	if err != nil {
 		return nil, err
 	}
 	return &ref, nil
 }
 
-// SecretDelete is the resolver for the secretDelete field.
-func (r *mutationResolver) SecretDelete(ctx context.Context, name string) (*model.MutationResult, error) {
-	if err := r.Platform.SecretDelete(ctx, name); err != nil {
+// UpdateOneSecret is the resolver for the updateOneSecret field.
+func (r *mutationResolver) UpdateOneSecret(ctx context.Context, input model.UpdateOneSecretInput) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretSet(ctx, input.ID, input.Update.Value)
+	if err != nil {
 		return nil, err
 	}
-	return namedActionResult("deleted", name), nil
+	return &ref, nil
+}
+
+// DeleteOneSecret is the resolver for the deleteOneSecret field.
+func (r *mutationResolver) DeleteOneSecret(ctx context.Context, input model.DeleteOneSecretInput) (*api.SecretRef, error) {
+	// SecretGet returns a zero-ish ref (not an error) for an unknown name, and
+	// SecretDelete is idempotent — so guard for "exists" the way DeleteOneService
+	// does, rather than reporting a fabricated delete of a secret that never was.
+	prev, err := r.Platform.SecretGet(ctx, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !prev.Declared && !prev.HasValue && !prev.Required && !prev.Generated {
+		return nil, fmt.Errorf("secret %q not found", input.ID)
+	}
+	if err := r.Platform.SecretDelete(ctx, input.ID); err != nil {
+		return nil, err
+	}
+	return &prev, nil
 }
 
 // Health is the resolver for the health field.
@@ -355,38 +407,68 @@ func (r *queryResolver) IngressStatus(ctx context.Context) (*api.IngressStatus, 
 }
 
 // Services is the resolver for the services field.
-func (r *queryResolver) Services(ctx context.Context) ([]*api.ServiceState, error) {
-	services, err := r.Platform.ServiceList(ctx)
-	return ptrSlice(services), err
+func (r *queryResolver) Services(ctx context.Context, filter *model.ServiceStateFilter, sorting []*model.ServiceStateSort, paging *model.OffsetPaging) (*model.ServiceStateConnection, error) {
+	items, err := r.Platform.ServiceList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := query.Args{Filter: bindServiceFilter(filter), Sorting: bindServiceSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, serviceFields)
+	return &model.ServiceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+}
+
+// Service is the resolver for the service field.
+func (r *queryResolver) Service(ctx context.Context, id string) (*api.ServiceState, error) {
+	return r.serviceByID(ctx, id)
 }
 
 // Jobs is the resolver for the jobs field.
-func (r *queryResolver) Jobs(ctx context.Context) ([]*api.JobState, error) {
-	jobs, err := r.Platform.JobList(ctx)
-	return ptrSlice(jobs), err
+func (r *queryResolver) Jobs(ctx context.Context, filter *model.JobStateFilter, sorting []*model.JobStateSort, paging *model.OffsetPaging) (*model.JobStateConnection, error) {
+	items, err := r.Platform.JobList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := query.Args{Filter: bindJobFilter(filter), Sorting: bindJobSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, jobFields)
+	return &model.JobStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+}
+
+// Job is the resolver for the job field.
+func (r *queryResolver) Job(ctx context.Context, id string) (*api.JobState, error) {
+	return r.jobByID(ctx, id)
 }
 
 // Sources is the resolver for the sources field.
-func (r *queryResolver) Sources(ctx context.Context) ([]*api.SourceState, error) {
-	sources, err := r.Platform.SourceList(ctx)
-	return ptrSlice(sources), err
+func (r *queryResolver) Sources(ctx context.Context, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) (*model.SourceStateConnection, error) {
+	items, err := r.Platform.SourceList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := query.Args{Filter: bindSourceFilter(filter), Sorting: bindSourceSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, sourceFields)
+	return &model.SourceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // Source is the resolver for the source field.
-func (r *queryResolver) Source(ctx context.Context, name string) (*api.SourceState, error) {
-	state, err := r.Platform.SourceStatus(ctx, name)
+func (r *queryResolver) Source(ctx context.Context, id string) (*api.SourceState, error) {
+	state, err := r.Platform.SourceStatus(ctx, id)
 	return &state, err
 }
 
 // Workspaces is the resolver for the workspaces field.
-func (r *queryResolver) Workspaces(ctx context.Context) ([]*api.WorkspaceRef, error) {
-	workspaces, err := r.Platform.WorkspaceList(ctx)
-	return ptrSlice(workspaces), err
+func (r *queryResolver) Workspaces(ctx context.Context, filter *model.WorkspaceRefFilter, sorting []*model.WorkspaceRefSort, paging *model.OffsetPaging) (*model.WorkspaceRefConnection, error) {
+	items, err := r.Platform.WorkspaceList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	args := query.Args{Filter: bindWorkspaceFilter(filter), Sorting: bindWorkspaceSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, workspaceFields)
+	return &model.WorkspaceRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // Workspace is the resolver for the workspace field.
-func (r *queryResolver) Workspace(ctx context.Context, name string) (*api.WorkspaceRef, error) {
-	workspace, err := r.Platform.WorkspaceGet(ctx, name)
+func (r *queryResolver) Workspace(ctx context.Context, id string) (*api.WorkspaceRef, error) {
+	workspace, err := r.Platform.WorkspaceGet(ctx, id)
 	return &workspace, err
 }
 
@@ -474,21 +556,19 @@ func (r *queryResolver) McpDescriptor(ctx context.Context) (map[string]any, erro
 }
 
 // Templates is the resolver for the templates field.
-func (r *queryResolver) Templates(ctx context.Context) ([]*api.TemplateDescriptor, error) {
-	descriptors, err := r.Platform.Templates(ctx)
+func (r *queryResolver) Templates(ctx context.Context, filter *model.TemplateDescriptorFilter, sorting []*model.TemplateDescriptorSort, paging *model.OffsetPaging) (*model.TemplateDescriptorConnection, error) {
+	items, err := r.Platform.Templates(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*api.TemplateDescriptor, len(descriptors))
-	for i := range descriptors {
-		out[i] = &descriptors[i]
-	}
-	return out, nil
+	args := query.Args{Filter: bindTemplateFilter(filter), Sorting: bindTemplateSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, templateFields)
+	return &model.TemplateDescriptorConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // Template is the resolver for the template field.
-func (r *queryResolver) Template(ctx context.Context, ref string) (*api.TemplateDescriptor, error) {
-	desc, err := r.Platform.Template(ctx, ref)
+func (r *queryResolver) Template(ctx context.Context, id string) (*api.TemplateDescriptor, error) {
+	desc, err := r.Platform.Template(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -496,21 +576,19 @@ func (r *queryResolver) Template(ctx context.Context, ref string) (*api.Template
 }
 
 // Secrets is the resolver for the secrets field.
-func (r *queryResolver) Secrets(ctx context.Context) ([]*api.SecretRef, error) {
-	refs, err := r.Platform.SecretsList(ctx)
+func (r *queryResolver) Secrets(ctx context.Context, filter *model.SecretRefFilter, sorting []*model.SecretRefSort, paging *model.OffsetPaging) (*model.SecretRefConnection, error) {
+	items, err := r.Platform.SecretsList(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*api.SecretRef, len(refs))
-	for i := range refs {
-		out[i] = &refs[i]
-	}
-	return out, nil
+	args := query.Args{Filter: bindSecretFilter(filter), Sorting: bindSecretSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, secretFields)
+	return &model.SecretRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // Secret is the resolver for the secret field.
-func (r *queryResolver) Secret(ctx context.Context, name string) (*api.SecretRef, error) {
-	ref, err := r.Platform.SecretGet(ctx, name)
+func (r *queryResolver) Secret(ctx context.Context, id string) (*api.SecretRef, error) {
+	ref, err := r.Platform.SecretGet(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -524,6 +602,21 @@ func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.Secr
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// ID is the resolver for the id field.
+func (r *secretRefResolver) ID(ctx context.Context, obj *api.SecretRef) (string, error) {
+	return obj.Name, nil
+}
+
+// ID is the resolver for the id field.
+func (r *serviceStateResolver) ID(ctx context.Context, obj *api.ServiceState) (string, error) {
+	return obj.Name, nil
+}
+
+// ID is the resolver for the id field.
+func (r *sourceStateResolver) ID(ctx context.Context, obj *api.SourceState) (string, error) {
+	return obj.Name, nil
 }
 
 // Services is the resolver for the services field.
@@ -590,12 +683,22 @@ func (r *subscriptionResolver) OnStackSnapshotChange(ctx context.Context) (<-cha
 	return r.Events.SubscribeSnapshot(ctx), nil
 }
 
+// ID is the resolver for the id field.
+func (r *templateDescriptorResolver) ID(ctx context.Context, obj *api.TemplateDescriptor) (string, error) {
+	return obj.Ref, nil
+}
+
 // EffectiveInputs is the resolver for the effectiveInputs field.
 func (r *workspaceCreatePreflightResolver) EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error) {
 	if obj == nil {
 		return nil, nil
 	}
 	return keyValueList(obj.EffectiveInputs), nil
+}
+
+// ID is the resolver for the id field.
+func (r *workspaceRefResolver) ID(ctx context.Context, obj *api.WorkspaceRef) (string, error) {
+	return obj.Name, nil
 }
 
 // TTLExpiresAt is the resolver for the ttlExpiresAt field.
@@ -641,17 +744,34 @@ func (r *workspaceStatusResolver) TTLExpiresAt(ctx context.Context, obj *api.Wor
 // CompiledStack returns CompiledStackResolver implementation.
 func (r *Resolver) CompiledStack() CompiledStackResolver { return &compiledStackResolver{r} }
 
+// JobState returns JobStateResolver implementation.
+func (r *Resolver) JobState() JobStateResolver { return &jobStateResolver{r} }
+
 // Mutation returns MutationResolver implementation.
 func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 
 // Query returns QueryResolver implementation.
 func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 
+// SecretRef returns SecretRefResolver implementation.
+func (r *Resolver) SecretRef() SecretRefResolver { return &secretRefResolver{r} }
+
+// ServiceState returns ServiceStateResolver implementation.
+func (r *Resolver) ServiceState() ServiceStateResolver { return &serviceStateResolver{r} }
+
+// SourceState returns SourceStateResolver implementation.
+func (r *Resolver) SourceState() SourceStateResolver { return &sourceStateResolver{r} }
+
 // StackStatus returns StackStatusResolver implementation.
 func (r *Resolver) StackStatus() StackStatusResolver { return &stackStatusResolver{r} }
 
 // Subscription returns SubscriptionResolver implementation.
 func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
+
+// TemplateDescriptor returns TemplateDescriptorResolver implementation.
+func (r *Resolver) TemplateDescriptor() TemplateDescriptorResolver {
+	return &templateDescriptorResolver{r}
+}
 
 // WorkspaceCreatePreflight returns WorkspaceCreatePreflightResolver implementation.
 func (r *Resolver) WorkspaceCreatePreflight() WorkspaceCreatePreflightResolver {
@@ -665,10 +785,15 @@ func (r *Resolver) WorkspaceRef() WorkspaceRefResolver { return &workspaceRefRes
 func (r *Resolver) WorkspaceStatus() WorkspaceStatusResolver { return &workspaceStatusResolver{r} }
 
 type compiledStackResolver struct{ *Resolver }
+type jobStateResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type secretRefResolver struct{ *Resolver }
+type serviceStateResolver struct{ *Resolver }
+type sourceStateResolver struct{ *Resolver }
 type stackStatusResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
+type templateDescriptorResolver struct{ *Resolver }
 type workspaceCreatePreflightResolver struct{ *Resolver }
 type workspaceRefResolver struct{ *Resolver }
 type workspaceStatusResolver struct{ *Resolver }

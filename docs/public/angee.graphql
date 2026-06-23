@@ -1,0 +1,621 @@
+input BooleanFieldComparison {
+	is: Boolean
+	isNot: Boolean
+}
+type CommitRef {
+	sha: String!
+	parents: [String!]!
+	refs: [String!]!
+	time: String!
+	summary: String!
+	author: String
+}
+type CompiledStack {
+	compose: JSON
+	processCompose: JSON
+	secretEnvVars: [KeyValue!]!
+}
+type ConnectionToken {
+	token: String!
+	actor: String!
+	expiresAt: String!
+}
+input CreateOneSecretInput {
+	secret: SecretCreateInput!
+}
+input CreateOneServiceInput {
+	service: ServiceCreateInput!
+}
+input CreateOneWorkspaceInput {
+	workspace: WorkspaceCreateInput!
+}
+input DeleteOneSecretInput {
+	id: ID!
+}
+input DeleteOneServiceInput {
+	id: ID!
+}
+input DeleteOneWorkspaceInput {
+	id: ID!
+	purge: Boolean
+}
+type DiffFile {
+	oldPath: String
+	newPath: String
+	mode: String
+	isBinary: Boolean!
+	isNew: Boolean!
+	isDeleted: Boolean!
+	isRename: Boolean!
+	hunks: [DiffHunk!]!
+}
+type DiffHunk {
+	oldStart: Int!
+	oldLines: Int!
+	newStart: Int!
+	newLines: Int!
+	header: String
+	body: String!
+}
+type GitOpResult {
+	ok: Boolean!
+	conflicted: Boolean!
+	conflictFiles: [String!]!
+	message: String!
+	source: WorkspaceSourceStatus
+}
+type GitOpsLink {
+	id: String!
+	source: String!
+	workspace: String!
+	slot: String!
+	kind: String!
+	mode: String
+	branch: String
+	ref: String
+	path: String!
+	exists: Boolean!
+	state: String!
+	currentRef: String
+	dirty: Boolean!
+	upstream: String
+	ahead: Int
+	behind: Int
+	pushed: Boolean!
+	unpushedReason: String
+	error: String
+}
+type GitOpsSummary {
+	sources: Int!
+	workspaces: Int!
+	worktrees: Int!
+	clean: Int!
+	dirty: Int!
+	ahead: Int!
+	behind: Int!
+	diverged: Int!
+	branchMismatch: Int!
+	missing: Int!
+	error: Int!
+	unpushed: Int!
+}
+type GitOpsTopology {
+	root: String!
+	name: String!
+	sources: [SourceState!]!
+	workspaces: [WorkspaceStatus!]!
+	links: [GitOpsLink!]!
+	summary: GitOpsSummary!
+}
+type IngressStatus {
+	type: String!
+	domain: String
+	routes: [RouteRef!]!
+}
+scalar JSON
+type JobState {
+	id: ID!
+	name: String!
+	runtime: String!
+}
+type JobStateConnection {
+	nodes: [JobState!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input JobStateFilter {
+	and: [JobStateFilter!]
+	or: [JobStateFilter!]
+	id: StringFieldComparison
+	name: StringFieldComparison
+	runtime: StringFieldComparison
+}
+input JobStateSort {
+	field: JobStateSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum JobStateSortFields {
+	id
+	name
+	runtime
+}
+type KeyValue {
+	key: String!
+	value: String!
+}
+input KeyValueInput {
+	key: String!
+	value: String!
+}
+type Mutation {
+	stackInit(input: StackInitInput!): StackInitResult
+	stackUpdate: MutationResult
+	stackPrepare: CompiledStack
+	stackBuild(input: StackRuntimeInput): MutationResult
+	stackUp(input: StackRuntimeInput): MutationResult
+	stackDev(input: StackRuntimeInput): MutationResult
+	stackDown: MutationResult
+	stackDestroy(purge: Boolean): MutationResult
+	jobRun(name: String!, inputs: [KeyValueInput!]): String!
+	serviceInit(input: ServiceInput!): MutationResult
+	createOneService(input: CreateOneServiceInput!): ServiceState!
+	updateOneService(input: UpdateOneServiceInput!): ServiceState!
+	deleteOneService(input: DeleteOneServiceInput!): ServiceState!
+	serviceUp(name: String!): MutationResult
+	serviceStart(name: String!): MutationResult
+	serviceStop(name: String!): MutationResult
+	serviceRestart(name: String!): MutationResult
+	sourceFetch(name: String!): SourceState
+	sourcePull(name: String!): SourceState
+	sourcePush(name: String!, ref: String): SourceState
+	createOneWorkspace(input: CreateOneWorkspaceInput!): WorkspaceRef!
+	updateOneWorkspace(input: UpdateOneWorkspaceInput!): WorkspaceRef!
+	deleteOneWorkspace(input: DeleteOneWorkspaceInput!): WorkspaceRef!
+	workspacePush(name: String!, ref: String): [SourceState!]!
+	workspaceSyncBase(name: String!, method: String): [SourceState!]!
+	workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
+	workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
+	workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
+	workspaceCreatePreflight(input: WorkspaceCreateInput!): WorkspaceCreatePreflight!
+	mintConnectionToken(actor: String!, scope: [String!], ttl: String): ConnectionToken!
+	mintRouteToken(actor: String!, service: String!, ttl: String): ConnectionToken!
+	workspaceSourceMerge(workspace: String!, slot: String!, ref: String!): GitOpResult!
+	workspaceSourceRebase(workspace: String!, slot: String!, ref: String!): GitOpResult!
+	workspaceSourceMergeAbort(workspace: String!, slot: String!): GitOpResult!
+	workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
+	workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
+	workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
+	createOneSecret(input: CreateOneSecretInput!): SecretRef!
+	updateOneSecret(input: UpdateOneSecretInput!): SecretRef!
+	deleteOneSecret(input: DeleteOneSecretInput!): SecretRef!
+}
+type MutationResult {
+	status: String!
+	name: String
+	message: String
+}
+type OffsetPageInfo {
+	hasNextPage: Boolean
+	hasPreviousPage: Boolean
+}
+input OffsetPaging {
+	limit: Int
+	offset: Int
+}
+type PreflightFailure {
+	field: String!
+	reason: String!
+}
+type Query {
+	health: MutationResult
+	stackStatus: StackStatus
+	serviceEndpoint(name: String!): ServiceEndpoint
+	ingressStatus: IngressStatus
+	services(filter: ServiceStateFilter, sorting: [ServiceStateSort!], paging: OffsetPaging): ServiceStateConnection!
+	service(id: ID!): ServiceState
+	jobs(filter: JobStateFilter, sorting: [JobStateSort!], paging: OffsetPaging): JobStateConnection!
+	job(id: ID!): JobState
+	sources(filter: SourceStateFilter, sorting: [SourceStateSort!], paging: OffsetPaging): SourceStateConnection!
+	source(id: ID!): SourceState
+	workspaces(filter: WorkspaceRefFilter, sorting: [WorkspaceRefSort!], paging: OffsetPaging): WorkspaceRefConnection!
+	workspace(id: ID!): WorkspaceRef
+	workspaceStatus(name: String!): WorkspaceStatus
+	workspaceGit(name: String!): [SourceState!]!
+	gitOpsTopology(withCommits: Int): GitOpsTopology
+	sourceDiff(name: String!, ref: String): [DiffFile!]!
+	workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
+	stackLogs(services: [String!], limit: Int): String!
+	serviceLogs(name: String!, limit: Int): String!
+	workspaceLogs(name: String!, limit: Int): String!
+	mcpDescriptor: JSON
+	templates(filter: TemplateDescriptorFilter, sorting: [TemplateDescriptorSort!], paging: OffsetPaging): TemplateDescriptorConnection!
+	template(id: ID!): TemplateDescriptor
+	secrets(filter: SecretRefFilter, sorting: [SecretRefSort!], paging: OffsetPaging): SecretRefConnection!
+	secret(id: ID!): SecretRef
+	secretValue(name: String!): SecretValue
+}
+type RouteRef {
+	service: String!
+	url: String!
+}
+input SecretCreateInput {
+	name: String!
+	value: String!
+}
+type SecretRef {
+	id: ID!
+	name: String!
+	declared: Boolean!
+	hasValue: Boolean!
+	required: Boolean
+	generated: Boolean
+	import: String
+	envVar: String
+}
+type SecretRefConnection {
+	nodes: [SecretRef!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input SecretRefFilter {
+	and: [SecretRefFilter!]
+	or: [SecretRefFilter!]
+	id: StringFieldComparison
+	name: StringFieldComparison
+	envVar: StringFieldComparison
+	declared: BooleanFieldComparison
+	hasValue: BooleanFieldComparison
+	required: BooleanFieldComparison
+	generated: BooleanFieldComparison
+}
+input SecretRefSort {
+	field: SecretRefSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum SecretRefSortFields {
+	id
+	name
+	envVar
+	declared
+	hasValue
+}
+input SecretUpdateInput {
+	value: String!
+}
+type SecretValue {
+	name: String!
+	value: String!
+}
+input ServiceCreateInput {
+	template: String!
+	workspace: String!
+	inputs: [KeyValueInput!]
+	name: String
+	start: Boolean
+}
+type ServiceEndpoint {
+	routed: Boolean!
+	url: String!
+	internalHost: String!
+	internalPort: Int!
+}
+input ServiceInput {
+	name: String
+	runtime: String
+	image: String
+	command: [String!]
+	mounts: [String!]
+	env: [KeyValueInput!]
+	ports: [String!]
+	workdir: String
+	start: Boolean
+}
+type ServiceState {
+	id: ID!
+	name: String!
+	runtime: String!
+	status: String!
+	health: String
+}
+type ServiceStateConnection {
+	nodes: [ServiceState!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input ServiceStateFilter {
+	and: [ServiceStateFilter!]
+	or: [ServiceStateFilter!]
+	id: StringFieldComparison
+	name: StringFieldComparison
+	runtime: StringFieldComparison
+	status: StringFieldComparison
+	health: StringFieldComparison
+}
+input ServiceStateSort {
+	field: ServiceStateSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum ServiceStateSortFields {
+	id
+	name
+	runtime
+	status
+	health
+}
+enum SortDirection {
+	ASC
+	DESC
+}
+enum SortNulls {
+	NULLS_FIRST
+	NULLS_LAST
+}
+type SourceState {
+	id: ID!
+	name: String!
+	slot: String
+	kind: String!
+	path: String!
+	exists: Boolean!
+	state: String
+	branch: String
+	ref: String
+	currentRef: String
+	dirty: Boolean
+	upstream: String
+	ahead: Int
+	behind: Int
+	pushed: Boolean
+	unpushedReason: String
+	error: String
+	commits: [CommitRef!]
+}
+type SourceStateConnection {
+	nodes: [SourceState!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input SourceStateFilter {
+	and: [SourceStateFilter!]
+	or: [SourceStateFilter!]
+	id: StringFieldComparison
+	name: StringFieldComparison
+	kind: StringFieldComparison
+	state: StringFieldComparison
+	branch: StringFieldComparison
+	exists: BooleanFieldComparison
+	dirty: BooleanFieldComparison
+	pushed: BooleanFieldComparison
+}
+input SourceStateSort {
+	field: SourceStateSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum SourceStateSortFields {
+	id
+	name
+	kind
+	state
+	branch
+}
+input StackInitInput {
+	template: String!
+	path: String
+	inputs: [KeyValueInput!]
+	force: Boolean
+}
+type StackInitResult {
+	status: String!
+	template: String!
+	root: String!
+}
+input StackRuntimeInput {
+	services: [String!]
+	build: Boolean
+}
+"""
+The stack overview aggregate — the root fields the web console reads as one.
+Mirrors the Query-root entity lists (as plain arrays, not connections) so a
+client can subscribe to the whole snapshot and field-prune via its selection set.
+"""
+type StackSnapshot {
+	health: MutationResult
+	stackStatus: StackStatus
+	services: [ServiceState!]!
+	jobs: [JobState!]!
+	sources: [SourceState!]!
+	workspaces: [WorkspaceRef!]!
+	templates: [TemplateDescriptor!]!
+	secrets: [SecretRef!]!
+	gitOpsTopology: GitOpsTopology
+}
+type StackStatus {
+	root: String!
+	name: String!
+	services: [ServiceState!]!
+	jobs: [JobState!]!
+	workspaces: [WorkspaceRef!]!
+}
+input StringFieldComparison {
+	is: Boolean
+	isNot: Boolean
+	eq: String
+	neq: String
+	gt: String
+	gte: String
+	lt: String
+	lte: String
+	like: String
+	notLike: String
+	iLike: String
+	notILike: String
+	in: [String!]
+	notIn: [String!]
+}
+type Subscription {
+	onGitOpsTopologyChange: GitOpsTopology!
+	onServiceLogs(name: String!): String!
+	onWorkspaceLogs(name: String!): String!
+	onWorkspaceStatusChange(name: String!): WorkspaceStatus!
+	"""
+	Emitted whenever the aggregate stack snapshot's hash changes.
+	"""
+	onStackSnapshotChange: StackSnapshot!
+}
+type TemplateDescriptor {
+	id: ID!
+	ref: String!
+	kind: String!
+	name: String
+	path: String!
+	inputs: [TemplateInputDescriptor!]!
+}
+type TemplateDescriptorConnection {
+	nodes: [TemplateDescriptor!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input TemplateDescriptorFilter {
+	and: [TemplateDescriptorFilter!]
+	or: [TemplateDescriptorFilter!]
+	id: StringFieldComparison
+	ref: StringFieldComparison
+	kind: StringFieldComparison
+	name: StringFieldComparison
+}
+input TemplateDescriptorSort {
+	field: TemplateDescriptorSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum TemplateDescriptorSortFields {
+	id
+	ref
+	kind
+	name
+}
+type TemplateInputDescriptor {
+	name: String!
+	type: String
+	required: Boolean!
+	immutable: Boolean!
+	generated: Boolean!
+	default: String
+	question: Boolean!
+}
+input UpdateOneSecretInput {
+	id: ID!
+	update: SecretUpdateInput!
+}
+input UpdateOneServiceInput {
+	id: ID!
+	update: ServiceInput!
+}
+input UpdateOneWorkspaceInput {
+	id: ID!
+	update: WorkspaceUpdateInput!
+}
+input WorkspaceCreateInput {
+	template: String!
+	name: String
+	inputs: [KeyValueInput!]
+	ttl: String
+}
+type WorkspaceCreatePreflight {
+	ok: Boolean!
+	template: String!
+	resolvedTemplate: String!
+	effectiveInputs: [KeyValue!]!
+	missingRequired: [String!]!
+	invalidInputs: [PreflightFailure!]!
+}
+type WorkspaceMountRef {
+	kind: String!
+	name: String!
+	field: String!
+	value: String!
+}
+type WorkspaceRef {
+	id: ID!
+	name: String!
+	path: String!
+	template: String!
+	processComposePort: Int
+	playwrightMcpName: String
+	playwrightMcpUrl: String
+	ttl: String
+	ttlExpiresAt: String
+}
+type WorkspaceRefConnection {
+	nodes: [WorkspaceRef!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input WorkspaceRefFilter {
+	and: [WorkspaceRefFilter!]
+	or: [WorkspaceRefFilter!]
+	id: StringFieldComparison
+	name: StringFieldComparison
+	template: StringFieldComparison
+}
+input WorkspaceRefSort {
+	field: WorkspaceRefSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum WorkspaceRefSortFields {
+	id
+	name
+	template
+}
+type WorkspaceSourceStatus {
+	slot: String!
+	source: String!
+	kind: String!
+	mode: String
+	branch: String
+	ref: String
+	subpath: String
+	path: String!
+	exists: Boolean!
+	state: String!
+	currentRef: String
+	dirty: Boolean!
+	upstream: String
+	ahead: Int
+	behind: Int
+	pushed: Boolean!
+	unpushedReason: String
+	error: String
+}
+type WorkspaceStatus {
+	name: String!
+	path: String!
+	exists: Boolean!
+	state: String!
+	error: String
+	template: String!
+	inputs: JSON
+	sources: [WorkspaceSourceStatus!]!
+	chain: [String!]!
+	chainRoot: String
+	allocations: JSON
+	processComposePort: Int
+	playwrightMcpName: String
+	playwrightMcpUrl: String
+	persistPaths: JSON
+	ttl: String
+	ttlExpiresAt: String
+	expired: Boolean!
+	mountedBy: [WorkspaceMountRef!]!
+	innerStack: StackStatus
+	innerError: String
+}
+input WorkspaceUpdateInput {
+	inputs: [KeyValueInput!]
+	ttl: String
+}

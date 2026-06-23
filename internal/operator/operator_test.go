@@ -449,7 +449,7 @@ services:
 	}
 
 	resp := doGraphQL(t, server, map[string]any{
-		"query": `{ workspace(name: "missing") { name } }`,
+		"query": `{ workspace(id: "missing") { name } }`,
 	})
 	if len(resp.Errors) != 1 {
 		t.Fatalf("GraphQL errors = %#v, want one domain error", resp.Errors)

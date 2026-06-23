@@ -5,7 +5,54 @@ type KeyValue {
   value: String!
 }
 
+# --- nestjs-query shared query primitives -------------------------------------
+
+enum SortDirection {
+  ASC
+  DESC
+}
+
+enum SortNulls {
+  NULLS_FIRST
+  NULLS_LAST
+}
+
+input OffsetPaging {
+  limit: Int
+  offset: Int
+}
+
+type OffsetPageInfo {
+  hasNextPage: Boolean
+  hasPreviousPage: Boolean
+}
+
+input StringFieldComparison {
+  is: Boolean
+  isNot: Boolean
+  eq: String
+  neq: String
+  gt: String
+  gte: String
+  lt: String
+  lte: String
+  like: String
+  notLike: String
+  iLike: String
+  notILike: String
+  in: [String!]
+  notIn: [String!]
+}
+
+input BooleanFieldComparison {
+  is: Boolean
+  isNot: Boolean
+}
+
+# --- entity types -------------------------------------------------------------
+
 type ServiceState {
+  id: ID!
   name: String!
   runtime: String!
   status: String!
@@ -13,11 +60,13 @@ type ServiceState {
 }
 
 type JobState {
+  id: ID!
   name: String!
   runtime: String!
 }
 
 type WorkspaceRef {
+  id: ID!
   name: String!
   path: String!
   template: String!
@@ -29,6 +78,7 @@ type WorkspaceRef {
 }
 
 type SourceState {
+  id: ID!
   name: String!
   slot: String
   kind: String!
@@ -227,6 +277,185 @@ type StackInitResult {
   root: String!
 }
 
+# --- per-collection filter / sort / connection types --------------------------
+
+input ServiceStateFilter {
+  and: [ServiceStateFilter!]
+  or: [ServiceStateFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  runtime: StringFieldComparison
+  status: StringFieldComparison
+  health: StringFieldComparison
+}
+
+enum ServiceStateSortFields {
+  id
+  name
+  runtime
+  status
+  health
+}
+
+input ServiceStateSort {
+  field: ServiceStateSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type ServiceStateConnection {
+  nodes: [ServiceState!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input JobStateFilter {
+  and: [JobStateFilter!]
+  or: [JobStateFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  runtime: StringFieldComparison
+}
+
+enum JobStateSortFields {
+  id
+  name
+  runtime
+}
+
+input JobStateSort {
+  field: JobStateSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type JobStateConnection {
+  nodes: [JobState!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input SourceStateFilter {
+  and: [SourceStateFilter!]
+  or: [SourceStateFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  kind: StringFieldComparison
+  state: StringFieldComparison
+  branch: StringFieldComparison
+  exists: BooleanFieldComparison
+  dirty: BooleanFieldComparison
+  pushed: BooleanFieldComparison
+}
+
+enum SourceStateSortFields {
+  id
+  name
+  kind
+  state
+  branch
+}
+
+input SourceStateSort {
+  field: SourceStateSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type SourceStateConnection {
+  nodes: [SourceState!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceRefFilter {
+  and: [WorkspaceRefFilter!]
+  or: [WorkspaceRefFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  template: StringFieldComparison
+}
+
+enum WorkspaceRefSortFields {
+  id
+  name
+  template
+}
+
+input WorkspaceRefSort {
+  field: WorkspaceRefSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceRefConnection {
+  nodes: [WorkspaceRef!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input TemplateDescriptorFilter {
+  and: [TemplateDescriptorFilter!]
+  or: [TemplateDescriptorFilter!]
+  id: StringFieldComparison
+  ref: StringFieldComparison
+  kind: StringFieldComparison
+  name: StringFieldComparison
+}
+
+enum TemplateDescriptorSortFields {
+  id
+  ref
+  kind
+  name
+}
+
+input TemplateDescriptorSort {
+  field: TemplateDescriptorSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type TemplateDescriptorConnection {
+  nodes: [TemplateDescriptor!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input SecretRefFilter {
+  and: [SecretRefFilter!]
+  or: [SecretRefFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  envVar: StringFieldComparison
+  declared: BooleanFieldComparison
+  hasValue: BooleanFieldComparison
+  required: BooleanFieldComparison
+  generated: BooleanFieldComparison
+}
+
+enum SecretRefSortFields {
+  id
+  name
+  envVar
+  declared
+  hasValue
+}
+
+input SecretRefSort {
+  field: SecretRefSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type SecretRefConnection {
+  nodes: [SecretRef!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+# --- inputs -------------------------------------------------------------------
+
 input KeyValueInput {
   key: String!
   value: String!
@@ -256,13 +485,6 @@ input ServiceInput {
   start: Boolean
 }
 
-input WorkspaceCreateInput {
-  template: String!
-  name: String
-  inputs: [KeyValueInput!]
-  ttl: String
-}
-
 input ServiceCreateInput {
   template: String!
   workspace: String!
@@ -271,22 +493,82 @@ input ServiceCreateInput {
   start: Boolean
 }
 
+input CreateOneServiceInput {
+  service: ServiceCreateInput!
+}
+
+input UpdateOneServiceInput {
+  id: ID!
+  update: ServiceInput!
+}
+
+input DeleteOneServiceInput {
+  id: ID!
+}
+
+input WorkspaceCreateInput {
+  template: String!
+  name: String
+  inputs: [KeyValueInput!]
+  ttl: String
+}
+
 input WorkspaceUpdateInput {
   inputs: [KeyValueInput!]
   ttl: String
 }
+
+input CreateOneWorkspaceInput {
+  workspace: WorkspaceCreateInput!
+}
+
+input UpdateOneWorkspaceInput {
+  id: ID!
+  update: WorkspaceUpdateInput!
+}
+
+input DeleteOneWorkspaceInput {
+  id: ID!
+  purge: Boolean
+}
+
+input SecretCreateInput {
+  name: String!
+  value: String!
+}
+
+input SecretUpdateInput {
+  value: String!
+}
+
+input CreateOneSecretInput {
+  secret: SecretCreateInput!
+}
+
+input UpdateOneSecretInput {
+  id: ID!
+  update: SecretUpdateInput!
+}
+
+input DeleteOneSecretInput {
+  id: ID!
+}
+
+# --- root ---------------------------------------------------------------------
 
 type Query {
   health: MutationResult
   stackStatus: StackStatus
   serviceEndpoint(name: String!): ServiceEndpoint
   ingressStatus: IngressStatus
-  services: [ServiceState!]!
-  jobs: [JobState!]!
-  sources: [SourceState!]!
-  source(name: String!): SourceState
-  workspaces: [WorkspaceRef!]!
-  workspace(name: String!): WorkspaceRef
+  services(filter: ServiceStateFilter, sorting: [ServiceStateSort!], paging: OffsetPaging): ServiceStateConnection!
+  service(id: ID!): ServiceState
+  jobs(filter: JobStateFilter, sorting: [JobStateSort!], paging: OffsetPaging): JobStateConnection!
+  job(id: ID!): JobState
+  sources(filter: SourceStateFilter, sorting: [SourceStateSort!], paging: OffsetPaging): SourceStateConnection!
+  source(id: ID!): SourceState
+  workspaces(filter: WorkspaceRefFilter, sorting: [WorkspaceRefSort!], paging: OffsetPaging): WorkspaceRefConnection!
+  workspace(id: ID!): WorkspaceRef
   workspaceStatus(name: String!): WorkspaceStatus
   workspaceGit(name: String!): [SourceState!]!
   gitOpsTopology(withCommits: Int): GitOpsTopology
@@ -296,10 +578,10 @@ type Query {
   serviceLogs(name: String!, limit: Int): String!
   workspaceLogs(name: String!, limit: Int): String!
   mcpDescriptor: JSON
-  templates: [TemplateDescriptor!]!
-  template(ref: String!): TemplateDescriptor
-  secrets: [SecretRef!]!
-  secret(name: String!): SecretRef
+  templates(filter: TemplateDescriptorFilter, sorting: [TemplateDescriptorSort!], paging: OffsetPaging): TemplateDescriptorConnection!
+  template(id: ID!): TemplateDescriptor
+  secrets(filter: SecretRefFilter, sorting: [SecretRefSort!], paging: OffsetPaging): SecretRefConnection!
+  secret(id: ID!): SecretRef
   secretValue(name: String!): SecretValue
 }
 
@@ -314,19 +596,19 @@ type Mutation {
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
   serviceInit(input: ServiceInput!): MutationResult
-  serviceCreate(input: ServiceCreateInput!): ServiceState
-  serviceUpdate(name: String!, input: ServiceInput!): MutationResult
+  createOneService(input: CreateOneServiceInput!): ServiceState!
+  updateOneService(input: UpdateOneServiceInput!): ServiceState!
+  deleteOneService(input: DeleteOneServiceInput!): ServiceState!
   serviceUp(name: String!): MutationResult
   serviceStart(name: String!): MutationResult
   serviceStop(name: String!): MutationResult
   serviceRestart(name: String!): MutationResult
-  serviceDestroy(name: String!): MutationResult
   sourceFetch(name: String!): SourceState
   sourcePull(name: String!): SourceState
   sourcePush(name: String!, ref: String): SourceState
-  workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
-  workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
-  workspaceDestroy(name: String!, purge: Boolean): MutationResult
+  createOneWorkspace(input: CreateOneWorkspaceInput!): WorkspaceRef!
+  updateOneWorkspace(input: UpdateOneWorkspaceInput!): WorkspaceRef!
+  deleteOneWorkspace(input: DeleteOneWorkspaceInput!): WorkspaceRef!
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!
   workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
@@ -341,8 +623,9 @@ type Mutation {
   workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
   workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
   workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
-  secretSet(name: String!, value: String!): SecretRef!
-  secretDelete(name: String!): MutationResult!
+  createOneSecret(input: CreateOneSecretInput!): SecretRef!
+  updateOneSecret(input: UpdateOneSecretInput!): SecretRef!
+  deleteOneSecret(input: DeleteOneSecretInput!): SecretRef!
 }
 
 type Subscription {
@@ -356,8 +639,8 @@ type Subscription {
 
 """
 The stack overview aggregate — the root fields the web console reads as one.
-Mirrors the Query-root types so a client can subscribe to the whole snapshot
-and field-prune via its selection set.
+Mirrors the Query-root entity lists (as plain arrays, not connections) so a
+client can subscribe to the whole snapshot and field-prune via its selection set.
 """
 type StackSnapshot {
   health: MutationResult
@@ -396,6 +679,7 @@ type TemplateInputDescriptor {
 }
 
 type TemplateDescriptor {
+  id: ID!
   ref: String!
   kind: String!
   name: String
@@ -410,6 +694,7 @@ type ConnectionToken {
 }
 
 type SecretRef {
+  id: ID!
   name: String!
   declared: Boolean!
   hasValue: Boolean!

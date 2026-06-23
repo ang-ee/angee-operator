@@ -159,7 +159,7 @@ _angee:
 	}
 
 	gqlBody, _ := json.Marshal(map[string]any{
-		"query": `{ template(ref: "workspaces/dev-pr") { ref kind name inputs { name required } } }`,
+		"query": `{ template(id: "workspaces/dev-pr") { ref kind name inputs { name required } } }`,
 	})
 	gqlReq := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(gqlBody))
 	gqlReq.Header.Set("Content-Type", "application/json")

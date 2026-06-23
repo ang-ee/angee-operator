@@ -4,6 +4,51 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Changed (breaking — operator GraphQL)
+
+- The operator GraphQL **collection surface** was reshaped to the
+  [nestjs-query](https://doug-martin.github.io/nestjs-query/) convention so the
+  off-the-shelf [`@refinedev/nestjs-query`](https://www.npmjs.com/package/@refinedev/nestjs-query)
+  data provider drives an Angee console with no custom mappers. This is a clean
+  cut with **no backward compatibility** — GraphQL clients must update.
+  - `services`, `jobs`, `sources`, `workspaces`, `templates`, and `secrets` now
+    take `filter` / `sorting` / `paging` arguments and return an offset
+    connection (`{ nodes, totalCount, pageInfo }`) instead of a bare list.
+  - Every entity exposes `id: ID!` (aliasing `name`, or `ref` for templates);
+    single lookups are now `<entity>(id: ID!)` (was `name:` / `ref:`).
+  - Service, secret, and workspace mutations are now nestjs-query CRUD:
+    `createOne` / `updateOne` / `deleteOne` for each. The previous
+    `serviceCreate` / `serviceUpdate` / `serviceDestroy`,
+    `secretSet` / `secretDelete`, and
+    `workspaceCreate` / `workspaceUpdate` / `workspaceDestroy` mutations were
+    **removed**. `deleteOneWorkspace` carries an optional `purge` in its input.
+  - Sources keep their read connection plus the existing git verbs
+    (`sourceFetch` / `sourcePull` / `sourcePush`); the operator has no
+    source create/delete primitive, so source CRUD waits on the
+    [global source registry](docs/proposals/global-source-registry.md).
+  - Lifecycle, git, token, log, and workspace-source operations
+    (`workspaceCreatePreflight`, `workspacePush`, `workspaceSyncBase`, the
+    `workspaceSource*` git ops) are unchanged — they have no CRUD analog and are
+    consumed via refine custom operations.
+  - `StackSnapshot` keeps bare-array list fields — it is a console aggregate,
+    not a refine resource.
+  - Filtering/sorting/paging is evaluated in-process by the new generic
+    `internal/query` engine; the `service.API` interface, REST endpoints, and
+    CLI are unchanged. Exposing the same filter/sort/paging over REST is a
+    planned follow-up. See
+    [`docs/proposals/graphql-nestjs-query-shape.md`](docs/proposals/graphql-nestjs-query-shape.md).
+
+### Added
+
+- The operator GraphQL schema is now exported as SDL to
+  `docs/public/angee.graphql` (`make graphql-schema`, also produced by
+  `make generate` and checked by `make check-generated`) for frontend codegen
+  (e.g. graphql-codegen / `@refinedev/nestjs-query`). It is formatted from the
+  same executable schema the operator serves, which also exposes live
+  introspection at `/graphql`.
+
 ## v0.6.2 — 2026-06-17
 
 ### Fixes

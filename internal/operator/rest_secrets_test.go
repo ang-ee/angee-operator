@@ -151,7 +151,7 @@ secrets:
 
 	rest := doREST[[]api.SecretRef](t, server, http.MethodGet, "/secrets", nil)
 	gqlBody, _ := json.Marshal(map[string]any{
-		"query": `{ secrets { name declared hasValue required generated envVar } }`,
+		"query": `{ secrets { nodes { name declared hasValue required generated envVar } totalCount } }`,
 	})
 	gqlReq := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(gqlBody))
 	gqlReq.Header.Set("Content-Type", "application/json")
@@ -162,7 +162,10 @@ secrets:
 	}
 	var gql struct {
 		Data struct {
-			Secrets []map[string]any `json:"secrets"`
+			Secrets struct {
+				Nodes      []map[string]any `json:"nodes"`
+				TotalCount int              `json:"totalCount"`
+			} `json:"secrets"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
@@ -172,12 +175,12 @@ secrets:
 	if len(gql.Errors) > 0 {
 		t.Fatalf("GraphQL errors: %+v", gql.Errors)
 	}
-	if len(rest) != len(gql.Data.Secrets) {
-		t.Fatalf("REST count=%d GraphQL count=%d", len(rest), len(gql.Data.Secrets))
+	if len(rest) != len(gql.Data.Secrets.Nodes) || gql.Data.Secrets.TotalCount != len(rest) {
+		t.Fatalf("REST count=%d GraphQL count=%d totalCount=%d", len(rest), len(gql.Data.Secrets.Nodes), gql.Data.Secrets.TotalCount)
 	}
 	for i, r := range rest {
-		if r.Name != gql.Data.Secrets[i]["name"] {
-			t.Fatalf("name mismatch at %d: REST=%v GraphQL=%v", i, r.Name, gql.Data.Secrets[i]["name"])
+		if r.Name != gql.Data.Secrets.Nodes[i]["name"] {
+			t.Fatalf("name mismatch at %d: REST=%v GraphQL=%v", i, r.Name, gql.Data.Secrets.Nodes[i]["name"])
 		}
 	}
 }
