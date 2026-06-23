@@ -25,6 +25,9 @@ func (p *Platform) Templates(ctx context.Context, q query.Args) ([]api.TemplateD
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
+	if err := query.Validate(q, queryfields.Template); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	roots := []string{
 		filepath.Join(p.root, ".templates"),
 		filepath.Join(p.root, "templates"),
@@ -70,9 +73,6 @@ func (p *Platform) Templates(ctx context.Context, q query.Args) ([]api.TemplateD
 		}
 	}
 	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].Ref < descriptors[j].Ref })
-	if err := query.Validate(q, queryfields.Template); err != nil {
-		return nil, 0, invalidQueryError(err)
-	}
 	page, total := query.Apply(descriptors, q, queryfields.Template)
 	return page, total, nil
 }

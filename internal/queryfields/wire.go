@@ -28,8 +28,11 @@ func ToArgs(q api.ListQuery) query.Args {
 }
 
 // FromArgs converts the engine form back to the wire query, for the remote
-// client to encode. It is lossless for string and boolean fields (the only
-// filterable kinds today).
+// client to encode. The value-bearing operators (Eq/Neq/Gt/.../In) assume
+// string Values — they round-trip losslessly today because every filter the
+// GraphQL/REST layers build uses string comparisons (is/isNot bools are carried
+// separately). A future numeric pushdown through the remote client would need a
+// typed wire representation here rather than the stringified form.
 func FromArgs(a query.Args) api.ListQuery {
 	q := api.ListQuery{}
 	if f := fromFilter(a.Filter); f != nil {

@@ -52,6 +52,9 @@ func validateSecretName(name string) error {
 // manifest. Undeclared backend keys are intentionally not enumerated —
 // see docs/guide/concepts.md "Secrets" for the rationale.
 func (p *Platform) SecretsList(ctx context.Context, q query.Args) ([]api.SecretRef, int, error) {
+	if err := query.Validate(q, queryfields.Secret); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, 0, err
@@ -67,9 +70,6 @@ func (p *Platform) SecretsList(ctx context.Context, q query.Args) ([]api.SecretR
 			return nil, 0, err
 		}
 		refs = append(refs, ref)
-	}
-	if err := query.Validate(q, queryfields.Secret); err != nil {
-		return nil, 0, invalidQueryError(err)
 	}
 	page, total := query.Apply(refs, q, queryfields.Secret)
 	return page, total, nil

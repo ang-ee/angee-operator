@@ -60,6 +60,9 @@ func (p *Platform) materializeReferencedSources(ctx context.Context, stack *mani
 }
 
 func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error) {
+	if err := query.Validate(q, queryfields.Source); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, 0, err
@@ -71,9 +74,6 @@ func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceSt
 			state = api.SourceState{Name: name, Kind: stack.Sources[name].Kind, Path: p.sourcePath(name, stack.Sources[name]), State: "error", Error: err.Error()}
 		}
 		states = append(states, state)
-	}
-	if err := query.Validate(q, queryfields.Source); err != nil {
-		return nil, 0, invalidQueryError(err)
 	}
 	page, total := query.Apply(states, q, queryfields.Source)
 	return page, total, nil

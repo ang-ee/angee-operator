@@ -30,6 +30,11 @@ type NumericFieldMap[T any] map[string]func(T) (float64, bool)
 // count plus min/max/sum of each reduce field per group. Null group-key values
 // normalize to "" (matching the FieldMap "empty == absent" convention). Groups
 // are returned sorted by key tuple for deterministic output.
+//
+// Callers are expected to pre-validate groupBy field names against fm (the
+// GraphQL layer does this implicitly via schema-constrained groupBy enums): a
+// groupBy field absent from fm contributes an empty-string key component rather
+// than an error.
 func Aggregate[T any](items []T, f Filter, groupBy []string, fm FieldMap[T], nfm NumericFieldMap[T], reduce []string) []Group {
 	type bucket struct {
 		key   []KV

@@ -17,6 +17,9 @@ import (
 )
 
 func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, int, error) {
+	if err := query.Validate(q, queryfields.Job); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	status, err := p.StackStatus(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -24,9 +27,6 @@ func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, i
 	jobs := make([]api.JobState, 0, len(status.Jobs))
 	for _, name := range sortedKeys(status.Jobs) {
 		jobs = append(jobs, status.Jobs[name])
-	}
-	if err := query.Validate(q, queryfields.Job); err != nil {
-		return nil, 0, invalidQueryError(err)
 	}
 	page, total := query.Apply(jobs, q, queryfields.Job)
 	return page, total, nil

@@ -137,6 +137,9 @@ func (p *Platform) WorkspaceList(ctx context.Context, q query.Args) ([]api.Works
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
+	if err := query.Validate(q, queryfields.Workspace); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, 0, err
@@ -145,9 +148,6 @@ func (p *Platform) WorkspaceList(ctx context.Context, q query.Args) ([]api.Works
 	for _, name := range sortedKeys(stack.Workspaces) {
 		workspace := stack.Workspaces[name]
 		refs = append(refs, workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace))
-	}
-	if err := query.Validate(q, queryfields.Workspace); err != nil {
-		return nil, 0, invalidQueryError(err)
 	}
 	page, total := query.Apply(refs, q, queryfields.Workspace)
 	return page, total, nil
