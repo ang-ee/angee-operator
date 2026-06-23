@@ -31,6 +31,7 @@ type Config = graphql.Config[ResolverRoot, DirectiveRoot, ComplexityRoot]
 
 type ResolverRoot interface {
 	CompiledStack() CompiledStackResolver
+	GitOpsTopology() GitOpsTopologyResolver
 	JobState() JobStateResolver
 	Mutation() MutationResolver
 	Query() QueryResolver
@@ -120,6 +121,12 @@ type ComplexityRoot struct {
 		Workspace      func(childComplexity int) int
 	}
 
+	GitOpsLinkConnection struct {
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
 	GitOpsSummary struct {
 		Ahead          func(childComplexity int) int
 		Behind         func(childComplexity int) int
@@ -136,12 +143,12 @@ type ComplexityRoot struct {
 	}
 
 	GitOpsTopology struct {
-		Links      func(childComplexity int) int
+		Links      func(childComplexity int, filter *model.GitOpsLinkFilter, sorting []*model.GitOpsLinkSort, paging *model.OffsetPaging) int
 		Name       func(childComplexity int) int
 		Root       func(childComplexity int) int
-		Sources    func(childComplexity int) int
+		Sources    func(childComplexity int, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) int
 		Summary    func(childComplexity int) int
-		Workspaces func(childComplexity int) int
+		Workspaces func(childComplexity int, filter *model.WorkspaceStatusFilter, sorting []*model.WorkspaceStatusSort, paging *model.OffsetPaging) int
 	}
 
 	IngressStatus struct {
@@ -405,6 +412,12 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
+	WorkspaceMountRefConnection struct {
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
 	WorkspaceRef struct {
 		ID                 func(childComplexity int) int
 		Name               func(childComplexity int) int
@@ -444,6 +457,12 @@ type ComplexityRoot struct {
 		Upstream       func(childComplexity int) int
 	}
 
+	WorkspaceSourceStatusConnection struct {
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
 	WorkspaceStatus struct {
 		Allocations        func(childComplexity int) int
 		Chain              func(childComplexity int) int
@@ -451,21 +470,28 @@ type ComplexityRoot struct {
 		Error              func(childComplexity int) int
 		Exists             func(childComplexity int) int
 		Expired            func(childComplexity int) int
+		ID                 func(childComplexity int) int
 		InnerError         func(childComplexity int) int
 		InnerStack         func(childComplexity int) int
 		Inputs             func(childComplexity int) int
-		MountedBy          func(childComplexity int) int
+		MountedBy          func(childComplexity int, filter *model.WorkspaceMountRefFilter, sorting []*model.WorkspaceMountRefSort, paging *model.OffsetPaging) int
 		Name               func(childComplexity int) int
 		Path               func(childComplexity int) int
 		PersistPaths       func(childComplexity int) int
 		PlaywrightMCPName  func(childComplexity int) int
 		PlaywrightMCPURL   func(childComplexity int) int
 		ProcessComposePort func(childComplexity int) int
-		Sources            func(childComplexity int) int
+		Sources            func(childComplexity int, filter *model.WorkspaceSourceStatusFilter, sorting []*model.WorkspaceSourceStatusSort, paging *model.OffsetPaging) int
 		State              func(childComplexity int) int
 		TTL                func(childComplexity int) int
 		TTLExpiresAt       func(childComplexity int) int
 		Template           func(childComplexity int) int
+	}
+
+	WorkspaceStatusConnection struct {
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
 	}
 }
 
@@ -473,6 +499,11 @@ type CompiledStackResolver interface {
 	Compose(ctx context.Context, obj *service.CompiledStack) (map[string]any, error)
 	ProcessCompose(ctx context.Context, obj *service.CompiledStack) (map[string]any, error)
 	SecretEnvVars(ctx context.Context, obj *service.CompiledStack) ([]*model.KeyValue, error)
+}
+type GitOpsTopologyResolver interface {
+	Sources(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) (*model.SourceStateConnection, error)
+	Workspaces(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.WorkspaceStatusFilter, sorting []*model.WorkspaceStatusSort, paging *model.OffsetPaging) (*model.WorkspaceStatusConnection, error)
+	Links(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.GitOpsLinkFilter, sorting []*model.GitOpsLinkSort, paging *model.OffsetPaging) (*model.GitOpsLinkConnection, error)
 }
 type JobStateResolver interface {
 	ID(ctx context.Context, obj *api.JobState) (string, error)
@@ -580,13 +611,18 @@ type WorkspaceRefResolver interface {
 	TTLExpiresAt(ctx context.Context, obj *api.WorkspaceRef) (*string, error)
 }
 type WorkspaceStatusResolver interface {
+	ID(ctx context.Context, obj *api.WorkspaceStatusResponse) (string, error)
+
 	Inputs(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error)
+	Sources(ctx context.Context, obj *api.WorkspaceStatusResponse, filter *model.WorkspaceSourceStatusFilter, sorting []*model.WorkspaceSourceStatusSort, paging *model.OffsetPaging) (*model.WorkspaceSourceStatusConnection, error)
 
 	Allocations(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error)
 
 	PersistPaths(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error)
 
 	TTLExpiresAt(ctx context.Context, obj *api.WorkspaceStatusResponse) (*string, error)
+
+	MountedBy(ctx context.Context, obj *api.WorkspaceStatusResponse, filter *model.WorkspaceMountRefFilter, sorting []*model.WorkspaceMountRefSort, paging *model.OffsetPaging) (*model.WorkspaceMountRefConnection, error)
 }
 
 type executableSchema graphql.ExecutableSchemaState[ResolverRoot, DirectiveRoot, ComplexityRoot]
@@ -910,6 +946,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.GitOpsLink.Workspace(childComplexity), true
 
+	case "GitOpsLinkConnection.nodes":
+		if e.ComplexityRoot.GitOpsLinkConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLinkConnection.Nodes(childComplexity), true
+	case "GitOpsLinkConnection.pageInfo":
+		if e.ComplexityRoot.GitOpsLinkConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLinkConnection.PageInfo(childComplexity), true
+	case "GitOpsLinkConnection.totalCount":
+		if e.ComplexityRoot.GitOpsLinkConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLinkConnection.TotalCount(childComplexity), true
+
 	case "GitOpsSummary.ahead":
 		if e.ComplexityRoot.GitOpsSummary.Ahead == nil {
 			break
@@ -988,7 +1043,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		return e.ComplexityRoot.GitOpsTopology.Links(childComplexity), true
+		args, err := ec.field_GitOpsTopology_links_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.GitOpsTopology.Links(childComplexity, args["filter"].(*model.GitOpsLinkFilter), args["sorting"].([]*model.GitOpsLinkSort), args["paging"].(*model.OffsetPaging)), true
 	case "GitOpsTopology.name":
 		if e.ComplexityRoot.GitOpsTopology.Name == nil {
 			break
@@ -1006,7 +1066,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		return e.ComplexityRoot.GitOpsTopology.Sources(childComplexity), true
+		args, err := ec.field_GitOpsTopology_sources_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.GitOpsTopology.Sources(childComplexity, args["filter"].(*model.SourceStateFilter), args["sorting"].([]*model.SourceStateSort), args["paging"].(*model.OffsetPaging)), true
 	case "GitOpsTopology.summary":
 		if e.ComplexityRoot.GitOpsTopology.Summary == nil {
 			break
@@ -1018,7 +1083,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		return e.ComplexityRoot.GitOpsTopology.Workspaces(childComplexity), true
+		args, err := ec.field_GitOpsTopology_workspaces_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.GitOpsTopology.Workspaces(childComplexity, args["filter"].(*model.WorkspaceStatusFilter), args["sorting"].([]*model.WorkspaceStatusSort), args["paging"].(*model.OffsetPaging)), true
 
 	case "IngressStatus.domain":
 		if e.ComplexityRoot.IngressStatus.Domain == nil {
@@ -2438,6 +2508,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.WorkspaceMountRef.Value(childComplexity), true
 
+	case "WorkspaceMountRefConnection.nodes":
+		if e.ComplexityRoot.WorkspaceMountRefConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceMountRefConnection.Nodes(childComplexity), true
+	case "WorkspaceMountRefConnection.pageInfo":
+		if e.ComplexityRoot.WorkspaceMountRefConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceMountRefConnection.PageInfo(childComplexity), true
+	case "WorkspaceMountRefConnection.totalCount":
+		if e.ComplexityRoot.WorkspaceMountRefConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceMountRefConnection.TotalCount(childComplexity), true
+
 	case "WorkspaceRef.id":
 		if e.ComplexityRoot.WorkspaceRef.ID == nil {
 			break
@@ -2621,6 +2710,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.WorkspaceSourceStatus.Upstream(childComplexity), true
 
+	case "WorkspaceSourceStatusConnection.nodes":
+		if e.ComplexityRoot.WorkspaceSourceStatusConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatusConnection.Nodes(childComplexity), true
+	case "WorkspaceSourceStatusConnection.pageInfo":
+		if e.ComplexityRoot.WorkspaceSourceStatusConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatusConnection.PageInfo(childComplexity), true
+	case "WorkspaceSourceStatusConnection.totalCount":
+		if e.ComplexityRoot.WorkspaceSourceStatusConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatusConnection.TotalCount(childComplexity), true
+
 	case "WorkspaceStatus.allocations":
 		if e.ComplexityRoot.WorkspaceStatus.Allocations == nil {
 			break
@@ -2657,6 +2765,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceStatus.Expired(childComplexity), true
+	case "WorkspaceStatus.id":
+		if e.ComplexityRoot.WorkspaceStatus.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatus.ID(childComplexity), true
 	case "WorkspaceStatus.innerError":
 		if e.ComplexityRoot.WorkspaceStatus.InnerError == nil {
 			break
@@ -2680,7 +2794,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		return e.ComplexityRoot.WorkspaceStatus.MountedBy(childComplexity), true
+		args, err := ec.field_WorkspaceStatus_mountedBy_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.WorkspaceStatus.MountedBy(childComplexity, args["filter"].(*model.WorkspaceMountRefFilter), args["sorting"].([]*model.WorkspaceMountRefSort), args["paging"].(*model.OffsetPaging)), true
 	case "WorkspaceStatus.name":
 		if e.ComplexityRoot.WorkspaceStatus.Name == nil {
 			break
@@ -2722,7 +2841,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		return e.ComplexityRoot.WorkspaceStatus.Sources(childComplexity), true
+		args, err := ec.field_WorkspaceStatus_sources_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.WorkspaceStatus.Sources(childComplexity, args["filter"].(*model.WorkspaceSourceStatusFilter), args["sorting"].([]*model.WorkspaceSourceStatusSort), args["paging"].(*model.OffsetPaging)), true
 	case "WorkspaceStatus.state":
 		if e.ComplexityRoot.WorkspaceStatus.State == nil {
 			break
@@ -2748,6 +2872,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.WorkspaceStatus.Template(childComplexity), true
 
+	case "WorkspaceStatusConnection.nodes":
+		if e.ComplexityRoot.WorkspaceStatusConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatusConnection.Nodes(childComplexity), true
+	case "WorkspaceStatusConnection.pageInfo":
+		if e.ComplexityRoot.WorkspaceStatusConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatusConnection.PageInfo(childComplexity), true
+	case "WorkspaceStatusConnection.totalCount":
+		if e.ComplexityRoot.WorkspaceStatusConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatusConnection.TotalCount(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -2763,6 +2906,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputDeleteOneSecretInput,
 		ec.unmarshalInputDeleteOneServiceInput,
 		ec.unmarshalInputDeleteOneWorkspaceInput,
+		ec.unmarshalInputGitOpsLinkFilter,
+		ec.unmarshalInputGitOpsLinkSort,
 		ec.unmarshalInputJobStateFilter,
 		ec.unmarshalInputJobStateSort,
 		ec.unmarshalInputKeyValueInput,
@@ -2786,8 +2931,14 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateOneServiceInput,
 		ec.unmarshalInputUpdateOneWorkspaceInput,
 		ec.unmarshalInputWorkspaceCreateInput,
+		ec.unmarshalInputWorkspaceMountRefFilter,
+		ec.unmarshalInputWorkspaceMountRefSort,
 		ec.unmarshalInputWorkspaceRefFilter,
 		ec.unmarshalInputWorkspaceRefSort,
+		ec.unmarshalInputWorkspaceSourceStatusFilter,
+		ec.unmarshalInputWorkspaceSourceStatusSort,
+		ec.unmarshalInputWorkspaceStatusFilter,
+		ec.unmarshalInputWorkspaceStatusSort,
 		ec.unmarshalInputWorkspaceUpdateInput,
 	)
 	first := true
@@ -3092,6 +3243,7 @@ type StackStatus {
 }
 
 type WorkspaceStatus {
+  id: ID!
   name: String!
   path: String!
   exists: Boolean!
@@ -3099,7 +3251,7 @@ type WorkspaceStatus {
   error: String
   template: String!
   inputs: JSON
-  sources: [WorkspaceSourceStatus!]!
+  sources(filter: WorkspaceSourceStatusFilter, sorting: [WorkspaceSourceStatusSort!], paging: OffsetPaging): WorkspaceSourceStatusConnection!
   chain: [String!]!
   chainRoot: String
   allocations: JSON
@@ -3110,7 +3262,7 @@ type WorkspaceStatus {
   ttl: String
   ttlExpiresAt: String
   expired: Boolean!
-  mountedBy: [WorkspaceMountRef!]!
+  mountedBy(filter: WorkspaceMountRefFilter, sorting: [WorkspaceMountRefSort!], paging: OffsetPaging): WorkspaceMountRefConnection!
   innerStack: StackStatus
   innerError: String
 }
@@ -3118,9 +3270,9 @@ type WorkspaceStatus {
 type GitOpsTopology {
   root: String!
   name: String!
-  sources: [SourceState!]!
-  workspaces: [WorkspaceStatus!]!
-  links: [GitOpsLink!]!
+  sources(filter: SourceStateFilter, sorting: [SourceStateSort!], paging: OffsetPaging): SourceStateConnection!
+  workspaces(filter: WorkspaceStatusFilter, sorting: [WorkspaceStatusSort!], paging: OffsetPaging): WorkspaceStatusConnection!
+  links(filter: GitOpsLinkFilter, sorting: [GitOpsLinkSort!], paging: OffsetPaging): GitOpsLinkConnection!
   summary: GitOpsSummary!
 }
 
@@ -3333,6 +3485,139 @@ input SecretRefSort {
 
 type SecretRefConnection {
   nodes: [SecretRef!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+# --- relation (nested connection) element types ------------------------------
+
+input GitOpsLinkFilter {
+  and: [GitOpsLinkFilter!]
+  or: [GitOpsLinkFilter!]
+  id: StringFieldComparison
+  source: StringFieldComparison
+  workspace: StringFieldComparison
+  slot: StringFieldComparison
+  kind: StringFieldComparison
+  mode: StringFieldComparison
+  state: StringFieldComparison
+  branch: StringFieldComparison
+  dirty: BooleanFieldComparison
+  pushed: BooleanFieldComparison
+}
+
+enum GitOpsLinkSortFields {
+  id
+  source
+  workspace
+  slot
+  kind
+  mode
+  state
+  branch
+}
+
+input GitOpsLinkSort {
+  field: GitOpsLinkSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type GitOpsLinkConnection {
+  nodes: [GitOpsLink!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceStatusFilter {
+  and: [WorkspaceStatusFilter!]
+  or: [WorkspaceStatusFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  state: StringFieldComparison
+  template: StringFieldComparison
+  exists: BooleanFieldComparison
+  expired: BooleanFieldComparison
+}
+
+enum WorkspaceStatusSortFields {
+  id
+  name
+  state
+  template
+}
+
+input WorkspaceStatusSort {
+  field: WorkspaceStatusSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceStatusConnection {
+  nodes: [WorkspaceStatus!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceSourceStatusFilter {
+  and: [WorkspaceSourceStatusFilter!]
+  or: [WorkspaceSourceStatusFilter!]
+  slot: StringFieldComparison
+  source: StringFieldComparison
+  kind: StringFieldComparison
+  mode: StringFieldComparison
+  state: StringFieldComparison
+  branch: StringFieldComparison
+  dirty: BooleanFieldComparison
+  pushed: BooleanFieldComparison
+  exists: BooleanFieldComparison
+}
+
+enum WorkspaceSourceStatusSortFields {
+  slot
+  source
+  kind
+  mode
+  state
+  branch
+}
+
+input WorkspaceSourceStatusSort {
+  field: WorkspaceSourceStatusSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceSourceStatusConnection {
+  nodes: [WorkspaceSourceStatus!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceMountRefFilter {
+  and: [WorkspaceMountRefFilter!]
+  or: [WorkspaceMountRefFilter!]
+  kind: StringFieldComparison
+  name: StringFieldComparison
+  field: StringFieldComparison
+  value: StringFieldComparison
+}
+
+enum WorkspaceMountRefSortFields {
+  kind
+  name
+  field
+  value
+}
+
+input WorkspaceMountRefSort {
+  field: WorkspaceMountRefSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceMountRefConnection {
+  nodes: [WorkspaceMountRef!]!
   totalCount: Int!
   pageInfo: OffsetPageInfo!
 }
@@ -3739,6 +4024,18 @@ func (ec *executionContext) childFields_GitOpsLink(ctx context.Context, field gr
 		return ec.fieldContext_GitOpsLink_error(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type GitOpsLink", field.Name)
+}
+
+func (ec *executionContext) childFields_GitOpsLinkConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "nodes":
+		return ec.fieldContext_GitOpsLinkConnection_nodes(ctx, field)
+	case "totalCount":
+		return ec.fieldContext_GitOpsLinkConnection_totalCount(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_GitOpsLinkConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type GitOpsLinkConnection", field.Name)
 }
 
 func (ec *executionContext) childFields_GitOpsSummary(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4151,6 +4448,18 @@ func (ec *executionContext) childFields_WorkspaceMountRef(ctx context.Context, f
 	return nil, fmt.Errorf("no field named %q was found under type WorkspaceMountRef", field.Name)
 }
 
+func (ec *executionContext) childFields_WorkspaceMountRefConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "nodes":
+		return ec.fieldContext_WorkspaceMountRefConnection_nodes(ctx, field)
+	case "totalCount":
+		return ec.fieldContext_WorkspaceMountRefConnection_totalCount(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_WorkspaceMountRefConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorkspaceMountRefConnection", field.Name)
+}
+
 func (ec *executionContext) childFields_WorkspaceRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -4229,8 +4538,22 @@ func (ec *executionContext) childFields_WorkspaceSourceStatus(ctx context.Contex
 	return nil, fmt.Errorf("no field named %q was found under type WorkspaceSourceStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_WorkspaceSourceStatusConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "nodes":
+		return ec.fieldContext_WorkspaceSourceStatusConnection_nodes(ctx, field)
+	case "totalCount":
+		return ec.fieldContext_WorkspaceSourceStatusConnection_totalCount(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_WorkspaceSourceStatusConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorkspaceSourceStatusConnection", field.Name)
+}
+
 func (ec *executionContext) childFields_WorkspaceStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
+	case "id":
+		return ec.fieldContext_WorkspaceStatus_id(ctx, field)
 	case "name":
 		return ec.fieldContext_WorkspaceStatus_name(ctx, field)
 	case "path":
@@ -4275,6 +4598,18 @@ func (ec *executionContext) childFields_WorkspaceStatus(ctx context.Context, fie
 		return ec.fieldContext_WorkspaceStatus_innerError(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type WorkspaceStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_WorkspaceStatusConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "nodes":
+		return ec.fieldContext_WorkspaceStatusConnection_nodes(ctx, field)
+	case "totalCount":
+		return ec.fieldContext_WorkspaceStatusConnection_totalCount(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_WorkspaceStatusConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorkspaceStatusConnection", field.Name)
 }
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4392,6 +4727,96 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 // endregion ************************** generated!.gotpl **************************
 
 // region    ***************************** args.gotpl *****************************
+
+func (ec *executionContext) field_GitOpsTopology_links_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.GitOpsLinkFilter, error) {
+			return ec.unmarshalOGitOpsLinkFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "sorting",
+		func(ctx context.Context, v any) ([]*model.GitOpsLinkSort, error) {
+			return ec.unmarshalOGitOpsLinkSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSortᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["sorting"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "paging",
+		func(ctx context.Context, v any) (*model.OffsetPaging, error) {
+			return ec.unmarshalOOffsetPaging2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPaging(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paging"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_GitOpsTopology_sources_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.SourceStateFilter, error) {
+			return ec.unmarshalOSourceStateFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourceStateFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "sorting",
+		func(ctx context.Context, v any) ([]*model.SourceStateSort, error) {
+			return ec.unmarshalOSourceStateSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourceStateSortᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["sorting"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "paging",
+		func(ctx context.Context, v any) (*model.OffsetPaging, error) {
+			return ec.unmarshalOOffsetPaging2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPaging(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paging"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_GitOpsTopology_workspaces_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.WorkspaceStatusFilter, error) {
+			return ec.unmarshalOWorkspaceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "sorting",
+		func(ctx context.Context, v any) ([]*model.WorkspaceStatusSort, error) {
+			return ec.unmarshalOWorkspaceStatusSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSortᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["sorting"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "paging",
+		func(ctx context.Context, v any) (*model.OffsetPaging, error) {
+			return ec.unmarshalOOffsetPaging2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPaging(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paging"] = arg2
+	return args, nil
+}
 
 func (ec *executionContext) field_Mutation_createOneSecret_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
@@ -5592,6 +6017,66 @@ func (ec *executionContext) field_Subscription_onWorkspaceStatusChange_args(ctx 
 		return nil, err
 	}
 	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_WorkspaceStatus_mountedBy_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.WorkspaceMountRefFilter, error) {
+			return ec.unmarshalOWorkspaceMountRefFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "sorting",
+		func(ctx context.Context, v any) ([]*model.WorkspaceMountRefSort, error) {
+			return ec.unmarshalOWorkspaceMountRefSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSortᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["sorting"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "paging",
+		func(ctx context.Context, v any) (*model.OffsetPaging, error) {
+			return ec.unmarshalOOffsetPaging2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPaging(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paging"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_WorkspaceStatus_sources_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.WorkspaceSourceStatusFilter, error) {
+			return ec.unmarshalOWorkspaceSourceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "sorting",
+		func(ctx context.Context, v any) ([]*model.WorkspaceSourceStatusSort, error) {
+			return ec.unmarshalOWorkspaceSourceStatusSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSortᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["sorting"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "paging",
+		func(ctx context.Context, v any) (*model.OffsetPaging, error) {
+			return ec.unmarshalOOffsetPaging2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPaging(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["paging"] = arg2
 	return args, nil
 }
 
@@ -6836,6 +7321,93 @@ func (ec *executionContext) fieldContext_GitOpsLink_error(_ context.Context, fie
 	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _GitOpsLinkConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.GitOpsLinkConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLinkConnection_nodes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.GitOpsLink) graphql.Marshaler {
+			return ec.marshalNGitOpsLink2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLinkᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLinkConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GitOpsLinkConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpsLink(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GitOpsLinkConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.GitOpsLinkConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLinkConnection_totalCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLinkConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsLinkConnection", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpsLinkConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.GitOpsLinkConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLinkConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.OffsetPageInfo) graphql.Marshaler {
+			return ec.marshalNOffsetPageInfo2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLinkConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GitOpsLinkConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_OffsetPageInfo(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _GitOpsSummary_sources(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsSummary) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7167,25 +7739,37 @@ func (ec *executionContext) _GitOpsTopology_sources(ctx context.Context, field g
 			return ec.fieldContext_GitOpsTopology_sources(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Sources, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.GitOpsTopology().Sources(ctx, obj, fc.Args["filter"].(*model.SourceStateFilter), fc.Args["sorting"].([]*model.SourceStateSort), fc.Args["paging"].(*model.OffsetPaging))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []api.SourceState) graphql.Marshaler {
-			return ec.marshalNSourceState2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SourceStateConnection) graphql.Marshaler {
+			return ec.marshalNSourceStateConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourceStateConnection(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_GitOpsTopology_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_GitOpsTopology_sources(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "GitOpsTopology",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_SourceState(ctx, field)
+			return ec.childFields_SourceStateConnection(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_GitOpsTopology_sources_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -7199,25 +7783,37 @@ func (ec *executionContext) _GitOpsTopology_workspaces(ctx context.Context, fiel
 			return ec.fieldContext_GitOpsTopology_workspaces(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Workspaces, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.GitOpsTopology().Workspaces(ctx, obj, fc.Args["filter"].(*model.WorkspaceStatusFilter), fc.Args["sorting"].([]*model.WorkspaceStatusSort), fc.Args["paging"].(*model.OffsetPaging))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceStatusResponse) graphql.Marshaler {
-			return ec.marshalNWorkspaceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponseᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.WorkspaceStatusConnection) graphql.Marshaler {
+			return ec.marshalNWorkspaceStatusConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusConnection(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_GitOpsTopology_workspaces(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_GitOpsTopology_workspaces(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "GitOpsTopology",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_WorkspaceStatus(ctx, field)
+			return ec.childFields_WorkspaceStatusConnection(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_GitOpsTopology_workspaces_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -7231,25 +7827,37 @@ func (ec *executionContext) _GitOpsTopology_links(ctx context.Context, field gra
 			return ec.fieldContext_GitOpsTopology_links(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Links, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.GitOpsTopology().Links(ctx, obj, fc.Args["filter"].(*model.GitOpsLinkFilter), fc.Args["sorting"].([]*model.GitOpsLinkSort), fc.Args["paging"].(*model.OffsetPaging))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []api.GitOpsLink) graphql.Marshaler {
-			return ec.marshalNGitOpsLink2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLinkᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.GitOpsLinkConnection) graphql.Marshaler {
+			return ec.marshalNGitOpsLinkConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkConnection(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_GitOpsTopology_links(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_GitOpsTopology_links(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "GitOpsTopology",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_GitOpsLink(ctx, field)
+			return ec.childFields_GitOpsLinkConnection(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_GitOpsTopology_links_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -13119,6 +13727,93 @@ func (ec *executionContext) fieldContext_WorkspaceMountRef_value(_ context.Conte
 	return graphql.NewScalarFieldContext("WorkspaceMountRef", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _WorkspaceMountRefConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceMountRefConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceMountRefConnection_nodes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.WorkspaceMountRef) graphql.Marshaler {
+			return ec.marshalNWorkspaceMountRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRefᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceMountRefConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceMountRefConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceMountRef(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WorkspaceMountRefConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceMountRefConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceMountRefConnection_totalCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceMountRefConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceMountRefConnection", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceMountRefConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceMountRefConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceMountRefConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.OffsetPageInfo) graphql.Marshaler {
+			return ec.marshalNOffsetPageInfo2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceMountRefConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceMountRefConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_OffsetPageInfo(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _WorkspaceRef_id(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRef) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -13827,6 +14522,116 @@ func (ec *executionContext) fieldContext_WorkspaceSourceStatus_error(_ context.C
 	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _WorkspaceSourceStatusConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceSourceStatusConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatusConnection_nodes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.WorkspaceSourceStatus) graphql.Marshaler {
+			return ec.marshalNWorkspaceSourceStatus2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatusᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatusConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceSourceStatusConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceSourceStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WorkspaceSourceStatusConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceSourceStatusConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatusConnection_totalCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatusConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceSourceStatusConnection", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceSourceStatusConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceSourceStatusConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatusConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.OffsetPageInfo) graphql.Marshaler {
+			return ec.marshalNOffsetPageInfo2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatusConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceSourceStatusConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_OffsetPageInfo(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WorkspaceStatus_id(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatus_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.WorkspaceStatus().ID(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatus_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceStatus", field, true, true, errors.New("field of type ID does not have child fields"))
+}
+
 func (ec *executionContext) _WorkspaceStatus_name(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -13997,25 +14802,37 @@ func (ec *executionContext) _WorkspaceStatus_sources(ctx context.Context, field 
 			return ec.fieldContext_WorkspaceStatus_sources(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Sources, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WorkspaceStatus().Sources(ctx, obj, fc.Args["filter"].(*model.WorkspaceSourceStatusFilter), fc.Args["sorting"].([]*model.WorkspaceSourceStatusSort), fc.Args["paging"].(*model.OffsetPaging))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceSourceStatus) graphql.Marshaler {
-			return ec.marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatusᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.WorkspaceSourceStatusConnection) graphql.Marshaler {
+			return ec.marshalNWorkspaceSourceStatusConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusConnection(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_WorkspaceStatus_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_WorkspaceStatus_sources(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "WorkspaceStatus",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_WorkspaceSourceStatus(ctx, field)
+			return ec.childFields_WorkspaceSourceStatusConnection(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WorkspaceStatus_sources_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -14259,25 +15076,37 @@ func (ec *executionContext) _WorkspaceStatus_mountedBy(ctx context.Context, fiel
 			return ec.fieldContext_WorkspaceStatus_mountedBy(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.MountedBy, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WorkspaceStatus().MountedBy(ctx, obj, fc.Args["filter"].(*model.WorkspaceMountRefFilter), fc.Args["sorting"].([]*model.WorkspaceMountRefSort), fc.Args["paging"].(*model.OffsetPaging))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceMountRef) graphql.Marshaler {
-			return ec.marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRefᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.WorkspaceMountRefConnection) graphql.Marshaler {
+			return ec.marshalNWorkspaceMountRefConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefConnection(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_WorkspaceStatus_mountedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_WorkspaceStatus_mountedBy(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "WorkspaceStatus",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_WorkspaceMountRef(ctx, field)
+			return ec.childFields_WorkspaceMountRefConnection(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WorkspaceStatus_mountedBy_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -14335,6 +15164,93 @@ func (ec *executionContext) _WorkspaceStatus_innerError(ctx context.Context, fie
 }
 func (ec *executionContext) fieldContext_WorkspaceStatus_innerError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("WorkspaceStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceStatusConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceStatusConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatusConnection_nodes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*api.WorkspaceStatusResponse) graphql.Marshaler {
+			return ec.marshalNWorkspaceStatus2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponseᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatusConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceStatusConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WorkspaceStatusConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceStatusConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatusConnection_totalCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatusConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceStatusConnection", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceStatusConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.WorkspaceStatusConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatusConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.OffsetPageInfo) graphql.Marshaler {
+			return ec.marshalNOffsetPageInfo2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOffsetPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatusConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceStatusConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_OffsetPageInfo(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
@@ -15620,6 +16536,157 @@ func (ec *executionContext) unmarshalInputDeleteOneWorkspaceInput(ctx context.Co
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputGitOpsLinkFilter(ctx context.Context, obj any) (model.GitOpsLinkFilter, error) {
+	var it model.GitOpsLinkFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"and", "or", "id", "source", "workspace", "slot", "kind", "mode", "state", "branch", "dirty", "pushed"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "and":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("and"))
+			data, err := ec.unmarshalOGitOpsLinkFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.And = data
+		case "or":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("or"))
+			data, err := ec.unmarshalOGitOpsLinkFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Or = data
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "source":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("source"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Source = data
+		case "workspace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("workspace"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Workspace = data
+		case "slot":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("slot"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Slot = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "mode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("mode"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Mode = data
+		case "state":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("state"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.State = data
+		case "branch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("branch"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Branch = data
+		case "dirty":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dirty"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Dirty = data
+		case "pushed":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("pushed"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Pushed = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputGitOpsLinkSort(ctx context.Context, obj any) (model.GitOpsLinkSort, error) {
+	var it model.GitOpsLinkSort
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "direction", "nulls"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNGitOpsLinkSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSortFields(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalNSortDirection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortDirection(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		case "nulls":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nulls"))
+			data, err := ec.unmarshalOSortNulls2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortNulls(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Nulls = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputJobStateFilter(ctx context.Context, obj any) (model.JobStateFilter, error) {
 	var it model.JobStateFilter
 	if obj == nil {
@@ -16870,6 +17937,115 @@ func (ec *executionContext) unmarshalInputWorkspaceCreateInput(ctx context.Conte
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputWorkspaceMountRefFilter(ctx context.Context, obj any) (model.WorkspaceMountRefFilter, error) {
+	var it model.WorkspaceMountRefFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"and", "or", "kind", "name", "field", "value"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "and":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("and"))
+			data, err := ec.unmarshalOWorkspaceMountRefFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.And = data
+		case "or":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("or"))
+			data, err := ec.unmarshalOWorkspaceMountRefFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Or = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "value":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("value"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Value = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorkspaceMountRefSort(ctx context.Context, obj any) (model.WorkspaceMountRefSort, error) {
+	var it model.WorkspaceMountRefSort
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "direction", "nulls"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNWorkspaceMountRefSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSortFields(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalNSortDirection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortDirection(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		case "nulls":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nulls"))
+			data, err := ec.unmarshalOSortNulls2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortNulls(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Nulls = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputWorkspaceRefFilter(ctx context.Context, obj any) (model.WorkspaceRefFilter, error) {
 	var it model.WorkspaceRefFilter
 	if obj == nil {
@@ -16949,6 +18125,273 @@ func (ec *executionContext) unmarshalInputWorkspaceRefSort(ctx context.Context, 
 		case "field":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
 			data, err := ec.unmarshalNWorkspaceRefSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceRefSortFields(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalNSortDirection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortDirection(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		case "nulls":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nulls"))
+			data, err := ec.unmarshalOSortNulls2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortNulls(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Nulls = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorkspaceSourceStatusFilter(ctx context.Context, obj any) (model.WorkspaceSourceStatusFilter, error) {
+	var it model.WorkspaceSourceStatusFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"and", "or", "slot", "source", "kind", "mode", "state", "branch", "dirty", "pushed", "exists"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "and":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("and"))
+			data, err := ec.unmarshalOWorkspaceSourceStatusFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.And = data
+		case "or":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("or"))
+			data, err := ec.unmarshalOWorkspaceSourceStatusFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Or = data
+		case "slot":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("slot"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Slot = data
+		case "source":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("source"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Source = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "mode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("mode"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Mode = data
+		case "state":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("state"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.State = data
+		case "branch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("branch"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Branch = data
+		case "dirty":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dirty"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Dirty = data
+		case "pushed":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("pushed"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Pushed = data
+		case "exists":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("exists"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Exists = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorkspaceSourceStatusSort(ctx context.Context, obj any) (model.WorkspaceSourceStatusSort, error) {
+	var it model.WorkspaceSourceStatusSort
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "direction", "nulls"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNWorkspaceSourceStatusSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSortFields(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalNSortDirection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortDirection(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		case "nulls":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nulls"))
+			data, err := ec.unmarshalOSortNulls2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSortNulls(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Nulls = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorkspaceStatusFilter(ctx context.Context, obj any) (model.WorkspaceStatusFilter, error) {
+	var it model.WorkspaceStatusFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"and", "or", "id", "name", "state", "template", "exists", "expired"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "and":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("and"))
+			data, err := ec.unmarshalOWorkspaceStatusFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.And = data
+		case "or":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("or"))
+			data, err := ec.unmarshalOWorkspaceStatusFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilterᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Or = data
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "state":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("state"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.State = data
+		case "template":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("template"))
+			data, err := ec.unmarshalOStringFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Template = data
+		case "exists":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("exists"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Exists = data
+		case "expired":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expired"))
+			data, err := ec.unmarshalOBooleanFieldComparison2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐBooleanFieldComparison(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Expired = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputWorkspaceStatusSort(ctx context.Context, obj any) (model.WorkspaceStatusSort, error) {
+	var it model.WorkspaceStatusSort
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "direction", "nulls"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNWorkspaceStatusSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSortFields(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -17547,6 +18990,55 @@ func (ec *executionContext) _GitOpsLink(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var gitOpsLinkConnectionImplementors = []string{"GitOpsLinkConnection"}
+
+func (ec *executionContext) _GitOpsLinkConnection(ctx context.Context, sel ast.SelectionSet, obj *model.GitOpsLinkConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, gitOpsLinkConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("GitOpsLinkConnection")
+		case "nodes":
+			out.Values[i] = ec._GitOpsLinkConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._GitOpsLinkConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._GitOpsLinkConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var gitOpsSummaryImplementors = []string{"GitOpsSummary"}
 
 func (ec *executionContext) _GitOpsSummary(ctx context.Context, sel ast.SelectionSet, obj *api.GitOpsSummary) graphql.Marshaler {
@@ -17655,32 +19147,125 @@ func (ec *executionContext) _GitOpsTopology(ctx context.Context, sel ast.Selecti
 		case "root":
 			out.Values[i] = ec._GitOpsTopology_root(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "name":
 			out.Values[i] = ec._GitOpsTopology_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "sources":
-			out.Values[i] = ec._GitOpsTopology_sources(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._GitOpsTopology_sources(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "workspaces":
-			out.Values[i] = ec._GitOpsTopology_workspaces(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._GitOpsTopology_workspaces(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "links":
-			out.Values[i] = ec._GitOpsTopology_links(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._GitOpsTopology_links(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "summary":
 			out.Values[i] = ec._GitOpsTopology_summary(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -20131,6 +21716,55 @@ func (ec *executionContext) _WorkspaceMountRef(ctx context.Context, sel ast.Sele
 	return out
 }
 
+var workspaceMountRefConnectionImplementors = []string{"WorkspaceMountRefConnection"}
+
+func (ec *executionContext) _WorkspaceMountRefConnection(ctx context.Context, sel ast.SelectionSet, obj *model.WorkspaceMountRefConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, workspaceMountRefConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorkspaceMountRefConnection")
+		case "nodes":
+			out.Values[i] = ec._WorkspaceMountRefConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._WorkspaceMountRefConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._WorkspaceMountRefConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var workspaceRefImplementors = []string{"WorkspaceRef"}
 
 func (ec *executionContext) _WorkspaceRef(ctx context.Context, sel ast.SelectionSet, obj *api.WorkspaceRef) graphql.Marshaler {
@@ -20400,6 +22034,55 @@ func (ec *executionContext) _WorkspaceSourceStatus(ctx context.Context, sel ast.
 	return out
 }
 
+var workspaceSourceStatusConnectionImplementors = []string{"WorkspaceSourceStatusConnection"}
+
+func (ec *executionContext) _WorkspaceSourceStatusConnection(ctx context.Context, sel ast.SelectionSet, obj *model.WorkspaceSourceStatusConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, workspaceSourceStatusConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorkspaceSourceStatusConnection")
+		case "nodes":
+			out.Values[i] = ec._WorkspaceSourceStatusConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._WorkspaceSourceStatusConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._WorkspaceSourceStatusConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var workspaceStatusImplementors = []string{"WorkspaceStatus"}
 
 func (ec *executionContext) _WorkspaceStatus(ctx context.Context, sel ast.SelectionSet, obj *api.WorkspaceStatusResponse) graphql.Marshaler {
@@ -20411,6 +22094,42 @@ func (ec *executionContext) _WorkspaceStatus(ctx context.Context, sel ast.Select
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("WorkspaceStatus")
+		case "id":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WorkspaceStatus_id(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "name":
 			out.Values[i] = ec._WorkspaceStatus_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -20472,10 +22191,41 @@ func (ec *executionContext) _WorkspaceStatus(ctx context.Context, sel ast.Select
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "sources":
-			out.Values[i] = ec._WorkspaceStatus_sources(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WorkspaceStatus_sources(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "chain":
 			out.Values[i] = ec._WorkspaceStatus_chain(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -20596,14 +22346,94 @@ func (ec *executionContext) _WorkspaceStatus(ctx context.Context, sel ast.Select
 				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "mountedBy":
-			out.Values[i] = ec._WorkspaceStatus_mountedBy(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WorkspaceStatus_mountedBy(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "innerStack":
 			out.Values[i] = ec._WorkspaceStatus_innerStack(ctx, field, obj)
 		case "innerError":
 			out.Values[i] = ec._WorkspaceStatus_innerError(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var workspaceStatusConnectionImplementors = []string{"WorkspaceStatusConnection"}
+
+func (ec *executionContext) _WorkspaceStatusConnection(ctx context.Context, sel ast.SelectionSet, obj *model.WorkspaceStatusConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, workspaceStatusConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorkspaceStatusConnection")
+		case "nodes":
+			out.Values[i] = ec._WorkspaceStatusConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._WorkspaceStatusConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._WorkspaceStatusConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -21086,15 +22916,11 @@ func (ec *executionContext) marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋang
 	return ec._GitOpResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNGitOpsLink2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLink(ctx context.Context, sel ast.SelectionSet, v api.GitOpsLink) graphql.Marshaler {
-	return ec._GitOpsLink(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNGitOpsLink2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []api.GitOpsLink) graphql.Marshaler {
+func (ec *executionContext) marshalNGitOpsLink2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.GitOpsLink) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNGitOpsLink2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLink(ctx, sel, v[i])
+		return ec.marshalNGitOpsLink2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLink(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -21104,6 +22930,50 @@ func (ec *executionContext) marshalNGitOpsLink2ᚕgithubᚗcomᚋangᚑeeᚋange
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNGitOpsLink2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsLink(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsLink) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._GitOpsLink(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNGitOpsLinkConnection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkConnection(ctx context.Context, sel ast.SelectionSet, v model.GitOpsLinkConnection) graphql.Marshaler {
+	return ec._GitOpsLinkConnection(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNGitOpsLinkConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkConnection(ctx context.Context, sel ast.SelectionSet, v *model.GitOpsLinkConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._GitOpsLinkConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNGitOpsLinkFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilter(ctx context.Context, v any) (*model.GitOpsLinkFilter, error) {
+	res, err := ec.unmarshalInputGitOpsLinkFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNGitOpsLinkSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSort(ctx context.Context, v any) (*model.GitOpsLinkSort, error) {
+	res, err := ec.unmarshalInputGitOpsLinkSort(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNGitOpsLinkSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSortFields(ctx context.Context, v any) (model.GitOpsLinkSortFields, error) {
+	var res model.GitOpsLinkSortFields
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNGitOpsLinkSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSortFields(ctx context.Context, sel ast.SelectionSet, v model.GitOpsLinkSortFields) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNGitOpsSummary2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsSummary(ctx context.Context, sel ast.SelectionSet, v api.GitOpsSummary) graphql.Marshaler {
@@ -21460,26 +23330,6 @@ func (ec *executionContext) marshalNSortDirection2githubᚗcomᚋangᚑeeᚋange
 	return v
 }
 
-func (ec *executionContext) marshalNSourceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v api.SourceState) graphql.Marshaler {
-	return ec._SourceState(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNSourceState2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []api.SourceState) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNSourceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
 func (ec *executionContext) marshalNSourceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.SourceState) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -21724,15 +23574,11 @@ func (ec *executionContext) marshalNWorkspaceCreatePreflight2ᚖgithubᚗcomᚋa
 	return ec._WorkspaceCreatePreflight(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNWorkspaceMountRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRef(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceMountRef) graphql.Marshaler {
-	return ec._WorkspaceMountRef(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRefᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceMountRef) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceMountRef2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRefᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.WorkspaceMountRef) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceMountRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRef(ctx, sel, v[i])
+		return ec.marshalNWorkspaceMountRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRef(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -21742,6 +23588,50 @@ func (ec *executionContext) marshalNWorkspaceMountRef2ᚕgithubᚗcomᚋangᚑee
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNWorkspaceMountRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceMountRef(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceMountRef) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceMountRef(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorkspaceMountRefConnection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefConnection(ctx context.Context, sel ast.SelectionSet, v model.WorkspaceMountRefConnection) graphql.Marshaler {
+	return ec._WorkspaceMountRefConnection(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorkspaceMountRefConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefConnection(ctx context.Context, sel ast.SelectionSet, v *model.WorkspaceMountRefConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceMountRefConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceMountRefFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilter(ctx context.Context, v any) (*model.WorkspaceMountRefFilter, error) {
+	res, err := ec.unmarshalInputWorkspaceMountRefFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceMountRefSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSort(ctx context.Context, v any) (*model.WorkspaceMountRefSort, error) {
+	res, err := ec.unmarshalInputWorkspaceMountRefSort(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceMountRefSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSortFields(ctx context.Context, v any) (model.WorkspaceMountRefSortFields, error) {
+	var res model.WorkspaceMountRefSortFields
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNWorkspaceMountRefSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSortFields(ctx context.Context, sel ast.SelectionSet, v model.WorkspaceMountRefSortFields) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNWorkspaceRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceRef) graphql.Marshaler {
@@ -21808,15 +23698,11 @@ func (ec *executionContext) marshalNWorkspaceRefSortFields2githubᚗcomᚋangᚑ
 	return v
 }
 
-func (ec *executionContext) marshalNWorkspaceSourceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceSourceStatus) graphql.Marshaler {
-	return ec._WorkspaceSourceStatus(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceSourceStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.WorkspaceSourceStatus) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceSourceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, sel, v[i])
+		return ec.marshalNWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -21828,15 +23714,59 @@ func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚕgithubᚗcomᚋang�
 	return ret
 }
 
+func (ec *executionContext) marshalNWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceSourceStatus(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorkspaceSourceStatusConnection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusConnection(ctx context.Context, sel ast.SelectionSet, v model.WorkspaceSourceStatusConnection) graphql.Marshaler {
+	return ec._WorkspaceSourceStatusConnection(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorkspaceSourceStatusConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusConnection(ctx context.Context, sel ast.SelectionSet, v *model.WorkspaceSourceStatusConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceSourceStatusConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceSourceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilter(ctx context.Context, v any) (*model.WorkspaceSourceStatusFilter, error) {
+	res, err := ec.unmarshalInputWorkspaceSourceStatusFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceSourceStatusSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSort(ctx context.Context, v any) (*model.WorkspaceSourceStatusSort, error) {
+	res, err := ec.unmarshalInputWorkspaceSourceStatusSort(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceSourceStatusSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSortFields(ctx context.Context, v any) (model.WorkspaceSourceStatusSortFields, error) {
+	var res model.WorkspaceSourceStatusSortFields
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNWorkspaceSourceStatusSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSortFields(ctx context.Context, sel ast.SelectionSet, v model.WorkspaceSourceStatusSortFields) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNWorkspaceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceStatusResponse) graphql.Marshaler {
 	return ec._WorkspaceStatus(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkspaceStatus2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponseᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceStatusResponse) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkspaceStatus2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponseᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.WorkspaceStatusResponse) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNWorkspaceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx, sel, v[i])
+		return ec.marshalNWorkspaceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -21856,6 +23786,40 @@ func (ec *executionContext) marshalNWorkspaceStatus2ᚖgithubᚗcomᚋangᚑee�
 		return graphql.Null
 	}
 	return ec._WorkspaceStatus(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorkspaceStatusConnection2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusConnection(ctx context.Context, sel ast.SelectionSet, v model.WorkspaceStatusConnection) graphql.Marshaler {
+	return ec._WorkspaceStatusConnection(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorkspaceStatusConnection2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusConnection(ctx context.Context, sel ast.SelectionSet, v *model.WorkspaceStatusConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceStatusConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilter(ctx context.Context, v any) (*model.WorkspaceStatusFilter, error) {
+	res, err := ec.unmarshalInputWorkspaceStatusFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceStatusSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSort(ctx context.Context, v any) (*model.WorkspaceStatusSort, error) {
+	res, err := ec.unmarshalInputWorkspaceStatusSort(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNWorkspaceStatusSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSortFields(ctx context.Context, v any) (model.WorkspaceStatusSortFields, error) {
+	var res model.WorkspaceStatusSortFields
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNWorkspaceStatusSortFields2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSortFields(ctx context.Context, sel ast.SelectionSet, v model.WorkspaceStatusSortFields) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNWorkspaceUpdateInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceUpdateInput(ctx context.Context, v any) (*model.WorkspaceUpdateInput, error) {
@@ -22066,6 +24030,50 @@ func (ec *executionContext) marshalOCompiledStack2ᚖgithubᚗcomᚋangᚑeeᚋa
 		return graphql.Null
 	}
 	return ec._CompiledStack(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOGitOpsLinkFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilterᚄ(ctx context.Context, v any) ([]*model.GitOpsLinkFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.GitOpsLinkFilter, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNGitOpsLinkFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilter(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalOGitOpsLinkFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkFilter(ctx context.Context, v any) (*model.GitOpsLinkFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputGitOpsLinkFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOGitOpsLinkSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSortᚄ(ctx context.Context, v any) ([]*model.GitOpsLinkSort, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.GitOpsLinkSort, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNGitOpsLinkSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGitOpsLinkSort(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
 func (ec *executionContext) marshalOGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpsTopologyResponse(ctx context.Context, sel ast.SelectionSet, v *api.GitOpsTopologyResponse) graphql.Marshaler {
@@ -22544,6 +24552,50 @@ func (ec *executionContext) unmarshalOTemplateDescriptorSort2ᚕᚖgithubᚗcom�
 	return res, nil
 }
 
+func (ec *executionContext) unmarshalOWorkspaceMountRefFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilterᚄ(ctx context.Context, v any) ([]*model.WorkspaceMountRefFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.WorkspaceMountRefFilter, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNWorkspaceMountRefFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilter(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalOWorkspaceMountRefFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefFilter(ctx context.Context, v any) (*model.WorkspaceMountRefFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputWorkspaceMountRefFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOWorkspaceMountRefSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSortᚄ(ctx context.Context, v any) ([]*model.WorkspaceMountRefSort, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.WorkspaceMountRefSort, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNWorkspaceMountRefSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceMountRefSort(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
 func (ec *executionContext) marshalOWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRef(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceRef) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -22602,11 +24654,99 @@ func (ec *executionContext) marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋang�
 	return ec._WorkspaceSourceStatus(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOWorkspaceSourceStatusFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilterᚄ(ctx context.Context, v any) ([]*model.WorkspaceSourceStatusFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.WorkspaceSourceStatusFilter, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNWorkspaceSourceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilter(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalOWorkspaceSourceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusFilter(ctx context.Context, v any) (*model.WorkspaceSourceStatusFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputWorkspaceSourceStatusFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOWorkspaceSourceStatusSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSortᚄ(ctx context.Context, v any) ([]*model.WorkspaceSourceStatusSort, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.WorkspaceSourceStatusSort, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNWorkspaceSourceStatusSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceSourceStatusSort(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
 func (ec *executionContext) marshalOWorkspaceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceStatusResponse(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceStatusResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._WorkspaceStatus(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOWorkspaceStatusFilter2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilterᚄ(ctx context.Context, v any) ([]*model.WorkspaceStatusFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.WorkspaceStatusFilter, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNWorkspaceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilter(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalOWorkspaceStatusFilter2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusFilter(ctx context.Context, v any) (*model.WorkspaceStatusFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputWorkspaceStatusFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOWorkspaceStatusSort2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSortᚄ(ctx context.Context, v any) ([]*model.WorkspaceStatusSort, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.WorkspaceStatusSort, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNWorkspaceStatusSort2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceStatusSort(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
 func (ec *executionContext) marshalO__EnumValue2ᚕgithubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐEnumValueᚄ(ctx context.Context, sel ast.SelectionSet, v []introspection.EnumValue) graphql.Marshaler {

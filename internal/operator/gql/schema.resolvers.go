@@ -12,6 +12,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -37,6 +38,39 @@ func (r *compiledStackResolver) SecretEnvVars(ctx context.Context, obj *service.
 		return nil, nil
 	}
 	return keyValueList(obj.SecretEnvVars), nil
+}
+
+// Sources is the resolver for the sources field.
+func (r *gitOpsTopologyResolver) Sources(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.SourceStateFilter, sorting []*model.SourceStateSort, paging *model.OffsetPaging) (*model.SourceStateConnection, error) {
+	var items []api.SourceState
+	if obj != nil {
+		items = obj.Sources
+	}
+	args := query.Args{Filter: bindSourceFilter(filter), Sorting: bindSourceSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, queryfields.Source)
+	return &model.SourceStateConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+}
+
+// Workspaces is the resolver for the workspaces field.
+func (r *gitOpsTopologyResolver) Workspaces(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.WorkspaceStatusFilter, sorting []*model.WorkspaceStatusSort, paging *model.OffsetPaging) (*model.WorkspaceStatusConnection, error) {
+	var items []api.WorkspaceStatusResponse
+	if obj != nil {
+		items = obj.Workspaces
+	}
+	args := query.Args{Filter: bindWorkspaceStatusFilter(filter), Sorting: bindWorkspaceStatusSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, queryfields.WorkspaceStatus)
+	return &model.WorkspaceStatusConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+}
+
+// Links is the resolver for the links field.
+func (r *gitOpsTopologyResolver) Links(ctx context.Context, obj *api.GitOpsTopologyResponse, filter *model.GitOpsLinkFilter, sorting []*model.GitOpsLinkSort, paging *model.OffsetPaging) (*model.GitOpsLinkConnection, error) {
+	var items []api.GitOpsLink
+	if obj != nil {
+		items = obj.Links
+	}
+	args := query.Args{Filter: bindGitOpsLinkFilter(filter), Sorting: bindGitOpsLinkSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, queryfields.GitOpsLink)
+	return &model.GitOpsLinkConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // ID is the resolver for the id field.
@@ -703,12 +737,31 @@ func (r *workspaceRefResolver) TTLExpiresAt(ctx context.Context, obj *api.Worksp
 	return formatGraphQLTime(obj.TTLExpiresAt), nil
 }
 
+// ID is the resolver for the id field.
+func (r *workspaceStatusResolver) ID(ctx context.Context, obj *api.WorkspaceStatusResponse) (string, error) {
+	if obj == nil {
+		return "", nil
+	}
+	return obj.Name, nil
+}
+
 // Inputs is the resolver for the inputs field.
 func (r *workspaceStatusResolver) Inputs(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error) {
 	if obj == nil {
 		return nil, nil
 	}
 	return stringMapJSON(obj.Inputs), nil
+}
+
+// Sources is the resolver for the sources field.
+func (r *workspaceStatusResolver) Sources(ctx context.Context, obj *api.WorkspaceStatusResponse, filter *model.WorkspaceSourceStatusFilter, sorting []*model.WorkspaceSourceStatusSort, paging *model.OffsetPaging) (*model.WorkspaceSourceStatusConnection, error) {
+	var items []api.WorkspaceSourceStatus
+	if obj != nil {
+		items = obj.Sources
+	}
+	args := query.Args{Filter: bindWorkspaceSourceStatusFilter(filter), Sorting: bindWorkspaceSourceStatusSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, queryfields.WorkspaceSource)
+	return &model.WorkspaceSourceStatusConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
 }
 
 // Allocations is the resolver for the allocations field.
@@ -735,8 +788,22 @@ func (r *workspaceStatusResolver) TTLExpiresAt(ctx context.Context, obj *api.Wor
 	return formatGraphQLTime(obj.TTLExpiresAt), nil
 }
 
+// MountedBy is the resolver for the mountedBy field.
+func (r *workspaceStatusResolver) MountedBy(ctx context.Context, obj *api.WorkspaceStatusResponse, filter *model.WorkspaceMountRefFilter, sorting []*model.WorkspaceMountRefSort, paging *model.OffsetPaging) (*model.WorkspaceMountRefConnection, error) {
+	var items []api.WorkspaceMountRef
+	if obj != nil {
+		items = obj.MountedBy
+	}
+	args := query.Args{Filter: bindWorkspaceMountRefFilter(filter), Sorting: bindWorkspaceMountRefSorts(sorting), Paging: bindPaging(paging)}
+	page, total := query.Apply(items, args, queryfields.WorkspaceMount)
+	return &model.WorkspaceMountRefConnection{Nodes: ptrSlice(page), TotalCount: total, PageInfo: offsetPageInfo(args.Paging, total, len(page))}, nil
+}
+
 // CompiledStack returns CompiledStackResolver implementation.
 func (r *Resolver) CompiledStack() CompiledStackResolver { return &compiledStackResolver{r} }
+
+// GitOpsTopology returns GitOpsTopologyResolver implementation.
+func (r *Resolver) GitOpsTopology() GitOpsTopologyResolver { return &gitOpsTopologyResolver{r} }
 
 // JobState returns JobStateResolver implementation.
 func (r *Resolver) JobState() JobStateResolver { return &jobStateResolver{r} }
@@ -779,6 +846,7 @@ func (r *Resolver) WorkspaceRef() WorkspaceRefResolver { return &workspaceRefRes
 func (r *Resolver) WorkspaceStatus() WorkspaceStatusResolver { return &workspaceStatusResolver{r} }
 
 type compiledStackResolver struct{ *Resolver }
+type gitOpsTopologyResolver struct{ *Resolver }
 type jobStateResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }

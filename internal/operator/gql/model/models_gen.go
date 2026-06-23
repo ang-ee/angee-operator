@@ -41,6 +41,33 @@ type DeleteOneWorkspaceInput struct {
 	Purge *bool  `json:"purge,omitempty"`
 }
 
+type GitOpsLinkConnection struct {
+	Nodes      []*api.GitOpsLink `json:"nodes"`
+	TotalCount int               `json:"totalCount"`
+	PageInfo   *OffsetPageInfo   `json:"pageInfo"`
+}
+
+type GitOpsLinkFilter struct {
+	And       []*GitOpsLinkFilter     `json:"and,omitempty"`
+	Or        []*GitOpsLinkFilter     `json:"or,omitempty"`
+	ID        *StringFieldComparison  `json:"id,omitempty"`
+	Source    *StringFieldComparison  `json:"source,omitempty"`
+	Workspace *StringFieldComparison  `json:"workspace,omitempty"`
+	Slot      *StringFieldComparison  `json:"slot,omitempty"`
+	Kind      *StringFieldComparison  `json:"kind,omitempty"`
+	Mode      *StringFieldComparison  `json:"mode,omitempty"`
+	State     *StringFieldComparison  `json:"state,omitempty"`
+	Branch    *StringFieldComparison  `json:"branch,omitempty"`
+	Dirty     *BooleanFieldComparison `json:"dirty,omitempty"`
+	Pushed    *BooleanFieldComparison `json:"pushed,omitempty"`
+}
+
+type GitOpsLinkSort struct {
+	Field     GitOpsLinkSortFields `json:"field"`
+	Direction SortDirection        `json:"direction"`
+	Nulls     *SortNulls           `json:"nulls,omitempty"`
+}
+
 type JobStateConnection struct {
 	Nodes      []*api.JobState `json:"nodes"`
 	TotalCount int             `json:"totalCount"`
@@ -289,6 +316,27 @@ type WorkspaceCreateInput struct {
 	TTL      *string          `json:"ttl,omitempty"`
 }
 
+type WorkspaceMountRefConnection struct {
+	Nodes      []*api.WorkspaceMountRef `json:"nodes"`
+	TotalCount int                      `json:"totalCount"`
+	PageInfo   *OffsetPageInfo          `json:"pageInfo"`
+}
+
+type WorkspaceMountRefFilter struct {
+	And   []*WorkspaceMountRefFilter `json:"and,omitempty"`
+	Or    []*WorkspaceMountRefFilter `json:"or,omitempty"`
+	Kind  *StringFieldComparison     `json:"kind,omitempty"`
+	Name  *StringFieldComparison     `json:"name,omitempty"`
+	Field *StringFieldComparison     `json:"field,omitempty"`
+	Value *StringFieldComparison     `json:"value,omitempty"`
+}
+
+type WorkspaceMountRefSort struct {
+	Field     WorkspaceMountRefSortFields `json:"field"`
+	Direction SortDirection               `json:"direction"`
+	Nulls     *SortNulls                  `json:"nulls,omitempty"`
+}
+
 type WorkspaceRefConnection struct {
 	Nodes      []*api.WorkspaceRef `json:"nodes"`
 	TotalCount int                 `json:"totalCount"`
@@ -309,9 +357,125 @@ type WorkspaceRefSort struct {
 	Nulls     *SortNulls             `json:"nulls,omitempty"`
 }
 
+type WorkspaceSourceStatusConnection struct {
+	Nodes      []*api.WorkspaceSourceStatus `json:"nodes"`
+	TotalCount int                          `json:"totalCount"`
+	PageInfo   *OffsetPageInfo              `json:"pageInfo"`
+}
+
+type WorkspaceSourceStatusFilter struct {
+	And    []*WorkspaceSourceStatusFilter `json:"and,omitempty"`
+	Or     []*WorkspaceSourceStatusFilter `json:"or,omitempty"`
+	Slot   *StringFieldComparison         `json:"slot,omitempty"`
+	Source *StringFieldComparison         `json:"source,omitempty"`
+	Kind   *StringFieldComparison         `json:"kind,omitempty"`
+	Mode   *StringFieldComparison         `json:"mode,omitempty"`
+	State  *StringFieldComparison         `json:"state,omitempty"`
+	Branch *StringFieldComparison         `json:"branch,omitempty"`
+	Dirty  *BooleanFieldComparison        `json:"dirty,omitempty"`
+	Pushed *BooleanFieldComparison        `json:"pushed,omitempty"`
+	Exists *BooleanFieldComparison        `json:"exists,omitempty"`
+}
+
+type WorkspaceSourceStatusSort struct {
+	Field     WorkspaceSourceStatusSortFields `json:"field"`
+	Direction SortDirection                   `json:"direction"`
+	Nulls     *SortNulls                      `json:"nulls,omitempty"`
+}
+
+type WorkspaceStatusConnection struct {
+	Nodes      []*api.WorkspaceStatusResponse `json:"nodes"`
+	TotalCount int                            `json:"totalCount"`
+	PageInfo   *OffsetPageInfo                `json:"pageInfo"`
+}
+
+type WorkspaceStatusFilter struct {
+	And      []*WorkspaceStatusFilter `json:"and,omitempty"`
+	Or       []*WorkspaceStatusFilter `json:"or,omitempty"`
+	ID       *StringFieldComparison   `json:"id,omitempty"`
+	Name     *StringFieldComparison   `json:"name,omitempty"`
+	State    *StringFieldComparison   `json:"state,omitempty"`
+	Template *StringFieldComparison   `json:"template,omitempty"`
+	Exists   *BooleanFieldComparison  `json:"exists,omitempty"`
+	Expired  *BooleanFieldComparison  `json:"expired,omitempty"`
+}
+
+type WorkspaceStatusSort struct {
+	Field     WorkspaceStatusSortFields `json:"field"`
+	Direction SortDirection             `json:"direction"`
+	Nulls     *SortNulls                `json:"nulls,omitempty"`
+}
+
 type WorkspaceUpdateInput struct {
 	Inputs []*KeyValueInput `json:"inputs,omitempty"`
 	TTL    *string          `json:"ttl,omitempty"`
+}
+
+type GitOpsLinkSortFields string
+
+const (
+	GitOpsLinkSortFieldsID        GitOpsLinkSortFields = "id"
+	GitOpsLinkSortFieldsSource    GitOpsLinkSortFields = "source"
+	GitOpsLinkSortFieldsWorkspace GitOpsLinkSortFields = "workspace"
+	GitOpsLinkSortFieldsSlot      GitOpsLinkSortFields = "slot"
+	GitOpsLinkSortFieldsKind      GitOpsLinkSortFields = "kind"
+	GitOpsLinkSortFieldsMode      GitOpsLinkSortFields = "mode"
+	GitOpsLinkSortFieldsState     GitOpsLinkSortFields = "state"
+	GitOpsLinkSortFieldsBranch    GitOpsLinkSortFields = "branch"
+)
+
+var AllGitOpsLinkSortFields = []GitOpsLinkSortFields{
+	GitOpsLinkSortFieldsID,
+	GitOpsLinkSortFieldsSource,
+	GitOpsLinkSortFieldsWorkspace,
+	GitOpsLinkSortFieldsSlot,
+	GitOpsLinkSortFieldsKind,
+	GitOpsLinkSortFieldsMode,
+	GitOpsLinkSortFieldsState,
+	GitOpsLinkSortFieldsBranch,
+}
+
+func (e GitOpsLinkSortFields) IsValid() bool {
+	switch e {
+	case GitOpsLinkSortFieldsID, GitOpsLinkSortFieldsSource, GitOpsLinkSortFieldsWorkspace, GitOpsLinkSortFieldsSlot, GitOpsLinkSortFieldsKind, GitOpsLinkSortFieldsMode, GitOpsLinkSortFieldsState, GitOpsLinkSortFieldsBranch:
+		return true
+	}
+	return false
+}
+
+func (e GitOpsLinkSortFields) String() string {
+	return string(e)
+}
+
+func (e *GitOpsLinkSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = GitOpsLinkSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid GitOpsLinkSortFields", str)
+	}
+	return nil
+}
+
+func (e GitOpsLinkSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *GitOpsLinkSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e GitOpsLinkSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 type JobStateSortFields string
@@ -723,6 +887,65 @@ func (e TemplateDescriptorSortFields) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type WorkspaceMountRefSortFields string
+
+const (
+	WorkspaceMountRefSortFieldsKind  WorkspaceMountRefSortFields = "kind"
+	WorkspaceMountRefSortFieldsName  WorkspaceMountRefSortFields = "name"
+	WorkspaceMountRefSortFieldsField WorkspaceMountRefSortFields = "field"
+	WorkspaceMountRefSortFieldsValue WorkspaceMountRefSortFields = "value"
+)
+
+var AllWorkspaceMountRefSortFields = []WorkspaceMountRefSortFields{
+	WorkspaceMountRefSortFieldsKind,
+	WorkspaceMountRefSortFieldsName,
+	WorkspaceMountRefSortFieldsField,
+	WorkspaceMountRefSortFieldsValue,
+}
+
+func (e WorkspaceMountRefSortFields) IsValid() bool {
+	switch e {
+	case WorkspaceMountRefSortFieldsKind, WorkspaceMountRefSortFieldsName, WorkspaceMountRefSortFieldsField, WorkspaceMountRefSortFieldsValue:
+		return true
+	}
+	return false
+}
+
+func (e WorkspaceMountRefSortFields) String() string {
+	return string(e)
+}
+
+func (e *WorkspaceMountRefSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WorkspaceMountRefSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WorkspaceMountRefSortFields", str)
+	}
+	return nil
+}
+
+func (e WorkspaceMountRefSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WorkspaceMountRefSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WorkspaceMountRefSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type WorkspaceRefSortFields string
 
 const (
@@ -775,6 +998,128 @@ func (e *WorkspaceRefSortFields) UnmarshalJSON(b []byte) error {
 }
 
 func (e WorkspaceRefSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WorkspaceSourceStatusSortFields string
+
+const (
+	WorkspaceSourceStatusSortFieldsSlot   WorkspaceSourceStatusSortFields = "slot"
+	WorkspaceSourceStatusSortFieldsSource WorkspaceSourceStatusSortFields = "source"
+	WorkspaceSourceStatusSortFieldsKind   WorkspaceSourceStatusSortFields = "kind"
+	WorkspaceSourceStatusSortFieldsMode   WorkspaceSourceStatusSortFields = "mode"
+	WorkspaceSourceStatusSortFieldsState  WorkspaceSourceStatusSortFields = "state"
+	WorkspaceSourceStatusSortFieldsBranch WorkspaceSourceStatusSortFields = "branch"
+)
+
+var AllWorkspaceSourceStatusSortFields = []WorkspaceSourceStatusSortFields{
+	WorkspaceSourceStatusSortFieldsSlot,
+	WorkspaceSourceStatusSortFieldsSource,
+	WorkspaceSourceStatusSortFieldsKind,
+	WorkspaceSourceStatusSortFieldsMode,
+	WorkspaceSourceStatusSortFieldsState,
+	WorkspaceSourceStatusSortFieldsBranch,
+}
+
+func (e WorkspaceSourceStatusSortFields) IsValid() bool {
+	switch e {
+	case WorkspaceSourceStatusSortFieldsSlot, WorkspaceSourceStatusSortFieldsSource, WorkspaceSourceStatusSortFieldsKind, WorkspaceSourceStatusSortFieldsMode, WorkspaceSourceStatusSortFieldsState, WorkspaceSourceStatusSortFieldsBranch:
+		return true
+	}
+	return false
+}
+
+func (e WorkspaceSourceStatusSortFields) String() string {
+	return string(e)
+}
+
+func (e *WorkspaceSourceStatusSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WorkspaceSourceStatusSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WorkspaceSourceStatusSortFields", str)
+	}
+	return nil
+}
+
+func (e WorkspaceSourceStatusSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WorkspaceSourceStatusSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WorkspaceSourceStatusSortFields) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WorkspaceStatusSortFields string
+
+const (
+	WorkspaceStatusSortFieldsID       WorkspaceStatusSortFields = "id"
+	WorkspaceStatusSortFieldsName     WorkspaceStatusSortFields = "name"
+	WorkspaceStatusSortFieldsState    WorkspaceStatusSortFields = "state"
+	WorkspaceStatusSortFieldsTemplate WorkspaceStatusSortFields = "template"
+)
+
+var AllWorkspaceStatusSortFields = []WorkspaceStatusSortFields{
+	WorkspaceStatusSortFieldsID,
+	WorkspaceStatusSortFieldsName,
+	WorkspaceStatusSortFieldsState,
+	WorkspaceStatusSortFieldsTemplate,
+}
+
+func (e WorkspaceStatusSortFields) IsValid() bool {
+	switch e {
+	case WorkspaceStatusSortFieldsID, WorkspaceStatusSortFieldsName, WorkspaceStatusSortFieldsState, WorkspaceStatusSortFieldsTemplate:
+		return true
+	}
+	return false
+}
+
+func (e WorkspaceStatusSortFields) String() string {
+	return string(e)
+}
+
+func (e *WorkspaceStatusSortFields) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WorkspaceStatusSortFields(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WorkspaceStatusSortFields", str)
+	}
+	return nil
+}
+
+func (e WorkspaceStatusSortFields) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WorkspaceStatusSortFields) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WorkspaceStatusSortFields) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

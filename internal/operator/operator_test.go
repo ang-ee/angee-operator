@@ -141,7 +141,7 @@ services:
 	}
 
 	resp := doGraphQL(t, server, map[string]any{
-		"query": `{ workspaceStatus(name: "feat") { name state exists inputs processComposePort playwrightMcpName playwrightMcpUrl sources { slot source kind mode state pushed } mountedBy { kind name field } } }`,
+		"query": `{ workspaceStatus(name: "feat") { name state exists inputs processComposePort playwrightMcpName playwrightMcpUrl sources { nodes { slot source kind mode state pushed } } mountedBy { nodes { kind name field } } } }`,
 	})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("GraphQL errors = %#v", resp.Errors)
@@ -153,7 +153,7 @@ services:
 	if status["processComposePort"] != float64(10002) || status["playwrightMcpName"] != "playwright-feat" || status["playwrightMcpUrl"] != "http://127.0.0.1:9225/mcp" {
 		t.Fatalf("workspace runtime facts = %#v, want control/MCP facts", status)
 	}
-	sources := status["sources"].([]any)
+	sources := status["sources"].(map[string]any)["nodes"].([]any)
 	if len(sources) != 1 {
 		t.Fatalf("sources length = %d, want 1", len(sources))
 	}
@@ -161,7 +161,7 @@ services:
 	if source["slot"] != "app" || source["source"] != "app" || source["kind"] != "git" || source["mode"] != "worktree" || source["state"] != "missing" {
 		t.Fatalf("source status = %#v, want missing app git worktree", source)
 	}
-	mountedBy := status["mountedBy"].([]any)
+	mountedBy := status["mountedBy"].(map[string]any)["nodes"].([]any)
 	if len(mountedBy) != 1 {
 		t.Fatalf("mountedBy length = %d, want 1", len(mountedBy))
 	}
@@ -246,12 +246,14 @@ name: inner
 			gitOpsTopology {
 				name
 				summary { sources workspaces worktrees ahead unpushed }
-				sources { name state ref pushed }
-				links { id workspace slot source state ahead pushed currentRef }
+				sources { nodes { name state ref pushed } }
+				links { nodes { id workspace slot source state ahead pushed currentRef } }
 				workspaces {
-					name
-					sources { slot state ahead pushed }
-					innerStack { name services { name } jobs { name } workspaces { name } }
+					nodes {
+						name
+						sources { nodes { slot state ahead pushed } }
+						innerStack { name services { name } jobs { name } workspaces { name } }
+					}
 				}
 			}
 		}`,
@@ -267,7 +269,7 @@ name: inner
 	if summary["ahead"] != float64(1) || summary["unpushed"] != float64(1) {
 		t.Fatalf("summary = %#v, want one ahead unpushed worktree", summary)
 	}
-	links := topology["links"].([]any)
+	links := topology["links"].(map[string]any)["nodes"].([]any)
 	if len(links) != 1 {
 		t.Fatalf("links length = %d, want 1", len(links))
 	}
@@ -323,13 +325,13 @@ func TestOperatorWorkspaceBranchIdentityStatusAndSyncBase(t *testing.T) {
 	}
 
 	resp := doGraphQL(t, server, map[string]any{
-		"query": `{ workspaceStatus(name: "feature-a") { state sources { slot state branch currentRef unpushedReason } } }`,
+		"query": `{ workspaceStatus(name: "feature-a") { state sources { nodes { slot state branch currentRef unpushedReason } } } }`,
 	})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("GraphQL status errors = %#v", resp.Errors)
 	}
 	gqlStatus := resp.Data["workspaceStatus"].(map[string]any)
-	gqlSource := gqlStatus["sources"].([]any)[0].(map[string]any)
+	gqlSource := gqlStatus["sources"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
 	if gqlStatus["state"] != "discrepancy" || gqlSource["state"] != "branch-mismatch" || gqlSource["branch"] != workspaceName || gqlSource["currentRef"] != "codex/feature-a" {
 		t.Fatalf("GraphQL status = %#v source = %#v, want same branch mismatch contract", gqlStatus, gqlSource)
 	}

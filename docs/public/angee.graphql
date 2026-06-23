@@ -85,6 +85,40 @@ type GitOpsLink {
 	unpushedReason: String
 	error: String
 }
+type GitOpsLinkConnection {
+	nodes: [GitOpsLink!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input GitOpsLinkFilter {
+	and: [GitOpsLinkFilter!]
+	or: [GitOpsLinkFilter!]
+	id: StringFieldComparison
+	source: StringFieldComparison
+	workspace: StringFieldComparison
+	slot: StringFieldComparison
+	kind: StringFieldComparison
+	mode: StringFieldComparison
+	state: StringFieldComparison
+	branch: StringFieldComparison
+	dirty: BooleanFieldComparison
+	pushed: BooleanFieldComparison
+}
+input GitOpsLinkSort {
+	field: GitOpsLinkSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum GitOpsLinkSortFields {
+	id
+	source
+	workspace
+	slot
+	kind
+	mode
+	state
+	branch
+}
 type GitOpsSummary {
 	sources: Int!
 	workspaces: Int!
@@ -102,9 +136,9 @@ type GitOpsSummary {
 type GitOpsTopology {
 	root: String!
 	name: String!
-	sources: [SourceState!]!
-	workspaces: [WorkspaceStatus!]!
-	links: [GitOpsLink!]!
+	sources(filter: SourceStateFilter, sorting: [SourceStateSort!], paging: OffsetPaging): SourceStateConnection!
+	workspaces(filter: WorkspaceStatusFilter, sorting: [WorkspaceStatusSort!], paging: OffsetPaging): WorkspaceStatusConnection!
+	links(filter: GitOpsLinkFilter, sorting: [GitOpsLinkSort!], paging: OffsetPaging): GitOpsLinkConnection!
 	summary: GitOpsSummary!
 }
 type IngressStatus {
@@ -539,6 +573,30 @@ type WorkspaceMountRef {
 	field: String!
 	value: String!
 }
+type WorkspaceMountRefConnection {
+	nodes: [WorkspaceMountRef!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input WorkspaceMountRefFilter {
+	and: [WorkspaceMountRefFilter!]
+	or: [WorkspaceMountRefFilter!]
+	kind: StringFieldComparison
+	name: StringFieldComparison
+	field: StringFieldComparison
+	value: StringFieldComparison
+}
+input WorkspaceMountRefSort {
+	field: WorkspaceMountRefSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum WorkspaceMountRefSortFields {
+	kind
+	name
+	field
+	value
+}
 type WorkspaceRef {
 	id: ID!
 	name: String!
@@ -592,7 +650,39 @@ type WorkspaceSourceStatus {
 	unpushedReason: String
 	error: String
 }
+type WorkspaceSourceStatusConnection {
+	nodes: [WorkspaceSourceStatus!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input WorkspaceSourceStatusFilter {
+	and: [WorkspaceSourceStatusFilter!]
+	or: [WorkspaceSourceStatusFilter!]
+	slot: StringFieldComparison
+	source: StringFieldComparison
+	kind: StringFieldComparison
+	mode: StringFieldComparison
+	state: StringFieldComparison
+	branch: StringFieldComparison
+	dirty: BooleanFieldComparison
+	pushed: BooleanFieldComparison
+	exists: BooleanFieldComparison
+}
+input WorkspaceSourceStatusSort {
+	field: WorkspaceSourceStatusSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum WorkspaceSourceStatusSortFields {
+	slot
+	source
+	kind
+	mode
+	state
+	branch
+}
 type WorkspaceStatus {
+	id: ID!
 	name: String!
 	path: String!
 	exists: Boolean!
@@ -600,7 +690,7 @@ type WorkspaceStatus {
 	error: String
 	template: String!
 	inputs: JSON
-	sources: [WorkspaceSourceStatus!]!
+	sources(filter: WorkspaceSourceStatusFilter, sorting: [WorkspaceSourceStatusSort!], paging: OffsetPaging): WorkspaceSourceStatusConnection!
 	chain: [String!]!
 	chainRoot: String
 	allocations: JSON
@@ -611,9 +701,35 @@ type WorkspaceStatus {
 	ttl: String
 	ttlExpiresAt: String
 	expired: Boolean!
-	mountedBy: [WorkspaceMountRef!]!
+	mountedBy(filter: WorkspaceMountRefFilter, sorting: [WorkspaceMountRefSort!], paging: OffsetPaging): WorkspaceMountRefConnection!
 	innerStack: StackStatus
 	innerError: String
+}
+type WorkspaceStatusConnection {
+	nodes: [WorkspaceStatus!]!
+	totalCount: Int!
+	pageInfo: OffsetPageInfo!
+}
+input WorkspaceStatusFilter {
+	and: [WorkspaceStatusFilter!]
+	or: [WorkspaceStatusFilter!]
+	id: StringFieldComparison
+	name: StringFieldComparison
+	state: StringFieldComparison
+	template: StringFieldComparison
+	exists: BooleanFieldComparison
+	expired: BooleanFieldComparison
+}
+input WorkspaceStatusSort {
+	field: WorkspaceStatusSortFields!
+	direction: SortDirection!
+	nulls: SortNulls
+}
+enum WorkspaceStatusSortFields {
+	id
+	name
+	state
+	template
 }
 input WorkspaceUpdateInput {
 	inputs: [KeyValueInput!]

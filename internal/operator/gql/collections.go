@@ -326,6 +326,191 @@ func bindSecretSorts(in []*model.SecretRefSort) []query.Sort {
 	return out
 }
 
+// --- relation binders --------------------------------------------------------
+
+func bindGitOpsLinkFilter(f *model.GitOpsLinkFilter) query.Filter {
+	if f == nil {
+		return query.Filter{}
+	}
+	out := query.Filter{Fields: map[string]query.Comparison{}}
+	if f.ID != nil {
+		out.Fields["id"] = stringCmp(f.ID)
+	}
+	if f.Source != nil {
+		out.Fields["source"] = stringCmp(f.Source)
+	}
+	if f.Workspace != nil {
+		out.Fields["workspace"] = stringCmp(f.Workspace)
+	}
+	if f.Slot != nil {
+		out.Fields["slot"] = stringCmp(f.Slot)
+	}
+	if f.Kind != nil {
+		out.Fields["kind"] = stringCmp(f.Kind)
+	}
+	if f.Mode != nil {
+		out.Fields["mode"] = stringCmp(f.Mode)
+	}
+	if f.State != nil {
+		out.Fields["state"] = stringCmp(f.State)
+	}
+	if f.Branch != nil {
+		out.Fields["branch"] = stringCmp(f.Branch)
+	}
+	if f.Dirty != nil {
+		out.Fields["dirty"] = boolCmp(f.Dirty)
+	}
+	if f.Pushed != nil {
+		out.Fields["pushed"] = boolCmp(f.Pushed)
+	}
+	for _, sub := range f.And {
+		out.And = append(out.And, bindGitOpsLinkFilter(sub))
+	}
+	for _, sub := range f.Or {
+		out.Or = append(out.Or, bindGitOpsLinkFilter(sub))
+	}
+	return out
+}
+
+func bindGitOpsLinkSorts(in []*model.GitOpsLinkSort) []query.Sort {
+	out := make([]query.Sort, 0, len(in))
+	for _, s := range in {
+		if s != nil {
+			out = append(out, bindSort(string(s.Field), s.Direction, s.Nulls))
+		}
+	}
+	return out
+}
+
+func bindWorkspaceStatusFilter(f *model.WorkspaceStatusFilter) query.Filter {
+	if f == nil {
+		return query.Filter{}
+	}
+	out := query.Filter{Fields: map[string]query.Comparison{}}
+	if f.ID != nil {
+		out.Fields["id"] = stringCmp(f.ID)
+	}
+	if f.Name != nil {
+		out.Fields["name"] = stringCmp(f.Name)
+	}
+	if f.State != nil {
+		out.Fields["state"] = stringCmp(f.State)
+	}
+	if f.Template != nil {
+		out.Fields["template"] = stringCmp(f.Template)
+	}
+	if f.Exists != nil {
+		out.Fields["exists"] = boolCmp(f.Exists)
+	}
+	if f.Expired != nil {
+		out.Fields["expired"] = boolCmp(f.Expired)
+	}
+	for _, sub := range f.And {
+		out.And = append(out.And, bindWorkspaceStatusFilter(sub))
+	}
+	for _, sub := range f.Or {
+		out.Or = append(out.Or, bindWorkspaceStatusFilter(sub))
+	}
+	return out
+}
+
+func bindWorkspaceStatusSorts(in []*model.WorkspaceStatusSort) []query.Sort {
+	out := make([]query.Sort, 0, len(in))
+	for _, s := range in {
+		if s != nil {
+			out = append(out, bindSort(string(s.Field), s.Direction, s.Nulls))
+		}
+	}
+	return out
+}
+
+func bindWorkspaceSourceStatusFilter(f *model.WorkspaceSourceStatusFilter) query.Filter {
+	if f == nil {
+		return query.Filter{}
+	}
+	out := query.Filter{Fields: map[string]query.Comparison{}}
+	if f.Slot != nil {
+		out.Fields["slot"] = stringCmp(f.Slot)
+	}
+	if f.Source != nil {
+		out.Fields["source"] = stringCmp(f.Source)
+	}
+	if f.Kind != nil {
+		out.Fields["kind"] = stringCmp(f.Kind)
+	}
+	if f.Mode != nil {
+		out.Fields["mode"] = stringCmp(f.Mode)
+	}
+	if f.State != nil {
+		out.Fields["state"] = stringCmp(f.State)
+	}
+	if f.Branch != nil {
+		out.Fields["branch"] = stringCmp(f.Branch)
+	}
+	if f.Dirty != nil {
+		out.Fields["dirty"] = boolCmp(f.Dirty)
+	}
+	if f.Pushed != nil {
+		out.Fields["pushed"] = boolCmp(f.Pushed)
+	}
+	if f.Exists != nil {
+		out.Fields["exists"] = boolCmp(f.Exists)
+	}
+	for _, sub := range f.And {
+		out.And = append(out.And, bindWorkspaceSourceStatusFilter(sub))
+	}
+	for _, sub := range f.Or {
+		out.Or = append(out.Or, bindWorkspaceSourceStatusFilter(sub))
+	}
+	return out
+}
+
+func bindWorkspaceSourceStatusSorts(in []*model.WorkspaceSourceStatusSort) []query.Sort {
+	out := make([]query.Sort, 0, len(in))
+	for _, s := range in {
+		if s != nil {
+			out = append(out, bindSort(string(s.Field), s.Direction, s.Nulls))
+		}
+	}
+	return out
+}
+
+func bindWorkspaceMountRefFilter(f *model.WorkspaceMountRefFilter) query.Filter {
+	if f == nil {
+		return query.Filter{}
+	}
+	out := query.Filter{Fields: map[string]query.Comparison{}}
+	if f.Kind != nil {
+		out.Fields["kind"] = stringCmp(f.Kind)
+	}
+	if f.Name != nil {
+		out.Fields["name"] = stringCmp(f.Name)
+	}
+	if f.Field != nil {
+		out.Fields["field"] = stringCmp(f.Field)
+	}
+	if f.Value != nil {
+		out.Fields["value"] = stringCmp(f.Value)
+	}
+	for _, sub := range f.And {
+		out.And = append(out.And, bindWorkspaceMountRefFilter(sub))
+	}
+	for _, sub := range f.Or {
+		out.Or = append(out.Or, bindWorkspaceMountRefFilter(sub))
+	}
+	return out
+}
+
+func bindWorkspaceMountRefSorts(in []*model.WorkspaceMountRefSort) []query.Sort {
+	out := make([]query.Sort, 0, len(in))
+	for _, s := range in {
+		if s != nil {
+			out = append(out, bindSort(string(s.Field), s.Direction, s.Nulls))
+		}
+	}
+	return out
+}
+
 // --- single-entity lookups (no service.API getter exists for these) ----------
 
 func (r *Resolver) serviceByID(ctx context.Context, id string) (*api.ServiceState, error) {

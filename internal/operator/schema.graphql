@@ -209,6 +209,7 @@ type StackStatus {
 }
 
 type WorkspaceStatus {
+  id: ID!
   name: String!
   path: String!
   exists: Boolean!
@@ -216,7 +217,7 @@ type WorkspaceStatus {
   error: String
   template: String!
   inputs: JSON
-  sources: [WorkspaceSourceStatus!]!
+  sources(filter: WorkspaceSourceStatusFilter, sorting: [WorkspaceSourceStatusSort!], paging: OffsetPaging): WorkspaceSourceStatusConnection!
   chain: [String!]!
   chainRoot: String
   allocations: JSON
@@ -227,7 +228,7 @@ type WorkspaceStatus {
   ttl: String
   ttlExpiresAt: String
   expired: Boolean!
-  mountedBy: [WorkspaceMountRef!]!
+  mountedBy(filter: WorkspaceMountRefFilter, sorting: [WorkspaceMountRefSort!], paging: OffsetPaging): WorkspaceMountRefConnection!
   innerStack: StackStatus
   innerError: String
 }
@@ -235,9 +236,9 @@ type WorkspaceStatus {
 type GitOpsTopology {
   root: String!
   name: String!
-  sources: [SourceState!]!
-  workspaces: [WorkspaceStatus!]!
-  links: [GitOpsLink!]!
+  sources(filter: SourceStateFilter, sorting: [SourceStateSort!], paging: OffsetPaging): SourceStateConnection!
+  workspaces(filter: WorkspaceStatusFilter, sorting: [WorkspaceStatusSort!], paging: OffsetPaging): WorkspaceStatusConnection!
+  links(filter: GitOpsLinkFilter, sorting: [GitOpsLinkSort!], paging: OffsetPaging): GitOpsLinkConnection!
   summary: GitOpsSummary!
 }
 
@@ -450,6 +451,139 @@ input SecretRefSort {
 
 type SecretRefConnection {
   nodes: [SecretRef!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+# --- relation (nested connection) element types ------------------------------
+
+input GitOpsLinkFilter {
+  and: [GitOpsLinkFilter!]
+  or: [GitOpsLinkFilter!]
+  id: StringFieldComparison
+  source: StringFieldComparison
+  workspace: StringFieldComparison
+  slot: StringFieldComparison
+  kind: StringFieldComparison
+  mode: StringFieldComparison
+  state: StringFieldComparison
+  branch: StringFieldComparison
+  dirty: BooleanFieldComparison
+  pushed: BooleanFieldComparison
+}
+
+enum GitOpsLinkSortFields {
+  id
+  source
+  workspace
+  slot
+  kind
+  mode
+  state
+  branch
+}
+
+input GitOpsLinkSort {
+  field: GitOpsLinkSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type GitOpsLinkConnection {
+  nodes: [GitOpsLink!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceStatusFilter {
+  and: [WorkspaceStatusFilter!]
+  or: [WorkspaceStatusFilter!]
+  id: StringFieldComparison
+  name: StringFieldComparison
+  state: StringFieldComparison
+  template: StringFieldComparison
+  exists: BooleanFieldComparison
+  expired: BooleanFieldComparison
+}
+
+enum WorkspaceStatusSortFields {
+  id
+  name
+  state
+  template
+}
+
+input WorkspaceStatusSort {
+  field: WorkspaceStatusSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceStatusConnection {
+  nodes: [WorkspaceStatus!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceSourceStatusFilter {
+  and: [WorkspaceSourceStatusFilter!]
+  or: [WorkspaceSourceStatusFilter!]
+  slot: StringFieldComparison
+  source: StringFieldComparison
+  kind: StringFieldComparison
+  mode: StringFieldComparison
+  state: StringFieldComparison
+  branch: StringFieldComparison
+  dirty: BooleanFieldComparison
+  pushed: BooleanFieldComparison
+  exists: BooleanFieldComparison
+}
+
+enum WorkspaceSourceStatusSortFields {
+  slot
+  source
+  kind
+  mode
+  state
+  branch
+}
+
+input WorkspaceSourceStatusSort {
+  field: WorkspaceSourceStatusSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceSourceStatusConnection {
+  nodes: [WorkspaceSourceStatus!]!
+  totalCount: Int!
+  pageInfo: OffsetPageInfo!
+}
+
+input WorkspaceMountRefFilter {
+  and: [WorkspaceMountRefFilter!]
+  or: [WorkspaceMountRefFilter!]
+  kind: StringFieldComparison
+  name: StringFieldComparison
+  field: StringFieldComparison
+  value: StringFieldComparison
+}
+
+enum WorkspaceMountRefSortFields {
+  kind
+  name
+  field
+  value
+}
+
+input WorkspaceMountRefSort {
+  field: WorkspaceMountRefSortFields!
+  direction: SortDirection!
+  nulls: SortNulls
+}
+
+type WorkspaceMountRefConnection {
+  nodes: [WorkspaceMountRef!]!
   totalCount: Int!
   pageInfo: OffsetPageInfo!
 }

@@ -143,3 +143,22 @@ func TestWorkspaceCRUD(t *testing.T) {
 		t.Fatal("DeleteOneWorkspace(ghost) error = nil, want not-found")
 	}
 }
+
+// TestGitOpsTopologyLinksRelation drives a nested relation connection: filtering
+// GitOpsTopology.links over the slice already on the parent object.
+func TestGitOpsTopologyLinksRelation(t *testing.T) {
+	r := &Resolver{}
+	obj := &api.GitOpsTopologyResponse{Links: []api.GitOpsLink{
+		{ID: "w:app", Workspace: "w", Slot: "app", State: "dirty", Dirty: true},
+		{ID: "w:lib", Workspace: "w", Slot: "lib", State: "clean", Dirty: false},
+	}}
+	yes := true
+	conn, err := r.GitOpsTopology().Links(context.Background(), obj,
+		&model.GitOpsLinkFilter{Dirty: &model.BooleanFieldComparison{Is: &yes}}, nil, nil)
+	if err != nil {
+		t.Fatalf("Links() error = %v", err)
+	}
+	if conn.TotalCount != 1 || len(conn.Nodes) != 1 || conn.Nodes[0].Slot != "app" {
+		t.Fatalf("links(dirty) = %+v, want only the dirty app link", conn)
+	}
+}
