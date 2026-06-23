@@ -1,5 +1,5 @@
 // Command gqlschema writes the operator's GraphQL schema as SDL, for frontend
-// codegen (e.g. graphql-codegen / @refinedev/nestjs-query). It formats the same
+// codegen (e.g. graphql-codegen / @refinedev/hasura). It formats the same
 // executable schema the operator serves, so the emitted SDL can never drift
 // from the running API. The operator also exposes live introspection at
 // /graphql; this file is the committed, offline-consumable equivalent.

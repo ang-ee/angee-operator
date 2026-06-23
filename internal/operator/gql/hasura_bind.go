@@ -41,8 +41,9 @@ func stringCmp(c *model.StringComparisonExp) query.Comparison {
 		In:       strVals(c.In),
 		NotIn:    strVals(c.Nin),
 	}
-	// _similar (SQL SIMILAR TO) is approximated as LIKE — exact for the
-	// startswiths/endswiths patterns refine emits (value% / %value).
+	// _similar is mapped to LIKE. Exact only for the value% / %value patterns
+	// refine emits for startswiths/endswiths; general SQL SIMILAR TO regex
+	// syntax (| * + ( )) is NOT faithfully evaluated.
 	if c.Similar != nil && out.Like == nil {
 		out.Like = c.Similar
 	}
@@ -463,17 +464,18 @@ func sourcesAggregateFields(total int, items []*api.SourceState) *model.SourcesA
 		return out
 	}
 	g := groups[0]
-	out.Sum = &model.SourcesSumFields{Ahead: intPtr(g.Sum["ahead"]), Behind: intPtr(g.Sum["behind"])}
-	out.Min = &model.SourcesMinFields{Ahead: intPtr(g.Min["ahead"]), Behind: intPtr(g.Min["behind"])}
-	out.Max = &model.SourcesMaxFields{Ahead: intPtr(g.Max["ahead"]), Behind: intPtr(g.Max["behind"])}
+	out.Sum = &model.SourcesSumFields{Ahead: aggInt(g.Sum["ahead"]), Behind: aggInt(g.Sum["behind"])}
+	out.Min = &model.SourcesMinFields{Ahead: aggInt(g.Min["ahead"]), Behind: aggInt(g.Min["behind"])}
+	out.Max = &model.SourcesMaxFields{Ahead: aggInt(g.Max["ahead"]), Behind: aggInt(g.Max["behind"])}
 	n := float64(g.Count)
-	out.Avg = &model.SourcesAvgFields{Ahead: floatPtr(g.Sum["ahead"] / n), Behind: floatPtr(g.Sum["behind"] / n)}
+	out.Avg = &model.SourcesAvgFields{Ahead: aggFloat(g.Sum["ahead"] / n), Behind: aggFloat(g.Sum["behind"] / n)}
 	return out
 }
 
-func intPtr(f float64) *int {
+// aggInt truncates an aggregate (sum/min/max) back to an int column pointer.
+func aggInt(f float64) *int {
 	v := int(f)
 	return &v
 }
 
-func floatPtr(f float64) *float64 { return &f }
+func aggFloat(f float64) *float64 { return &f }

@@ -123,6 +123,16 @@ func TestDeleteSecretsByPkNotFound(t *testing.T) {
 	}
 }
 
+// TestSecretsByPkNotFound: getOne on an unknown secret resolves to null, not a
+// fabricated row (Hasura getOne semantics; SecretGet synthesizes a zero ref).
+func TestSecretsByPkNotFound(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{}}
+	got, err := r.Query().SecretsByPk(context.Background(), "ghost")
+	if err != nil || got != nil {
+		t.Fatalf("SecretsByPk(ghost) = (%#v, %v), want (nil, nil)", got, err)
+	}
+}
+
 // TestWorkspaceInsertDelete covers insert_one and delete_by_pk (returns pre-delete
 // row; missing workspace surfaces WorkspaceGet's not-found error).
 func TestWorkspaceInsertDelete(t *testing.T) {

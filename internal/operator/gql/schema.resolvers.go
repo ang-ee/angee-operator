@@ -462,18 +462,28 @@ func (r *queryResolver) Sources(ctx context.Context, where *model.SourcesBoolExp
 // SourcesByPk is the resolver for the sources_by_pk field.
 func (r *queryResolver) SourcesByPk(ctx context.Context, id string) (*api.SourceState, error) {
 	state, err := r.Platform.SourceStatus(ctx, id)
-	return &state, err
+	if err != nil {
+		if isNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &state, nil
 }
 
-// SourcesAggregate is the resolver for the sources_aggregate field.
+// SourcesAggregate is the resolver for the sources_aggregate field. The numeric
+// aggregate (count/sum/avg/min/max) is computed over the full filtered set so the
+// figures describe one consistent population; only `nodes` honors limit/offset.
 func (r *queryResolver) SourcesAggregate(ctx context.Context, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) (*model.SourcesAggregate, error) {
-	args := query.Args{Filter: bindSourcesWhere(where), Sorting: bindSourcesOrderBy(orderBy), Paging: pagingFrom(limit, offset)}
-	page, total, err := r.Platform.SourceList(ctx, args)
+	full, total, err := r.Platform.SourceList(ctx, query.Args{Filter: bindSourcesWhere(where), Sorting: bindSourcesOrderBy(orderBy)})
 	if err != nil {
 		return nil, err
 	}
-	nodes := ptrSlice(page)
-	return &model.SourcesAggregate{Aggregate: sourcesAggregateFields(total, nodes), Nodes: nodes}, nil
+	fullPtr := ptrSlice(full)
+	return &model.SourcesAggregate{
+		Aggregate: sourcesAggregateFields(total, fullPtr),
+		Nodes:     windowSlice(fullPtr, pagingFrom(limit, offset)),
+	}, nil
 }
 
 // Workspaces is the resolver for the workspaces field.
@@ -490,6 +500,9 @@ func (r *queryResolver) Workspaces(ctx context.Context, where *model.WorkspacesB
 func (r *queryResolver) WorkspacesByPk(ctx context.Context, id string) (*api.WorkspaceRef, error) {
 	ws, err := r.Platform.WorkspaceGet(ctx, id)
 	if err != nil {
+		if isNotFound(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &ws, nil
@@ -519,6 +532,9 @@ func (r *queryResolver) Templates(ctx context.Context, where *model.TemplatesBoo
 func (r *queryResolver) TemplatesByPk(ctx context.Context, id string) (*api.TemplateDescriptor, error) {
 	desc, err := r.Platform.Template(ctx, id)
 	if err != nil {
+		if isNotFound(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &desc, nil
@@ -549,6 +565,11 @@ func (r *queryResolver) SecretsByPk(ctx context.Context, id string) (*api.Secret
 	ref, err := r.Platform.SecretGet(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	// SecretGet synthesizes a zero ref for an unknown name rather than erroring;
+	// treat a wholly-undeclared, value-less ref as not-found so getOne is null.
+	if !ref.Declared && !ref.HasValue && !ref.Required && !ref.Generated {
+		return nil, nil
 	}
 	return &ref, nil
 }

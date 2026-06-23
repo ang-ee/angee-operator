@@ -1,6 +1,10 @@
 # Proposal: reshape the operator GraphQL to the nestjs-query shape
 
-**Status:** Implemented (collections + service/secret CRUD) · **Area:** operator GraphQL, service API · **Surfaces:** GraphQL (operator) + refine.dev consoles
+**Status:** ⚠️ Superseded — Angee standardized its consoles on **Hasura**, so the
+operator GraphQL was re-shaped to the Hasura dialect (`@refinedev/hasura`); the
+nestjs-query surface described below was removed. The generic `internal/query`
+engine, `queryfields`, and the `service.API` push-down survive the pivot and now
+back the Hasura shape. Kept for design rationale only. · **Area:** operator GraphQL, service API
 
 > ## Implementation notes (what shipped)
 >

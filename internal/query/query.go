@@ -1,9 +1,9 @@
-// Package query is a generic, in-memory filter / sort / page engine for the
-// operator's GraphQL collections. It is the normalized internal form of the
-// nestjs-query convention: a recursive and/or filter of per-field comparisons,
-// a multi-key sort, and offset paging. Each resolver supplies a [FieldMap] that
-// extracts a normalized [Value] per filterable/sortable field; the GraphQL layer
-// binds the typed *FieldComparison inputs down into [Comparison].
+// Package query is a generic, dialect-neutral, in-memory filter / sort / page
+// engine for the operator's GraphQL and REST collections: a recursive and/or
+// filter of per-field comparisons, a multi-key sort, and offset paging. Each
+// caller supplies a [FieldMap] that extracts a normalized [Value] per
+// filterable/sortable field; the GraphQL/REST layers bind their per-field
+// comparison inputs down into [Comparison].
 //
 // Collections are small (manifest/runtime state, not a database), so the engine
 // operates over a plain slice rather than translating to a query language.
@@ -18,8 +18,8 @@ type Args struct {
 	Paging  Paging
 }
 
-// Filter is a recursive AND/OR tree of per-field comparisons — the internal
-// normalization of nestjs-query's <T>Filter { and, or, <field>: Comparison }.
+// Filter is a recursive AND/OR tree of per-field comparisons (the engine form
+// that Hasura `where` / REST filter inputs bind down into).
 // The zero Filter (no And/Or/Fields) matches everything: the "no filter" default.
 type Filter struct {
 	And    []Filter

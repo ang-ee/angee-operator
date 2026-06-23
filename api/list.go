@@ -1,7 +1,8 @@
 package api
 
-// This file holds the REST wire contract for nestjs-query-style filtered list
-// requests/responses. It is stdlib-only by design: the api package must not
+// This file holds the REST wire contract for filtered list requests/responses
+// (a generic, transport-neutral filter/sort/paging JSON, independent of the
+// GraphQL Hasura dialect). It is stdlib-only by design: the api package must not
 // depend on internal/query. The api.ListQuery <-> query.Args conversion lives in
 // internal/queryfields, the one place allowed to import both.
 

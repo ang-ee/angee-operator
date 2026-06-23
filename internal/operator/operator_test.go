@@ -448,8 +448,10 @@ services:
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
+	// getOne (`*_by_pk`) now resolves null for a missing row (Hasura semantics),
+	// so exercise the domain-error path via a mutation that looks the row up.
 	resp := doGraphQL(t, server, map[string]any{
-		"query": `{ workspaces_by_pk(id: "missing") { name } }`,
+		"query": `mutation { delete_workspaces_by_pk(id: "missing") { id } }`,
 	})
 	if len(resp.Errors) != 1 {
 		t.Fatalf("GraphQL errors = %#v, want one domain error", resp.Errors)

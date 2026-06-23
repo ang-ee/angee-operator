@@ -2,10 +2,12 @@ package gql
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // liveSubInterval is the poll cadence backing the Hasura-style live-list
@@ -13,11 +15,32 @@ import (
 const liveSubInterval = 2 * time.Second
 
 // This file holds the Hasura-dialect glue: single-row lookups backing *_by_pk,
-// the live-list subscription poller, plus the where/order_by binders onto the
-// internal/query engine (below).
+// the live-list subscription poller, and small slice helpers. The where /
+// order_by / input binders live in hasura_bind.go.
+
+// isNotFound reports whether err is a service.NotFoundError, so *_by_pk resolvers
+// can resolve to null (Hasura getOne semantics) instead of a hard GraphQL error.
+func isNotFound(err error) bool {
+	var nf *service.NotFoundError
+	return errors.As(err, &nf)
+}
+
+// windowSlice applies offset/limit to an already-filtered slice (for the nodes of
+// an aggregate, where the numeric aggregate is over the full set).
+func windowSlice[T any](s []T, p query.Paging) []T {
+	if p.Offset >= len(s) {
+		return []T{}
+	}
+	s = s[p.Offset:]
+	if p.Limit > 0 && p.Limit < len(s) {
+		s = s[:p.Limit]
+	}
+	return s
+}
 
 // serviceByID / jobByID back the *_by_pk resolvers for the two entities that
-// have no dedicated single-item service.API getter.
+// have no dedicated single-item service.API getter. O(n) over the in-memory list
+// — acceptable for the operator's small collections.
 func (r *Resolver) serviceByID(ctx context.Context, id string) (*api.ServiceState, error) {
 	items, _, err := r.Platform.ServiceList(ctx, query.Args{})
 	if err != nil {
