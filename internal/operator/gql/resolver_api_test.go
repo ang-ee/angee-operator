@@ -19,14 +19,20 @@ func strptr(s string) *string { return &s }
 type fakeAPI struct {
 	service.API
 	services   []api.ServiceState
+	sources    []api.SourceState
 	secrets    []api.SecretRef
 	workspaces []api.WorkspaceRef
 }
 
-// ServiceList / SecretsList apply the real engine so resolver tests exercise the
-// same filter/sort/paging path the production Platform uses.
+// ServiceList / SourceList / SecretsList apply the real engine so resolver tests
+// exercise the same filter/sort/paging path the production Platform uses.
 func (f fakeAPI) ServiceList(_ context.Context, q query.Args) ([]api.ServiceState, int, error) {
 	page, total := query.Apply(f.services, q, queryfields.Service)
+	return page, total, nil
+}
+
+func (f fakeAPI) SourceList(_ context.Context, q query.Args) ([]api.SourceState, int, error) {
+	page, total := query.Apply(f.sources, q, queryfields.Source)
 	return page, total, nil
 }
 
@@ -123,28 +129,140 @@ func TestDeleteSecretsByPkNotFound(t *testing.T) {
 	}
 }
 
-// TestServicesGroupsByStatus drives the NDC-shaped grouped aggregation: group
-// by status, each group carrying its dimension key + per-group count.
+// TestServicesGroupsByStatus drives the typed-key grouped aggregation (the
+// strawberry-django-hasura Option A shape): group by status, each group pairing
+// a typed key (one field per selected dimension) with the free aggregate.
 func TestServicesGroupsByStatus(t *testing.T) {
 	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
 		{Name: "a", Runtime: "container", Status: "running"},
 		{Name: "b", Runtime: "container", Status: "running"},
 		{Name: "c", Runtime: "local", Status: "exited"},
 	}}}
-	groups, err := r.Query().ServicesGroups(context.Background(), nil,
-		[]model.ServicesGroupDimension{model.ServicesGroupDimensionStatus}, nil, nil)
+	groups, err := r.Query().ServicesGroups(context.Background(),
+		[]*model.ServicesGroupBySpec{{Field: model.ServicesGroupableFieldStatus}}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ServicesGroups() error = %v", err)
 	}
 	got := map[string]int{}
 	for _, g := range groups {
-		if len(g.Dimensions) != 1 || g.Dimensions[0].Key != "status" {
-			t.Fatalf("group dimensions = %#v, want one status dimension", g.Dimensions)
+		if g.Key == nil || g.Key.Status == nil {
+			t.Fatalf("group key = %#v, want a typed status dimension", g.Key)
 		}
-		got[g.Dimensions[0].Value] = g.Aggregates.Count
+		got[*g.Key.Status] = g.Aggregate.Count
 	}
 	if got["running"] != 2 || got["exited"] != 1 {
 		t.Fatalf("grouped counts = %#v, want running:2 exited:1", got)
+	}
+}
+
+// TestServicesGroupsHavingOrder covers the two new in-memory passes: having
+// (a predicate over the aggregate measures) and order_by (sort groups by a
+// measure alias). having count_gt:1 drops the single-member group; order_by
+// count desc then sorts the survivors.
+func TestServicesGroupsHavingOrder(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "a", Runtime: "container", Status: "running"},
+		{Name: "b", Runtime: "container", Status: "running"},
+		{Name: "c", Runtime: "container", Status: "exited"},
+		{Name: "d", Runtime: "local", Status: "starting"},
+	}}}
+	one := 1
+	desc := model.OrderByDesc
+	groups, err := r.Query().ServicesGroups(context.Background(),
+		[]*model.ServicesGroupBySpec{{Field: model.ServicesGroupableFieldStatus}},
+		nil,
+		&model.ServicesHaving{CountGt: &one},
+		[]*model.ServicesGroupOrder{{Field: "count", Direction: &desc}},
+		nil, nil)
+	if err != nil {
+		t.Fatalf("ServicesGroups() error = %v", err)
+	}
+	// exited (1) and starting (1) are filtered by count_gt:1; only running (2) survives.
+	if len(groups) != 1 || groups[0].Key.Status == nil || *groups[0].Key.Status != "running" || groups[0].Aggregate.Count != 2 {
+		t.Fatalf("having/order groups = %#v, want [running count 2]", groups)
+	}
+}
+
+// TestServicesGroupsRejectGranularity: the operator has no granular dimensions,
+// so a group_by spec carrying a granularity is rejected (matching upstream's
+// GranularityNotApplicable) rather than silently ignored.
+func TestServicesGroupsRejectGranularity(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "a", Runtime: "container", Status: "running"},
+	}}}
+	gran := model.GranularityMonth
+	_, err := r.Query().ServicesGroups(context.Background(),
+		[]*model.ServicesGroupBySpec{{Field: model.ServicesGroupableFieldStatus, Granularity: &gran}},
+		nil, nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("ServicesGroups(granularity=MONTH) error = nil, want not-applicable")
+	}
+}
+
+// TestServicesGroupsEmpty: an empty group_by ([] is valid for [Spec!]!) collapses
+// to a single all-items group with an all-nil typed key.
+func TestServicesGroupsEmpty(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "a", Status: "running"}, {Name: "b", Status: "exited"},
+	}}}
+	groups, err := r.Query().ServicesGroups(context.Background(),
+		[]*model.ServicesGroupBySpec{}, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("ServicesGroups([]) error = %v", err)
+	}
+	if len(groups) != 1 || groups[0].Aggregate.Count != 2 {
+		t.Fatalf("empty group_by = %#v, want one group of count 2", groups)
+	}
+	if k := groups[0].Key; k.Status != nil || k.Runtime != nil || k.Health != nil {
+		t.Fatalf("empty group_by key = %#v, want all-nil", k)
+	}
+}
+
+// TestSourcesGroupsMeasures covers the numeric reducers (sum/avg/min/max) and
+// order_by on a dimension key.
+func TestSourcesGroupsMeasures(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{sources: []api.SourceState{
+		{Name: "a", Kind: "git", Ahead: 1, Behind: 0},
+		{Name: "b", Kind: "git", Ahead: 3, Behind: 2},
+		{Name: "c", Kind: "local", Ahead: 10, Behind: 0},
+	}}}
+	asc := model.OrderByAsc
+	groups, err := r.Query().SourcesGroups(context.Background(),
+		[]*model.SourcesGroupBySpec{{Field: model.SourcesGroupableFieldKind}},
+		nil, nil,
+		[]*model.SourcesGroupOrder{{Field: "kind", Direction: &asc}}, // order_by on a dimension key
+		nil, nil)
+	if err != nil {
+		t.Fatalf("SourcesGroups() error = %v", err)
+	}
+	if len(groups) != 2 || groups[0].Key.Kind == nil || *groups[0].Key.Kind != "git" || *groups[1].Key.Kind != "local" {
+		t.Fatalf("groups = %#v, want [git, local] by kind asc", groups)
+	}
+	git := groups[0].Aggregate
+	if git.Count != 2 || *git.Sum.Ahead != 4 || *git.Min.Ahead != 1 || *git.Max.Ahead != 3 || *git.Avg.Ahead != 2 {
+		t.Fatalf("git aggregate = %#v, want count2 sum4 min1 max3 avg2", git)
+	}
+}
+
+// TestSourcesGroupsHavingBoolKey covers having over a measure and a bool typed
+// key (group by dirty -> *bool key).
+func TestSourcesGroupsHavingBoolKey(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{sources: []api.SourceState{
+		{Name: "a", Kind: "git", Dirty: false},
+		{Name: "b", Kind: "git", Dirty: false},
+		{Name: "c", Kind: "git", Dirty: true},
+	}}}
+	one := 1
+	groups, err := r.Query().SourcesGroups(context.Background(),
+		[]*model.SourcesGroupBySpec{{Field: model.SourcesGroupableFieldDirty}},
+		nil,
+		&model.SourcesHaving{CountGt: &one}, // drops the single dirty=true group
+		nil, nil, nil)
+	if err != nil {
+		t.Fatalf("SourcesGroups() error = %v", err)
+	}
+	if len(groups) != 1 || groups[0].Key.Dirty == nil || *groups[0].Key.Dirty != false || groups[0].Aggregate.Count != 2 {
+		t.Fatalf("having/bool-key groups = %#v, want [dirty=false count 2]", groups)
 	}
 }
 

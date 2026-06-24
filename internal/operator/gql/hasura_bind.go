@@ -1,6 +1,11 @@
 package gql
 
 import (
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/query"
@@ -492,32 +497,287 @@ func sourcesAggregateFromGroup(g query.Group) *model.SourcesAggregateFields {
 }
 
 // --- NDC grouping helpers ----------------------------------------------------
+// The <t>_groups roots mirror the strawberry-django-hasura grouping contract: a
+// typed `key` (one field per selected dimension) paired with the FREE
+// <t>_aggregate_fields aggregate. group_by specs, having (a predicate over the
+// aggregate measures), group order_by, and offset paging are applied here over
+// the materialized engine groups, keeping the queryfields FieldMaps out of the
+// generated resolver file.
 
-// serviceGroups / sourceGroups run the grouped aggregation through the engine,
-// keeping the queryfields FieldMaps out of the generated resolver file.
-func serviceGroups(items []api.ServiceState, where *model.ServicesBoolExp, dims []model.ServicesGroupDimension) []query.Group {
-	return query.Aggregate(items, bindServicesWhere(where), dimensionStrings(dims), queryfields.Service, nil, nil)
-}
-
-func sourceGroups(items []api.SourceState, where *model.SourcesBoolExp, dims []model.SourcesGroupDimension) []query.Group {
-	return query.Aggregate(items, bindSourcesWhere(where), dimensionStrings(dims), queryfields.Source, queryfields.SourceNumeric, []string{"ahead", "behind"})
-}
-
-// groupDimensionsKV renders an engine group key as the NDC group `dimensions`
-// (ordered field/value pairs).
-func groupDimensionsKV(kvs []query.KV) []*model.KeyValue {
-	out := make([]*model.KeyValue, len(kvs))
-	for i, kv := range kvs {
-		out[i] = &model.KeyValue{Key: kv.Field, Value: kv.Value}
+// specDimensions flattens a [<t>_group_by_spec] list to engine dimension field
+// names (the UPPERCASE groupable-field enum value lowercased). A non-nil
+// granularity is rejected: the operator has no date/numeric dimensions to
+// bucket, matching strawberry-django-aggregates' GranularityNotApplicable.
+func specDimensions[S any](specs []*S, field func(*S) string, gran func(*S) *model.Granularity) ([]string, error) {
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		if s == nil {
+			continue
+		}
+		if g := gran(s); g != nil {
+			return nil, fmt.Errorf("granularity %q not applicable: the operator has no granular group-by dimensions", string(*g))
+		}
+		out = append(out, field(s))
 	}
-	return out
+	return out, nil
 }
 
-// dimensionStrings flattens a group_by dimension enum slice to field names.
-func dimensionStrings[T ~string](in []T) []string {
-	out := make([]string, len(in))
-	for i, d := range in {
-		out[i] = string(d)
+func serviceGroups(items []api.ServiceState, where *model.ServicesBoolExp, specs []*model.ServicesGroupBySpec) ([]query.Group, error) {
+	dims, err := specDimensions(specs,
+		func(s *model.ServicesGroupBySpec) string { return strings.ToLower(string(s.Field)) },
+		func(s *model.ServicesGroupBySpec) *model.Granularity { return s.Granularity })
+	if err != nil {
+		return nil, err
+	}
+	return query.Aggregate(items, bindServicesWhere(where), dims, queryfields.Service, nil, nil), nil
+}
+
+func sourceGroups(items []api.SourceState, where *model.SourcesBoolExp, specs []*model.SourcesGroupBySpec) ([]query.Group, error) {
+	dims, err := specDimensions(specs,
+		func(s *model.SourcesGroupBySpec) string { return strings.ToLower(string(s.Field)) },
+		func(s *model.SourcesGroupBySpec) *model.Granularity { return s.Granularity })
+	if err != nil {
+		return nil, err
+	}
+	return query.Aggregate(items, bindSourcesWhere(where), dims, queryfields.Source, queryfields.SourceNumeric, []string{"ahead", "behind"}), nil
+}
+
+// --- typed group keys --------------------------------------------------------
+// Only the selected dimensions are populated (one KV per group_by field); the
+// rest stay nil. Engine values are strings (null normalized to ""), so the bool
+// dimensions parse "true"/"false" back to *bool.
+
+func servicesGroupKey(kvs []query.KV) *model.ServicesGroupKey {
+	k := &model.ServicesGroupKey{}
+	for _, kv := range kvs {
+		v := kv.Value
+		switch kv.Field {
+		case "status":
+			k.Status = &v
+		case "runtime":
+			k.Runtime = &v
+		case "health":
+			k.Health = &v
+		}
+	}
+	return k
+}
+
+func sourcesGroupKey(kvs []query.KV) *model.SourcesGroupKey {
+	k := &model.SourcesGroupKey{}
+	for _, kv := range kvs {
+		v := kv.Value
+		switch kv.Field {
+		case "kind":
+			k.Kind = &v
+		case "state":
+			k.State = &v
+		case "branch":
+			k.Branch = &v
+		case "dirty":
+			b := v == "true"
+			k.Dirty = &b
+		case "pushed":
+			b := v == "true"
+			k.Pushed = &b
+		}
+	}
+	return k
+}
+
+// servicesAggregateFromGroup is the free services aggregate for one group (count
+// only); sourcesAggregateFromGroup adds the numeric reducers.
+func servicesAggregateFromGroup(g query.Group) *model.ServicesAggregateFields {
+	return &model.ServicesAggregateFields{Count: g.Count}
+}
+
+// --- having (predicate over the aggregate measures) --------------------------
+// Each switch case fires only on a FAILING comparison and returns false; an
+// unset (nil) comparison makes its case-guard false and is skipped, so a group
+// passes when none of the set comparisons fail. A non-nil empty `in: []` matches
+// nothing (SQL `IN ()` semantics); an unset (nil) `in` is a no-op (same for
+// not_in).
+
+func havingInt(v int, gt, lt, lte, gte, eq, neq *int, in, notIn []int) bool {
+	switch {
+	case gt != nil && v <= *gt:
+		return false
+	case lt != nil && v >= *lt:
+		return false
+	case lte != nil && v > *lte:
+		return false
+	case gte != nil && v < *gte:
+		return false
+	case eq != nil && v != *eq:
+		return false
+	case neq != nil && v == *neq:
+		return false
+	case in != nil && !slices.Contains(in, v):
+		return false
+	case notIn != nil && slices.Contains(notIn, v):
+		return false
+	}
+	return true
+}
+
+// havingFloat mirrors havingInt for float measures (the `avg_*` reducers). Note
+// `eq`/`neq`/`in`/`not_in` use exact float equality: against a divided average
+// (e.g. 10/3) they will essentially never match. This matches SQL/Hasura HAVING
+// semantics on a float aggregate; callers wanting a band should use gt/lt.
+func havingFloat(v float64, gt, lt, lte, gte, eq, neq *float64, in, notIn []float64) bool {
+	switch {
+	case gt != nil && v <= *gt:
+		return false
+	case lt != nil && v >= *lt:
+		return false
+	case lte != nil && v > *lte:
+		return false
+	case gte != nil && v < *gte:
+		return false
+	case eq != nil && v != *eq:
+		return false
+	case neq != nil && v == *neq:
+		return false
+	case in != nil && !slices.Contains(in, v):
+		return false
+	case notIn != nil && slices.Contains(notIn, v):
+		return false
+	}
+	return true
+}
+
+func servicesHavingOK(g query.Group, h *model.ServicesHaving) bool {
+	if h == nil {
+		return true
+	}
+	return havingInt(g.Count, h.CountGt, h.CountLt, h.CountLte, h.CountGte, h.CountEq, h.CountNeq, h.CountIn, h.CountNotIn)
+}
+
+func sourcesHavingOK(g query.Group, h *model.SourcesHaving) bool {
+	if h == nil {
+		return true
+	}
+	m := sourcesMeasures(g)
+	return havingInt(int(m["count"]), h.CountGt, h.CountLt, h.CountLte, h.CountGte, h.CountEq, h.CountNeq, h.CountIn, h.CountNotIn) &&
+		havingInt(int(m["sum_ahead"]), h.SumAheadGt, h.SumAheadLt, h.SumAheadLte, h.SumAheadGte, h.SumAheadEq, h.SumAheadNeq, h.SumAheadIn, h.SumAheadNotIn) &&
+		havingInt(int(m["sum_behind"]), h.SumBehindGt, h.SumBehindLt, h.SumBehindLte, h.SumBehindGte, h.SumBehindEq, h.SumBehindNeq, h.SumBehindIn, h.SumBehindNotIn) &&
+		havingFloat(m["avg_ahead"], h.AvgAheadGt, h.AvgAheadLt, h.AvgAheadLte, h.AvgAheadGte, h.AvgAheadEq, h.AvgAheadNeq, h.AvgAheadIn, h.AvgAheadNotIn) &&
+		havingFloat(m["avg_behind"], h.AvgBehindGt, h.AvgBehindLt, h.AvgBehindLte, h.AvgBehindGte, h.AvgBehindEq, h.AvgBehindNeq, h.AvgBehindIn, h.AvgBehindNotIn) &&
+		havingInt(int(m["min_ahead"]), h.MinAheadGt, h.MinAheadLt, h.MinAheadLte, h.MinAheadGte, h.MinAheadEq, h.MinAheadNeq, h.MinAheadIn, h.MinAheadNotIn) &&
+		havingInt(int(m["min_behind"]), h.MinBehindGt, h.MinBehindLt, h.MinBehindLte, h.MinBehindGte, h.MinBehindEq, h.MinBehindNeq, h.MinBehindIn, h.MinBehindNotIn) &&
+		havingInt(int(m["max_ahead"]), h.MaxAheadGt, h.MaxAheadLt, h.MaxAheadLte, h.MaxAheadGte, h.MaxAheadEq, h.MaxAheadNeq, h.MaxAheadIn, h.MaxAheadNotIn) &&
+		havingInt(int(m["max_behind"]), h.MaxBehindGt, h.MaxBehindLt, h.MaxBehindLte, h.MaxBehindGte, h.MaxBehindEq, h.MaxBehindNeq, h.MaxBehindIn, h.MaxBehindNotIn)
+}
+
+// --- group measures + ordering + paging --------------------------------------
+
+func servicesMeasures(g query.Group) map[string]float64 {
+	return map[string]float64{"count": float64(g.Count)}
+}
+
+func sourcesMeasures(g query.Group) map[string]float64 {
+	m := map[string]float64{
+		"count":      float64(g.Count),
+		"sum_ahead":  g.Sum["ahead"],
+		"sum_behind": g.Sum["behind"],
+		"min_ahead":  g.Min["ahead"],
+		"min_behind": g.Min["behind"],
+		"max_ahead":  g.Max["ahead"],
+		"max_behind": g.Max["behind"],
+	}
+	if n := float64(g.Count); n > 0 {
+		m["avg_ahead"] = g.Sum["ahead"] / n
+		m["avg_behind"] = g.Sum["behind"] / n
+	}
+	return m
+}
+
+func isDescOrder(d *model.OrderBy) bool {
+	if d == nil {
+		return false
+	}
+	switch *d {
+	case model.OrderByDesc, model.OrderByDescNullsFirst, model.OrderByDescNullsLast:
+		return true
+	}
+	return false
+}
+
+func groupKeyValue(g query.Group, field string) (string, bool) {
+	for _, kv := range g.Key {
+		if kv.Field == field {
+			return kv.Value, true
+		}
+	}
+	return "", false
+}
+
+// orderGroups sorts groups in place by each (field, desc) term. A field naming
+// an aggregate measure (count, sum_ahead, …) sorts numerically; a field naming a
+// selected dimension sorts by its key value; an unknown field is a no-op term. A
+// measure alias shadows a dimension of the same name (none collide today: the
+// dimensions are status/runtime/health, kind/state/branch/dirty/pushed). The
+// engine already returns groups in key-tuple order, so a stable sort keeps that
+// as the tiebreaker (and the whole result deterministic with no order_by).
+func orderGroups(groups []query.Group, fields []string, descs []bool, measures func(query.Group) map[string]float64) {
+	if len(fields) == 0 {
+		return
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		for t, f := range fields {
+			if vi, ok := measures(groups[i])[f]; ok {
+				vj := measures(groups[j])[f]
+				if vi != vj {
+					if descs[t] {
+						return vi > vj
+					}
+					return vi < vj
+				}
+				continue
+			}
+			si, oki := groupKeyValue(groups[i], f)
+			sj, _ := groupKeyValue(groups[j], f)
+			if oki && si != sj {
+				if descs[t] {
+					return si > sj
+				}
+				return si < sj
+			}
+		}
+		return false
+	})
+}
+
+func groupOrderTerms[O any](orders []*O, get func(*O) (string, *model.OrderBy)) ([]string, []bool) {
+	var fields []string
+	var descs []bool
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+		f, d := get(o)
+		fields = append(fields, f)
+		descs = append(descs, isDescOrder(d))
+	}
+	return fields, descs
+}
+
+func sortServiceGroups(groups []query.Group, orders []*model.ServicesGroupOrder) {
+	fields, descs := groupOrderTerms(orders, func(o *model.ServicesGroupOrder) (string, *model.OrderBy) { return o.Field, o.Direction })
+	orderGroups(groups, fields, descs, servicesMeasures)
+}
+
+func sortSourceGroups(groups []query.Group, orders []*model.SourcesGroupOrder) {
+	fields, descs := groupOrderTerms(orders, func(o *model.SourcesGroupOrder) (string, *model.OrderBy) { return o.Field, o.Direction })
+	orderGroups(groups, fields, descs, sourcesMeasures)
+}
+
+func filterGroups(groups []query.Group, keep func(query.Group) bool) []query.Group {
+	var out []query.Group
+	for _, g := range groups {
+		if keep(g) {
+			out = append(out, g)
+		}
 	}
 	return out
 }

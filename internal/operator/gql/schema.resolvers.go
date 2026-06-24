@@ -585,39 +585,46 @@ func (r *queryResolver) SecretsAggregate(ctx context.Context, where *model.Secre
 }
 
 // ServicesGroups is the resolver for the services_groups field. NDC-shaped
-// grouped aggregation: each group carries its dimension key + per-group
-// aggregates. limit/offset page the group list.
-func (r *queryResolver) ServicesGroups(ctx context.Context, where *model.ServicesBoolExp, dimensions []model.ServicesGroupDimension, limit *int, offset *int) ([]*model.ServicesGroup, error) {
+// grouped aggregation (NDC / strawberry-django-hasura shape): each group pairs a
+// typed key (one field per selected dimension) with the free aggregate. having
+// filters over the aggregate measures, order_by sorts groups, limit/offset page.
+func (r *queryResolver) ServicesGroups(ctx context.Context, groupBy []*model.ServicesGroupBySpec, where *model.ServicesBoolExp, having *model.ServicesHaving, orderBy []*model.ServicesGroupOrder, limit *int, offset *int) ([]*model.ServicesGroup, error) {
 	items, _, err := r.Platform.ServiceList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	groups := serviceGroups(items, where, dimensions)
+	groups, err := serviceGroups(items, where, groupBy)
+	if err != nil {
+		return nil, err
+	}
+	groups = filterGroups(groups, func(g query.Group) bool { return servicesHavingOK(g, having) })
+	sortServiceGroups(groups, orderBy)
+	groups = windowSlice(groups, pagingFrom(limit, offset))
 	out := make([]*model.ServicesGroup, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, &model.ServicesGroup{
-			Dimensions: groupDimensionsKV(g.Key),
-			Aggregates: &model.ServicesAggregateFields{Count: g.Count},
-		})
+		out = append(out, &model.ServicesGroup{Key: servicesGroupKey(g.Key), Aggregate: servicesAggregateFromGroup(g)})
 	}
-	return windowSlice(out, pagingFrom(limit, offset)), nil
+	return out, nil
 }
 
 // SourcesGroups is the resolver for the sources_groups field.
-func (r *queryResolver) SourcesGroups(ctx context.Context, where *model.SourcesBoolExp, dimensions []model.SourcesGroupDimension, limit *int, offset *int) ([]*model.SourcesGroup, error) {
+func (r *queryResolver) SourcesGroups(ctx context.Context, groupBy []*model.SourcesGroupBySpec, where *model.SourcesBoolExp, having *model.SourcesHaving, orderBy []*model.SourcesGroupOrder, limit *int, offset *int) ([]*model.SourcesGroup, error) {
 	items, _, err := r.Platform.SourceList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	groups := sourceGroups(items, where, dimensions)
+	groups, err := sourceGroups(items, where, groupBy)
+	if err != nil {
+		return nil, err
+	}
+	groups = filterGroups(groups, func(g query.Group) bool { return sourcesHavingOK(g, having) })
+	sortSourceGroups(groups, orderBy)
+	groups = windowSlice(groups, pagingFrom(limit, offset))
 	out := make([]*model.SourcesGroup, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, &model.SourcesGroup{
-			Dimensions: groupDimensionsKV(g.Key),
-			Aggregates: sourcesAggregateFromGroup(g),
-		})
+		out = append(out, &model.SourcesGroup{Key: sourcesGroupKey(g.Key), Aggregate: sourcesAggregateFromGroup(g)})
 	}
-	return windowSlice(out, pagingFrom(limit, offset)), nil
+	return out, nil
 }
 
 // WorkspaceStatus is the resolver for the workspaceStatus field.

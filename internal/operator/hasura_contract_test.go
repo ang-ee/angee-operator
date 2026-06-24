@@ -58,17 +58,19 @@ func TestHasuraProviderDocumentsValidate(t *testing.T) {
 		"filterOps": `query Filter($where: sources_bool_exp) {
 			sources(where: $where) { id name }
 		}`,
-		// NDC-shaped grouped aggregation (useGroupBy / useFacets via useCustom).
-		"groupBy": `query GroupBy($where: services_bool_exp, $dimensions: [services_group_dimension!]!, $limit: Int, $offset: Int) {
-			services_groups(where: $where, dimensions: $dimensions, limit: $limit, offset: $offset) {
-				dimensions { key value }
-				aggregates { count }
+		// NDC typed-key grouped aggregation (useGroupBy / useFacets via useCustom),
+		// mirroring the strawberry-django-hasura shape: group_by spec + typed key +
+		// free aggregate, plus having (over measures) and group order_by.
+		"groupBy": `query GroupBy($groupBy: [ServicesGroupBySpec!]!, $where: services_bool_exp, $having: ServicesHaving, $orderBy: [ServicesGroupOrder!], $limit: Int, $offset: Int) {
+			services_groups(group_by: $groupBy, where: $where, having: $having, order_by: $orderBy, limit: $limit, offset: $offset) {
+				key { status runtime health }
+				aggregate { count }
 			}
 		}`,
-		"groupBySourcesNumeric": `query GroupBySources($dimensions: [sources_group_dimension!]!) {
-			sources_groups(dimensions: $dimensions) {
-				dimensions { key value }
-				aggregates { count sum { ahead } avg { ahead } min { ahead } max { ahead } }
+		"groupBySourcesNumeric": `query GroupBySources($groupBy: [SourcesGroupBySpec!]!, $having: SourcesHaving, $orderBy: [SourcesGroupOrder!]) {
+			sources_groups(group_by: $groupBy, having: $having, order_by: $orderBy) {
+				key { kind state branch dirty pushed }
+				aggregate { count sum { ahead } avg { ahead } min { ahead } max { ahead } }
 			}
 		}`,
 	}

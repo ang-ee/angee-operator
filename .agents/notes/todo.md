@@ -71,6 +71,22 @@ client-facing reference.
   capitalized keys. Add `json` tags (or a `MarshalJSON`) if/when
   `CompiledStack` needs to be a first-class wire DTO. Pre-existing; not
   introduced by the `service.API` extraction.
+- [x] **Converge `*_groups` onto the Django "Option A" grouping shape.** DONE.
+  `services_groups` / `sources_groups` now mirror the `strawberry-django-hasura`
+  grouping contract: `group_by: [<t>_group_by_spec!]!` (typed `{ field,
+  granularity }` spec) + `{ key: <t>_group_key! (typed), aggregate:
+  <t>_aggregate_fields! (free) }`, plus `having` (over measures) and group
+  `order_by`, all applied in-memory over the engine groups. Helper types use the
+  upstream PascalCase convention (`ServicesGroupBySpec`/`ServicesGroupKey`/…) to
+  avoid a gqlgen marshaler collision (`services_group` field `key` vs a snake
+  `services_group_key` type). The operator has no granular dimensions, so a
+  non-null `granularity` is rejected (mirrors `GranularityNotApplicable`). The
+  free aggregate reuses the existing `<t>_aggregate_fields` (stock `<t>_aggregate`
+  unchanged). Remaining cross-backend nuance (intentional, not a TODO): the
+  operator collapses Django's group-order `direction`+`nulls` into the single
+  nulls-aware `order_by` enum, and its aggregate type name stays
+  `<t>_aggregate_fields` (vs upstream `<Model>Aggregate`) — type names are not
+  part of a shared document's selection set.
 
 ## Notes
 

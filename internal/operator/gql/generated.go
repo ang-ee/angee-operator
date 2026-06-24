@@ -232,12 +232,12 @@ type ComplexityRoot struct {
 		Services            func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
 		ServicesAggregate   func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
 		ServicesByPk        func(childComplexity int, id string) int
-		ServicesGroups      func(childComplexity int, where *model.ServicesBoolExp, dimensions []model.ServicesGroupDimension, limit *int, offset *int) int
+		ServicesGroups      func(childComplexity int, groupBy []*model.ServicesGroupBySpec, where *model.ServicesBoolExp, having *model.ServicesHaving, orderBy []*model.ServicesGroupOrder, limit *int, offset *int) int
 		SourceDiff          func(childComplexity int, name string, ref *string) int
 		Sources             func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
 		SourcesAggregate    func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
 		SourcesByPk         func(childComplexity int, id string) int
-		SourcesGroups       func(childComplexity int, where *model.SourcesBoolExp, dimensions []model.SourcesGroupDimension, limit *int, offset *int) int
+		SourcesGroups       func(childComplexity int, groupBy []*model.SourcesGroupBySpec, where *model.SourcesBoolExp, having *model.SourcesHaving, orderBy []*model.SourcesGroupOrder, limit *int, offset *int) int
 		StackLogs           func(childComplexity int, services []string, limit *int) int
 		StackStatus         func(childComplexity int) int
 		Templates           func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
@@ -288,6 +288,12 @@ type ComplexityRoot struct {
 		Status  func(childComplexity int) int
 	}
 
+	ServicesGroupKey struct {
+		Health  func(childComplexity int) int
+		Runtime func(childComplexity int) int
+		Status  func(childComplexity int) int
+	}
+
 	SourceState struct {
 		Ahead          func(childComplexity int) int
 		Behind         func(childComplexity int) int
@@ -307,6 +313,14 @@ type ComplexityRoot struct {
 		State          func(childComplexity int) int
 		UnpushedReason func(childComplexity int) int
 		Upstream       func(childComplexity int) int
+	}
+
+	SourcesGroupKey struct {
+		Branch func(childComplexity int) int
+		Dirty  func(childComplexity int) int
+		Kind   func(childComplexity int) int
+		Pushed func(childComplexity int) int
+		State  func(childComplexity int) int
 	}
 
 	StackInitResult struct {
@@ -470,8 +484,8 @@ type ComplexityRoot struct {
 	}
 
 	Services_group struct {
-		Aggregates func(childComplexity int) int
-		Dimensions func(childComplexity int) int
+		Aggregate func(childComplexity int) int
+		Key       func(childComplexity int) int
 	}
 
 	Sources_aggregate struct {
@@ -493,8 +507,8 @@ type ComplexityRoot struct {
 	}
 
 	Sources_group struct {
-		Aggregates func(childComplexity int) int
-		Dimensions func(childComplexity int) int
+		Aggregate func(childComplexity int) int
+		Key       func(childComplexity int) int
 	}
 
 	Sources_max_fields struct {
@@ -604,8 +618,8 @@ type QueryResolver interface {
 	Secrets(ctx context.Context, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) ([]*api.SecretRef, error)
 	SecretsByPk(ctx context.Context, id string) (*api.SecretRef, error)
 	SecretsAggregate(ctx context.Context, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) (*model.SecretsAggregate, error)
-	ServicesGroups(ctx context.Context, where *model.ServicesBoolExp, dimensions []model.ServicesGroupDimension, limit *int, offset *int) ([]*model.ServicesGroup, error)
-	SourcesGroups(ctx context.Context, where *model.SourcesBoolExp, dimensions []model.SourcesGroupDimension, limit *int, offset *int) ([]*model.SourcesGroup, error)
+	ServicesGroups(ctx context.Context, groupBy []*model.ServicesGroupBySpec, where *model.ServicesBoolExp, having *model.ServicesHaving, orderBy []*model.ServicesGroupOrder, limit *int, offset *int) ([]*model.ServicesGroup, error)
+	SourcesGroups(ctx context.Context, groupBy []*model.SourcesGroupBySpec, where *model.SourcesBoolExp, having *model.SourcesHaving, orderBy []*model.SourcesGroupOrder, limit *int, offset *int) ([]*model.SourcesGroup, error)
 	WorkspaceStatus(ctx context.Context, name string) (*api.WorkspaceStatusResponse, error)
 	WorkspaceGit(ctx context.Context, name string) ([]*api.SourceState, error)
 	GitOpsTopology(ctx context.Context, withCommits *int) (*api.GitOpsTopologyResponse, error)
@@ -1779,7 +1793,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.ServicesGroups(childComplexity, args["where"].(*model.ServicesBoolExp), args["dimensions"].([]model.ServicesGroupDimension), args["limit"].(*int), args["offset"].(*int)), true
+		return e.ComplexityRoot.Query.ServicesGroups(childComplexity, args["group_by"].([]*model.ServicesGroupBySpec), args["where"].(*model.ServicesBoolExp), args["having"].(*model.ServicesHaving), args["order_by"].([]*model.ServicesGroupOrder), args["limit"].(*int), args["offset"].(*int)), true
 	case "Query.sourceDiff":
 		if e.ComplexityRoot.Query.SourceDiff == nil {
 			break
@@ -1834,7 +1848,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.SourcesGroups(childComplexity, args["where"].(*model.SourcesBoolExp), args["dimensions"].([]model.SourcesGroupDimension), args["limit"].(*int), args["offset"].(*int)), true
+		return e.ComplexityRoot.Query.SourcesGroups(childComplexity, args["group_by"].([]*model.SourcesGroupBySpec), args["where"].(*model.SourcesBoolExp), args["having"].(*model.SourcesHaving), args["order_by"].([]*model.SourcesGroupOrder), args["limit"].(*int), args["offset"].(*int)), true
 	case "Query.stackLogs":
 		if e.ComplexityRoot.Query.StackLogs == nil {
 			break
@@ -2094,6 +2108,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceState.Status(childComplexity), true
 
+	case "ServicesGroupKey.health":
+		if e.ComplexityRoot.ServicesGroupKey.Health == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServicesGroupKey.Health(childComplexity), true
+	case "ServicesGroupKey.runtime":
+		if e.ComplexityRoot.ServicesGroupKey.Runtime == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServicesGroupKey.Runtime(childComplexity), true
+	case "ServicesGroupKey.status":
+		if e.ComplexityRoot.ServicesGroupKey.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServicesGroupKey.Status(childComplexity), true
+
 	case "SourceState.ahead":
 		if e.ComplexityRoot.SourceState.Ahead == nil {
 			break
@@ -2202,6 +2235,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SourceState.Upstream(childComplexity), true
+
+	case "SourcesGroupKey.branch":
+		if e.ComplexityRoot.SourcesGroupKey.Branch == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourcesGroupKey.Branch(childComplexity), true
+	case "SourcesGroupKey.dirty":
+		if e.ComplexityRoot.SourcesGroupKey.Dirty == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourcesGroupKey.Dirty(childComplexity), true
+	case "SourcesGroupKey.kind":
+		if e.ComplexityRoot.SourcesGroupKey.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourcesGroupKey.Kind(childComplexity), true
+	case "SourcesGroupKey.pushed":
+		if e.ComplexityRoot.SourcesGroupKey.Pushed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourcesGroupKey.Pushed(childComplexity), true
+	case "SourcesGroupKey.state":
+		if e.ComplexityRoot.SourcesGroupKey.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourcesGroupKey.State(childComplexity), true
 
 	case "StackInitResult.root":
 		if e.ComplexityRoot.StackInitResult.Root == nil {
@@ -2919,18 +2983,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Services_aggregate_fields.Count(childComplexity), true
 
-	case "services_group.aggregates":
-		if e.ComplexityRoot.Services_group.Aggregates == nil {
+	case "services_group.aggregate":
+		if e.ComplexityRoot.Services_group.Aggregate == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Services_group.Aggregates(childComplexity), true
-	case "services_group.dimensions":
-		if e.ComplexityRoot.Services_group.Dimensions == nil {
+		return e.ComplexityRoot.Services_group.Aggregate(childComplexity), true
+	case "services_group.key":
+		if e.ComplexityRoot.Services_group.Key == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Services_group.Dimensions(childComplexity), true
+		return e.ComplexityRoot.Services_group.Key(childComplexity), true
 
 	case "sources_aggregate.aggregate":
 		if e.ComplexityRoot.Sources_aggregate.Aggregate == nil {
@@ -2989,18 +3053,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Sources_avg_fields.Behind(childComplexity), true
 
-	case "sources_group.aggregates":
-		if e.ComplexityRoot.Sources_group.Aggregates == nil {
+	case "sources_group.aggregate":
+		if e.ComplexityRoot.Sources_group.Aggregate == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Sources_group.Aggregates(childComplexity), true
-	case "sources_group.dimensions":
-		if e.ComplexityRoot.Sources_group.Dimensions == nil {
+		return e.ComplexityRoot.Sources_group.Aggregate(childComplexity), true
+	case "sources_group.key":
+		if e.ComplexityRoot.Sources_group.Key == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Sources_group.Dimensions(childComplexity), true
+		return e.ComplexityRoot.Sources_group.Key(childComplexity), true
 
 	case "sources_max_fields.ahead":
 		if e.ComplexityRoot.Sources_max_fields.Ahead == nil {
@@ -3093,6 +3157,12 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputInt_comparison_exp,
 		ec.unmarshalInputKeyValueInput,
 		ec.unmarshalInputServiceInput,
+		ec.unmarshalInputServicesGroupBySpec,
+		ec.unmarshalInputServicesGroupOrder,
+		ec.unmarshalInputServicesHaving,
+		ec.unmarshalInputSourcesGroupBySpec,
+		ec.unmarshalInputSourcesGroupOrder,
+		ec.unmarshalInputSourcesHaving,
 		ec.unmarshalInputStackInitInput,
 		ec.unmarshalInputStackRuntimeInput,
 		ec.unmarshalInputString_comparison_exp,
@@ -3691,37 +3761,188 @@ type secrets_aggregate {
   nodes: [SecretRef!]!
 }
 
-# --- grouped aggregation (NDC grouping shape) --------------------------------
+# --- grouped aggregation (NDC / Hasura-v3 grouping shape) ---------------------
 # Hasura's standard ` + "`" + `<t>_aggregate` + "`" + ` is ungrouped; grouping is not a portable
 # standard yet (Hasura v3/DDN GraphQL group-by is pending, graphql-engine
-# #10786). These ` + "`" + `<t>_groups` + "`" + ` custom roots are shaped on the NDC grouping
-# structure — a list of groups, each a ` + "`" + `dimensions` + "`" + ` key plus per-group
-# ` + "`" + `aggregates` + "`" + ` — so a shared useGroupBy/useFacets hook has one forward-compatible
-# shape across the operator and the Django (` + "`" + `<model>_groups` + "`" + `) backends. Consumed
-# via refine ` + "`" + `useCustom` + "`" + ` + ` + "`" + `meta.gqlQuery` + "`" + ` (no stock provider supports group-by).
+# #10786). These ` + "`" + `<t>_groups` + "`" + ` custom roots mirror the ` + "`" + `strawberry-django-hasura` + "`" + `
+# adapter's NDC grouping contract exactly, so one shared useGroupBy/useFacets
+# hook (refine ` + "`" + `useCustom` + "`" + `) drives the operator and the Django ` + "`" + `<model>_groups` + "`" + `
+# backend through a single shape. Each group pairs a typed ` + "`" + `key` + "`" + ` (one field per
+# selected dimension) with the FREE ` + "`" + `<t>_aggregate_fields` + "`" + ` aggregate — the same
+# type ` + "`" + `<t>_aggregate` + "`" + ` exposes; the aggregate is never reshaped. ` + "`" + `having` + "`" + ` filters
+# over the aggregates, ` + "`" + `order_by` + "`" + ` sorts groups by a dimension or measure alias,
+# ` + "`" + `limit` + "`" + `/` + "`" + `offset` + "`" + ` page. No stock provider sends ` + "`" + `group_by` + "`" + `; this surface is
+# preview and additive (the stock list/aggregate/CRUD SDL is unaffected).
 
-enum services_group_dimension {
-  status
-  runtime
-  health
+# Granularity buckets for date/datetime/numeric dimensions (TIME date_trunc +
+# NUMBER date_part tracks), mirroring strawberry-django-aggregates' ` + "`" + `Granularity` + "`" + `
+# so the spec input is structurally identical across backends. The operator has
+# no granular dimensions, so supplying a granularity is rejected at runtime.
+enum Granularity {
+  YEAR
+  QUARTER
+  MONTH
+  WEEK
+  DAY
+  HOUR
+  MINUTE
+  SECOND
+  YEAR_NUMBER
+  QUARTER_NUMBER
+  MONTH_NUMBER
+  ISO_WEEK_NUMBER
+  DAY_OF_YEAR
+  DAY_OF_MONTH
+  DAY_OF_WEEK
+  HOUR_NUMBER
+  MINUTE_NUMBER
+  SECOND_NUMBER
+}
+
+# --- services grouping --------------------------------------------------------
+enum ServicesGroupableField {
+  STATUS
+  RUNTIME
+  HEALTH
+}
+
+input ServicesGroupBySpec {
+  field: ServicesGroupableField!
+  granularity: Granularity
+}
+
+type ServicesGroupKey {
+  status: String
+  runtime: String
+  health: String
+}
+
+input ServicesHaving {
+  count_gt: Int
+  count_lt: Int
+  count_lte: Int
+  count_gte: Int
+  count_eq: Int
+  count_neq: Int
+  count_in: [Int!]
+  count_not_in: [Int!]
+}
+
+input ServicesGroupOrder {
+  field: String!
+  direction: order_by
 }
 
 type services_group {
-  dimensions: [KeyValue!]!
-  aggregates: services_aggregate_fields!
+  key: ServicesGroupKey!
+  aggregate: services_aggregate_fields!
 }
 
-enum sources_group_dimension {
-  kind
-  state
-  branch
-  dirty
-  pushed
+# --- sources grouping ---------------------------------------------------------
+enum SourcesGroupableField {
+  KIND
+  STATE
+  BRANCH
+  DIRTY
+  PUSHED
+}
+
+input SourcesGroupBySpec {
+  field: SourcesGroupableField!
+  granularity: Granularity
+}
+
+type SourcesGroupKey {
+  kind: String
+  state: String
+  branch: String
+  dirty: Boolean
+  pushed: Boolean
+}
+
+input SourcesHaving {
+  count_gt: Int
+  count_lt: Int
+  count_lte: Int
+  count_gte: Int
+  count_eq: Int
+  count_neq: Int
+  count_in: [Int!]
+  count_not_in: [Int!]
+  sum_ahead_gt: Int
+  sum_ahead_lt: Int
+  sum_ahead_lte: Int
+  sum_ahead_gte: Int
+  sum_ahead_eq: Int
+  sum_ahead_neq: Int
+  sum_ahead_in: [Int!]
+  sum_ahead_not_in: [Int!]
+  sum_behind_gt: Int
+  sum_behind_lt: Int
+  sum_behind_lte: Int
+  sum_behind_gte: Int
+  sum_behind_eq: Int
+  sum_behind_neq: Int
+  sum_behind_in: [Int!]
+  sum_behind_not_in: [Int!]
+  avg_ahead_gt: Float
+  avg_ahead_lt: Float
+  avg_ahead_lte: Float
+  avg_ahead_gte: Float
+  avg_ahead_eq: Float
+  avg_ahead_neq: Float
+  avg_ahead_in: [Float!]
+  avg_ahead_not_in: [Float!]
+  avg_behind_gt: Float
+  avg_behind_lt: Float
+  avg_behind_lte: Float
+  avg_behind_gte: Float
+  avg_behind_eq: Float
+  avg_behind_neq: Float
+  avg_behind_in: [Float!]
+  avg_behind_not_in: [Float!]
+  min_ahead_gt: Int
+  min_ahead_lt: Int
+  min_ahead_lte: Int
+  min_ahead_gte: Int
+  min_ahead_eq: Int
+  min_ahead_neq: Int
+  min_ahead_in: [Int!]
+  min_ahead_not_in: [Int!]
+  min_behind_gt: Int
+  min_behind_lt: Int
+  min_behind_lte: Int
+  min_behind_gte: Int
+  min_behind_eq: Int
+  min_behind_neq: Int
+  min_behind_in: [Int!]
+  min_behind_not_in: [Int!]
+  max_ahead_gt: Int
+  max_ahead_lt: Int
+  max_ahead_lte: Int
+  max_ahead_gte: Int
+  max_ahead_eq: Int
+  max_ahead_neq: Int
+  max_ahead_in: [Int!]
+  max_ahead_not_in: [Int!]
+  max_behind_gt: Int
+  max_behind_lt: Int
+  max_behind_lte: Int
+  max_behind_gte: Int
+  max_behind_eq: Int
+  max_behind_neq: Int
+  max_behind_in: [Int!]
+  max_behind_not_in: [Int!]
+}
+
+input SourcesGroupOrder {
+  field: String!
+  direction: order_by
 }
 
 type sources_group {
-  dimensions: [KeyValue!]!
-  aggregates: sources_aggregate_fields!
+  key: SourcesGroupKey!
+  aggregate: sources_aggregate_fields!
 }
 
 # --- per-table mutation inputs/responses (CRUD entities) ----------------------
@@ -3848,8 +4069,8 @@ type Query {
   secrets_by_pk(id: String!): SecretRef
   secrets_aggregate(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): secrets_aggregate!
 
-  services_groups(where: services_bool_exp, dimensions: [services_group_dimension!]!, limit: Int, offset: Int): [services_group!]!
-  sources_groups(where: sources_bool_exp, dimensions: [sources_group_dimension!]!, limit: Int, offset: Int): [sources_group!]!
+  services_groups(group_by: [ServicesGroupBySpec!]!, where: services_bool_exp, having: ServicesHaving, order_by: [ServicesGroupOrder!], limit: Int, offset: Int): [services_group!]!
+  sources_groups(group_by: [SourcesGroupBySpec!]!, where: sources_bool_exp, having: SourcesHaving, order_by: [SourcesGroupOrder!], limit: Int, offset: Int): [sources_group!]!
 
   workspaceStatus(name: String!): WorkspaceStatus
   workspaceGit(name: String!): [SourceState!]!
@@ -4322,6 +4543,18 @@ func (ec *executionContext) childFields_ServiceState(ctx context.Context, field 
 	return nil, fmt.Errorf("no field named %q was found under type ServiceState", field.Name)
 }
 
+func (ec *executionContext) childFields_ServicesGroupKey(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "status":
+		return ec.fieldContext_ServicesGroupKey_status(ctx, field)
+	case "runtime":
+		return ec.fieldContext_ServicesGroupKey_runtime(ctx, field)
+	case "health":
+		return ec.fieldContext_ServicesGroupKey_health(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ServicesGroupKey", field.Name)
+}
+
 func (ec *executionContext) childFields_SourceState(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -4362,6 +4595,22 @@ func (ec *executionContext) childFields_SourceState(ctx context.Context, field g
 		return ec.fieldContext_SourceState_commits(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SourceState", field.Name)
+}
+
+func (ec *executionContext) childFields_SourcesGroupKey(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_SourcesGroupKey_kind(ctx, field)
+	case "state":
+		return ec.fieldContext_SourcesGroupKey_state(ctx, field)
+	case "branch":
+		return ec.fieldContext_SourcesGroupKey_branch(ctx, field)
+	case "dirty":
+		return ec.fieldContext_SourcesGroupKey_dirty(ctx, field)
+	case "pushed":
+		return ec.fieldContext_SourcesGroupKey_pushed(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SourcesGroupKey", field.Name)
 }
 
 func (ec *executionContext) childFields_StackInitResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4770,10 +5019,10 @@ func (ec *executionContext) childFields_services_aggregate_fields(ctx context.Co
 
 func (ec *executionContext) childFields_services_group(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "dimensions":
-		return ec.fieldContext_services_group_dimensions(ctx, field)
-	case "aggregates":
-		return ec.fieldContext_services_group_aggregates(ctx, field)
+	case "key":
+		return ec.fieldContext_services_group_key(ctx, field)
+	case "aggregate":
+		return ec.fieldContext_services_group_aggregate(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type services_group", field.Name)
 }
@@ -4816,10 +5065,10 @@ func (ec *executionContext) childFields_sources_avg_fields(ctx context.Context, 
 
 func (ec *executionContext) childFields_sources_group(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "dimensions":
-		return ec.fieldContext_sources_group_dimensions(ctx, field)
-	case "aggregates":
-		return ec.fieldContext_sources_group_aggregates(ctx, field)
+	case "key":
+		return ec.fieldContext_sources_group_key(ctx, field)
+	case "aggregate":
+		return ec.fieldContext_sources_group_aggregate(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type sources_group", field.Name)
 }
@@ -5963,38 +6212,54 @@ func (ec *executionContext) field_Query_services_by_pk_args(ctx context.Context,
 func (ec *executionContext) field_Query_services_groups_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "where",
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "group_by",
+		func(ctx context.Context, v any) ([]*model.ServicesGroupBySpec, error) {
+			return ec.unmarshalNServicesGroupBySpec2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupBySpecᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["group_by"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "where",
 		func(ctx context.Context, v any) (*model.ServicesBoolExp, error) {
 			return ec.unmarshalOservices_bool_exp2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesBoolExp(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["where"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "dimensions",
-		func(ctx context.Context, v any) ([]model.ServicesGroupDimension, error) {
-			return ec.unmarshalNservices_group_dimension2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimensionᚄ(ctx, v)
+	args["where"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "having",
+		func(ctx context.Context, v any) (*model.ServicesHaving, error) {
+			return ec.unmarshalOServicesHaving2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesHaving(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["dimensions"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "limit",
+	args["having"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "order_by",
+		func(ctx context.Context, v any) ([]*model.ServicesGroupOrder, error) {
+			return ec.unmarshalOServicesGroupOrder2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupOrderᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["order_by"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "limit",
 		func(ctx context.Context, v any) (*int, error) {
 			return ec.unmarshalOInt2ᚖint(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["limit"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "offset",
+	args["limit"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "offset",
 		func(ctx context.Context, v any) (*int, error) {
 			return ec.unmarshalOInt2ᚖint(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["offset"] = arg3
+	args["offset"] = arg5
 	return args, nil
 }
 
@@ -6113,38 +6378,54 @@ func (ec *executionContext) field_Query_sources_by_pk_args(ctx context.Context, 
 func (ec *executionContext) field_Query_sources_groups_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "where",
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "group_by",
+		func(ctx context.Context, v any) ([]*model.SourcesGroupBySpec, error) {
+			return ec.unmarshalNSourcesGroupBySpec2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupBySpecᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["group_by"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "where",
 		func(ctx context.Context, v any) (*model.SourcesBoolExp, error) {
 			return ec.unmarshalOsources_bool_exp2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesBoolExp(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["where"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "dimensions",
-		func(ctx context.Context, v any) ([]model.SourcesGroupDimension, error) {
-			return ec.unmarshalNsources_group_dimension2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimensionᚄ(ctx, v)
+	args["where"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "having",
+		func(ctx context.Context, v any) (*model.SourcesHaving, error) {
+			return ec.unmarshalOSourcesHaving2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesHaving(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["dimensions"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "limit",
+	args["having"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "order_by",
+		func(ctx context.Context, v any) ([]*model.SourcesGroupOrder, error) {
+			return ec.unmarshalOSourcesGroupOrder2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupOrderᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["order_by"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "limit",
 		func(ctx context.Context, v any) (*int, error) {
 			return ec.unmarshalOInt2ᚖint(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["limit"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "offset",
+	args["limit"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "offset",
 		func(ctx context.Context, v any) (*int, error) {
 			return ec.unmarshalOInt2ᚖint(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["offset"] = arg3
+	args["offset"] = arg5
 	return args, nil
 }
 
@@ -11365,7 +11646,7 @@ func (ec *executionContext) _Query_services_groups(ctx context.Context, field gr
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().ServicesGroups(ctx, fc.Args["where"].(*model.ServicesBoolExp), fc.Args["dimensions"].([]model.ServicesGroupDimension), fc.Args["limit"].(*int), fc.Args["offset"].(*int))
+			return ec.Resolvers.Query().ServicesGroups(ctx, fc.Args["group_by"].([]*model.ServicesGroupBySpec), fc.Args["where"].(*model.ServicesBoolExp), fc.Args["having"].(*model.ServicesHaving), fc.Args["order_by"].([]*model.ServicesGroupOrder), fc.Args["limit"].(*int), fc.Args["offset"].(*int))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.ServicesGroup) graphql.Marshaler {
@@ -11409,7 +11690,7 @@ func (ec *executionContext) _Query_sources_groups(ctx context.Context, field gra
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().SourcesGroups(ctx, fc.Args["where"].(*model.SourcesBoolExp), fc.Args["dimensions"].([]model.SourcesGroupDimension), fc.Args["limit"].(*int), fc.Args["offset"].(*int))
+			return ec.Resolvers.Query().SourcesGroups(ctx, fc.Args["group_by"].([]*model.SourcesGroupBySpec), fc.Args["where"].(*model.SourcesBoolExp), fc.Args["having"].(*model.SourcesHaving), fc.Args["order_by"].([]*model.SourcesGroupOrder), fc.Args["limit"].(*int), fc.Args["offset"].(*int))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.SourcesGroup) graphql.Marshaler {
@@ -12421,6 +12702,75 @@ func (ec *executionContext) fieldContext_ServiceState_health(_ context.Context, 
 	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ServicesGroupKey_status(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServicesGroupKey_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServicesGroupKey_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServicesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServicesGroupKey_runtime(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServicesGroupKey_runtime(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Runtime, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServicesGroupKey_runtime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServicesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServicesGroupKey_health(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServicesGroupKey_health(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Health, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServicesGroupKey_health(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServicesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _SourceState_id(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -12842,6 +13192,121 @@ func (ec *executionContext) fieldContext_SourceState_commits(_ context.Context, 
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _SourcesGroupKey_kind(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourcesGroupKey_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourcesGroupKey_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourcesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourcesGroupKey_state(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourcesGroupKey_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourcesGroupKey_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourcesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourcesGroupKey_branch(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourcesGroupKey_branch(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Branch, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourcesGroupKey_branch(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourcesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourcesGroupKey_dirty(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourcesGroupKey_dirty(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Dirty, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourcesGroupKey_dirty(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourcesGroupKey", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _SourcesGroupKey_pushed(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourcesGroupKey_pushed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Pushed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourcesGroupKey_pushed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourcesGroupKey", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
 func (ec *executionContext) _StackInitResult_status(ctx context.Context, field graphql.CollectedField, obj *model.StackInitResult) (ret graphql.Marshaler) {
@@ -16829,48 +17294,48 @@ func (ec *executionContext) fieldContext_services_aggregate_fields_count(_ conte
 	return graphql.NewScalarFieldContext("services_aggregate_fields", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _services_group_dimensions(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroup) (ret graphql.Marshaler) {
+func (ec *executionContext) _services_group_key(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroup) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_services_group_dimensions(ctx, field)
+			return ec.fieldContext_services_group_key(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Dimensions, nil
+			return obj.Key, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
-			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ServicesGroupKey) graphql.Marshaler {
+			return ec.marshalNServicesGroupKey2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupKey(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_services_group_dimensions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_services_group_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "services_group",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValue(ctx, field)
+			return ec.childFields_ServicesGroupKey(ctx, field)
 		},
 	}
 	return fc, nil
 }
 
-func (ec *executionContext) _services_group_aggregates(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroup) (ret graphql.Marshaler) {
+func (ec *executionContext) _services_group_aggregate(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroup) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_services_group_aggregates(ctx, field)
+			return ec.fieldContext_services_group_aggregate(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Aggregates, nil
+			return obj.Aggregate, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.ServicesAggregateFields) graphql.Marshaler {
@@ -16880,7 +17345,7 @@ func (ec *executionContext) _services_group_aggregates(ctx context.Context, fiel
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_services_group_aggregates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_services_group_aggregate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "services_group",
 		Field:      field,
@@ -17154,48 +17619,48 @@ func (ec *executionContext) fieldContext_sources_avg_fields_behind(_ context.Con
 	return graphql.NewScalarFieldContext("sources_avg_fields", field, false, false, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _sources_group_dimensions(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroup) (ret graphql.Marshaler) {
+func (ec *executionContext) _sources_group_key(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroup) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_sources_group_dimensions(ctx, field)
+			return ec.fieldContext_sources_group_key(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Dimensions, nil
+			return obj.Key, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
-			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SourcesGroupKey) graphql.Marshaler {
+			return ec.marshalNSourcesGroupKey2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupKey(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_sources_group_dimensions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_sources_group_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "sources_group",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValue(ctx, field)
+			return ec.childFields_SourcesGroupKey(ctx, field)
 		},
 	}
 	return fc, nil
 }
 
-func (ec *executionContext) _sources_group_aggregates(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroup) (ret graphql.Marshaler) {
+func (ec *executionContext) _sources_group_aggregate(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroup) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_sources_group_aggregates(ctx, field)
+			return ec.fieldContext_sources_group_aggregate(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Aggregates, nil
+			return obj.Aggregate, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.SourcesAggregateFields) graphql.Marshaler {
@@ -17205,7 +17670,7 @@ func (ec *executionContext) _sources_group_aggregates(ctx context.Context, field
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_sources_group_aggregates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_sources_group_aggregate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "sources_group",
 		Field:      field,
@@ -17796,6 +18261,760 @@ func (ec *executionContext) unmarshalInputServiceInput(ctx context.Context, obj 
 				return it, err
 			}
 			it.Start = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputServicesGroupBySpec(ctx context.Context, obj any) (model.ServicesGroupBySpec, error) {
+	var it model.ServicesGroupBySpec
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "granularity"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNServicesGroupableField2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupableField(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "granularity":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("granularity"))
+			data, err := ec.unmarshalOGranularity2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGranularity(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Granularity = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputServicesGroupOrder(ctx context.Context, obj any) (model.ServicesGroupOrder, error) {
+	var it model.ServicesGroupOrder
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "direction"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalOorder_by2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOrderBy(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputServicesHaving(ctx context.Context, obj any) (model.ServicesHaving, error) {
+	var it model.ServicesHaving
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"count_gt", "count_lt", "count_lte", "count_gte", "count_eq", "count_neq", "count_in", "count_not_in"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "count_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountGt = data
+		case "count_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountLt = data
+		case "count_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountLte = data
+		case "count_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountGte = data
+		case "count_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountEq = data
+		case "count_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountNeq = data
+		case "count_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountIn = data
+		case "count_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountNotIn = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSourcesGroupBySpec(ctx context.Context, obj any) (model.SourcesGroupBySpec, error) {
+	var it model.SourcesGroupBySpec
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "granularity"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNSourcesGroupableField2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupableField(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "granularity":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("granularity"))
+			data, err := ec.unmarshalOGranularity2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGranularity(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Granularity = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSourcesGroupOrder(ctx context.Context, obj any) (model.SourcesGroupOrder, error) {
+	var it model.SourcesGroupOrder
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"field", "direction"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "field":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Field = data
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalOorder_by2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOrderBy(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSourcesHaving(ctx context.Context, obj any) (model.SourcesHaving, error) {
+	var it model.SourcesHaving
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"count_gt", "count_lt", "count_lte", "count_gte", "count_eq", "count_neq", "count_in", "count_not_in", "sum_ahead_gt", "sum_ahead_lt", "sum_ahead_lte", "sum_ahead_gte", "sum_ahead_eq", "sum_ahead_neq", "sum_ahead_in", "sum_ahead_not_in", "sum_behind_gt", "sum_behind_lt", "sum_behind_lte", "sum_behind_gte", "sum_behind_eq", "sum_behind_neq", "sum_behind_in", "sum_behind_not_in", "avg_ahead_gt", "avg_ahead_lt", "avg_ahead_lte", "avg_ahead_gte", "avg_ahead_eq", "avg_ahead_neq", "avg_ahead_in", "avg_ahead_not_in", "avg_behind_gt", "avg_behind_lt", "avg_behind_lte", "avg_behind_gte", "avg_behind_eq", "avg_behind_neq", "avg_behind_in", "avg_behind_not_in", "min_ahead_gt", "min_ahead_lt", "min_ahead_lte", "min_ahead_gte", "min_ahead_eq", "min_ahead_neq", "min_ahead_in", "min_ahead_not_in", "min_behind_gt", "min_behind_lt", "min_behind_lte", "min_behind_gte", "min_behind_eq", "min_behind_neq", "min_behind_in", "min_behind_not_in", "max_ahead_gt", "max_ahead_lt", "max_ahead_lte", "max_ahead_gte", "max_ahead_eq", "max_ahead_neq", "max_ahead_in", "max_ahead_not_in", "max_behind_gt", "max_behind_lt", "max_behind_lte", "max_behind_gte", "max_behind_eq", "max_behind_neq", "max_behind_in", "max_behind_not_in"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "count_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountGt = data
+		case "count_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountLt = data
+		case "count_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountLte = data
+		case "count_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountGte = data
+		case "count_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountEq = data
+		case "count_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountNeq = data
+		case "count_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountIn = data
+		case "count_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("count_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CountNotIn = data
+		case "sum_ahead_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadGt = data
+		case "sum_ahead_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadLt = data
+		case "sum_ahead_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadLte = data
+		case "sum_ahead_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadGte = data
+		case "sum_ahead_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadEq = data
+		case "sum_ahead_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadNeq = data
+		case "sum_ahead_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadIn = data
+		case "sum_ahead_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_ahead_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumAheadNotIn = data
+		case "sum_behind_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindGt = data
+		case "sum_behind_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindLt = data
+		case "sum_behind_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindLte = data
+		case "sum_behind_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindGte = data
+		case "sum_behind_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindEq = data
+		case "sum_behind_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindNeq = data
+		case "sum_behind_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindIn = data
+		case "sum_behind_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sum_behind_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SumBehindNotIn = data
+		case "avg_ahead_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_gt"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadGt = data
+		case "avg_ahead_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_lt"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadLt = data
+		case "avg_ahead_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_lte"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadLte = data
+		case "avg_ahead_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_gte"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadGte = data
+		case "avg_ahead_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_eq"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadEq = data
+		case "avg_ahead_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_neq"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadNeq = data
+		case "avg_ahead_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_in"))
+			data, err := ec.unmarshalOFloat2ᚕfloat64ᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadIn = data
+		case "avg_ahead_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_ahead_not_in"))
+			data, err := ec.unmarshalOFloat2ᚕfloat64ᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgAheadNotIn = data
+		case "avg_behind_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_gt"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindGt = data
+		case "avg_behind_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_lt"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindLt = data
+		case "avg_behind_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_lte"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindLte = data
+		case "avg_behind_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_gte"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindGte = data
+		case "avg_behind_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_eq"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindEq = data
+		case "avg_behind_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_neq"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindNeq = data
+		case "avg_behind_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_in"))
+			data, err := ec.unmarshalOFloat2ᚕfloat64ᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindIn = data
+		case "avg_behind_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avg_behind_not_in"))
+			data, err := ec.unmarshalOFloat2ᚕfloat64ᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvgBehindNotIn = data
+		case "min_ahead_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadGt = data
+		case "min_ahead_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadLt = data
+		case "min_ahead_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadLte = data
+		case "min_ahead_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadGte = data
+		case "min_ahead_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadEq = data
+		case "min_ahead_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadNeq = data
+		case "min_ahead_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadIn = data
+		case "min_ahead_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_ahead_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinAheadNotIn = data
+		case "min_behind_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindGt = data
+		case "min_behind_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindLt = data
+		case "min_behind_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindLte = data
+		case "min_behind_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindGte = data
+		case "min_behind_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindEq = data
+		case "min_behind_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindNeq = data
+		case "min_behind_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindIn = data
+		case "min_behind_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("min_behind_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinBehindNotIn = data
+		case "max_ahead_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadGt = data
+		case "max_ahead_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadLt = data
+		case "max_ahead_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadLte = data
+		case "max_ahead_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadGte = data
+		case "max_ahead_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadEq = data
+		case "max_ahead_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadNeq = data
+		case "max_ahead_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadIn = data
+		case "max_ahead_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_ahead_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxAheadNotIn = data
+		case "max_behind_gt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_gt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindGt = data
+		case "max_behind_lt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_lt"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindLt = data
+		case "max_behind_lte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_lte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindLte = data
+		case "max_behind_gte":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_gte"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindGte = data
+		case "max_behind_eq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_eq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindEq = data
+		case "max_behind_neq":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_neq"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindNeq = data
+		case "max_behind_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindIn = data
+		case "max_behind_not_in":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_behind_not_in"))
+			data, err := ec.unmarshalOInt2ᚕintᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxBehindNotIn = data
 		}
 	}
 	return it, nil
@@ -21527,6 +22746,46 @@ func (ec *executionContext) _ServiceState(ctx context.Context, sel ast.Selection
 	return out
 }
 
+var servicesGroupKeyImplementors = []string{"ServicesGroupKey"}
+
+func (ec *executionContext) _ServicesGroupKey(ctx context.Context, sel ast.SelectionSet, obj *model.ServicesGroupKey) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, servicesGroupKeyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ServicesGroupKey")
+		case "status":
+			out.Values[i] = ec._ServicesGroupKey_status(ctx, field, obj)
+		case "runtime":
+			out.Values[i] = ec._ServicesGroupKey_runtime(ctx, field, obj)
+		case "health":
+			out.Values[i] = ec._ServicesGroupKey_health(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var sourceStateImplementors = []string{"SourceState"}
 
 func (ec *executionContext) _SourceState(ctx context.Context, sel ast.SelectionSet, obj *api.SourceState) graphql.Marshaler {
@@ -21620,6 +22879,50 @@ func (ec *executionContext) _SourceState(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._SourceState_error(ctx, field, obj)
 		case "commits":
 			out.Values[i] = ec._SourceState_commits(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var sourcesGroupKeyImplementors = []string{"SourcesGroupKey"}
+
+func (ec *executionContext) _SourcesGroupKey(ctx context.Context, sel ast.SelectionSet, obj *model.SourcesGroupKey) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sourcesGroupKeyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SourcesGroupKey")
+		case "kind":
+			out.Values[i] = ec._SourcesGroupKey_kind(ctx, field, obj)
+		case "state":
+			out.Values[i] = ec._SourcesGroupKey_state(ctx, field, obj)
+		case "branch":
+			out.Values[i] = ec._SourcesGroupKey_branch(ctx, field, obj)
+		case "dirty":
+			out.Values[i] = ec._SourcesGroupKey_dirty(ctx, field, obj)
+		case "pushed":
+			out.Values[i] = ec._SourcesGroupKey_pushed(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -23323,13 +24626,13 @@ func (ec *executionContext) _services_group(ctx context.Context, sel ast.Selecti
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("services_group")
-		case "dimensions":
-			out.Values[i] = ec._services_group_dimensions(ctx, field, obj)
+		case "key":
+			out.Values[i] = ec._services_group_key(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "aggregates":
-			out.Values[i] = ec._services_group_aggregates(ctx, field, obj)
+		case "aggregate":
+			out.Values[i] = ec._services_group_aggregate(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -23493,13 +24796,13 @@ func (ec *executionContext) _sources_group(ctx context.Context, sel ast.Selectio
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("sources_group")
-		case "dimensions":
-			out.Values[i] = ec._sources_group_dimensions(ctx, field, obj)
+		case "key":
+			out.Values[i] = ec._sources_group_key(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "aggregates":
-			out.Values[i] = ec._sources_group_aggregates(ctx, field, obj)
+		case "aggregate":
+			out.Values[i] = ec._sources_group_aggregate(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -23884,6 +25187,22 @@ func (ec *executionContext) marshalNDiffHunk2ᚕgithubᚗcomᚋangᚑeeᚋangee�
 	return ret
 }
 
+func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {
+	res, err := graphql.UnmarshalFloatContext(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.SelectionSet, v float64) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalFloatContext(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return graphql.WrapContextMarshaler(ctx, res)
+}
+
 func (ec *executionContext) marshalNGitOpResult2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx context.Context, sel ast.SelectionSet, v api.GitOpResult) graphql.Marshaler {
 	return ec._GitOpResult(ctx, sel, &v)
 }
@@ -24122,6 +25441,51 @@ func (ec *executionContext) marshalNServiceState2ᚖgithubᚗcomᚋangᚑeeᚋan
 	return ec._ServiceState(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNServicesGroupBySpec2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupBySpecᚄ(ctx context.Context, v any) ([]*model.ServicesGroupBySpec, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.ServicesGroupBySpec, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNServicesGroupBySpec2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupBySpec(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalNServicesGroupBySpec2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupBySpec(ctx context.Context, v any) (*model.ServicesGroupBySpec, error) {
+	res, err := ec.unmarshalInputServicesGroupBySpec(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNServicesGroupKey2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupKey(ctx context.Context, sel ast.SelectionSet, v *model.ServicesGroupKey) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ServicesGroupKey(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNServicesGroupOrder2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupOrder(ctx context.Context, v any) (*model.ServicesGroupOrder, error) {
+	res, err := ec.unmarshalInputServicesGroupOrder(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNServicesGroupableField2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupableField(ctx context.Context, v any) (model.ServicesGroupableField, error) {
+	var res model.ServicesGroupableField
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNServicesGroupableField2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupableField(ctx context.Context, sel ast.SelectionSet, v model.ServicesGroupableField) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNSourceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v api.SourceState) graphql.Marshaler {
 	return ec._SourceState(ctx, sel, &v)
 }
@@ -24166,6 +25530,51 @@ func (ec *executionContext) marshalNSourceState2ᚖgithubᚗcomᚋangᚑeeᚋang
 		return graphql.Null
 	}
 	return ec._SourceState(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSourcesGroupBySpec2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupBySpecᚄ(ctx context.Context, v any) ([]*model.SourcesGroupBySpec, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.SourcesGroupBySpec, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNSourcesGroupBySpec2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupBySpec(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalNSourcesGroupBySpec2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupBySpec(ctx context.Context, v any) (*model.SourcesGroupBySpec, error) {
+	res, err := ec.unmarshalInputSourcesGroupBySpec(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSourcesGroupKey2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupKey(ctx context.Context, sel ast.SelectionSet, v *model.SourcesGroupKey) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SourcesGroupKey(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSourcesGroupOrder2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupOrder(ctx context.Context, v any) (*model.SourcesGroupOrder, error) {
+	res, err := ec.unmarshalInputSourcesGroupOrder(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNSourcesGroupableField2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupableField(ctx context.Context, v any) (model.SourcesGroupableField, error) {
+	var res model.SourcesGroupableField
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSourcesGroupableField2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupableField(ctx context.Context, sel ast.SelectionSet, v model.SourcesGroupableField) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNStackInitInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitInput(ctx context.Context, v any) (model.StackInitInput, error) {
@@ -24653,47 +26062,6 @@ func (ec *executionContext) marshalNservices_group2ᚖgithubᚗcomᚋangᚑeeᚋ
 	return ec._services_group(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNservices_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimension(ctx context.Context, v any) (model.ServicesGroupDimension, error) {
-	var res model.ServicesGroupDimension
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNservices_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimension(ctx context.Context, sel ast.SelectionSet, v model.ServicesGroupDimension) graphql.Marshaler {
-	return v
-}
-
-func (ec *executionContext) unmarshalNservices_group_dimension2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimensionᚄ(ctx context.Context, v any) ([]model.ServicesGroupDimension, error) {
-	var vSlice []any
-	vSlice = graphql.CoerceList(v)
-	var err error
-	res := make([]model.ServicesGroupDimension, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNservices_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimension(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalNservices_group_dimension2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimensionᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ServicesGroupDimension) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNservices_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupDimension(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
 func (ec *executionContext) unmarshalNservices_insert_input2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesInsertInput(ctx context.Context, v any) (model.ServicesInsertInput, error) {
 	res, err := ec.unmarshalInputservices_insert_input(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -24767,47 +26135,6 @@ func (ec *executionContext) marshalNsources_group2ᚖgithubᚗcomᚋangᚑeeᚋa
 		return graphql.Null
 	}
 	return ec._sources_group(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNsources_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimension(ctx context.Context, v any) (model.SourcesGroupDimension, error) {
-	var res model.SourcesGroupDimension
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNsources_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimension(ctx context.Context, sel ast.SelectionSet, v model.SourcesGroupDimension) graphql.Marshaler {
-	return v
-}
-
-func (ec *executionContext) unmarshalNsources_group_dimension2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimensionᚄ(ctx context.Context, v any) ([]model.SourcesGroupDimension, error) {
-	var vSlice []any
-	vSlice = graphql.CoerceList(v)
-	var err error
-	res := make([]model.SourcesGroupDimension, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNsources_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimension(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalNsources_group_dimension2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimensionᚄ(ctx context.Context, sel ast.SelectionSet, v []model.SourcesGroupDimension) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNsources_group_dimension2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupDimension(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
 }
 
 func (ec *executionContext) unmarshalNsources_order_by2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesOrderBy(ctx context.Context, v any) (*model.SourcesOrderBy, error) {
@@ -24978,6 +26305,42 @@ func (ec *executionContext) marshalOCompiledStack2ᚖgithubᚗcomᚋangᚑeeᚋa
 	return ec._CompiledStack(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOFloat2ᚕfloat64ᚄ(ctx context.Context, v any) ([]float64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]float64, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNFloat2float64(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOFloat2ᚕfloat64ᚄ(ctx context.Context, sel ast.SelectionSet, v []float64) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNFloat2float64(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) unmarshalOFloat2ᚖfloat64(ctx context.Context, v any) (*float64, error) {
 	if v == nil {
 		return nil, nil
@@ -25000,6 +26363,22 @@ func (ec *executionContext) marshalOGitOpsTopology2ᚖgithubᚗcomᚋangᚑeeᚋ
 		return graphql.Null
 	}
 	return ec._GitOpsTopology(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOGranularity2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGranularity(ctx context.Context, v any) (*model.Granularity, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.Granularity)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOGranularity2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐGranularity(ctx context.Context, sel ast.SelectionSet, v *model.Granularity) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOIngressStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐIngressStatus(ctx context.Context, sel ast.SelectionSet, v *api.IngressStatus) graphql.Marshaler {
@@ -25161,11 +26540,63 @@ func (ec *executionContext) marshalOServiceState2ᚖgithubᚗcomᚋangᚑeeᚋan
 	return ec._ServiceState(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOServicesGroupOrder2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupOrderᚄ(ctx context.Context, v any) ([]*model.ServicesGroupOrder, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.ServicesGroupOrder, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNServicesGroupOrder2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupOrder(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalOServicesHaving2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesHaving(ctx context.Context, v any) (*model.ServicesHaving, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputServicesHaving(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceState(ctx context.Context, sel ast.SelectionSet, v *api.SourceState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._SourceState(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOSourcesGroupOrder2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupOrderᚄ(ctx context.Context, v any) ([]*model.SourcesGroupOrder, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.SourcesGroupOrder, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNSourcesGroupOrder2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupOrder(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalOSourcesHaving2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesHaving(ctx context.Context, v any) (*model.SourcesHaving, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputSourcesHaving(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOStackInitResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStackInitResult(ctx context.Context, sel ast.SelectionSet, v *model.StackInitResult) graphql.Marshaler {

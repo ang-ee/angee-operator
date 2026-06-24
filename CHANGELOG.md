@@ -36,15 +36,25 @@ latest tag.
   - The generic in-memory `internal/query` engine (filter/sort/paging/aggregate)
     is reused; the `service.API` push-down stays, so the REST surface still
     filters via `?query=<json>` → `{nodes,total_count}` (REST contract unchanged).
-  - **Grouped aggregation (NDC shape):** alongside the ungrouped Hasura
-    `<t>_aggregate`, `services_groups` / `sources_groups` custom roots return a
-    list of groups (`dimensions` key + per-group `aggregates`) shaped on the
-    NDC grouping structure — the emerging Hasura v3/DDN group-by standard
-    (graphql-engine #10786). This gives one forward-compatible grouped shape
-    across the operator and the Django (`<model>_groups`) backends for a shared
-    `useGroupBy`/`useFacets` hook (consumed via refine `useCustom`, since no
-    stock provider supports group-by). Deferred toward full NDC: `having`
-    predicates and order-by-on-aggregate.
+  - **Grouped aggregation (NDC typed-key shape):** alongside the ungrouped
+    Hasura `<t>_aggregate`, the `services_groups` / `sources_groups` custom roots
+    mirror the `strawberry-django-hasura` grouping contract exactly, so one
+    shared `useGroupBy`/`useFacets` hook (refine `useCustom`) drives the operator
+    and the Django `<model>_groups` backend through a single shape. Each group
+    pairs a typed `key` (one field per selected dimension) with the FREE
+    `<t>_aggregate_fields` aggregate — the same type `<t>_aggregate` exposes, no
+    reshape. The roots take `group_by: [<t>_group_by_spec!]!` (a `{ field,
+    granularity }` spec mirroring the upstream `Granularity` enum for structural
+    parity; the operator has no granular dimensions, so a non-null granularity is
+    rejected), `where` (pre-group filter), `having` (a predicate over the
+    aggregate measures: `count` / `sum_*` / `avg_*` / `min_*` / `max_*` with the
+    eight `gt,lt,lte,gte,eq,neq,in,not_in` comparisons), `order_by`
+    (`[<t>_group_order!]`, by a dimension or measure alias), and `limit`/`offset`
+    paging — all applied in-memory over the materialized engine groups. This
+    replaces the earlier interim `{ dimensions: [KeyValue!]!, aggregates }`
+    shape; the shape now tracks the Hasura v3/DDN group-by direction
+    (graphql-engine #10786). Preview/non-stock: the stock list/aggregate/CRUD
+    SDL is unaffected (grouping is additive).
 
 ### Added
 

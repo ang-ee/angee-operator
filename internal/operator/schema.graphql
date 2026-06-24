@@ -479,37 +479,188 @@ type secrets_aggregate {
   nodes: [SecretRef!]!
 }
 
-# --- grouped aggregation (NDC grouping shape) --------------------------------
+# --- grouped aggregation (NDC / Hasura-v3 grouping shape) ---------------------
 # Hasura's standard `<t>_aggregate` is ungrouped; grouping is not a portable
 # standard yet (Hasura v3/DDN GraphQL group-by is pending, graphql-engine
-# #10786). These `<t>_groups` custom roots are shaped on the NDC grouping
-# structure — a list of groups, each a `dimensions` key plus per-group
-# `aggregates` — so a shared useGroupBy/useFacets hook has one forward-compatible
-# shape across the operator and the Django (`<model>_groups`) backends. Consumed
-# via refine `useCustom` + `meta.gqlQuery` (no stock provider supports group-by).
+# #10786). These `<t>_groups` custom roots mirror the `strawberry-django-hasura`
+# adapter's NDC grouping contract exactly, so one shared useGroupBy/useFacets
+# hook (refine `useCustom`) drives the operator and the Django `<model>_groups`
+# backend through a single shape. Each group pairs a typed `key` (one field per
+# selected dimension) with the FREE `<t>_aggregate_fields` aggregate — the same
+# type `<t>_aggregate` exposes; the aggregate is never reshaped. `having` filters
+# over the aggregates, `order_by` sorts groups by a dimension or measure alias,
+# `limit`/`offset` page. No stock provider sends `group_by`; this surface is
+# preview and additive (the stock list/aggregate/CRUD SDL is unaffected).
 
-enum services_group_dimension {
-  status
-  runtime
-  health
+# Granularity buckets for date/datetime/numeric dimensions (TIME date_trunc +
+# NUMBER date_part tracks), mirroring strawberry-django-aggregates' `Granularity`
+# so the spec input is structurally identical across backends. The operator has
+# no granular dimensions, so supplying a granularity is rejected at runtime.
+enum Granularity {
+  YEAR
+  QUARTER
+  MONTH
+  WEEK
+  DAY
+  HOUR
+  MINUTE
+  SECOND
+  YEAR_NUMBER
+  QUARTER_NUMBER
+  MONTH_NUMBER
+  ISO_WEEK_NUMBER
+  DAY_OF_YEAR
+  DAY_OF_MONTH
+  DAY_OF_WEEK
+  HOUR_NUMBER
+  MINUTE_NUMBER
+  SECOND_NUMBER
+}
+
+# --- services grouping --------------------------------------------------------
+enum ServicesGroupableField {
+  STATUS
+  RUNTIME
+  HEALTH
+}
+
+input ServicesGroupBySpec {
+  field: ServicesGroupableField!
+  granularity: Granularity
+}
+
+type ServicesGroupKey {
+  status: String
+  runtime: String
+  health: String
+}
+
+input ServicesHaving {
+  count_gt: Int
+  count_lt: Int
+  count_lte: Int
+  count_gte: Int
+  count_eq: Int
+  count_neq: Int
+  count_in: [Int!]
+  count_not_in: [Int!]
+}
+
+input ServicesGroupOrder {
+  field: String!
+  direction: order_by
 }
 
 type services_group {
-  dimensions: [KeyValue!]!
-  aggregates: services_aggregate_fields!
+  key: ServicesGroupKey!
+  aggregate: services_aggregate_fields!
 }
 
-enum sources_group_dimension {
-  kind
-  state
-  branch
-  dirty
-  pushed
+# --- sources grouping ---------------------------------------------------------
+enum SourcesGroupableField {
+  KIND
+  STATE
+  BRANCH
+  DIRTY
+  PUSHED
+}
+
+input SourcesGroupBySpec {
+  field: SourcesGroupableField!
+  granularity: Granularity
+}
+
+type SourcesGroupKey {
+  kind: String
+  state: String
+  branch: String
+  dirty: Boolean
+  pushed: Boolean
+}
+
+input SourcesHaving {
+  count_gt: Int
+  count_lt: Int
+  count_lte: Int
+  count_gte: Int
+  count_eq: Int
+  count_neq: Int
+  count_in: [Int!]
+  count_not_in: [Int!]
+  sum_ahead_gt: Int
+  sum_ahead_lt: Int
+  sum_ahead_lte: Int
+  sum_ahead_gte: Int
+  sum_ahead_eq: Int
+  sum_ahead_neq: Int
+  sum_ahead_in: [Int!]
+  sum_ahead_not_in: [Int!]
+  sum_behind_gt: Int
+  sum_behind_lt: Int
+  sum_behind_lte: Int
+  sum_behind_gte: Int
+  sum_behind_eq: Int
+  sum_behind_neq: Int
+  sum_behind_in: [Int!]
+  sum_behind_not_in: [Int!]
+  avg_ahead_gt: Float
+  avg_ahead_lt: Float
+  avg_ahead_lte: Float
+  avg_ahead_gte: Float
+  avg_ahead_eq: Float
+  avg_ahead_neq: Float
+  avg_ahead_in: [Float!]
+  avg_ahead_not_in: [Float!]
+  avg_behind_gt: Float
+  avg_behind_lt: Float
+  avg_behind_lte: Float
+  avg_behind_gte: Float
+  avg_behind_eq: Float
+  avg_behind_neq: Float
+  avg_behind_in: [Float!]
+  avg_behind_not_in: [Float!]
+  min_ahead_gt: Int
+  min_ahead_lt: Int
+  min_ahead_lte: Int
+  min_ahead_gte: Int
+  min_ahead_eq: Int
+  min_ahead_neq: Int
+  min_ahead_in: [Int!]
+  min_ahead_not_in: [Int!]
+  min_behind_gt: Int
+  min_behind_lt: Int
+  min_behind_lte: Int
+  min_behind_gte: Int
+  min_behind_eq: Int
+  min_behind_neq: Int
+  min_behind_in: [Int!]
+  min_behind_not_in: [Int!]
+  max_ahead_gt: Int
+  max_ahead_lt: Int
+  max_ahead_lte: Int
+  max_ahead_gte: Int
+  max_ahead_eq: Int
+  max_ahead_neq: Int
+  max_ahead_in: [Int!]
+  max_ahead_not_in: [Int!]
+  max_behind_gt: Int
+  max_behind_lt: Int
+  max_behind_lte: Int
+  max_behind_gte: Int
+  max_behind_eq: Int
+  max_behind_neq: Int
+  max_behind_in: [Int!]
+  max_behind_not_in: [Int!]
+}
+
+input SourcesGroupOrder {
+  field: String!
+  direction: order_by
 }
 
 type sources_group {
-  dimensions: [KeyValue!]!
-  aggregates: sources_aggregate_fields!
+  key: SourcesGroupKey!
+  aggregate: sources_aggregate_fields!
 }
 
 # --- per-table mutation inputs/responses (CRUD entities) ----------------------
@@ -636,8 +787,8 @@ type Query {
   secrets_by_pk(id: String!): SecretRef
   secrets_aggregate(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): secrets_aggregate!
 
-  services_groups(where: services_bool_exp, dimensions: [services_group_dimension!]!, limit: Int, offset: Int): [services_group!]!
-  sources_groups(where: sources_bool_exp, dimensions: [sources_group_dimension!]!, limit: Int, offset: Int): [sources_group!]!
+  services_groups(group_by: [ServicesGroupBySpec!]!, where: services_bool_exp, having: ServicesHaving, order_by: [ServicesGroupOrder!], limit: Int, offset: Int): [services_group!]!
+  sources_groups(group_by: [SourcesGroupBySpec!]!, where: sources_bool_exp, having: SourcesHaving, order_by: [SourcesGroupOrder!], limit: Int, offset: Int): [sources_group!]!
 
   workspaceStatus(name: String!): WorkspaceStatus
   workspaceGit(name: String!): [SourceState!]!

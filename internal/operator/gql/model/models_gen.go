@@ -65,6 +65,126 @@ type ServiceInput struct {
 	Start   *bool            `json:"start,omitempty"`
 }
 
+type ServicesGroupBySpec struct {
+	Field       ServicesGroupableField `json:"field"`
+	Granularity *Granularity           `json:"granularity,omitempty"`
+}
+
+type ServicesGroupKey struct {
+	Status  *string `json:"status,omitempty"`
+	Runtime *string `json:"runtime,omitempty"`
+	Health  *string `json:"health,omitempty"`
+}
+
+type ServicesGroupOrder struct {
+	Field     string   `json:"field"`
+	Direction *OrderBy `json:"direction,omitempty"`
+}
+
+type ServicesHaving struct {
+	CountGt    *int  `json:"count_gt,omitempty"`
+	CountLt    *int  `json:"count_lt,omitempty"`
+	CountLte   *int  `json:"count_lte,omitempty"`
+	CountGte   *int  `json:"count_gte,omitempty"`
+	CountEq    *int  `json:"count_eq,omitempty"`
+	CountNeq   *int  `json:"count_neq,omitempty"`
+	CountIn    []int `json:"count_in,omitempty"`
+	CountNotIn []int `json:"count_not_in,omitempty"`
+}
+
+type SourcesGroupBySpec struct {
+	Field       SourcesGroupableField `json:"field"`
+	Granularity *Granularity          `json:"granularity,omitempty"`
+}
+
+type SourcesGroupKey struct {
+	Kind   *string `json:"kind,omitempty"`
+	State  *string `json:"state,omitempty"`
+	Branch *string `json:"branch,omitempty"`
+	Dirty  *bool   `json:"dirty,omitempty"`
+	Pushed *bool   `json:"pushed,omitempty"`
+}
+
+type SourcesGroupOrder struct {
+	Field     string   `json:"field"`
+	Direction *OrderBy `json:"direction,omitempty"`
+}
+
+type SourcesHaving struct {
+	CountGt        *int      `json:"count_gt,omitempty"`
+	CountLt        *int      `json:"count_lt,omitempty"`
+	CountLte       *int      `json:"count_lte,omitempty"`
+	CountGte       *int      `json:"count_gte,omitempty"`
+	CountEq        *int      `json:"count_eq,omitempty"`
+	CountNeq       *int      `json:"count_neq,omitempty"`
+	CountIn        []int     `json:"count_in,omitempty"`
+	CountNotIn     []int     `json:"count_not_in,omitempty"`
+	SumAheadGt     *int      `json:"sum_ahead_gt,omitempty"`
+	SumAheadLt     *int      `json:"sum_ahead_lt,omitempty"`
+	SumAheadLte    *int      `json:"sum_ahead_lte,omitempty"`
+	SumAheadGte    *int      `json:"sum_ahead_gte,omitempty"`
+	SumAheadEq     *int      `json:"sum_ahead_eq,omitempty"`
+	SumAheadNeq    *int      `json:"sum_ahead_neq,omitempty"`
+	SumAheadIn     []int     `json:"sum_ahead_in,omitempty"`
+	SumAheadNotIn  []int     `json:"sum_ahead_not_in,omitempty"`
+	SumBehindGt    *int      `json:"sum_behind_gt,omitempty"`
+	SumBehindLt    *int      `json:"sum_behind_lt,omitempty"`
+	SumBehindLte   *int      `json:"sum_behind_lte,omitempty"`
+	SumBehindGte   *int      `json:"sum_behind_gte,omitempty"`
+	SumBehindEq    *int      `json:"sum_behind_eq,omitempty"`
+	SumBehindNeq   *int      `json:"sum_behind_neq,omitempty"`
+	SumBehindIn    []int     `json:"sum_behind_in,omitempty"`
+	SumBehindNotIn []int     `json:"sum_behind_not_in,omitempty"`
+	AvgAheadGt     *float64  `json:"avg_ahead_gt,omitempty"`
+	AvgAheadLt     *float64  `json:"avg_ahead_lt,omitempty"`
+	AvgAheadLte    *float64  `json:"avg_ahead_lte,omitempty"`
+	AvgAheadGte    *float64  `json:"avg_ahead_gte,omitempty"`
+	AvgAheadEq     *float64  `json:"avg_ahead_eq,omitempty"`
+	AvgAheadNeq    *float64  `json:"avg_ahead_neq,omitempty"`
+	AvgAheadIn     []float64 `json:"avg_ahead_in,omitempty"`
+	AvgAheadNotIn  []float64 `json:"avg_ahead_not_in,omitempty"`
+	AvgBehindGt    *float64  `json:"avg_behind_gt,omitempty"`
+	AvgBehindLt    *float64  `json:"avg_behind_lt,omitempty"`
+	AvgBehindLte   *float64  `json:"avg_behind_lte,omitempty"`
+	AvgBehindGte   *float64  `json:"avg_behind_gte,omitempty"`
+	AvgBehindEq    *float64  `json:"avg_behind_eq,omitempty"`
+	AvgBehindNeq   *float64  `json:"avg_behind_neq,omitempty"`
+	AvgBehindIn    []float64 `json:"avg_behind_in,omitempty"`
+	AvgBehindNotIn []float64 `json:"avg_behind_not_in,omitempty"`
+	MinAheadGt     *int      `json:"min_ahead_gt,omitempty"`
+	MinAheadLt     *int      `json:"min_ahead_lt,omitempty"`
+	MinAheadLte    *int      `json:"min_ahead_lte,omitempty"`
+	MinAheadGte    *int      `json:"min_ahead_gte,omitempty"`
+	MinAheadEq     *int      `json:"min_ahead_eq,omitempty"`
+	MinAheadNeq    *int      `json:"min_ahead_neq,omitempty"`
+	MinAheadIn     []int     `json:"min_ahead_in,omitempty"`
+	MinAheadNotIn  []int     `json:"min_ahead_not_in,omitempty"`
+	MinBehindGt    *int      `json:"min_behind_gt,omitempty"`
+	MinBehindLt    *int      `json:"min_behind_lt,omitempty"`
+	MinBehindLte   *int      `json:"min_behind_lte,omitempty"`
+	MinBehindGte   *int      `json:"min_behind_gte,omitempty"`
+	MinBehindEq    *int      `json:"min_behind_eq,omitempty"`
+	MinBehindNeq   *int      `json:"min_behind_neq,omitempty"`
+	MinBehindIn    []int     `json:"min_behind_in,omitempty"`
+	MinBehindNotIn []int     `json:"min_behind_not_in,omitempty"`
+	MaxAheadGt     *int      `json:"max_ahead_gt,omitempty"`
+	MaxAheadLt     *int      `json:"max_ahead_lt,omitempty"`
+	MaxAheadLte    *int      `json:"max_ahead_lte,omitempty"`
+	MaxAheadGte    *int      `json:"max_ahead_gte,omitempty"`
+	MaxAheadEq     *int      `json:"max_ahead_eq,omitempty"`
+	MaxAheadNeq    *int      `json:"max_ahead_neq,omitempty"`
+	MaxAheadIn     []int     `json:"max_ahead_in,omitempty"`
+	MaxAheadNotIn  []int     `json:"max_ahead_not_in,omitempty"`
+	MaxBehindGt    *int      `json:"max_behind_gt,omitempty"`
+	MaxBehindLt    *int      `json:"max_behind_lt,omitempty"`
+	MaxBehindLte   *int      `json:"max_behind_lte,omitempty"`
+	MaxBehindGte   *int      `json:"max_behind_gte,omitempty"`
+	MaxBehindEq    *int      `json:"max_behind_eq,omitempty"`
+	MaxBehindNeq   *int      `json:"max_behind_neq,omitempty"`
+	MaxBehindIn    []int     `json:"max_behind_in,omitempty"`
+	MaxBehindNotIn []int     `json:"max_behind_not_in,omitempty"`
+}
+
 type StackInitInput struct {
 	Template string           `json:"template"`
 	Path     *string          `json:"path,omitempty"`
@@ -211,8 +331,8 @@ type ServicesBoolExp struct {
 }
 
 type ServicesGroup struct {
-	Dimensions []*KeyValue              `json:"dimensions"`
-	Aggregates *ServicesAggregateFields `json:"aggregates"`
+	Key       *ServicesGroupKey        `json:"key"`
+	Aggregate *ServicesAggregateFields `json:"aggregate"`
 }
 
 type ServicesInsertInput struct {
@@ -281,8 +401,8 @@ type SourcesBoolExp struct {
 }
 
 type SourcesGroup struct {
-	Dimensions []*KeyValue             `json:"dimensions"`
-	Aggregates *SourcesAggregateFields `json:"aggregates"`
+	Key       *SourcesGroupKey        `json:"key"`
+	Aggregate *SourcesAggregateFields `json:"aggregate"`
 }
 
 type SourcesMaxFields struct {
@@ -376,6 +496,211 @@ type WorkspacesSetInput struct {
 	Inputs []*KeyValueInput `json:"inputs,omitempty"`
 }
 
+type Granularity string
+
+const (
+	GranularityYear          Granularity = "YEAR"
+	GranularityQuarter       Granularity = "QUARTER"
+	GranularityMonth         Granularity = "MONTH"
+	GranularityWeek          Granularity = "WEEK"
+	GranularityDay           Granularity = "DAY"
+	GranularityHour          Granularity = "HOUR"
+	GranularityMinute        Granularity = "MINUTE"
+	GranularitySecond        Granularity = "SECOND"
+	GranularityYearNumber    Granularity = "YEAR_NUMBER"
+	GranularityQuarterNumber Granularity = "QUARTER_NUMBER"
+	GranularityMonthNumber   Granularity = "MONTH_NUMBER"
+	GranularityIsoWeekNumber Granularity = "ISO_WEEK_NUMBER"
+	GranularityDayOfYear     Granularity = "DAY_OF_YEAR"
+	GranularityDayOfMonth    Granularity = "DAY_OF_MONTH"
+	GranularityDayOfWeek     Granularity = "DAY_OF_WEEK"
+	GranularityHourNumber    Granularity = "HOUR_NUMBER"
+	GranularityMinuteNumber  Granularity = "MINUTE_NUMBER"
+	GranularitySecondNumber  Granularity = "SECOND_NUMBER"
+)
+
+var AllGranularity = []Granularity{
+	GranularityYear,
+	GranularityQuarter,
+	GranularityMonth,
+	GranularityWeek,
+	GranularityDay,
+	GranularityHour,
+	GranularityMinute,
+	GranularitySecond,
+	GranularityYearNumber,
+	GranularityQuarterNumber,
+	GranularityMonthNumber,
+	GranularityIsoWeekNumber,
+	GranularityDayOfYear,
+	GranularityDayOfMonth,
+	GranularityDayOfWeek,
+	GranularityHourNumber,
+	GranularityMinuteNumber,
+	GranularitySecondNumber,
+}
+
+func (e Granularity) IsValid() bool {
+	switch e {
+	case GranularityYear, GranularityQuarter, GranularityMonth, GranularityWeek, GranularityDay, GranularityHour, GranularityMinute, GranularitySecond, GranularityYearNumber, GranularityQuarterNumber, GranularityMonthNumber, GranularityIsoWeekNumber, GranularityDayOfYear, GranularityDayOfMonth, GranularityDayOfWeek, GranularityHourNumber, GranularityMinuteNumber, GranularitySecondNumber:
+		return true
+	}
+	return false
+}
+
+func (e Granularity) String() string {
+	return string(e)
+}
+
+func (e *Granularity) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = Granularity(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid Granularity", str)
+	}
+	return nil
+}
+
+func (e Granularity) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *Granularity) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e Granularity) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ServicesGroupableField string
+
+const (
+	ServicesGroupableFieldStatus  ServicesGroupableField = "STATUS"
+	ServicesGroupableFieldRuntime ServicesGroupableField = "RUNTIME"
+	ServicesGroupableFieldHealth  ServicesGroupableField = "HEALTH"
+)
+
+var AllServicesGroupableField = []ServicesGroupableField{
+	ServicesGroupableFieldStatus,
+	ServicesGroupableFieldRuntime,
+	ServicesGroupableFieldHealth,
+}
+
+func (e ServicesGroupableField) IsValid() bool {
+	switch e {
+	case ServicesGroupableFieldStatus, ServicesGroupableFieldRuntime, ServicesGroupableFieldHealth:
+		return true
+	}
+	return false
+}
+
+func (e ServicesGroupableField) String() string {
+	return string(e)
+}
+
+func (e *ServicesGroupableField) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ServicesGroupableField(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ServicesGroupableField", str)
+	}
+	return nil
+}
+
+func (e ServicesGroupableField) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ServicesGroupableField) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ServicesGroupableField) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SourcesGroupableField string
+
+const (
+	SourcesGroupableFieldKind   SourcesGroupableField = "KIND"
+	SourcesGroupableFieldState  SourcesGroupableField = "STATE"
+	SourcesGroupableFieldBranch SourcesGroupableField = "BRANCH"
+	SourcesGroupableFieldDirty  SourcesGroupableField = "DIRTY"
+	SourcesGroupableFieldPushed SourcesGroupableField = "PUSHED"
+)
+
+var AllSourcesGroupableField = []SourcesGroupableField{
+	SourcesGroupableFieldKind,
+	SourcesGroupableFieldState,
+	SourcesGroupableFieldBranch,
+	SourcesGroupableFieldDirty,
+	SourcesGroupableFieldPushed,
+}
+
+func (e SourcesGroupableField) IsValid() bool {
+	switch e {
+	case SourcesGroupableFieldKind, SourcesGroupableFieldState, SourcesGroupableFieldBranch, SourcesGroupableFieldDirty, SourcesGroupableFieldPushed:
+		return true
+	}
+	return false
+}
+
+func (e SourcesGroupableField) String() string {
+	return string(e)
+}
+
+func (e *SourcesGroupableField) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SourcesGroupableField(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SourcesGroupableField", str)
+	}
+	return nil
+}
+
+func (e SourcesGroupableField) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SourcesGroupableField) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SourcesGroupableField) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type OrderBy string
 
 const (
@@ -434,124 +759,6 @@ func (e *OrderBy) UnmarshalJSON(b []byte) error {
 }
 
 func (e OrderBy) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type ServicesGroupDimension string
-
-const (
-	ServicesGroupDimensionStatus  ServicesGroupDimension = "status"
-	ServicesGroupDimensionRuntime ServicesGroupDimension = "runtime"
-	ServicesGroupDimensionHealth  ServicesGroupDimension = "health"
-)
-
-var AllServicesGroupDimension = []ServicesGroupDimension{
-	ServicesGroupDimensionStatus,
-	ServicesGroupDimensionRuntime,
-	ServicesGroupDimensionHealth,
-}
-
-func (e ServicesGroupDimension) IsValid() bool {
-	switch e {
-	case ServicesGroupDimensionStatus, ServicesGroupDimensionRuntime, ServicesGroupDimensionHealth:
-		return true
-	}
-	return false
-}
-
-func (e ServicesGroupDimension) String() string {
-	return string(e)
-}
-
-func (e *ServicesGroupDimension) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = ServicesGroupDimension(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid services_group_dimension", str)
-	}
-	return nil
-}
-
-func (e ServicesGroupDimension) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *ServicesGroupDimension) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e ServicesGroupDimension) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type SourcesGroupDimension string
-
-const (
-	SourcesGroupDimensionKind   SourcesGroupDimension = "kind"
-	SourcesGroupDimensionState  SourcesGroupDimension = "state"
-	SourcesGroupDimensionBranch SourcesGroupDimension = "branch"
-	SourcesGroupDimensionDirty  SourcesGroupDimension = "dirty"
-	SourcesGroupDimensionPushed SourcesGroupDimension = "pushed"
-)
-
-var AllSourcesGroupDimension = []SourcesGroupDimension{
-	SourcesGroupDimensionKind,
-	SourcesGroupDimensionState,
-	SourcesGroupDimensionBranch,
-	SourcesGroupDimensionDirty,
-	SourcesGroupDimensionPushed,
-}
-
-func (e SourcesGroupDimension) IsValid() bool {
-	switch e {
-	case SourcesGroupDimensionKind, SourcesGroupDimensionState, SourcesGroupDimensionBranch, SourcesGroupDimensionDirty, SourcesGroupDimensionPushed:
-		return true
-	}
-	return false
-}
-
-func (e SourcesGroupDimension) String() string {
-	return string(e)
-}
-
-func (e *SourcesGroupDimension) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = SourcesGroupDimension(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid sources_group_dimension", str)
-	}
-	return nil
-}
-
-func (e SourcesGroupDimension) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *SourcesGroupDimension) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e SourcesGroupDimension) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
