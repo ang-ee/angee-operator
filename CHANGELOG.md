@@ -4,6 +4,74 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Changed (breaking — operator GraphQL)
+
+- The operator GraphQL surface was reshaped to the **Hasura dialect** (Angee now
+  standardizes its consoles on Hasura) so the off-the-shelf
+  [`@refinedev/hasura`](https://refine.dev/docs/data/packages/hasura/) data
+  provider drives an Angee console with no custom mappers. Clean cut, **no
+  backward compatibility** — GraphQL clients must update. (The intermediate
+  nestjs-query shape from earlier in this changelog is superseded.)
+  - **Console config required:** `namingConvention: "hasura-default"` and
+    `idType: "String"` (the operator's keys are names, surfaced as `id`).
+  - `services`, `jobs`, `sources`, `workspaces`, `templates`, `secrets` are
+    Hasura tables: `<t>(where: <t>_bool_exp, order_by: [<t>_order_by!], limit, offset): [Row!]!`,
+    `<t>_by_pk(id: String!)`, and `<t>_aggregate(where) { aggregate { count … } nodes }`
+    (`sources_aggregate` adds `sum/avg/min/max` over `ahead`/`behind`).
+  - Filtering uses Hasura `where` (`_and`/`_or` + `String_/Boolean_/Int_comparison_exp`
+    with `_eq _neq _gt _gte _lt _lte _in _nin _like _ilike _nilike _is_null …`);
+    sorting uses the `order_by` enum; paging uses top-level `limit`/`offset`.
+  - CRUD for `services` / `secrets` / `workspaces` is Hasura single-row:
+    `insert_<t>_one(object: <t>_insert_input!)`, `update_<t>_by_pk(pk_columns, _set)`,
+    `delete_<t>_by_pk(id)`. All prior verb/CRUD mutations
+    (`serviceCreate`/`secretSet`/`workspaceCreate`/the nestjs `*One`) are **removed**.
+  - **Realtime:** per-table live-query subscriptions
+    (`subscription { services(where, order_by, limit, offset) { … } }`, etc.),
+    backed by a per-subscription poller, so refine live mode works.
+  - Lifecycle, git, token, log, and `workspaceSource*` operations stay as custom
+    GraphQL operations (consumed via refine custom hooks); `GitOpsTopology.*`,
+    `WorkspaceStatus.*`, and `StackSnapshot` remain plain views/lists.
+  - The generic in-memory `internal/query` engine (filter/sort/paging/aggregate)
+    is reused; the `service.API` push-down stays, so the REST surface still
+    filters via `?query=<json>` → `{nodes,total_count}` (REST contract unchanged).
+  - **Grouped aggregation (NDC typed-key shape):** alongside the ungrouped
+    Hasura `<t>_aggregate`, the `services_groups` / `sources_groups` custom roots
+    mirror the `strawberry-django-hasura` grouping contract exactly, so one
+    shared `useGroupBy`/`useFacets` hook (refine `useCustom`) drives the operator
+    and the Django `<model>_groups` backend through a single shape. Each group
+    pairs a typed `key` (one field per selected dimension) with the FREE
+    `<t>_aggregate_fields` aggregate — the same type `<t>_aggregate` exposes, no
+    reshape. The roots take `group_by: [<t>_group_by_spec!]!` (a `{ field,
+    granularity }` spec mirroring the upstream `Granularity` enum for structural
+    parity; the operator has no granular dimensions, so a non-null granularity is
+    rejected), `where` (pre-group filter), `having` (a predicate over the
+    aggregate measures: `count` / `sum_*` / `avg_*` / `min_*` / `max_*` with the
+    eight `gt,lt,lte,gte,eq,neq,in,not_in` comparisons), `order_by`
+    (`[<t>_group_order!]`, by a dimension or measure alias), and `limit`/`offset`
+    paging — all applied in-memory over the materialized engine groups. This
+    replaces the earlier interim `{ dimensions: [KeyValue!]!, aggregates }`
+    shape; the shape now tracks the Hasura v3/DDN group-by direction
+    (graphql-engine #10786). Preview/non-stock: the stock list/aggregate/CRUD
+    SDL is unaffected (grouping is additive).
+
+### Added
+
+- The operator GraphQL schema is exported as SDL to `docs/public/angee.graphql`
+  (`make graphql-schema`, also produced by `make generate` and checked by
+  `make check-generated`) for frontend codegen; live introspection at `/graphql`.
+- A contract test (`internal/operator/hasura_contract_test.go`) validates the
+  exact documents `@refinedev/hasura` generates (getList/getOne/getMany/create/
+  update/deleteOne/aggregate/subscription + all filter operators, `idType:String`)
+  against the executable schema — a regression-guarded consumability guarantee.
+
+### Deferred
+
+- Bulk `*Many` Hasura mutations (`insert_<t>` / `update_<t>` / `delete_<t>` with
+  `affected_rows` / `returning`, i.e. refine's createMany/updateMany/deleteMany);
+  the single-row variants cover refine's core create/update/delete.
+
 ## v0.6.2 — 2026-06-17
 
 ### Fixes

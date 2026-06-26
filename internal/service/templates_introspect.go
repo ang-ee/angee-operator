@@ -10,6 +10,8 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 )
 
 // Templates discovers every template under the stack root's
@@ -19,9 +21,12 @@ import (
 //
 // Templates that fail to parse are skipped silently — `Template(ref)` is
 // the right place to surface parse errors against a specific ref.
-func (p *Platform) Templates(ctx context.Context) ([]api.TemplateDescriptor, error) {
+func (p *Platform) Templates(ctx context.Context, q query.Args) ([]api.TemplateDescriptor, int, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	if err := query.Validate(q, queryfields.Template); err != nil {
+		return nil, 0, invalidQueryError(err)
 	}
 	roots := []string{
 		filepath.Join(p.root, ".templates"),
@@ -35,7 +40,7 @@ func (p *Platform) Templates(ctx context.Context) ([]api.TemplateDescriptor, err
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, err
+			return nil, 0, err
 		}
 		for _, kindEntry := range entries {
 			if !kindEntry.IsDir() {
@@ -44,7 +49,7 @@ func (p *Platform) Templates(ctx context.Context) ([]api.TemplateDescriptor, err
 			kindDir := filepath.Join(root, kindEntry.Name())
 			templateEntries, err := os.ReadDir(kindDir)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			for _, te := range templateEntries {
 				if !te.IsDir() {
@@ -68,7 +73,8 @@ func (p *Platform) Templates(ctx context.Context) ([]api.TemplateDescriptor, err
 		}
 	}
 	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].Ref < descriptors[j].Ref })
-	return descriptors, nil
+	page, total := query.Apply(descriptors, q, queryfields.Template)
+	return page, total, nil
 }
 
 // Template returns the descriptor for the template identified by ref.

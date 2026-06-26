@@ -15,6 +15,8 @@ import (
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
 	"github.com/ang-ee/angee-operator/internal/ports"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 )
 
@@ -131,20 +133,24 @@ func defaultWorkspaceStackName(root string) string {
 	return name
 }
 
-func (p *Platform) WorkspaceList(ctx context.Context) ([]api.WorkspaceRef, error) {
+func (p *Platform) WorkspaceList(ctx context.Context, q query.Args) ([]api.WorkspaceRef, int, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	if err := query.Validate(q, queryfields.Workspace); err != nil {
+		return nil, 0, invalidQueryError(err)
 	}
 	stack, err := p.LoadStack()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	refs := make([]api.WorkspaceRef, 0, len(stack.Workspaces))
 	for _, name := range sortedKeys(stack.Workspaces) {
 		workspace := stack.Workspaces[name]
 		refs = append(refs, workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace))
 	}
-	return refs, nil
+	page, total := query.Apply(refs, q, queryfields.Workspace)
+	return page, total, nil
 }
 
 func (p *Platform) WorkspaceGet(ctx context.Context, name string) (api.WorkspaceRef, error) {

@@ -15,12 +15,17 @@ import (
 // own audit log.
 
 func (s *Server) secretsList(w http.ResponseWriter, r *http.Request) {
-	refs, err := s.platform.SecretsList(r.Context())
+	q, err := parseListQuery(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, refs)
+	nodes, total, err := s.platform.SecretsList(r.Context(), q)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.SecretListResponse{Nodes: nodes, TotalCount: total})
 }
 
 func (s *Server) secretGet(w http.ResponseWriter, r *http.Request) {

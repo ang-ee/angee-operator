@@ -1,4 +1,4 @@
-.PHONY: init build build-cli build-operator generate check-generated schema check-schema test fmt vet check clean
+.PHONY: init build build-cli build-operator generate graphql-schema check-generated schema check-schema test fmt vet check clean
 
 VERSION ?= dev
 LDFLAGS := -s -w -X github.com/ang-ee/angee-operator/internal/cli.Version=$(VERSION) -X github.com/ang-ee/angee-operator/internal/operator.Version=$(VERSION)
@@ -16,9 +16,16 @@ build-operator:
 
 generate:
 	go generate ./internal/operator
+	$(MAKE) graphql-schema
+
+# graphql-schema exports the operator GraphQL SDL for frontend codegen. It runs
+# after `generate` (it compiles the generated gql package), so the committed
+# artifact can never drift from the schema the operator serves.
+graphql-schema:
+	go run ./cmd/gqlschema -o docs/public/angee.graphql
 
 check-generated: generate
-	git diff --exit-code -- internal/operator/gql
+	git diff --exit-code -- internal/operator/gql docs/public/angee.graphql
 
 schema:
 	go run ./cmd/schema -o docs/public/angee.schema.json

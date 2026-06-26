@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,7 @@ func secretListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *
 			if err != nil {
 				return err
 			}
-			refs, err := platform.SecretsList(cmd.Context())
+			refs, _, err := platform.SecretsList(cmd.Context(), query.Args{})
 			if err != nil {
 				return err
 			}

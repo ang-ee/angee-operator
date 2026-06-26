@@ -10,6 +10,8 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 )
 
 func (p *Platform) materializeReferencedSources(ctx context.Context, stack *manifest.Stack) error {
@@ -57,10 +59,13 @@ func (p *Platform) materializeReferencedSources(ctx context.Context, stack *mani
 	return nil
 }
 
-func (p *Platform) SourceList(ctx context.Context) ([]api.SourceState, error) {
+func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error) {
+	if err := query.Validate(q, queryfields.Source); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	states := make([]api.SourceState, 0, len(stack.Sources))
 	for _, name := range sortedKeys(stack.Sources) {
@@ -70,7 +75,8 @@ func (p *Platform) SourceList(ctx context.Context) ([]api.SourceState, error) {
 		}
 		states = append(states, state)
 	}
-	return states, nil
+	page, total := query.Apply(states, q, queryfields.Source)
+	return page, total, nil
 }
 
 func (p *Platform) SourceFetch(ctx context.Context, name string) (api.SourceState, error) {

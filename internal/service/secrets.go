@@ -8,6 +8,8 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 )
@@ -49,24 +51,28 @@ func validateSecretName(name string) error {
 // SecretsList returns metadata for every secret declared in the stack
 // manifest. Undeclared backend keys are intentionally not enumerated —
 // see docs/guide/concepts.md "Secrets" for the rationale.
-func (p *Platform) SecretsList(ctx context.Context) ([]api.SecretRef, error) {
+func (p *Platform) SecretsList(ctx context.Context, q query.Args) ([]api.SecretRef, int, error) {
+	if err := query.Validate(q, queryfields.Secret); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	refs := make([]api.SecretRef, 0, len(stack.Secrets))
 	for _, name := range sortedKeys(stack.Secrets) {
 		ref, err := buildSecretRef(ctx, backend, stack, name)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		refs = append(refs, ref)
 	}
-	return refs, nil
+	page, total := query.Apply(refs, q, queryfields.Secret)
+	return page, total, nil
 }
 
 // SecretGet returns metadata for one secret. Works on both declared and

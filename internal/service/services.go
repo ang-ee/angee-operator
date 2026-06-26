@@ -8,6 +8,8 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/query"
+	"github.com/ang-ee/angee-operator/internal/queryfields"
 )
 
 func (p *Platform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) error {
@@ -115,16 +117,20 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 	return err
 }
 
-func (p *Platform) ServiceList(ctx context.Context) ([]api.ServiceState, error) {
+func (p *Platform) ServiceList(ctx context.Context, q query.Args) ([]api.ServiceState, int, error) {
+	if err := query.Validate(q, queryfields.Service); err != nil {
+		return nil, 0, invalidQueryError(err)
+	}
 	status, err := p.StackStatus(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	services := make([]api.ServiceState, 0, len(status.Services))
 	for _, name := range sortedKeys(status.Services) {
 		services = append(services, status.Services[name])
 	}
-	return services, nil
+	page, total := query.Apply(services, q, queryfields.Service)
+	return page, total, nil
 }
 
 func serviceFromRequest(req api.ServiceInitRequest) (manifest.Service, error) {

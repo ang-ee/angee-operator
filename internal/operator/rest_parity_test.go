@@ -159,7 +159,7 @@ _angee:
 	}
 
 	gqlBody, _ := json.Marshal(map[string]any{
-		"query": `{ template(ref: "workspaces/dev-pr") { ref kind name inputs { name required } } }`,
+		"query": `{ templates_by_pk(id: "workspaces/dev-pr") { ref kind name inputs { name required } } }`,
 	})
 	gqlReq := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(gqlBody))
 	gqlReq.Header.Set("Content-Type", "application/json")
@@ -170,7 +170,7 @@ _angee:
 	}
 	var gql struct {
 		Data struct {
-			Template map[string]any `json:"template"`
+			Template map[string]any `json:"templates_by_pk"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}

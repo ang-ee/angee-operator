@@ -28,12 +28,21 @@ models:
   ServiceState:
     model:
       - github.com/ang-ee/angee-operator/api.ServiceState
+    fields:
+      id:
+        resolver: true
   JobState:
     model:
       - github.com/ang-ee/angee-operator/api.JobState
+    fields:
+      id:
+        resolver: true
   SourceState:
     model:
       - github.com/ang-ee/angee-operator/api.SourceState
+    fields:
+      id:
+        resolver: true
   WorkspaceSourceStatus:
     model:
       - github.com/ang-ee/angee-operator/api.WorkspaceSourceStatus
@@ -53,12 +62,16 @@ models:
     model:
       - github.com/ang-ee/angee-operator/api.WorkspaceRef
     fields:
+      id:
+        resolver: true
       ttlExpiresAt:
         resolver: true
   WorkspaceStatus:
     model:
       - github.com/ang-ee/angee-operator/api.WorkspaceStatusResponse
     fields:
+      id:
+        resolver: true
       inputs:
         resolver: true
       allocations:
@@ -99,6 +112,9 @@ models:
   TemplateDescriptor:
     model:
       - github.com/ang-ee/angee-operator/api.TemplateDescriptor
+    fields:
+      id:
+        resolver: true
   TemplateInputDescriptor:
     model:
       - github.com/ang-ee/angee-operator/api.TemplateInputDescriptor
@@ -129,6 +145,9 @@ models:
   SecretRef:
     model:
       - github.com/ang-ee/angee-operator/api.SecretRef
+    fields:
+      id:
+        resolver: true
   SecretValue:
     model:
       - github.com/ang-ee/angee-operator/api.SecretValueResponse

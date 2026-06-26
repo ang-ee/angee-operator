@@ -73,8 +73,8 @@ secrets:
 	t.Cleanup(server.Close)
 
 	// Initial list: declared, no value.
-	refs := doREST[[]api.SecretRef](t, server, http.MethodGet, "/secrets", nil)
-	if len(refs) != 1 || refs[0].Name != "db-password" || refs[0].HasValue {
+	refs := doREST[api.SecretListResponse](t, server, http.MethodGet, "/secrets", nil)
+	if len(refs.Nodes) != 1 || refs.Nodes[0].Name != "db-password" || refs.Nodes[0].HasValue {
 		t.Fatalf("initial list = %+v, want one declared+empty secret", refs)
 	}
 
@@ -85,8 +85,8 @@ secrets:
 	}
 
 	// List again: hasValue now true
-	refs = doREST[[]api.SecretRef](t, server, http.MethodGet, "/secrets", nil)
-	if !refs[0].HasValue {
+	refs = doREST[api.SecretListResponse](t, server, http.MethodGet, "/secrets", nil)
+	if !refs.Nodes[0].HasValue {
 		t.Fatalf("post-set list = %+v, want hasValue=true", refs)
 	}
 
@@ -103,8 +103,8 @@ secrets:
 	}
 
 	// List: hasValue now false again
-	refs = doREST[[]api.SecretRef](t, server, http.MethodGet, "/secrets", nil)
-	if refs[0].HasValue {
+	refs = doREST[api.SecretListResponse](t, server, http.MethodGet, "/secrets", nil)
+	if refs.Nodes[0].HasValue {
 		t.Fatalf("post-delete list = %+v, want hasValue=false", refs)
 	}
 }
@@ -149,9 +149,9 @@ secrets:
 	}
 	t.Cleanup(server.Close)
 
-	rest := doREST[[]api.SecretRef](t, server, http.MethodGet, "/secrets", nil)
+	rest := doREST[api.SecretListResponse](t, server, http.MethodGet, "/secrets", nil)
 	gqlBody, _ := json.Marshal(map[string]any{
-		"query": `{ secrets { name declared hasValue required generated envVar } }`,
+		"query": `{ secrets { name declared hasValue required generated envVar } secrets_aggregate { aggregate { count } } }`,
 	})
 	gqlReq := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(gqlBody))
 	gqlReq.Header.Set("Content-Type", "application/json")
@@ -162,7 +162,12 @@ secrets:
 	}
 	var gql struct {
 		Data struct {
-			Secrets []map[string]any `json:"secrets"`
+			Secrets          []map[string]any `json:"secrets"`
+			SecretsAggregate struct {
+				Aggregate struct {
+					Count int `json:"count"`
+				} `json:"aggregate"`
+			} `json:"secrets_aggregate"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
@@ -172,10 +177,10 @@ secrets:
 	if len(gql.Errors) > 0 {
 		t.Fatalf("GraphQL errors: %+v", gql.Errors)
 	}
-	if len(rest) != len(gql.Data.Secrets) {
-		t.Fatalf("REST count=%d GraphQL count=%d", len(rest), len(gql.Data.Secrets))
+	if len(rest.Nodes) != len(gql.Data.Secrets) || gql.Data.SecretsAggregate.Aggregate.Count != len(rest.Nodes) {
+		t.Fatalf("REST count=%d GraphQL count=%d aggregate=%d", len(rest.Nodes), len(gql.Data.Secrets), gql.Data.SecretsAggregate.Aggregate.Count)
 	}
-	for i, r := range rest {
+	for i, r := range rest.Nodes {
 		if r.Name != gql.Data.Secrets[i]["name"] {
 			t.Fatalf("name mismatch at %d: REST=%v GraphQL=%v", i, r.Name, gql.Data.Secrets[i]["name"])
 		}

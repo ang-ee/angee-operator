@@ -166,12 +166,17 @@ func (s *Server) workspaceSourcePublish(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) templates(w http.ResponseWriter, r *http.Request) {
-	descs, err := s.platform.Templates(r.Context())
+	q, err := parseListQuery(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, descs)
+	nodes, total, err := s.platform.Templates(r.Context(), q)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.TemplateListResponse{Nodes: nodes, TotalCount: total})
 }
 
 func (s *Server) template(w http.ResponseWriter, r *http.Request) {

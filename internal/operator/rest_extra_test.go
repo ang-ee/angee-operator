@@ -156,8 +156,8 @@ _angee:
 	}
 	t.Cleanup(server.Close)
 
-	list := doREST[[]api.TemplateDescriptor](t, server, http.MethodGet, "/templates", nil)
-	if len(list) != 1 || list[0].Ref != "workspaces/dev-pr" {
+	list := doREST[api.TemplateListResponse](t, server, http.MethodGet, "/templates", nil)
+	if len(list.Nodes) != 1 || list.Nodes[0].Ref != "workspaces/dev-pr" {
 		t.Fatalf("templates list = %+v, want one workspaces/dev-pr", list)
 	}
 	desc := doREST[api.TemplateDescriptor](t, server, http.MethodGet, "/templates/workspaces/dev-pr", nil)

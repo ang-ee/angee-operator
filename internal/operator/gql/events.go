@@ -12,6 +12,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -190,27 +191,27 @@ func (h *EventHub) buildSnapshot(ctx context.Context) (*model.StackSnapshot, err
 	if err != nil {
 		return nil, err
 	}
-	services, err := h.platform.ServiceList(ctx)
+	services, _, err := h.platform.ServiceList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	jobs, err := h.platform.JobList(ctx)
+	jobs, _, err := h.platform.JobList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	sources, err := h.platform.SourceList(ctx)
+	sources, _, err := h.platform.SourceList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	workspaces, err := h.platform.WorkspaceList(ctx)
+	workspaces, _, err := h.platform.WorkspaceList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	templates, err := h.platform.Templates(ctx)
+	templates, _, err := h.platform.Templates(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
-	secrets, err := h.platform.SecretsList(ctx)
+	secrets, _, err := h.platform.SecretsList(ctx, query.Args{})
 	if err != nil {
 		return nil, err
 	}
