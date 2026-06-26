@@ -36,8 +36,11 @@ That run must:
 6. Parse the rendered `service.yaml` as a partial `manifest.Stack` (only
    `services:` is expected).
 7. Copy any other rendered files (typically `docker/`) into
-   `<stack_root>/.angee/services/<service_name>/` so the rendered
-   `build.context: ./.angee/services/<service_name>/docker` resolves.
+   `<stack_root>/services/<service_name>/` so the rendered
+   `build.context: ./services/<service_name>/docker` resolves.
+   (`<stack_root>` is the control root / ANGEE_ROOT, normally `.angee`;
+   the build context is a sibling of `workspaces/` and `run/`, never
+   nested under a second `.angee`.)
 8. Merge the parsed service entry into `stack.Services` and persist
    `stack` via `manifest.SaveFile`.
 9. Persist the port leases into `stack.PortLeases[<pool>]` (owner is the
@@ -45,7 +48,7 @@ That run must:
 10. Run `Platform.StackPrepare` to re-render docker-compose.
 
 `service destroy <name>` (existing) should already work for cleanup. Add
-deletion of `.angee/services/<service_name>/` and release of the port
+deletion of `services/<service_name>/` and release of the port
 leases.
 
 ## Canonical templates the implementation must support
@@ -80,7 +83,7 @@ services:
   agent-my-pa:
     runtime: container
     build:
-      context: ./.angee/services/agent-my-pa/docker
+      context: ./services/agent-my-pa/docker
     ports: ["3017:3007"]
     mounts: ["workspace://my-pa:/workspace"]
     env:
@@ -163,7 +166,7 @@ Outline (preserves the order from the Goal section):
     matches `serviceName`. Reject anything else (jobs, volumes, ports,
     secrets — render produced more than just the service).
 11. Move the non-`service.yaml` outputs (typically `docker/`) into
-    `filepath.Join(p.root, ".angee/services", serviceName)` (create
+    `filepath.Join(p.root, "services", serviceName)` (create
     parents). Overwrite is fine for re-render. If a directory entry
     would collide with existing files, error.
 12. Append the service to `stack.Services` and persist port leases in
@@ -179,7 +182,7 @@ the function returns nil.
 
 `ServiceDestroy` (`internal/service/services.go:84`) needs a sibling
 change: after removing the service from the manifest, also delete the
-build context dir at `<root>/.angee/services/<name>` and release any
+build context dir at `<root>/services/<name>` and release any
 port leases owned by `service:<name>`. Check the current implementation
 before touching it — it may already be sufficient.
 
@@ -314,7 +317,7 @@ breaks:
    workspaces.** Owner key is `service:<name>` to keep them distinct
    from `workspace:<name>` leases.
 
-4. **Build contexts live at `<root>/.angee/services/<service_name>/`.**
+4. **Build contexts live at `<root>/services/<service_name>/`.**
    Not under the workspace's directory. Per-service, owned by the stack.
    Allows multiple services from the same template (different inputs)
    without collision.

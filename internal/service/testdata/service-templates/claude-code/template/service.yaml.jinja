@@ -2,7 +2,7 @@ services:
   {{ service_name }}:
     runtime: container
     build:
-      context: ./.angee/services/{{ service_name }}/docker
+      context: ./services/{{ service_name }}/docker
     ports:
       - "{{ alloc_acp }}:3007"
     mounts:

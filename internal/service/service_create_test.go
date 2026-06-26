@@ -18,7 +18,17 @@ import (
 // allocate against it.
 func setupServiceCreateFixture(t *testing.T) (*Platform, string) {
 	t.Helper()
-	root := t.TempDir()
+	return setupServiceCreateFixtureAt(t, t.TempDir())
+}
+
+// setupServiceCreateFixtureAt builds the fixture rooted at the given path,
+// letting callers exercise the production control-root layout where the
+// stack root itself is a `.angee` directory.
+func setupServiceCreateFixtureAt(t *testing.T, root string) (*Platform, string) {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root): %v", err)
+	}
 	stack := &manifest.Stack{
 		Version: manifest.VersionCurrent,
 		Kind:    manifest.KindStack,
@@ -94,9 +104,73 @@ func TestServiceCreateHappyPath(t *testing.T) {
 	if !found {
 		t.Fatalf("port lease for %q not persisted: %+v", owner, stack.PortLeases)
 	}
-	// Build context dir landed at .angee/services/agent-my-pa/.
-	if _, err := os.Stat(filepath.Join(p.root, ".angee", "services", "agent-my-pa", "docker", "Dockerfile")); err != nil {
+	// Build context dir landed at <root>/services/agent-my-pa/.
+	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa", "docker", "Dockerfile")); err != nil {
 		t.Fatalf("build context not installed: %v", err)
+	}
+}
+
+// TestServiceCreateControlRootNoDoubling pins the fix for the `.angee/.angee`
+// path doubling: when the stack root is itself a `.angee` control dir (the
+// standard chain_root layout, and every workspace inner-stack), the build
+// context must land at <root>/services/<name>, never <root>/.angee/services.
+func TestServiceCreateControlRootNoDoubling(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".angee")
+	p, templatePath := setupServiceCreateFixtureAt(t, root)
+	if _, err := p.ServiceCreate(context.Background(), api.ServiceCreateRequest{
+		Template:  templatePath,
+		Workspace: "my-pa",
+		Inputs:    map[string]string{"auth_mode": "api_key"},
+	}); err != nil {
+		t.Fatalf("ServiceCreate: %v", err)
+	}
+	// Build context sits directly under the control root.
+	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa", "docker", "Dockerfile")); err != nil {
+		t.Fatalf("build context not installed at <root>/services: %v", err)
+	}
+	// And crucially NOT one .angee too deep.
+	if _, err := os.Stat(filepath.Join(p.root, ".angee", "services", "agent-my-pa")); !os.IsNotExist(err) {
+		t.Fatalf("build context doubled into <root>/.angee/services (err=%v)", err)
+	}
+}
+
+// TestValidateRenderedServiceBuildContext locks the containment property of the
+// build.context validator directly: the rendered context must resolve inside
+// <root>/services/<name>/ and nowhere else. A hostile template must not be able
+// to escape via `../`, an absolute path, or a sibling-prefix dir.
+func TestValidateRenderedServiceBuildContext(t *testing.T) {
+	const name = "agent-x"
+	cases := []struct {
+		desc    string
+		build   any
+		wantErr bool
+	}{
+		{"nil build", nil, false},
+		{"canonical docker subdir", "./services/agent-x/docker", false},
+		{"bare service dir", "services/agent-x", false},
+		{"leading-dot bare dir", "./services/agent-x", false},
+		{"parent escape via subpath", "./services/agent-x/../../../etc", true},
+		{"parent escape direct", "../../../etc", true},
+		{"absolute path", "/etc/passwd", true},
+		{"sibling-prefix bypass", "./services/agent-x-evil/docker", true},
+		{"wrong service dir", "./services/other/docker", true},
+		{"legacy doubled path rejected", "./.angee/services/agent-x/docker", true},
+		{"map context ok", map[string]any{"context": "./services/agent-x/docker"}, false},
+		{"map context absolute", map[string]any{"context": "/etc"}, true},
+		{"map context non-string", map[string]any{"context": 123}, true},
+		{"map no context key", map[string]any{"dockerfile": "Dockerfile"}, false},
+		{"mapany context ok", map[any]any{"context": "./services/agent-x/docker"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := validateRenderedServiceBuildContext(manifest.Service{Build: tc.build}, name)
+			if tc.wantErr && err == nil {
+				t.Fatalf("build=%v: expected error, got nil", tc.build)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("build=%v: unexpected error: %v", tc.build, err)
+			}
+		})
 	}
 }
 
@@ -289,13 +363,13 @@ func TestServiceDestroyReleasesLeaseAndBuildContext(t *testing.T) {
 		t.Fatalf("ServiceCreate: %v", err)
 	}
 	// Confirm build context exists pre-destroy.
-	if _, err := os.Stat(filepath.Join(p.root, ".angee", "services", "agent-my-pa")); err != nil {
+	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa")); err != nil {
 		t.Fatalf("expected build context pre-destroy: %v", err)
 	}
 	if err := p.ServiceDestroy(context.Background(), "agent-my-pa", false); err != nil {
 		t.Fatalf("ServiceDestroy: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(p.root, ".angee", "services", "agent-my-pa")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa")); !os.IsNotExist(err) {
 		t.Fatalf("build context not removed after destroy: %v", err)
 	}
 	stack, _ := manifest.LoadFile(manifest.Path(p.root))

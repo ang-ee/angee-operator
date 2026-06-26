@@ -179,8 +179,10 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 
 	// Move the rest of the rendered tree (typically `docker/`) into the
 	// stack-owned build-context dir. service.yaml itself is consumed and
-	// not copied.
-	buildContext := filepath.Join(p.root, ".angee", "services", serviceName)
+	// not copied. p.root is the control root (ANGEE_ROOT, normally `.angee`),
+	// so the dir is `<root>/services/<name>` — a sibling of `workspaces/`,
+	// `run/`, etc. — not `<root>/.angee/services/<name>`.
+	buildContext := filepath.Join(p.root, "services", serviceName)
 	if err := os.RemoveAll(buildContext); err != nil {
 		return api.ServiceState{}, fmt.Errorf("clear previous build context %s: %w", buildContext, err)
 	}
@@ -442,9 +444,9 @@ func parsePartialServiceManifest(data []byte) (partialServiceManifest, error) {
 
 // validateRenderedServiceBuildContext ensures the rendered service's
 // `build.context`, if any, resolves inside the stack-owned build dir
-// at `.angee/services/<service_name>/`. A hostile template could
-// otherwise render `build.context: ../../../etc` and point compose at
-// arbitrary host paths.
+// at `services/<service_name>/` (relative to the control root, where the
+// compose file is written). A hostile template could otherwise render
+// `build.context: ../../../etc` and point compose at arbitrary host paths.
 //
 // The manifest's Build field is untyped (`any`) — it can be a bare
 // string ("./docker") or a struct map ({context: "...", dockerfile:
@@ -482,13 +484,13 @@ func validateRenderedServiceBuildContext(service manifest.Service, serviceName s
 		return nil
 	}
 	// Canonical install location for template-rendered services.
-	expectedPrefix := filepath.ToSlash(filepath.Join(".angee", "services", serviceName)) + "/"
+	expectedPrefix := filepath.ToSlash(filepath.Join("services", serviceName)) + "/"
 	clean := filepath.ToSlash(filepath.Clean(strings.TrimPrefix(context, "./")))
 	if filepath.IsAbs(context) {
 		return &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service build.context %q must be relative to the stack root", context)}
 	}
 	if !strings.HasPrefix(clean, expectedPrefix) && clean != strings.TrimSuffix(expectedPrefix, "/") {
-		return &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service build.context %q must live under .angee/services/%s/", context, serviceName)}
+		return &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service build.context %q must live under services/%s/", context, serviceName)}
 	}
 	return nil
 }

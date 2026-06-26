@@ -107,9 +107,9 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 	}
 	// Remove the template-rendered build-context dir if one exists.
 	// Idempotent: services created via `ServiceInit` (field-based) have
-	// no dir under .angee/services/, and os.RemoveAll on a missing path
+	// no dir under services/, and os.RemoveAll on a missing path
 	// is a no-op.
-	buildContext := filepath.Join(p.root, ".angee", "services", name)
+	buildContext := filepath.Join(p.root, "services", name)
 	if err := os.RemoveAll(buildContext); err != nil {
 		return fmt.Errorf("remove service build context %s: %w", buildContext, err)
 	}

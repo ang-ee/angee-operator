@@ -4,6 +4,26 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Fixed
+
+- Dynamically-provisioned service build contexts are now installed at
+  `<root>/services/<name>/` instead of `<root>/.angee/services/<name>/`. The
+  stack root is already the control directory (`ANGEE_ROOT`, normally `.angee`,
+  and always `.angee` for a workspace inner-stack), so the old path
+  double-prepended `.angee` and the build context landed at
+  `.angee/.angee/services/<name>/` — an exception to the convention that
+  `workspaces/`, `run/`, `sources/`, and the generated compose files all sit
+  directly under the root. The build-context writer, the destroy cleanup, and
+  the `build.context` containment validator now use `services/<name>/`.
+  - **Service template contract change:** rendered services must now declare
+    `build.context: ./services/<name>/docker` (previously
+    `./.angee/services/<name>/docker`). Update service templates in lockstep
+    with this release; existing provisioned stacks keep building on the old
+    doubled path until re-provisioned (the orphaned directory is gitignored and
+    harmless).
+
 ## v0.7.1 — 2026-06-26
 
 ### Added

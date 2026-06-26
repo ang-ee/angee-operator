@@ -116,7 +116,7 @@ The template must declare `_angee.kind: service` and render a
 `service.yaml` containing exactly one service entry. The operator
 appends that entry to the outer stack's `services:` map, installs any
 other rendered files (typically `docker/`) at
-`<root>/.angee/services/<service_name>/`, and allocates ports from
+`<root>/services/<service_name>/`, and allocates ports from
 declared pools under owner `service/<name>/<pool>`.
 
 Jobs:

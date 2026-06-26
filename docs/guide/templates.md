@@ -165,8 +165,8 @@ inputs, and per-instance port allocation.
 exactly one service entry under `services:`. Anything else (jobs,
 volumes, secrets, sources) is rejected. Other files in the rendered
 tree — typically `docker/Dockerfile` and friends — are moved into
-`<stack_root>/.angee/services/<service_name>/` so the rendered
-`build.context: ./.angee/services/<service_name>/docker` resolves.
+`<stack_root>/services/<service_name>/` so the rendered
+`build.context: ./services/<service_name>/docker` resolves.
 
 **Render variables** available in Jinja:
 
@@ -208,7 +208,7 @@ services:
   {{ service_name }}:
     runtime: container
     build:
-      context: ./.angee/services/{{ service_name }}/docker
+      context: ./services/{{ service_name }}/docker
     ports: ["{{ alloc_acp }}:3007"]
     mounts: ["workspace://{{ workspace_name }}:/workspace"]
     env:
