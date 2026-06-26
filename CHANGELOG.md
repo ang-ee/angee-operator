@@ -4,6 +4,27 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- `angee workspace create --sync` reconciles a worktree left behind by an
+  earlier create that failed after materializing it: the leftover worktree is
+  removed and re-added — gated behind `--sync` because it discards the
+  leftover's contents — instead of failing with `already exists and is not
+  empty`. A stale "missing but already registered" worktree (no working tree to
+  lose) is reclaimed automatically, without `--sync`. Exposed on the CLI
+  (`--sync`), REST, and GraphQL (`workspaces_insert_input.sync` /
+  `WorkspaceCreateInput.sync`) surfaces.
+
+### Fixed
+
+- `angee workspace create` is now transactional: a create that fails after
+  materializing git worktrees (e.g. an invalid `--ttl` or a template render
+  error) rolls those worktrees and the workspace directory back, instead of
+  stranding "missing but already registered" worktrees that block the next
+  create. A pre-existing leftover directory is left untouched on failure.
+
 ## v0.7.0 — 2026-06-26
 
 ### Changed (breaking — operator GraphQL)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,10 +59,33 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		return api.WorkspaceRef{}, err
 	}
 	workspacePath := filepath.Join(p.root, "workspaces", name)
+	// A pre-existing workspace directory is a leftover from an earlier failed
+	// create; rollback below must not delete it (that leftover is what sync is
+	// gated to protect), only the worktrees this create itself materializes.
+	_, statErr := os.Stat(workspacePath)
+	workspacePreexisted := statErr == nil
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	workspaceSources, err := p.materializeWorkspaceSources(ctx, stack, name, workspacePath, metadata, inputs, allocations)
+	committed := false
+	var workspaceSources map[string]manifest.WorkspaceSource
+	defer func() {
+		if committed {
+			return
+		}
+		// Roll back only what this create materialized: deregister the worktrees
+		// it added (which also deletes their working trees), and remove the
+		// workspace directory only when this create created it. A create that
+		// failed at the "already exists" guard materialized nothing, so its
+		// workspaceSources is empty and a pre-existing leftover is left intact.
+		// Use a fresh context so cleanup runs even when the request context is
+		// what was cancelled.
+		p.removeWorkspaceWorktrees(context.Background(), stack, workspacePath, workspaceSources)
+		if !workspacePreexisted {
+			_ = os.RemoveAll(workspacePath)
+		}
+	}()
+	workspaceSources, err = p.materializeWorkspaceSources(ctx, stack, name, workspacePath, metadata, inputs, allocations, req.Sync)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -108,6 +132,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return api.WorkspaceRef{}, err
 	}
+	committed = true
 	return workspaceRef(name, workspacePath, workspace), nil
 }
 
@@ -391,7 +416,11 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 		return err
 	}
 	if purge {
-		return os.RemoveAll(filepath.Join(p.root, "workspaces", name))
+		workspacePath := filepath.Join(p.root, "workspaces", name)
+		// Deregister the worktrees first so purging the directory does not
+		// strand "missing but already registered" entries in the shared caches.
+		p.removeWorkspaceWorktrees(ctx, stack, workspacePath, workspace.Sources)
+		return os.RemoveAll(workspacePath)
 	}
 	return nil
 }
@@ -947,7 +976,7 @@ func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.Source
 	}
 }
 
-func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int) (map[string]manifest.WorkspaceSource, error) {
+func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int, sync bool) (map[string]manifest.WorkspaceSource, error) {
 	result := map[string]manifest.WorkspaceSource{}
 	items := []workspaceSourceMaterialization{}
 	for _, slot := range sortedKeys(metadata.Sources) {
@@ -1002,15 +1031,48 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	}
 	for _, item := range orderedItems {
 		dest := filepath.Join(workspacePath, filepath.FromSlash(item.resolved.Subpath))
-		if err := p.materializeWorkspaceSource(ctx, item.sourceName, item.source, item.resolved, dest); err != nil {
+		if err := p.materializeWorkspaceSource(ctx, item.sourceName, item.source, item.resolved, dest, sync); err != nil {
 			if item.optional {
 				continue
 			}
-			return nil, err
+			// Return the worktrees materialized so far alongside the error so
+			// the caller's rollback can undo them; this is the single cleanup
+			// site for a failed create.
+			return result, err
 		}
 		result[item.slot] = item.resolved
 	}
 	return result, nil
+}
+
+// removeWorkspaceWorktrees deregisters every git worktree materialized for the
+// given workspace sources, deleting each worktree's working tree. It targets
+// only those destination paths, so sibling worktrees sharing the same source
+// caches are left intact. It is best-effort cleanup for failed or rolled-back
+// creates, so per-source errors are ignored.
+func (p *Platform) removeWorkspaceWorktrees(ctx context.Context, stack *manifest.Stack, workspacePath string, sources map[string]manifest.WorkspaceSource) {
+	type worktree struct{ cachePath, dest string }
+	var worktrees []worktree
+	for _, ws := range sources {
+		if ws.Mode != "worktree" {
+			continue
+		}
+		source, ok := stack.Sources[ws.Source]
+		if !ok || source.Kind != "git" {
+			continue
+		}
+		worktrees = append(worktrees, worktree{
+			cachePath: p.sourcePath(ws.Source, source),
+			dest:      filepath.Join(workspacePath, filepath.FromSlash(ws.Subpath)),
+		})
+	}
+	// Remove deepest path first so a parent worktree's forced delete cannot wipe
+	// a nested worktree's directory before that nested one is deregistered.
+	sort.Slice(worktrees, func(i, j int) bool { return len(worktrees[i].dest) > len(worktrees[j].dest) })
+	client := git.New()
+	for _, w := range worktrees {
+		_ = client.WorktreeRemove(ctx, w.cachePath, w.dest)
+	}
 }
 
 type workspaceSourceMaterialization struct {
@@ -1075,8 +1137,10 @@ func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceNam
 	return manifest.WorkspaceSource{Source: sourceName, Mode: spec.Mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
 }
 
-func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string) error {
+func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool) error {
+	destExists, destEmpty := false, false
 	if info, err := os.Stat(dest); err == nil {
+		destExists = true
 		if source.Kind != "git" || !info.IsDir() {
 			return fmt.Errorf("workspace source destination %s already exists", dest)
 		}
@@ -1084,7 +1148,10 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		if err != nil {
 			return err
 		}
-		if !empty {
+		destEmpty = empty
+		// A non-empty leftover only blocks the create when we are not asked to
+		// reconcile it; with sync, a worktree source reclaims the path below.
+		if !empty && (!sync || ws.Mode != "worktree") {
 			return fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
 		}
 	} else if !os.IsNotExist(err) {
@@ -1112,11 +1179,44 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			if ref == "" {
 				ref = source.DefaultRef
 			}
-			if ws.Branch != "" && client.RefExists(ctx, cachePath, "refs/heads/"+ws.Branch) {
+			useExisting := ws.Branch != "" && client.RefExists(ctx, cachePath, "refs/heads/"+ws.Branch)
+			if useExisting {
 				fmt.Fprintf(os.Stderr, "warning: branch %q already exists in %s; checking it out into worktree without creating a new branch\n", ws.Branch, cachePath)
-				return client.WorktreeAdd(ctx, cachePath, dest, ws.Branch)
 			}
-			return client.WorktreeAddBranch(ctx, cachePath, dest, ws.Branch, ref)
+			addWorktree := func() error {
+				if useExisting {
+					return client.WorktreeAdd(ctx, cachePath, dest, ws.Branch)
+				}
+				return client.WorktreeAddBranch(ctx, cachePath, dest, ws.Branch, ref)
+			}
+			if destExists && !destEmpty {
+				// A populated worktree left by a create that failed after
+				// materializing it. Reaching here implies sync (the guard above
+				// rejects a non-empty destination otherwise). Hand it back to
+				// git before re-adding; remove targets only dest, so sibling
+				// worktrees sharing this cache are untouched. If dest is not a
+				// reclaimable worktree (e.g. unrelated files), keep the clear
+				// "already exists" refusal instead of leaking a raw git error,
+				// and leave its contents in place.
+				if err := client.WorktreeRemove(ctx, cachePath, dest); err != nil {
+					return fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
+				}
+				return addWorktree()
+			}
+			// The destination is absent or an empty directory, so the add
+			// normally succeeds. If it does not, an earlier failed create may
+			// have left a stale "missing but already registered" worktree for
+			// this path. That registration has no working tree to lose, so it is
+			// always safe to clear (no sync required); prune is git's recovery
+			// for it. Prune only here — when an add actually conflicts — so the
+			// common create never risks a sibling whose dir is briefly absent.
+			if err := addWorktree(); err != nil {
+				if pruneErr := client.WorktreePrune(ctx, cachePath); pruneErr != nil {
+					return err
+				}
+				return addWorktree()
+			}
+			return nil
 		}
 		ref := ws.Ref
 		if ref == "" {

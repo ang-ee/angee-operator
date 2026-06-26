@@ -450,6 +450,7 @@ func workspaceInsertRequest(o model.WorkspacesInsertInput) api.WorkspaceCreateRe
 		Name:     stringPtrValue(o.Name),
 		Inputs:   keyValuesFrom(o.Inputs),
 		TTL:      stringPtrValue(o.TTL),
+		Sync:     boolPtrValue(o.Sync),
 	}
 }
 

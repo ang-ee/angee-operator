@@ -1171,6 +1171,7 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
 	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "template ref, URL, or path")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
+	cmd.Flags().BoolVar(&req.Sync, "sync", false, "reconcile leftover worktree state from a failed create instead of failing")
 	return cmd
 }
 

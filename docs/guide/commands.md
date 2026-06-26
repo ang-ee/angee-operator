@@ -138,7 +138,7 @@ matching `sourceDiff` / `workspaceSource*` GraphQL mutations). See
 ## Workspaces
 
 ```sh
-angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...]
+angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--sync]
 angee workspace update <name> [--ttl duration] [--input key=value ...]
 angee workspace list  # alias: ls
 angee workspace get <name>
@@ -153,6 +153,13 @@ angee workspace destroy <name> [--purge]
 
 `angee ws` is an alias for `angee workspace`, so `angee ws ls` and
 `angee ws status <name>` are equivalent to their long forms.
+
+`create --sync` reconciles a worktree left behind by an earlier create that
+failed after materializing it: it removes that one leftover worktree and
+re-adds it, instead of failing with `already exists and is not empty`. It
+only reclaims a genuine git worktree at the destination and never touches
+sibling worktrees that share the same source cache. (A stale "missing but
+already registered" worktree is reclaimed automatically, without `--sync`.)
 
 Workspaces are a **pure file primitive**: `create`/`update` render Copier
 templates (including any chained inner-stack templates) and materialize git

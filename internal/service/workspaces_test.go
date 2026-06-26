@@ -326,6 +326,231 @@ func TestWorkspaceCreateRejectsRootWorktreeCacheInsideDestination(t *testing.T) 
 	}
 }
 
+// seedWorktreeRemote initializes a bare remote with a single committed main
+// branch, ready to back a worktree-mode workspace source.
+func seedWorktreeRemote(t *testing.T, base, remote string) {
+	t.Helper()
+	seed := filepath.Join(base, "seed")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, "", "clone", remote, seed)
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	runGit(t, seed, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(seed, "README.md"), "repo readme\n")
+	mustWriteFile(t, filepath.Join(seed, ".gitignore"), ".angee/\n.copier-answers.yml\n")
+	runGit(t, seed, "add", ".")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+}
+
+func TestWorkspaceCreateReclaimsLeftoverWorktree(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeRootGitWorkspaceTemplateWithCachePath(t, base, remote, ".cache/app")
+	seedWorktreeRemote(t, base, remote)
+
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	req := api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "feature-a",
+		Inputs:   map[string]string{"branch": "feature-a"},
+	}
+	if _, err := platform.WorkspaceCreate(ctx, req); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	workspacePath := filepath.Join(root, "workspaces", "feature-a")
+
+	// freeWorkspaceName drops the manifest entry a successful create recorded so
+	// the same name can be created again, mimicking a create that died before
+	// reaching the manifest save.
+	freeWorkspaceName := func() {
+		stack, err := manifest.LoadFile(manifest.Path(root))
+		if err != nil {
+			t.Fatalf("LoadFile(angee.yaml) error = %v", err)
+		}
+		delete(stack.Workspaces, "feature-a")
+		if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+			t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+		}
+	}
+
+	// Case 1: a stale "missing but already registered" worktree — the directory
+	// is gone but the registration remains. It has no working tree to lose, so a
+	// plain create reclaims it without sync.
+	freeWorkspaceName()
+	if err := os.RemoveAll(workspacePath); err != nil {
+		t.Fatalf("RemoveAll(workspace) error = %v", err)
+	}
+	if _, err := platform.WorkspaceCreate(ctx, req); err != nil {
+		t.Fatalf("WorkspaceCreate() reclaiming missing worktree error = %v", err)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, workspacePath, "branch", "--show-current")); got != "feature-a" {
+		t.Fatalf("workspace git branch after missing-worktree reclaim = %q, want feature-a", got)
+	}
+
+	// Case 2: a populated leftover worktree — the directory is still present with
+	// its contents. A plain create must refuse it; only sync reclaims it.
+	freeWorkspaceName()
+	leftoverFile := filepath.Join(workspacePath, "README.md")
+	// Run the plain create twice: each must refuse identically, and — crucially —
+	// the refusal must never delete the leftover (the rollback only undoes what a
+	// create itself materialized, not a pre-existing leftover the sync gate
+	// protects).
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := platform.WorkspaceCreate(ctx, req); err == nil {
+			t.Fatalf("WorkspaceCreate() attempt %d over populated worktree error = nil, want already-exists failure", attempt)
+		} else if !strings.Contains(err.Error(), "already exists and is not empty") {
+			t.Fatalf("WorkspaceCreate() attempt %d over populated worktree error = %v, want \"already exists and is not empty\"", attempt, err)
+		}
+		if _, err := os.Stat(leftoverFile); err != nil {
+			t.Fatalf("leftover worktree file after refused create attempt %d: Stat err = %v, want preserved", attempt, err)
+		}
+	}
+	syncReq := req
+	syncReq.Sync = true
+	if _, err := platform.WorkspaceCreate(ctx, syncReq); err != nil {
+		t.Fatalf("WorkspaceCreate(sync) error = %v", err)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, workspacePath, "branch", "--show-current")); got != "feature-a" {
+		t.Fatalf("workspace git branch after sync reclaim = %q, want feature-a", got)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, workspacePath, "status", "--porcelain")); got != "" {
+		t.Fatalf("workspace git status after sync reclaim = %q, want clean", got)
+	}
+}
+
+// TestWorkspaceCreateSyncLeavesNonWorktreeDestinationIntact checks that sync
+// only reclaims a genuine worktree: over a populated directory that is not a
+// reclaimable worktree, it returns the clear "already exists" refusal (not a
+// raw git error) and leaves the directory's contents untouched.
+func TestWorkspaceCreateSyncLeavesNonWorktreeDestinationIntact(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeRootGitWorkspaceTemplateWithCachePath(t, base, remote, ".cache/app")
+	seedWorktreeRemote(t, base, remote)
+
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	// A populated, non-worktree directory sitting at the destination.
+	workspacePath := filepath.Join(root, "workspaces", "feature-a")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+	strayFile := filepath.Join(workspacePath, "precious.txt")
+	mustWriteFile(t, strayFile, "do not delete\n")
+
+	if _, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "feature-a",
+		Inputs:   map[string]string{"branch": "feature-a"},
+		Sync:     true,
+	}); err == nil {
+		t.Fatal("WorkspaceCreate(sync) over non-worktree dir error = nil, want already-exists failure")
+	} else if !strings.Contains(err.Error(), "already exists and is not empty") {
+		t.Fatalf("WorkspaceCreate(sync) over non-worktree dir error = %v, want \"already exists and is not empty\"", err)
+	}
+	if got, err := os.ReadFile(strayFile); err != nil || string(got) != "do not delete\n" {
+		t.Fatalf("stray file after refused sync create: contents=%q err=%v, want preserved", got, err)
+	}
+}
+
+// TestWorkspaceCreateRefusesBranchLiveInSiblingWorktree is the regression for
+// the data-loss path: sync must not force a second checkout of a branch that is
+// already live in another workspace's worktree (which would let commits in one
+// silently clobber the other). Sibling workspaces share one source cache, so a
+// reclaim must never reach for --force.
+func TestWorkspaceCreateRefusesBranchLiveInSiblingWorktree(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeRootGitWorkspaceTemplateWithCachePath(t, base, remote, ".cache/app")
+	seedWorktreeRemote(t, base, remote)
+
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	first := api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "alpha",
+		Inputs:   map[string]string{"branch": "shared"},
+	}
+	if _, err := platform.WorkspaceCreate(ctx, first); err != nil {
+		t.Fatalf("WorkspaceCreate(alpha) error = %v", err)
+	}
+	alphaPath := filepath.Join(root, "workspaces", "alpha")
+
+	// A second workspace resolving the same branch, even with sync, must be
+	// refused — the branch is live in alpha's worktree.
+	second := api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "beta",
+		Inputs:   map[string]string{"branch": "shared"},
+		Sync:     true,
+	}
+	if _, err := platform.WorkspaceCreate(ctx, second); err == nil {
+		t.Fatal("WorkspaceCreate(beta, sync) error = nil, want branch-already-checked-out failure")
+	} else if !strings.Contains(err.Error(), "already used by worktree") {
+		t.Fatalf("WorkspaceCreate(beta, sync) error = %v, want \"already used by worktree\"", err)
+	}
+
+	// alpha is untouched: still on its branch and clean, with no clobbering.
+	if got := strings.TrimSpace(runGitOutput(t, alphaPath, "branch", "--show-current")); got != "shared" {
+		t.Fatalf("alpha git branch = %q, want shared", got)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, alphaPath, "status", "--porcelain")); got != "" {
+		t.Fatalf("alpha git status = %q, want clean", got)
+	}
+}
+
+// TestWorkspaceCreateRollsBackFailedWorktree is the regression for the
+// non-transactional create: a create that fails after materializing a worktree
+// must roll the worktree back, leaving no stranded registration in the shared
+// cache and no half-rendered workspace directory.
+func TestWorkspaceCreateRollsBackFailedWorktree(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeRootGitWorkspaceTemplateWithCachePath(t, base, remote, ".cache/app")
+	seedWorktreeRemote(t, base, remote)
+
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	// An invalid TTL fails after the worktree is materialized.
+	if _, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "feature-a",
+		Inputs:   map[string]string{"branch": "feature-a"},
+		TTL:      "not-a-duration",
+	}); err == nil {
+		t.Fatal("WorkspaceCreate() with invalid TTL error = nil, want parse failure")
+	}
+
+	workspacePath := filepath.Join(root, "workspaces", "feature-a")
+	if _, err := os.Stat(workspacePath); !os.IsNotExist(err) {
+		t.Fatalf("workspace directory after failed create: Stat err = %v, want not-exist", err)
+	}
+	// The cache holds only its own main checkout — the failed worktree was
+	// deregistered, not stranded as a prunable entry.
+	cachePath := filepath.Join(root, ".cache", "app")
+	if got := strings.Count(runGitOutput(t, cachePath, "worktree", "list", "--porcelain"), "worktree "); got != 1 {
+		t.Fatalf("registered worktrees in cache after rollback = %d, want 1 (cache only)", got)
+	}
+}
+
 func TestWorkspaceStatusIncludesRuntimeFacts(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".angee")
 	if err := os.MkdirAll(filepath.Join(root, "workspaces", "feature-storage"), 0o755); err != nil {

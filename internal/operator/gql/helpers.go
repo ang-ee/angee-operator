@@ -39,6 +39,7 @@ func workspaceCreateRequestFrom(input model.WorkspaceCreateInput) api.WorkspaceC
 		Name:     stringPtrValue(input.Name),
 		Inputs:   keyValuesFrom(input.Inputs),
 		TTL:      stringPtrValue(input.TTL),
+		Sync:     boolPtrValue(input.Sync),
 	}
 }
 

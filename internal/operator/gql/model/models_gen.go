@@ -241,6 +241,7 @@ type WorkspaceCreateInput struct {
 	Name     *string          `json:"name,omitempty"`
 	Inputs   []*KeyValueInput `json:"inputs,omitempty"`
 	TTL      *string          `json:"ttl,omitempty"`
+	Sync     *bool            `json:"sync,omitempty"`
 }
 
 type JobsAggregate struct {
@@ -479,6 +480,7 @@ type WorkspacesInsertInput struct {
 	Name     *string          `json:"name,omitempty"`
 	TTL      *string          `json:"ttl,omitempty"`
 	Inputs   []*KeyValueInput `json:"inputs,omitempty"`
+	Sync     *bool            `json:"sync,omitempty"`
 }
 
 type WorkspacesOrderBy struct {

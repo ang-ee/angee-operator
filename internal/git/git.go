@@ -118,6 +118,32 @@ func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, re
 	return err
 }
 
+// WorktreeRemove deregisters the worktree at dest and deletes its working
+// tree. It targets only dest, so sibling worktrees of repoDir are left intact;
+// --force lets git drop the worktree even when it holds uncommitted changes. It
+// is used to reclaim a populated leftover worktree from a failed create before
+// re-adding the path, and to roll back worktrees a failed create materialized.
+// The doubled --force drops the worktree even when it is locked, and on current
+// git even when its working tree has already gone missing, since reclaim and
+// rollback always mean to discard the leftover. The missing-registration
+// recovery in materializeWorkspaceSource still routes through WorktreePrune, the
+// portable recovery for older git that refuses to remove a missing working tree.
+func (c Client) WorktreeRemove(ctx context.Context, repoDir, dest string) error {
+	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", dest)
+	return err
+}
+
+// WorktreePrune clears administrative entries for worktrees whose working tree
+// has gone missing, so one can be re-added at a path git still reports as
+// "missing but already registered". It is git's canonical recovery for a
+// prunable registration (WorktreeRemove rejects a missing working tree). It
+// acts on every prunable entry in repoDir, so callers invoke it only when an
+// add actually conflicts, not preemptively.
+func (c Client) WorktreePrune(ctx context.Context, repoDir string) error {
+	_, err := c.Run(ctx, repoDir, "worktree", "prune")
+	return err
+}
+
 func (c Client) Pull(ctx context.Context, dir string) error {
 	_, err := c.Run(ctx, dir, "pull", "--ff-only")
 	return err

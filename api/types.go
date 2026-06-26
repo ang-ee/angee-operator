@@ -205,6 +205,15 @@ type WorkspaceCreateRequest struct {
 	Name     string            `json:"name,omitempty"`
 	Inputs   map[string]string `json:"inputs,omitempty"`
 	TTL      string            `json:"ttl,omitempty"`
+	// Sync reclaims a populated worktree left at a source's destination by an
+	// earlier create that failed after materializing it, instead of failing
+	// with "already exists and is not empty": that one worktree is removed and
+	// re-added. It is gated behind Sync because it discards whatever the
+	// leftover worktree held. (A stale "missing but already registered"
+	// worktree, which has no working tree to lose, is always reclaimed, even
+	// without Sync.) Reclaim targets only that path, so sibling workspaces
+	// sharing the source cache are untouched.
+	Sync bool `json:"sync,omitempty"`
 }
 
 // ServiceCreateRequest renders a single manifest.Service into the

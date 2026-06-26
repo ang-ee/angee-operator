@@ -3975,6 +3975,7 @@ input workspaces_insert_input {
   name: String
   ttl: String
   inputs: [KeyValueInput!]
+  sync: Boolean
 }
 
 input workspaces_set_input {
@@ -4035,6 +4036,7 @@ input WorkspaceCreateInput {
   name: String
   inputs: [KeyValueInput!]
   ttl: String
+  sync: Boolean
 }
 
 # --- root ---------------------------------------------------------------------
@@ -19240,7 +19242,7 @@ func (ec *executionContext) unmarshalInputWorkspaceCreateInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"template", "name", "inputs", "ttl"}
+	fieldsInOrder := [...]string{"template", "name", "inputs", "ttl", "sync"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -19275,6 +19277,13 @@ func (ec *executionContext) unmarshalInputWorkspaceCreateInput(ctx context.Conte
 				return it, err
 			}
 			it.TTL = data
+		case "sync":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sync"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Sync = data
 		}
 	}
 	return it, nil
@@ -20326,7 +20335,7 @@ func (ec *executionContext) unmarshalInputworkspaces_insert_input(ctx context.Co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"template", "name", "ttl", "inputs"}
+	fieldsInOrder := [...]string{"template", "name", "ttl", "inputs", "sync"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -20361,6 +20370,13 @@ func (ec *executionContext) unmarshalInputworkspaces_insert_input(ctx context.Co
 				return it, err
 			}
 			it.Inputs = data
+		case "sync":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sync"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Sync = data
 		}
 	}
 	return it, nil

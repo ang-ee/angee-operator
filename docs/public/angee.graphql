@@ -504,6 +504,7 @@ input WorkspaceCreateInput {
 	name: String
 	inputs: [KeyValueInput!]
 	ttl: String
+	sync: Boolean
 }
 type WorkspaceCreatePreflight {
 	ok: Boolean!
@@ -783,6 +784,7 @@ input workspaces_insert_input {
 	name: String
 	ttl: String
 	inputs: [KeyValueInput!]
+	sync: Boolean
 }
 input workspaces_order_by {
 	id: order_by
