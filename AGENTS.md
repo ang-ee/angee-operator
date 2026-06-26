@@ -6,11 +6,11 @@ operator, and runtime backend implementation for Angee.
 > ## For new development work, start in `angee-django`
 >
 > If you are starting a fresh session and want to make changes to angee-go, use
-> the multi-repo workspace flow from `~/Work/fyltr/angee-django` rather than
-> cloning or editing this repository directly:
+> the multi-repo workspace flow from your local `angee-django` checkout rather
+> than cloning or editing this repository directly:
 >
 > ```sh
-> cd ~/Work/fyltr/angee-django
+> cd <your-angee-django-checkout>
 > angee workspace create fix-issue-123 --template dev-pr-multi
 > ```
 >
