@@ -76,7 +76,7 @@ func TestHasuraProviderDocumentsValidate(t *testing.T) {
 	}
 
 	for name, doc := range docs {
-		if _, errs := gqlparser.LoadQuery(schema, doc); len(errs) > 0 {
+		if _, errs := gqlparser.LoadQueryWithRules(schema, doc, nil); len(errs) > 0 {
 			t.Errorf("%s: refine-hasura document does not validate against schema: %v", name, errs)
 		}
 	}
@@ -95,7 +95,7 @@ func TestHasuraFilterOperatorsValidate(t *testing.T) {
 		}) { id }
 		sources(where: { ahead: { _gt: 0, _gte: 1, _lt: 9, _lte: 8 }, dirty: { _eq: true } }) { id }
 	}`
-	if _, errs := gqlparser.LoadQuery(schema, doc); len(errs) > 0 {
+	if _, errs := gqlparser.LoadQueryWithRules(schema, doc, nil); len(errs) > 0 {
 		t.Fatalf("filter-operator document does not validate: %v", errs)
 	}
 }
