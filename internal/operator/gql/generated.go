@@ -90,6 +90,19 @@ type ComplexityRoot struct {
 		OldStart func(childComplexity int) int
 	}
 
+	FileContent struct {
+		Content func(childComplexity int) int
+		Etag    func(childComplexity int) int
+		Path    func(childComplexity int) int
+		Source  func(childComplexity int) int
+	}
+
+	FileRef struct {
+		Etag   func(childComplexity int) int
+		Path   func(childComplexity int) int
+		Source func(childComplexity int) int
+	}
+
 	GitOpResult struct {
 		ConflictFiles func(childComplexity int) int
 		Conflicted    func(childComplexity int) int
@@ -165,6 +178,7 @@ type ComplexityRoot struct {
 		DeleteSecretsByPk             func(childComplexity int, id string) int
 		DeleteServicesByPk            func(childComplexity int, id string) int
 		DeleteWorkspacesByPk          func(childComplexity int, id string) int
+		FileWrite                     func(childComplexity int, source string, path string, content string, etag *string) int
 		InsertSecretsOne              func(childComplexity int, object model.SecretsInsertInput) int
 		InsertServicesOne             func(childComplexity int, object model.ServicesInsertInput) int
 		InsertWorkspacesOne           func(childComplexity int, object model.WorkspacesInsertInput) int
@@ -216,6 +230,7 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
+		File                func(childComplexity int, source string, path string) int
 		GitOpsTopology      func(childComplexity int, withCommits *int) int
 		Health              func(childComplexity int) int
 		IngressStatus       func(childComplexity int) int
@@ -563,6 +578,7 @@ type MutationResolver interface {
 	StackDown(ctx context.Context) (*model.MutationResult, error)
 	StackDestroy(ctx context.Context, purge *bool) (*model.MutationResult, error)
 	JobRun(ctx context.Context, name string, inputs []*model.KeyValueInput) (string, error)
+	FileWrite(ctx context.Context, source string, path string, content string, etag *string) (*api.FileRef, error)
 	ServiceInit(ctx context.Context, input model.ServiceInput) (*model.MutationResult, error)
 	InsertServicesOne(ctx context.Context, object model.ServicesInsertInput) (*api.ServiceState, error)
 	UpdateServicesByPk(ctx context.Context, pkColumns model.ServicesPkColumnsInput, set model.ServicesSetInput) (*api.ServiceState, error)
@@ -630,6 +646,7 @@ type QueryResolver interface {
 	WorkspaceLogs(ctx context.Context, name string, limit *int) (string, error)
 	McpDescriptor(ctx context.Context) (map[string]any, error)
 	SecretValue(ctx context.Context, name string) (*api.SecretValueResponse, error)
+	File(ctx context.Context, source string, path string) (*api.FileContent, error)
 }
 type SecretRefResolver interface {
 	ID(ctx context.Context, obj *api.SecretRef) (string, error)
@@ -855,6 +872,50 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DiffHunk.OldStart(childComplexity), true
+
+	case "FileContent.content":
+		if e.ComplexityRoot.FileContent.Content == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileContent.Content(childComplexity), true
+	case "FileContent.etag":
+		if e.ComplexityRoot.FileContent.Etag == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileContent.Etag(childComplexity), true
+	case "FileContent.path":
+		if e.ComplexityRoot.FileContent.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileContent.Path(childComplexity), true
+	case "FileContent.source":
+		if e.ComplexityRoot.FileContent.Source == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileContent.Source(childComplexity), true
+
+	case "FileRef.etag":
+		if e.ComplexityRoot.FileRef.Etag == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileRef.Etag(childComplexity), true
+	case "FileRef.path":
+		if e.ComplexityRoot.FileRef.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileRef.Path(childComplexity), true
+	case "FileRef.source":
+		if e.ComplexityRoot.FileRef.Source == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileRef.Source(childComplexity), true
 
 	case "GitOpResult.conflictFiles":
 		if e.ComplexityRoot.GitOpResult.ConflictFiles == nil {
@@ -1196,6 +1257,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteWorkspacesByPk(childComplexity, args["id"].(string)), true
+	case "Mutation.fileWrite":
+		if e.ComplexityRoot.Mutation.FileWrite == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_fileWrite_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.FileWrite(childComplexity, args["source"].(string), args["path"].(string), args["content"].(string), args["etag"].(*string)), true
 	case "Mutation.insert_secrets_one":
 		if e.ComplexityRoot.Mutation.InsertSecretsOne == nil {
 			break
@@ -1621,6 +1693,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PreflightFailure.Reason(childComplexity), true
 
+	case "Query.file":
+		if e.ComplexityRoot.Query.File == nil {
+			break
+		}
+
+		args, err := ec.field_Query_file_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.File(childComplexity, args["source"].(string), args["path"].(string)), true
 	case "Query.gitOpsTopology":
 		if e.ComplexityRoot.Query.GitOpsTopology == nil {
 			break
@@ -4084,6 +4167,7 @@ type Query {
   workspaceLogs(name: String!, limit: Int): String!
   mcpDescriptor: JSON
   secretValue(name: String!): SecretValue
+  file(source: String!, path: String!): FileContent!
 }
 
 type Mutation {
@@ -4096,6 +4180,7 @@ type Mutation {
   stackDown: MutationResult
   stackDestroy(purge: Boolean): MutationResult
   jobRun(name: String!, inputs: [KeyValueInput!]): String!
+  fileWrite(source: String!, path: String!, content: String!, etag: String): FileRef!
 
   serviceInit(input: ServiceInput!): MutationResult
   insert_services_one(object: services_insert_input!): ServiceState
@@ -4219,6 +4304,19 @@ type SecretValue {
   name: String!
   value: String!
 }
+
+type FileContent {
+  path: String!
+  source: String!
+  content: String!
+  etag: String!
+}
+
+type FileRef {
+  path: String!
+  source: String!
+  etag: String!
+}
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -4307,6 +4405,32 @@ func (ec *executionContext) childFields_DiffHunk(ctx context.Context, field grap
 		return ec.fieldContext_DiffHunk_body(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DiffHunk", field.Name)
+}
+
+func (ec *executionContext) childFields_FileContent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "path":
+		return ec.fieldContext_FileContent_path(ctx, field)
+	case "source":
+		return ec.fieldContext_FileContent_source(ctx, field)
+	case "content":
+		return ec.fieldContext_FileContent_content(ctx, field)
+	case "etag":
+		return ec.fieldContext_FileContent_etag(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileContent", field.Name)
+}
+
+func (ec *executionContext) childFields_FileRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "path":
+		return ec.fieldContext_FileRef_path(ctx, field)
+	case "source":
+		return ec.fieldContext_FileRef_source(ctx, field)
+	case "etag":
+		return ec.fieldContext_FileRef_etag(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileRef", field.Name)
 }
 
 func (ec *executionContext) childFields_GitOpResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5187,6 +5311,44 @@ func (ec *executionContext) field_Mutation_delete_workspaces_by_pk_args(ctx cont
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_fileWrite_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "source",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["source"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "path",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["path"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "content",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["content"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "etag",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["etag"] = arg3
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_insert_secrets_one_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -5874,6 +6036,28 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 		return nil, err
 	}
 	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_file_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "source",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["source"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "path",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["path"] = arg1
 	return args, nil
 }
 
@@ -7663,6 +7847,167 @@ func (ec *executionContext) fieldContext_DiffHunk_body(_ context.Context, field 
 	return graphql.NewScalarFieldContext("DiffHunk", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _FileContent_path(ctx context.Context, field graphql.CollectedField, obj *api.FileContent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileContent_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileContent_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileContent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileContent_source(ctx context.Context, field graphql.CollectedField, obj *api.FileContent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileContent_source(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Source, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileContent_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileContent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileContent_content(ctx context.Context, field graphql.CollectedField, obj *api.FileContent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileContent_content(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Content, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileContent_content(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileContent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileContent_etag(ctx context.Context, field graphql.CollectedField, obj *api.FileContent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileContent_etag(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Etag, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileContent_etag(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileContent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileRef_path(ctx context.Context, field graphql.CollectedField, obj *api.FileRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileRef_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileRef_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileRef_source(ctx context.Context, field graphql.CollectedField, obj *api.FileRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileRef_source(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Source, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileRef_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _FileRef_etag(ctx context.Context, field graphql.CollectedField, obj *api.FileRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FileRef_etag(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Etag, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FileRef_etag(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FileRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _GitOpResult_ok(ctx context.Context, field graphql.CollectedField, obj *api.GitOpResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -9221,6 +9566,50 @@ func (ec *executionContext) fieldContext_Mutation_jobRun(ctx context.Context, fi
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_jobRun_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_fileWrite(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_fileWrite(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().FileWrite(ctx, fc.Args["source"].(string), fc.Args["path"].(string), fc.Args["content"].(string), fc.Args["etag"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.FileRef) graphql.Marshaler {
+			return ec.marshalNFileRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐFileRef(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_fileWrite(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FileRef(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_fileWrite_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -12139,6 +12528,50 @@ func (ec *executionContext) fieldContext_Query_secretValue(ctx context.Context, 
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_secretValue_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_file(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_file(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().File(ctx, fc.Args["source"].(string), fc.Args["path"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.FileContent) graphql.Marshaler {
+			return ec.marshalNFileContent2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐFileContent(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_file(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FileContent(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_file_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -20873,6 +21306,109 @@ func (ec *executionContext) _DiffHunk(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
+var fileContentImplementors = []string{"FileContent"}
+
+func (ec *executionContext) _FileContent(ctx context.Context, sel ast.SelectionSet, obj *api.FileContent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, fileContentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("FileContent")
+		case "path":
+			out.Values[i] = ec._FileContent_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "source":
+			out.Values[i] = ec._FileContent_source(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "content":
+			out.Values[i] = ec._FileContent_content(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "etag":
+			out.Values[i] = ec._FileContent_etag(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var fileRefImplementors = []string{"FileRef"}
+
+func (ec *executionContext) _FileRef(ctx context.Context, sel ast.SelectionSet, obj *api.FileRef) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, fileRefImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("FileRef")
+		case "path":
+			out.Values[i] = ec._FileRef_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "source":
+			out.Values[i] = ec._FileRef_source(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "etag":
+			out.Values[i] = ec._FileRef_etag(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var gitOpResultImplementors = []string{"GitOpResult"}
 
 func (ec *executionContext) _GitOpResult(ctx context.Context, sel ast.SelectionSet, obj *api.GitOpResult) graphql.Marshaler {
@@ -21413,6 +21949,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "jobRun":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_jobRun(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fileWrite":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_fileWrite(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -22400,6 +22943,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_secretValue(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "file":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_file(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
 				return res
 			}
 
@@ -25201,6 +25766,34 @@ func (ec *executionContext) marshalNDiffHunk2ᚕgithubᚗcomᚋangᚑeeᚋangee�
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNFileContent2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐFileContent(ctx context.Context, sel ast.SelectionSet, v api.FileContent) graphql.Marshaler {
+	return ec._FileContent(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNFileContent2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐFileContent(ctx context.Context, sel ast.SelectionSet, v *api.FileContent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._FileContent(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNFileRef2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐFileRef(ctx context.Context, sel ast.SelectionSet, v api.FileRef) graphql.Marshaler {
+	return ec._FileRef(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNFileRef2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐFileRef(ctx context.Context, sel ast.SelectionSet, v *api.FileRef) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._FileRef(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {

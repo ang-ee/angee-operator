@@ -1,11 +1,9 @@
 package operator
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/ang-ee/angee-operator/api"
-	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 func writeServiceError(w http.ResponseWriter, err error) {
@@ -13,34 +11,24 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	writeJSON(w, status, body)
 }
 
+// serviceErrorResponse maps a service-layer error to an HTTP status and
+// response body. It shares classifyServiceError with the GraphQL surface so the
+// NotFound/Conflict/InvalidInput ladder lives in exactly one place. Each
+// category populates only its relevant fields; the rest stay empty and are
+// omitted, reproducing the historical per-category JSON shapes. For a matched
+// error the message is the matched type's own Error() text (carried on
+// classifiedError) so it stays correct even if a caller later %w-wraps the
+// typed error; unmatched errors fall back to err.Error().
 func serviceErrorResponse(err error) (int, api.ErrorResponse) {
-	var notFound *service.NotFoundError
-	if errors.As(err, &notFound) {
-		return http.StatusNotFound, api.ErrorResponse{
-			Kind:  notFound.Kind,
-			Name:  notFound.Name,
-			Error: notFound.Error(),
-		}
+	c := classifyServiceError(err)
+	if !c.matched {
+		return c.status, api.ErrorResponse{Error: err.Error()}
 	}
-
-	var conflict *service.ConflictError
-	if errors.As(err, &conflict) {
-		return http.StatusConflict, api.ErrorResponse{
-			Kind:   conflict.Kind,
-			Name:   conflict.Name,
-			Reason: conflict.Reason,
-			Error:  conflict.Error(),
-		}
+	return c.status, api.ErrorResponse{
+		Kind:   c.kind,
+		Name:   c.name,
+		Field:  c.field,
+		Reason: c.reason,
+		Error:  c.message,
 	}
-
-	var invalid *service.InvalidInputError
-	if errors.As(err, &invalid) {
-		return http.StatusBadRequest, api.ErrorResponse{
-			Field:  invalid.Field,
-			Reason: invalid.Reason,
-			Error:  invalid.Error(),
-		}
-	}
-
-	return http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()}
 }

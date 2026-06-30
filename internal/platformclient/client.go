@@ -433,6 +433,25 @@ func (p *RemoteClient) SecretDelete(ctx context.Context, name string) error {
 	return p.doJSON(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil, nil)
 }
 
+func (p *RemoteClient) FileRead(ctx context.Context, source, path string) (api.FileContent, error) {
+	var out api.FileContent
+	q := url.Values{"source": {source}, "path": {path}}
+	if err := p.doJSON(ctx, http.MethodGet, "/files", q, nil, &out); err != nil {
+		return api.FileContent{}, err
+	}
+	return out, nil
+}
+
+func (p *RemoteClient) FileWrite(ctx context.Context, source, path, content, etag string) (api.FileRef, error) {
+	var out api.FileRef
+	q := url.Values{"source": {source}, "path": {path}}
+	body := api.FileWriteRequest{Content: content, Etag: etag}
+	if err := p.doJSON(ctx, http.MethodPut, "/files", q, body, &out); err != nil {
+		return api.FileRef{}, err
+	}
+	return out, nil
+}
+
 func (p *RemoteClient) WorkspaceCreatePreflight(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceCreatePreflightResponse, error) {
 	var resp api.WorkspaceCreatePreflightResponse
 	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/preflight", nil, req, &resp); err != nil {

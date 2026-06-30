@@ -22,6 +22,7 @@ type fakeAPI struct {
 	sources    []api.SourceState
 	secrets    []api.SecretRef
 	workspaces []api.WorkspaceRef
+	files      map[string]api.FileContent // keyed by source+"/"+path
 }
 
 // ServiceList / SourceList / SecretsList apply the real engine so resolver tests
@@ -70,6 +71,24 @@ func (f fakeAPI) WorkspaceGet(_ context.Context, name string) (api.WorkspaceRef,
 }
 
 func (f fakeAPI) WorkspaceDestroy(context.Context, string, bool) error { return nil }
+
+// FileRead returns canned content for a known source/path, or a typed
+// *service.NotFoundError so the resolver's error passthrough is exercised.
+func (f fakeAPI) FileRead(_ context.Context, source, path string) (api.FileContent, error) {
+	if c, ok := f.files[source+"/"+path]; ok {
+		return c, nil
+	}
+	return api.FileContent{}, &service.NotFoundError{Kind: "file", Name: path}
+}
+
+// FileWrite records the write (so a follow-up FileRead observes it) and echoes
+// back a metadata-only ref with a fresh etag.
+func (f fakeAPI) FileWrite(_ context.Context, source, path, content, etag string) (api.FileRef, error) {
+	if f.files != nil {
+		f.files[source+"/"+path] = api.FileContent{Path: path, Source: source, Content: content, Etag: "etag1"}
+	}
+	return api.FileRef{Path: path, Source: source, Etag: "etag1"}, nil
+}
 
 // TestServicesListFilter drives the Hasura where binding (status._eq) through the
 // engine and back as a plain array.
@@ -126,6 +145,45 @@ func TestDeleteSecretsByPkNotFound(t *testing.T) {
 	r := &Resolver{Platform: fakeAPI{}}
 	if _, err := r.Mutation().DeleteSecretsByPk(context.Background(), "ghost"); err == nil {
 		t.Fatal("DeleteSecretsByPk(ghost) error = nil, want not-found")
+	}
+}
+
+// TestFileQueryAndMutation drives the scalar file read query and fileWrite
+// mutation resolvers, including the not-found passthrough and read-after-write.
+func TestFileQueryAndMutation(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{files: map[string]api.FileContent{
+		"app/config.yaml": {Path: "config.yaml", Source: "app", Content: "hello", Etag: "etag0"},
+	}}}
+
+	got, err := r.Query().File(context.Background(), "app", "config.yaml")
+	if err != nil {
+		t.Fatalf("File() error = %v", err)
+	}
+	if got == nil || got.Content != "hello" || got.Etag != "etag0" || got.Source != "app" {
+		t.Fatalf("File = %#v, want hello/etag0/app", got)
+	}
+
+	// An unknown path surfaces the backend's not-found error unchanged.
+	if _, err := r.Query().File(context.Background(), "app", "ghost"); err == nil {
+		t.Fatal("File(ghost) error = nil, want not-found")
+	}
+
+	etag := "etag0"
+	ref, err := r.Mutation().FileWrite(context.Background(), "app", "config.yaml", "updated", &etag)
+	if err != nil {
+		t.Fatalf("FileWrite() error = %v", err)
+	}
+	if ref == nil || ref.Path != "config.yaml" || ref.Source != "app" || ref.Etag != "etag1" {
+		t.Fatalf("FileWrite = %#v, want config.yaml/app/etag1", ref)
+	}
+
+	// The mutation is observable through a subsequent read.
+	after, err := r.Query().File(context.Background(), "app", "config.yaml")
+	if err != nil {
+		t.Fatalf("File() after write error = %v", err)
+	}
+	if after.Content != "updated" || after.Etag != "etag1" {
+		t.Fatalf("post-write file = %#v, want updated/etag1", after)
 	}
 }
 

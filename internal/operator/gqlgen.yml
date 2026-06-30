@@ -151,3 +151,9 @@ models:
   SecretValue:
     model:
       - github.com/ang-ee/angee-operator/api.SecretValueResponse
+  FileContent:
+    model:
+      - github.com/ang-ee/angee-operator/api.FileContent
+  FileRef:
+    model:
+      - github.com/ang-ee/angee-operator/api.FileRef

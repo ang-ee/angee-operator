@@ -204,6 +204,10 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /secrets/{name}/value", s.auth(http.HandlerFunc(s.secretValue)))
 	mux.Handle("POST /secrets/{name}", s.auth(http.HandlerFunc(s.secretSet)))
 	mux.Handle("DELETE /secrets/{name}", s.auth(http.HandlerFunc(s.secretDelete)))
+	// source + path ride as query params (a file path holds slashes, so it
+	// cannot be a path segment); both routes are auth()-wrapped like the rest.
+	mux.Handle("GET /files", s.auth(http.HandlerFunc(s.fileGet)))
+	mux.Handle("PUT /files", s.auth(http.HandlerFunc(s.filePut)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),
