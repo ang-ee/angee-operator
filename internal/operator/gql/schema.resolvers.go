@@ -118,6 +118,15 @@ func (r *mutationResolver) JobRun(ctx context.Context, name string, inputs []*mo
 	return string(out), nil
 }
 
+// FileWrite is the resolver for the fileWrite field.
+func (r *mutationResolver) FileWrite(ctx context.Context, source string, path string, content string, etag *string) (*api.FileRef, error) {
+	ref, err := r.Platform.FileWrite(ctx, source, path, content, stringPtrValue(etag))
+	if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
 // ServiceInit is the resolver for the serviceInit field.
 func (r *mutationResolver) ServiceInit(ctx context.Context, input model.ServiceInput) (*model.MutationResult, error) {
 	req := serviceRequestFrom(input)
@@ -717,6 +726,15 @@ func (r *queryResolver) SecretValue(ctx context.Context, name string) (*api.Secr
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// File is the resolver for the file field.
+func (r *queryResolver) File(ctx context.Context, source string, path string) (*api.FileContent, error) {
+	content, err := r.Platform.FileRead(ctx, source, path)
+	if err != nil {
+		return nil, err
+	}
+	return &content, nil
 }
 
 // ID is the resolver for the id field.

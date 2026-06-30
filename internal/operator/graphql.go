@@ -16,7 +16,6 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/ang-ee/angee-operator/api"
 	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
-	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -149,25 +148,24 @@ func formatGraphQLError(ctx context.Context, err error) *gqlerror.Error {
 		gqlErr.Extensions = map[string]any{}
 	}
 
-	var notFound *service.NotFoundError
-	if errors.As(err, &notFound) {
-		gqlErr.Extensions["kind"] = notFound.Kind
-		gqlErr.Extensions["name"] = notFound.Name
+	// Share the classifier with the REST surface; the status doubles as the
+	// category discriminator that selects which extension keys to attach.
+	switch c := classifyServiceError(err); c.status {
+	case http.StatusNotFound:
+		gqlErr.Message = c.message
+		gqlErr.Extensions["kind"] = c.kind
+		gqlErr.Extensions["name"] = c.name
 		return gqlErr
-	}
-
-	var conflict *service.ConflictError
-	if errors.As(err, &conflict) {
-		gqlErr.Extensions["kind"] = conflict.Kind
-		gqlErr.Extensions["name"] = conflict.Name
-		gqlErr.Extensions["reason"] = conflict.Reason
+	case http.StatusConflict:
+		gqlErr.Message = c.message
+		gqlErr.Extensions["kind"] = c.kind
+		gqlErr.Extensions["name"] = c.name
+		gqlErr.Extensions["reason"] = c.reason
 		return gqlErr
-	}
-
-	var invalid *service.InvalidInputError
-	if errors.As(err, &invalid) {
-		gqlErr.Extensions["field"] = invalid.Field
-		gqlErr.Extensions["reason"] = invalid.Reason
+	case http.StatusBadRequest:
+		gqlErr.Message = c.message
+		gqlErr.Extensions["field"] = c.field
+		gqlErr.Extensions["reason"] = c.reason
 		return gqlErr
 	}
 

@@ -75,6 +75,8 @@ helper used by adapters or tests and should not be exposed directly.
 | `SecretValue` | Yes | Yes | Yes | CLI `angee secret reveal`; REST `GET /secrets/{name}/value`. Privileged value-read. |
 | `SecretSet` | Yes | Yes | Yes | CLI `angee secret set`; REST `POST /secrets/{name}`. |
 | `SecretDelete` | Yes | Yes | Yes | CLI `angee secret delete`; REST `DELETE /secrets/{name}`. |
+| `FileRead` | Yes | Yes | Yes | CLI `angee file get`; REST `GET /files`; GraphQL `file`. Raw file read under a stack source. |
+| `FileWrite` | Yes | Yes | Yes | CLI `angee file set`; REST `PUT /files`; GraphQL `fileWrite`. Raw file write under a stack source. |
 
 When adding a new exported `Platform` method, update this table in the same
 change. `internal/service/surface_matrix_test.go` verifies that every exported

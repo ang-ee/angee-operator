@@ -79,6 +79,11 @@ type SecretsBackend struct {
 	Token   string `yaml:"token,omitempty" json:"token,omitempty"`
 }
 
+// Seam: a future SecretsBackend-shaped FilesBackend block would select a
+// non-localfs files store, opened via store.Open. Files default to the
+// zero-config localfs backend rooted at the resolved source dir, so no
+// manifest config is needed today.
+
 type Ingress struct {
 	Type    string `yaml:"type,omitempty" json:"type,omitempty" validate:"omitempty,oneof=none caddy" jsonschema:"enum=none,enum=caddy"`
 	Routing string `yaml:"routing,omitempty" json:"routing,omitempty" validate:"omitempty,oneof=host path" jsonschema:"enum=host,enum=path"`

@@ -414,6 +414,31 @@ type SecretSetRequest struct {
 	Value string `json:"value"`
 }
 
+// FileContent is the full read result for one file under a stack source.
+// Content is the raw UTF-8 text; Etag is the sha256 version token used for
+// optimistic-concurrency writes.
+type FileContent struct {
+	Path    string `yaml:"path" json:"path"`
+	Source  string `yaml:"source" json:"source"`
+	Content string `yaml:"content" json:"content"`
+	Etag    string `yaml:"etag" json:"etag"`
+}
+
+// FileRef is the metadata-only result of a write (no content echoed back).
+type FileRef struct {
+	Path   string `yaml:"path" json:"path"`
+	Source string `yaml:"source" json:"source"`
+	Etag   string `yaml:"etag" json:"etag"`
+}
+
+// FileWriteRequest is the body of `PUT /files` and the `fileWrite` mutation.
+// Content is required. Etag, when non-empty, is a compare-and-set precondition;
+// a mismatch is a 409 / conflict.
+type FileWriteRequest struct {
+	Content string `yaml:"content" json:"content"`
+	Etag    string `yaml:"etag,omitempty" json:"etag,omitempty"`
+}
+
 type WorkspaceSyncBaseRequest struct {
 	Method string `json:"method,omitempty"`
 }

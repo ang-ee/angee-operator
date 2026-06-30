@@ -38,6 +38,7 @@ type API interface {
 	WorkspaceSourceAPI
 	GitOpsAPI
 	SecretsAPI
+	FileAPI
 	IngressAPI
 	TemplateAPI
 }
@@ -143,6 +144,12 @@ type SecretsAPI interface {
 	SecretValue(ctx context.Context, name string) (api.SecretValueResponse, error)
 	SecretSet(ctx context.Context, name, value string) (api.SecretRef, error)
 	SecretDelete(ctx context.Context, name string) error
+}
+
+// FileAPI covers raw read/write of files under a stack source dir.
+type FileAPI interface {
+	FileRead(ctx context.Context, source, path string) (api.FileContent, error)
+	FileWrite(ctx context.Context, source, path, content, etag string) (api.FileRef, error)
 }
 
 // IngressAPI covers resolved service endpoints and ingress status.

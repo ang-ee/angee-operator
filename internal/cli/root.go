@@ -67,6 +67,7 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(templateCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(tokenCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(secretCommand(stdout, stderr, &root, &operatorURL, &jsonOutput))
+	cmd.AddCommand(fileCommand(stdout, stderr, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(doctorCommand(stdout, &root, &jsonOutput))
 	cmd.AddCommand(internalCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(operatorCommand(stdout, stderr))
