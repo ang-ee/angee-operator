@@ -4,6 +4,29 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.7.3 — 2026-06-30
+
+### Added
+
+- Operator **workspace file tools**: a generic, scoped file read/write API for
+  editing files inside a stack source over the operator, modeled on the secrets
+  API. `GET /files?source=&path=` returns `{ path, source, content, etag }` and
+  `PUT /files` writes with an optional `etag` precondition (a stale etag is a
+  `409 Conflict`). Exposed on REST, GraphQL (`file` query / `fileWrite`
+  mutation), the typed client (`FileRead` / `FileWrite`), and the CLI
+  (`angee file get` / `angee file set`). Paths are confined to the source root
+  (traversal and symlink-escape are rejected) and content is treated as UTF-8
+  text within a 1 MiB cap.
+
+### Changed
+
+- Introduced an `internal/store` substrate: a minimal generic key→bytes `Store`
+  (modeled on Vault's `physical.Backend`) with optional capability interfaces
+  (`Lister` / `Deleter` / `Versioned`) discovered by type assertion, plus a
+  backend registry. The new `localfs` backend (atomic temp+rename writes and
+  compare-and-set etags) backs the file tools; env-file and OpenBao are now
+  registered as store backends. Existing secret behavior is unchanged.
+
 ## v0.7.2 — 2026-06-26
 
 ### Fixed
