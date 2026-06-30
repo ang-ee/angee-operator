@@ -59,6 +59,10 @@ linters:
         # G304: file inclusion via variable is a CLI's job — paths come from
         # the user (`angee init <template>`), validated where it matters.
         - G304
+        # G703: path traversal via taint — internal/store/localfs resolves every
+        # key through a containment check (resolve/evalExisting) before any FS
+        # op; gosec's taint analysis can't see it. Same class as G304 above.
+        - G703
         # G306: 0644 on operator-generated docker-compose.yaml is intentional
         - G306
         # G704: SSRF via taint — the operator URL is set by the local user,
