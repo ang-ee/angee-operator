@@ -400,7 +400,16 @@ func (r *queryResolver) StackStatus(ctx context.Context) (*api.StackStatusRespon
 
 // ServiceEndpoint is the resolver for the serviceEndpoint field.
 func (r *queryResolver) ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error) {
-	return r.Platform.ServiceEndpoint(ctx, name)
+	endpoint, err := r.Platform.ServiceEndpoint(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	// The platform builds the routing fields; the log-stream descriptor needs
+	// the request scheme/host + token minter, injected via LogStreamDescriptor.
+	if endpoint != nil && r.LogStreamDescriptor != nil {
+		endpoint.LogStream = r.LogStreamDescriptor(ctx, name)
+	}
+	return endpoint, nil
 }
 
 // IngressStatus is the resolver for the ingressStatus field.

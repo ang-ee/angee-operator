@@ -152,6 +152,13 @@ input KeyValueInput {
 	key: String!
 	value: String!
 }
+type LogStream {
+	url: String!
+	target: String!
+	protocol: String!
+	token: String
+	expiresAt: String
+}
 type Mutation {
 	stackInit(input: StackInitInput!): StackInitResult
 	stackUpdate: MutationResult
@@ -264,6 +271,7 @@ type ServiceEndpoint {
 	url: String!
 	internalHost: String!
 	internalPort: Int!
+	logStream: LogStream
 }
 input ServiceInput {
 	name: String

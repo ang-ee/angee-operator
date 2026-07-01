@@ -1,6 +1,24 @@
 # Proposal: `stack update` re-renders the manifest from its template
 
-**Status:** Draft · **Area:** stacks, templates, copier · **Surfaces:** CLI + operator
+**Status:** Partially implemented (v0.5.9/v0.5.12) — `stack update --template` re-render shipped (local CLI); full 3-way conflict detection and remote surfaces remain. See [ROADMAP](./ROADMAP.md).
+
+## Implementation status
+
+**Shipped (v0.5.9/v0.5.12):** `angee stack update --template [--dry-run]`
+re-renders `angee.yaml` from the stack's Copier template and structurally merges
+it (template-origin sections refreshed; `operator`/`workspaces`/`port_leases` and
+allocated port values preserved), via `Platform.StackUpdateFromTemplate`
+(`internal/service/stack_update.go`). v0.5.12 reconciles a managed workspace
+inner stack's allocated ports from the parent record. Documented in
+`docs/guide/commands.md`.
+
+**Remaining (roadmap):** full **3-way conflict detection** — a locally-edited
+template key should fail with a structured conflict rather than template-wins
+(CHANGELOG v0.5.9 flags this as a follow-up) — and exposure of the re-render on
+the **remote REST/GraphQL** surfaces (it runs locally today and needs the stack's
+`.copier-answers.yml`).
+
+The remainder of this document is the original design context.
 
 ## Summary
 

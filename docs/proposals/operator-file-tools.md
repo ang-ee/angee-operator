@@ -1,8 +1,26 @@
 # Proposal: operator workspace file tools (read/edit)
 
-**Status:** proposal — for the angee-operator team to implement. Not built here.
+**Status:** Partially implemented (v0.7.3) — the core file read/write API shipped; the optional directory `list` + `delete` remain. See [ROADMAP](./ROADMAP.md).
 **Asked by:** the Angee marketplace (install/uninstall addons). **Consumer:** the
 platform console board (TS) + `platform_integrate_vcs`.
+
+## Implementation status
+
+**Shipped (v0.7.3):** the generic scoped file read/write API modeled on `secrets`
+— REST `GET`/`PUT /files` (etag compare-and-set, `409` on stale), GraphQL
+`file` / `fileWrite`, typed client `FileRead`/`FileWrite`, CLI `angee file get`/`set`,
+source-root path containment, and a 1 MiB UTF-8 cap — all on the new
+`internal/store` substrate (`localfs` backend with atomic writes + CAS etags,
+`Lister`/`Deleter`/`Versioned` capability interfaces, backend registry). See
+CHANGELOG v0.7.3 and `docs/reference/operator-api.md`.
+
+**Remaining (roadmap):** the optional `GET /files/list?source=&path=<dir>`
+directory listing and `DELETE /files` — deferred because the marketplace's
+install/uninstall flow needs only read + write. The `internal/store` layer
+already exposes `Lister`/`Deleter`, so these are a surface-wiring task
+(REST + GraphQL + client + CLI) when a consumer needs them.
+
+The remainder of this document is the original design context.
 
 ## Why
 

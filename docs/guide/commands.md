@@ -276,6 +276,26 @@ match `^[A-Za-z0-9._-]{1,256}$`.
 The same operations are reachable over REST and GraphQL — see
 [Operator API](/reference/operator-api).
 
+## Files
+
+Read and write files inside a stack source (e.g. edit a workspace's
+`settings.yaml` through the operator rather than by hand):
+
+```sh
+angee file get <path> --source <name>                       # prints file content
+angee file set <path> --source <name> --content "…"         # write a literal
+angee file set <path> --source <name> --file ./local.yaml   # write from a local file
+angee file set <path> --source <name> --stdin               # write from stdin
+angee file set <path> --source <name> --content "…" --etag <etag>  # compare-and-set
+```
+
+`--source` is required; `path` is relative to the source root (traversal and
+symlink-escape are rejected) and content is UTF-8 text within a 1 MiB cap.
+`get` returns the current `etag`; pass it back to `set --etag` as a
+compare-and-set precondition — a stale value is a conflict. The same
+operations are reachable over REST (`GET`/`PUT /files`) and GraphQL
+(`file` / `fileWrite`) — see [Operator API](/reference/operator-api).
+
 ## Operator
 
 ```sh

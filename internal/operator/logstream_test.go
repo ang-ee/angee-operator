@@ -153,6 +153,23 @@ func TestServiceLogsSocketProdStubErrorsBeforeUpgrade(t *testing.T) {
 	}
 }
 
+func TestNewLogStreamer(t *testing.T) {
+	// Empty and "ephemeral" both select the dev live-proxy; any other value is
+	// rejected so a misconfigured --log-backend fails fast at startup.
+	for _, backend := range []string{"", "ephemeral"} {
+		got, err := newLogStreamer(backend, nil)
+		if err != nil {
+			t.Fatalf("newLogStreamer(%q) error = %v", backend, err)
+		}
+		if _, ok := got.(ephemeralStreamer); !ok {
+			t.Fatalf("newLogStreamer(%q) = %T, want ephemeralStreamer", backend, got)
+		}
+	}
+	if _, err := newLogStreamer("victorialogs", nil); err == nil {
+		t.Fatal("newLogStreamer(unknown) expected an error, got nil")
+	}
+}
+
 func TestLogTailParam(t *testing.T) {
 	cases := []struct {
 		query string
@@ -205,7 +222,7 @@ func TestLogStreamDescriptor(t *testing.T) {
 	s := &Server{config: Config{Token: "admin-bearer"}, tokens: minter}
 	r := httptest.NewRequest(http.MethodGet, "http://operator.example:9000/services/web/endpoint", nil)
 
-	ls := s.logStreamDescriptor(r, "web")
+	ls := s.logStreamDescriptor(r.Context(), logSocketScheme(r), r.Host, "web")
 	if ls == nil {
 		t.Fatal("nil descriptor")
 	}
@@ -216,11 +233,46 @@ func TestLogStreamDescriptor(t *testing.T) {
 	if ls.URL != wantURL {
 		t.Fatalf("descriptor URL = %q, want %q", ls.URL, wantURL)
 	}
-	if ls.Token == "" {
+	if ls.Token == nil {
 		t.Fatal("expected a minted token when a bearer is configured")
 	}
 	// The minted token must authorize the web service socket.
-	if _, err := minter.Verify(ls.Token, serviceAudience("web")); err != nil {
+	if _, err := minter.Verify(*ls.Token, serviceAudience("web")); err != nil {
 		t.Fatalf("descriptor token does not verify for svc:web: %v", err)
+	}
+}
+
+// TestGraphQLServiceEndpointLogStream guards the GraphQL wiring: the field must
+// resolve to a populated descriptor (the struct field is only set by the
+// resolver, never by the platform), not the structural null it would be if the
+// resolver returned the platform endpoint unmodified.
+func TestGraphQLServiceEndpointLogStream(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, "version: 1\nkind: stack\nname: test\nservices:\n  api:\n    runtime: container\n    image: nginx:latest\n")
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{ serviceEndpoint(name: "api") { url logStream { url target protocol } } }`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL errors = %#v", resp.Errors)
+	}
+	endpoint, ok := resp.Data["serviceEndpoint"].(map[string]any)
+	if !ok {
+		t.Fatalf("serviceEndpoint = %#v", resp.Data["serviceEndpoint"])
+	}
+	ls, ok := endpoint["logStream"].(map[string]any)
+	if !ok {
+		t.Fatalf("serviceEndpoint.logStream = %#v, want a populated descriptor (not null)", endpoint["logStream"])
+	}
+	if ls["target"] != "operator" || ls["protocol"] != "ws" {
+		t.Fatalf("logStream target/protocol = %v/%v", ls["target"], ls["protocol"])
+	}
+	url, _ := ls["url"].(string)
+	if !strings.HasPrefix(url, "ws://") || !strings.HasSuffix(url, "/services/api/logs/stream") {
+		t.Fatalf("logStream.url = %q, want ws://<host>/services/api/logs/stream", url)
 	}
 }

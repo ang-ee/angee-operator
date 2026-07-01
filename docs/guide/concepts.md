@@ -51,7 +51,7 @@ React, or any specific framework.
 
 | Concept | Role | Where it lives |
 | --- | --- | --- |
-| **Stack** | One `ANGEE_ROOT` containing `angee.yaml` plus generated runtime files. Materialized from a Stack template. | `internal/manifest/`, `internal/service/` |
+| **Stack** | One `ANGEE_ROOT` containing `angee.yaml` plus generated runtime files. Materialized from a Stack template, in one of [two layouts](#two-stack-layouts) — a `.angee/` dev overlay or a self-contained root instance. | `internal/manifest/`, `internal/service/` |
 | **Service** | A long-running workload. `runtime: container` → Docker Compose; `runtime: local` → process-compose. | `internal/runtime/` |
 | **Job** | An explicitly invoked command with the same env, mount, and workdir handling as a Service. | `internal/service/` |
 | **Source** | Reusable source material. Implemented kinds: `git` (cached and optionally worktreed) and `local` (path-mounted). | `internal/git/`, `internal/service/` |
@@ -69,6 +69,46 @@ Every concept above has a `service.Platform` method and at least one of
 {CLI, REST, GraphQL}. The full classification is tracked in
 [Surface parity](/reference/surfaces) and enforced by
 `internal/service/surface_matrix_test.go`.
+
+## Two stack layouts
+
+Every Stack is one `ANGEE_ROOT` with an `angee.yaml`, but a Stack root
+relates to the code it runs in one of two ways. The difference is
+entirely **where `ANGEE_ROOT` sits** and **how its Sources are
+materialized** — the operator treats both as the same Stack primitive;
+the Stack template picks the layout.
+
+- **Dev overlay** (`ANGEE_ROOT: .angee`). The Stack root is a `.angee/`
+  directory *inside a checkout you already have*. Its Sources are
+  `local` — path-mounted to the surrounding code (`framework_path: ..`,
+  `project_path: ..`) — so nothing is cloned; you edit files on disk and
+  the overlay runs them. A developer adds it with `angee init --dev`, and
+  `.angee/` is gitignored and regenerable per clone. This is the layout
+  for iterating on checkouts you already have.
+
+- **Self-contained instance** (`ANGEE_ROOT: .`). The folder *is* the
+  Stack root — `angee.yaml` and the compiled compose live at the root —
+  and its Sources are `git`, **cloned into the root** by the operator.
+  You create it with `angee stack init --template stacks/local <folder>`;
+  nothing pre-exists, the operator pulls everything in. This is the
+  deployable local / staging / prod instance, and the shell that hosts
+  Workspaces.
+
+So a dev-flavour Stack template renders a `.angee/` overlay with `local`
+Sources; a non-dev template renders a root with cloned `git` Sources.
+
+### The application is a Source, not the Stack
+
+The application a Stack runs — for the default Host, a Django + React
+**project** (see the [Host glossary](/guide/glossary)) — is just a
+Source. **Its own repository owns its root and its `.copier-answers.yml`.**
+A dev overlay points a `local` Source at that repository; a self-contained
+instance clones it in as a `git` Source. Rendering a *Stack* into a
+project's own root (a dev stack at `ANGEE_ROOT: .`) conflates the two —
+the root's `.copier-answers.yml` ends up describing the stack rather than
+the project — and is an anti-pattern. Keep the project's root the
+project's; let the Stack be either a `.angee/` overlay or its own instance
+folder.
 
 ## What the operator owns
 

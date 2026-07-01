@@ -124,6 +124,9 @@ models:
   ServiceEndpoint:
     model:
       - github.com/ang-ee/angee-operator/api.ServiceEndpoint
+  LogStream:
+    model:
+      - github.com/ang-ee/angee-operator/api.LogStream
   IngressStatus:
     model:
       - github.com/ang-ee/angee-operator/api.IngressStatus

@@ -1,6 +1,23 @@
 # Proposal: per-service log streaming sockets routed by the operator
 
-**Status:** Draft · **Area:** operator, runtime backends, operator auth, logs · **Surfaces:** operator HTTP/WS + GraphQL `serviceEndpoint`
+**Status:** Partially implemented (v0.6.0/v0.6.1; GraphQL `logStream` field + `--log-backend` selector in the current Unreleased cycle) — a durable production log backend remains. See [ROADMAP](./ROADMAP.md).
+
+## Implementation status
+
+**Shipped:** the streaming-follow primitive (`Backend.StreamLogs`, line-by-line
+runner), `Platform.StreamServiceLogs` → `api.LogLine`, the per-service WebSocket
+`GET /services/{name}/logs/stream` (`?tail=` backlog, origin + route-token auth),
+the `LogStreamer` seam with the `ephemeralStreamer` dev live-proxy, and the
+`log_stream` descriptor on the REST service-info endpoint (v0.6.0/v0.6.1). The
+GraphQL `serviceEndpoint.logStream` field and the config-driven `--log-backend`
+selector shipped in the current Unreleased cycle.
+
+**Remaining (roadmap):** a durable **production** log backend behind the
+`LogStreamer` seam — `prodStreamer` is a fail-closed stub with no store, shipper,
+or resolvable `logs.backend` target yet — plus the optional `LogLine.Ts`
+timestamp field. The Angee host-side console rewiring lives in a separate repo.
+
+The remainder of this document is the original design context.
 
 ## Summary
 
