@@ -4,6 +4,30 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.7.6 — 2026-07-01
+
+### Added
+
+- `angee stack init` now renders a stack template's declared `_angee.chain`
+  hosts into the target **before** the stack's own files, so a `kind: stack`
+  that chains a project host (e.g. `stacks/local` → `projects/web`) produces the
+  host's files overlaid by the stack instead of only the stack's own files. The
+  chain was previously parsed but never rendered. Chain entries share the schema
+  and `${...}` substitution grammar of workspace chains: each entry's `template`
+  ref and `inputs` resolve against the stack's inputs; a `../../projects/web`
+  ref resolves relative to the stack template while a `stacks/<name>` ref
+  resolves through the template search path; and an optional `root` /
+  `chain_root` places a host in a sub-directory (empty root overlays in place).
+  An unresolved input reference now fails loudly instead of being written
+  through verbatim.
+
+### Known issues
+
+- A flat chain overlay (a chain entry with no `root`) shares Copier's
+  `.copier-answers.yml` with the stack render that overwrites it, so a later
+  `angee stack update` refreshes the stack layer but not the chained host layer.
+  Give a chained host its own `root` to keep it independently updatable.
+
 ## v0.7.5 — 2026-07-01
 
 ### Changed
