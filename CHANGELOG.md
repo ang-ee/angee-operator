@@ -4,6 +4,22 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Changed
+
+- `angee stack init` (and its `init --dev` / `init stack` variants) now fall back
+  to running locally when `ANGEE_OPERATOR_URL` (or `--operator`) is set but the
+  operator is not reachable, instead of failing with a raw connection error. Init
+  is a bootstrap command that only renders template files into a new root — the
+  operator for that root often does not exist yet — so a short `GET /healthz`
+  probe decides reachability, and an operator that refuses or does not answer the
+  probe prints a notice on stderr and proceeds in-process. A reachable operator
+  still handles init remotely; an interrupted probe (Ctrl-C) surfaces as a
+  cancellation rather than silently falling back; and runtime commands (`up`,
+  `down`, `logs`, …) are unchanged — they route to the operator and surface its
+  errors as before.
+
 ## v0.7.4 — 2026-07-01
 
 ### Added

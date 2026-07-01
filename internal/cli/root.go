@@ -96,7 +96,7 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 			if err != nil {
 				return err
 			}
-			platform, err := localPlatformForRoot(root, operatorURL, false)
+			platform, err := initPlatform(cmd.Context(), root, operatorURL, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -143,7 +143,7 @@ func initStackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comman
 			if _, ok := inputs["ANGEE_ROOT"]; !ok {
 				inputs["ANGEE_ROOT"] = "."
 			}
-			platform, err := localPlatformForRoot(root, operatorURL, false)
+			platform, err := initPlatform(cmd.Context(), root, operatorURL, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -184,7 +184,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			platform, err := localPlatformForRoot(root, operatorURL, false)
+			platform, err := initPlatform(cmd.Context(), root, operatorURL, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -840,6 +840,31 @@ func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (s
 		selected = resolved
 	}
 	return service.New(selected)
+}
+
+// initPlatform selects the platform for stack-init commands. When an operator
+// URL is configured but the operator is not reachable, init falls back to an
+// in-process local platform instead of failing: init is a bootstrap command
+// that only renders template files into a new root, so running it locally is a
+// safe default (and often the only option, since the operator for that root may
+// not exist yet). A reachable operator, and the no-operator case, behave
+// exactly like localPlatformForRoot with resolveControlRoot=false.
+func initPlatform(ctx context.Context, root, operatorURL *string, stderr io.Writer) (service.API, error) {
+	if operatorURL == nil || *operatorURL == "" {
+		return localPlatformForRoot(root, operatorURL, false)
+	}
+	client := platformclient.New(*operatorURL)
+	if err := client.Ping(ctx); err != nil {
+		if ctx.Err() != nil {
+			// The caller's context was canceled (Ctrl-C / SIGTERM), not the
+			// operator refusing the probe. Surface the interruption instead of
+			// silently creating a local stack the user tried to abort.
+			return nil, err
+		}
+		_, _ = fmt.Fprintf(stderr, "angee: operator at %s is not reachable (%v); running init locally\n", *operatorURL, err)
+		return service.New(*root)
+	}
+	return client, nil
 }
 
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {

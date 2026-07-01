@@ -12,6 +12,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 func TestVersionFlag(t *testing.T) {
@@ -44,6 +45,66 @@ func TestInitDevReportsTemplateAndRoot(t *testing.T) {
 	want := "stack template dev initialized as .angee"
 	if got := strings.TrimSpace(stdout.String()); got != want {
 		t.Fatalf("init output = %q, want %q", got, want)
+	}
+}
+
+func TestStackInitFallsBackToLocalWhenOperatorUnreachable(t *testing.T) {
+	// A server that is closed immediately yields a URL whose port refuses
+	// connections, standing in for an operator that is configured but down.
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	operatorURL := server.URL
+	server.Close()
+
+	root := t.TempDir()
+	templateRoot := writeStackTemplate(t, root)
+	t.Chdir(root)
+	t.Setenv("ANGEE_OPERATOR_URL", operatorURL)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"stack", "init", templateRoot, "angee-notes", "--yes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "angee-notes", ".angee", "angee.yaml")); err != nil {
+		t.Fatalf("Stat(angee-notes/.angee/angee.yaml) error = %v", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "not reachable") || !strings.Contains(got, "running init locally") {
+		t.Fatalf("stderr = %q, want unreachable-operator fallback notice", got)
+	}
+}
+
+func TestStackInitRoutesToReachableOperator(t *testing.T) {
+	initCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/stack/init":
+			initCalled = true
+			_ = json.NewEncoder(w).Encode(service.StackInitResult{Template: "dev", Root: "/remote/angee-notes"})
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	t.Chdir(root)
+	t.Setenv("ANGEE_OPERATOR_URL", server.URL)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"stack", "init", "dev", "angee-notes", "--yes"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !initCalled {
+		t.Fatal("operator /stack/init was not called; init did not route to the reachable operator")
+	}
+	if _, err := os.Stat(filepath.Join(root, "angee-notes")); !os.IsNotExist(err) {
+		t.Fatalf("expected no local stack when operator is reachable; Stat err = %v", err)
 	}
 }
 

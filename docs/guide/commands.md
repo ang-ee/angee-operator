@@ -29,6 +29,11 @@ angee status
 `angee init --dev` is shorthand for the `dev` stack template. The template must
 be available through the local or remote template resolver.
 
+The init commands bootstrap a new root, so they tolerate a missing operator: if
+`ANGEE_OPERATOR_URL` (or `--operator`) is set but the operator is not reachable,
+init prints a notice and renders the template locally instead of failing. A
+reachable operator still handles init remotely.
+
 `angee stack update` regenerates the derived runtime files from `angee.yaml`.
 With `--template` it first **re-renders `angee.yaml` from the stack's Copier
 template** (so template changes — a new service, job, port, or source — reach an

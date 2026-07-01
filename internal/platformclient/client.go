@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/query"
@@ -79,6 +80,31 @@ type RemoteInvalidInput struct {
 // New constructs a RemoteClient for the operator at baseURL.
 func New(baseURL string) *RemoteClient {
 	return &RemoteClient{baseURL: strings.TrimRight(baseURL, "/"), client: http.DefaultClient}
+}
+
+// Ping reports whether the operator is reachable by issuing a short
+// GET /healthz request. It returns nil as soon as the operator answers with
+// any HTTP response (the server is up), and the transport error otherwise
+// (connection refused, DNS failure, timeout). Callers use this to decide
+// whether to fall back to local execution when an operator URL is configured
+// but the server is down. The probe is bounded by a short timeout so a hung
+// operator does not stall the caller indefinitely.
+func (p *RemoteClient) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint("/healthz", nil), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	// Drain before closing so the keep-alive connection can be reused by the
+	// StackInit request that follows to the same operator.
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return nil
 }
 
 func (p *RemoteClient) StackInit(ctx context.Context, template string, targetPath string, inputs map[string]string, force bool) (service.StackInitResult, error) {
