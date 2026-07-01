@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -43,6 +44,20 @@ type prodStreamer struct{}
 
 func (prodStreamer) StreamService(context.Context, string, int) (<-chan api.LogLine, error) {
 	return nil, errLogBackendNotConfigured
+}
+
+// newLogStreamer selects the per-service log streaming backend from config.
+// The empty string and "ephemeral" both pick the dev live-proxy; any other
+// value is rejected at startup, so a misconfigured `--log-backend` fails fast
+// instead of silently defaulting. Only the ephemeral backend is wired today;
+// a durable production backend (the `prodStreamer` seam) adds a new case here.
+func newLogStreamer(backend string, platform service.API) (LogStreamer, error) {
+	switch backend {
+	case "", "ephemeral":
+		return ephemeralStreamer{platform: platform}, nil
+	default:
+		return nil, fmt.Errorf("unknown log backend %q (supported: ephemeral)", backend)
+	}
 }
 
 const logSocketWriteWait = 10 * time.Second
@@ -162,16 +177,23 @@ func (s *Server) authorizeServiceSocket(r *http.Request, service string) bool {
 	return ok
 }
 
-// logStreamDescriptor builds the LogStream the service-info endpoint returns:
-// the resolved socket URL (derived from how the client reached the operator) and
-// a freshly-minted route token. Today it always resolves the operator target;
-// edge and production targets are selected here once configured.
-func (s *Server) logStreamDescriptor(r *http.Request, service string) *api.LogStream {
-	scheme := "ws"
+// logSocketScheme returns the WebSocket scheme matching how the client reached
+// the operator (wss behind TLS, ws otherwise).
+func logSocketScheme(r *http.Request) string {
 	if r.TLS != nil {
-		scheme = "wss"
+		return "wss"
 	}
-	socket := url.URL{Scheme: scheme, Host: r.Host, Path: "/services/" + service + "/logs/stream"}
+	return "ws"
+}
+
+// logStreamDescriptor builds the LogStream the service-info endpoint returns:
+// the resolved socket URL (from the scheme/host the client used to reach the
+// operator) and a freshly-minted route token. Shared by the REST handler and
+// the GraphQL resolver, which supply scheme/host differently. Today it always
+// resolves the operator target; edge and production targets are selected here
+// once configured. The context carries the actor scope used for minting.
+func (s *Server) logStreamDescriptor(ctx context.Context, scheme, host, service string) *api.LogStream {
+	socket := url.URL{Scheme: scheme, Host: host, Path: "/services/" + service + "/logs/stream"}
 	descriptor := &api.LogStream{
 		URL:      socket.String(),
 		Target:   "operator",
@@ -182,7 +204,7 @@ func (s *Server) logStreamDescriptor(r *http.Request, service string) *api.LogSt
 		return descriptor
 	}
 	actor := "log-stream"
-	if scope, ok := actorScopeFromContext(r.Context()); ok && scope.Actor != "" {
+	if scope, ok := actorScopeFromContext(ctx); ok && scope.Actor != "" {
 		actor = scope.Actor
 	}
 	token, err := s.tokens.MintRoute(actor, service, "")
@@ -191,7 +213,7 @@ func (s *Server) logStreamDescriptor(r *http.Request, service string) *api.LogSt
 		// minting failure only by omitting the credential.
 		return descriptor
 	}
-	descriptor.Token = token.Token
-	descriptor.ExpiresAt = token.ExpiresAt
+	descriptor.Token = &token.Token
+	descriptor.ExpiresAt = &token.ExpiresAt
 	return descriptor
 }

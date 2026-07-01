@@ -1,6 +1,8 @@
 package gql
 
 import (
+	"context"
+
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
@@ -24,4 +26,10 @@ type Resolver struct {
 	Platform service.API
 	Events   *EventHub
 	Tokens   TokenMinter
+	// LogStreamDescriptor builds a service's live-log-socket descriptor for the
+	// serviceEndpoint resolver. Injected by the operator package (it needs the
+	// request scheme/host and the token minter, which the gql package can't
+	// reach); nil in contexts that don't serve it, in which case the
+	// serviceEndpoint.logStream field is null.
+	LogStreamDescriptor func(ctx context.Context, service string) *api.LogStream
 }

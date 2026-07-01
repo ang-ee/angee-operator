@@ -274,6 +274,22 @@ the secret name and the request's remote address. OpenBao keeps its own
 audit log on top of that; env-file deployments rely on the operator log
 as the only paper trail.
 
+Files (scoped read/write inside a stack source):
+
+```http
+GET /files?source=<name>&path=<rel>               read one file
+PUT /files?source=<name>&path=<rel>               body: {"content":"...","etag":"..."}
+```
+
+`source` and `path` are query parameters (a file path holds slashes).
+`GET /files` returns `{ path, source, content, etag }`. `PUT /files` writes
+the body's `content` and returns metadata only (`{ path, source, etag }`);
+an optional `etag` is a compare-and-set precondition — a stale value is a
+`409 Conflict`. Paths are confined to the source root (traversal and
+symlink-escape are rejected) and content is UTF-8 text within a 1 MiB cap.
+Both routes sit behind the admin-bearer/`operator`-token gate; writes are
+logged to operator stderr with the source, path, and remote address.
+
 Mints an HS256-signed JWT scoped to the supplied actor. TTL defaults to
 1h and is capped at 24h. The signing key resolves via
 `--jwt-secret` / `ANGEE_OPERATOR_JWT_SECRET` / HKDF-from-admin-bearer
@@ -314,6 +330,23 @@ and `workspaceSyncBase(name:, method:)` mirrors the REST `sync-base` endpoint.
 
 The schema source lives at `internal/operator/schema.graphql`; generated gqlgen
 runtime files live under `internal/operator/gql/`.
+
+### Files
+
+Read and write files inside a stack source, mirroring the REST `/files`
+routes:
+
+```graphql
+query   { file(source: "app", path: "settings.yaml") { path source content etag } }
+mutation { fileWrite(source: "app", path: "settings.yaml", content: "…", etag: "…") { path source etag } }
+```
+
+`file` returns the content and current `etag`; `fileWrite` writes and returns
+metadata only. The optional `etag` argument is a compare-and-set precondition —
+a stale value fails with a `409`-equivalent conflict error. Paths are confined
+to the source root and content is UTF-8 text within a 1 MiB cap. `serviceEndpoint`
+likewise exposes a `logStream { url target protocol token expiresAt }` descriptor
+mirroring the REST endpoint's `log_stream` field.
 
 ### Subscriptions
 

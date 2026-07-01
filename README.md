@@ -29,8 +29,10 @@ REST + GraphQL:
 | **GitOps topology** (derived view: sources × slots) | `gitOpsTopology(withCommits: Int)` snapshot; `onGitOpsTopologyChange` live. |
 | **Templates** (discoverable Copier templates) | `templates`, `template(ref)`. |
 | **Secrets** (env-file or OpenBao backend) | `secrets`, `secret(name)`, `secretValue(name)` (privileged value-read), `secretSet`, `secretDelete`. |
-| **Connection token** (per-actor scoped JWT) | `mintConnectionToken(actor, ttl)` (gated by admin bearer). |
-| **Subscriptions** (SSE, GraphQL-only) | `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
+| **Files** (scoped read/write inside a stack source) | `file(source, path)`, `fileWrite(source, path, content, etag)` (etag compare-and-set; REST `GET`/`PUT /files`; CLI `angee file get`/`set`). |
+| **Ingress / endpoints** (optional Caddy edge) | `serviceEndpoint(name)` (routed URL + `logStream` descriptor), `ingressStatus`. |
+| **Tokens** (per-actor scoped JWTs) | `mintConnectionToken(actor, scope, ttl)` (`aud=operator`), `mintRouteToken(actor, service, ttl)` (`aud=svc:<service>`, for edge/log sockets). Gated by the admin bearer. |
+| **Subscriptions** (SSE, GraphQL-only) | `onStackSnapshotChange` (aggregate), `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
 
 Every operation above is reachable over both REST (`POST /...` /
 `GET /...`) and GraphQL — subscriptions are the one deliberate split

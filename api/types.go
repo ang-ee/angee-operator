@@ -288,11 +288,13 @@ type ServiceEndpoint struct {
 // a production backend) and hands back the matching short-lived credential.
 // Connecting is identical regardless of Target.
 type LogStream struct {
-	URL       string `json:"url"`
-	Target    string `json:"target"`
-	Protocol  string `json:"protocol"`
-	Token     string `json:"token,omitempty"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	URL      string `json:"url"`
+	Target   string `json:"target"`
+	Protocol string `json:"protocol"`
+	// Token and ExpiresAt are nil in open (tokenless) dev — omitted over REST
+	// and null over GraphQL, rather than an empty string.
+	Token     *string `json:"token,omitempty"`
+	ExpiresAt *string `json:"expires_at,omitempty"`
 }
 
 // LogLine is one structured log line from a single service's live stream.

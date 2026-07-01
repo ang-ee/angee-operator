@@ -4,6 +4,37 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- The GraphQL `serviceEndpoint` query now returns a `logStream` descriptor
+  (`{ url, target, protocol, token, expiresAt }`), reaching parity with the REST
+  `GET /services/{name}/endpoint` `log_stream` field — a GraphQL consumer can now
+  open a service's live log socket without dropping to REST for the credential.
+- The operator takes a `--log-backend` flag selecting the per-service log
+  streaming backend (default `ephemeral`, the dev live-proxy). This realizes the
+  `LogStreamer` config seam: an unrecognized value now fails fast at startup with
+  a clear error instead of silently defaulting. A durable production backend
+  registers behind the same seam once it exists (`prodStreamer` remains a
+  fail-closed stub).
+
+### Docs
+
+- Documented the workspace **file tools** primitive (shipped v0.7.3) that was
+  missing from the published surfaces: the `angee file get`/`set` CLI in the
+  commands guide, the `GET`/`PUT /files` REST routes and `file`/`fileWrite`
+  GraphQL in the operator-API reference, and a Files row (plus ingress/endpoints,
+  route-token, and `onStackSnapshotChange` entries) in the README control-plane
+  table.
+- Reconciled `docs/proposals/` with shipped reality: removed five proposals whose
+  work fully landed in code, docs, and this changelog
+  (`compose-project-isolation`, `ingress-routing-modes`,
+  `graphql-websocket-transport`, `stack-snapshot-subscription`, and the
+  Hasura-superseded `graphql-nestjs-query-shape`); trimmed four partially-shipped
+  proposals to their remaining scope with an `Implementation status` header; and
+  added `docs/proposals/ROADMAP.md` indexing all open work.
+
 ## v0.7.3 — 2026-06-30
 
 ### Added

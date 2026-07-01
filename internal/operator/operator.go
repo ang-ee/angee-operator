@@ -35,6 +35,7 @@ type Config struct {
 	Token          string
 	JWTSecret      string
 	AllowedOrigins []string
+	LogBackend     string
 }
 
 type Server struct {
@@ -75,6 +76,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	cmd.Flags().StringVar(&config.Token, "token", config.Token, "bearer token for protected endpoints")
 	cmd.Flags().StringVar(&config.JWTSecret, "jwt-secret", config.JWTSecret, "explicit HS256 signing key for mintConnectionToken (default: env ANGEE_OPERATOR_JWT_SECRET, then HKDF-from-bearer, then per-process random)")
 	cmd.Flags().StringArrayVar(&config.AllowedOrigins, "allowed-origin", config.AllowedOrigins, "additional allowed WebSocket Origin (repeatable); loopback origins are always allowed")
+	cmd.Flags().StringVar(&config.LogBackend, "log-backend", config.LogBackend, "per-service log streaming backend (default: ephemeral live-proxy)")
 	return cmd.ExecuteContext(ctx)
 }
 
@@ -106,9 +108,12 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 	eventHub := opgql.NewEventHub(platform)
-	// Dev default: ephemeral live-proxy. A configured production log backend
-	// would replace this with a prodStreamer.
-	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter, logStreamer: ephemeralStreamer{platform: platform}}
+	// Select the per-service log backend; defaults to the ephemeral live-proxy.
+	logStreamer, err := newLogStreamer(config.LogBackend, platform)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter, logStreamer: logStreamer}
 	fmt.Fprintf(os.Stderr, "operator: jwt signing key fingerprint=%s\n", minter.Fingerprint())
 	graphqlHandler, graphqlWSHandler, err := newGraphQLHandler(s)
 	if err != nil {
@@ -434,7 +439,7 @@ func (s *Server) serviceEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	// Advertise the live log socket + credential alongside the service endpoint
 	// so a consumer can open the stream without a second round trip.
-	endpoint.LogStream = s.logStreamDescriptor(r, name)
+	endpoint.LogStream = s.logStreamDescriptor(r.Context(), logSocketScheme(r), r.Host, name)
 	writeJSON(w, http.StatusOK, endpoint)
 }
 

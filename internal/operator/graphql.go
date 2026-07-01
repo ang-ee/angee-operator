@@ -46,7 +46,18 @@ var (
 // resolver set, and event hub; only the transport differs.
 func newGraphQLHandler(s *Server) (post, ws http.Handler, err error) {
 	gqlServer := handler.New(opgql.NewExecutableSchema(opgql.Config{
-		Resolvers: &opgql.Resolver{Platform: s.platform, Events: s.eventHub, Tokens: s.tokens},
+		Resolvers: &opgql.Resolver{
+			Platform: s.platform,
+			Events:   s.eventHub,
+			Tokens:   s.tokens,
+			LogStreamDescriptor: func(ctx context.Context, service string) *api.LogStream {
+				req, ok := endpointRequestFromContext(ctx)
+				if !ok {
+					return nil
+				}
+				return s.logStreamDescriptor(ctx, req.scheme, req.host, service)
+			},
+		},
 	}))
 	// SSE must be registered before POST so the Accept-based dispatch picks
 	// it up for `text/event-stream` requests (see gqlgen issue #3275).
@@ -90,6 +101,9 @@ func newGraphQLHandler(s *Server) (post, ws http.Handler, err error) {
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
+		// Carry the request scheme/host into resolvers so serviceEndpoint can
+		// build an absolute log-socket URL (gqlgen doesn't expose the request).
+		r = r.WithContext(withEndpointRequest(r.Context(), logSocketScheme(r), r.Host))
 		gqlServer.ServeHTTP(w, r)
 	})
 	// The gqlgen server dispatches the GET upgrade to the Websocket transport;
@@ -121,6 +135,25 @@ func (s *Server) graphqlWSInit(ctx context.Context, initPayload transport.InitPa
 		ctx = withActorScope(ctx, *claims)
 	}
 	return ctx, nil, nil
+}
+
+// endpointRequest carries the request scheme/host into GraphQL resolvers.
+// gqlgen doesn't expose the *http.Request to resolvers, so the POST handler
+// stashes what serviceEndpoint needs to build an absolute log-socket URL.
+type endpointRequest struct {
+	scheme string
+	host   string
+}
+
+type endpointRequestKey struct{}
+
+func withEndpointRequest(ctx context.Context, scheme, host string) context.Context {
+	return context.WithValue(ctx, endpointRequestKey{}, endpointRequest{scheme: scheme, host: host})
+}
+
+func endpointRequestFromContext(ctx context.Context) (endpointRequest, bool) {
+	v, ok := ctx.Value(endpointRequestKey{}).(endpointRequest)
+	return v, ok
 }
 
 func validateGraphQLContentType(r *http.Request) error {

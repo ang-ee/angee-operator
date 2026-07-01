@@ -1,6 +1,26 @@
 # Proposal: `ingress` — an optional edge backend (Caddy) + minted, scoped operator tokens
 
-**Status:** Draft · **Area:** manifest, runtime backends, operator auth, operator API · **Surfaces:** manifest + compile + operator GraphQL/REST
+**Status:** Partially implemented (v0.5.6/v0.5.8) — the Caddy edge, route tokens, and two-tier operator auth shipped; per-field token **scope enforcement** remains. See [ROADMAP](./ROADMAP.md).
+
+## Implementation status
+
+**Shipped (v0.5.6/v0.5.8):** the manifest `ingress`/`route` model (default
+`type: none`), the edge backend interface with `none`/`caddy` backends wired into
+`Compile`, the token model (`mintConnectionToken` `aud=operator` with a `scope`
+argument, `mintRouteToken` `aud=svc:<service>`, central `Verify`), the
+`/edge/verify` forward-auth target, the two-tier operator-API auth (admin bearer
+**or** a minted `aud=operator` token), and the `serviceEndpoint` / `ingressStatus`
+GraphQL+REST queries. See CHANGELOG v0.5.6/v0.5.8, `docs/guide/ingress.md`, and
+`docs/reference/operator-api.md`. (The host/path routing modes and `tls`/`port`
+dev controls shipped separately in v0.5.14/v0.5.17.)
+
+**Remaining (roadmap):** the field→capability **scope map that gates mutations**.
+Token scope is carried on the request context but is advisory today — no path
+enforces it per-mutation yet (`internal/operator/tokens.go`). The Angee
+host-backend (Django) rewrite that hands browsers scoped tokens instead of the
+admin bearer lives in a separate repo and is out of scope here.
+
+The remainder of this document is the original design context.
 
 ## Summary
 

@@ -174,6 +174,14 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
+	LogStream struct {
+		ExpiresAt func(childComplexity int) int
+		Protocol  func(childComplexity int) int
+		Target    func(childComplexity int) int
+		Token     func(childComplexity int) int
+		URL       func(childComplexity int) int
+	}
+
 	Mutation struct {
 		DeleteSecretsByPk             func(childComplexity int, id string) int
 		DeleteServicesByPk            func(childComplexity int, id string) int
@@ -291,6 +299,7 @@ type ComplexityRoot struct {
 	ServiceEndpoint struct {
 		InternalHost func(childComplexity int) int
 		InternalPort func(childComplexity int) int
+		LogStream    func(childComplexity int) int
 		Routed       func(childComplexity int) int
 		URL          func(childComplexity int) int
 	}
@@ -1224,6 +1233,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.KeyValue.Value(childComplexity), true
 
+	case "LogStream.expiresAt":
+		if e.ComplexityRoot.LogStream.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LogStream.ExpiresAt(childComplexity), true
+	case "LogStream.protocol":
+		if e.ComplexityRoot.LogStream.Protocol == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LogStream.Protocol(childComplexity), true
+	case "LogStream.target":
+		if e.ComplexityRoot.LogStream.Target == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LogStream.Target(childComplexity), true
+	case "LogStream.token":
+		if e.ComplexityRoot.LogStream.Token == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LogStream.Token(childComplexity), true
+	case "LogStream.url":
+		if e.ComplexityRoot.LogStream.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LogStream.URL(childComplexity), true
+
 	case "Mutation.delete_secrets_by_pk":
 		if e.ComplexityRoot.Mutation.DeleteSecretsByPk == nil {
 			break
@@ -2147,6 +2187,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServiceEndpoint.InternalPort(childComplexity), true
+	case "ServiceEndpoint.logStream":
+		if e.ComplexityRoot.ServiceEndpoint.LogStream == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceEndpoint.LogStream(childComplexity), true
 	case "ServiceEndpoint.routed":
 		if e.ComplexityRoot.ServiceEndpoint.Routed == nil {
 			break
@@ -3616,6 +3662,19 @@ type ServiceEndpoint {
   url: String!
   internalHost: String!
   internalPort: Int!
+  logStream: LogStream
+}
+
+# LogStream is the descriptor a consumer uses to open a service's live log
+# socket: a resolved URL plus a short-lived route token. Mirrors the REST
+# ` + "`" + `GET /services/{name}/endpoint` + "`" + ` ` + "`" + `log_stream` + "`" + ` field. token/expiresAt are null
+# in open (tokenless) dev.
+type LogStream {
+  url: String!
+  target: String!
+  protocol: String!
+  token: String
+  expiresAt: String
 }
 
 type IngressStatus {
@@ -4575,6 +4634,22 @@ func (ec *executionContext) childFields_KeyValue(ctx context.Context, field grap
 	return nil, fmt.Errorf("no field named %q was found under type KeyValue", field.Name)
 }
 
+func (ec *executionContext) childFields_LogStream(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "url":
+		return ec.fieldContext_LogStream_url(ctx, field)
+	case "target":
+		return ec.fieldContext_LogStream_target(ctx, field)
+	case "protocol":
+		return ec.fieldContext_LogStream_protocol(ctx, field)
+	case "token":
+		return ec.fieldContext_LogStream_token(ctx, field)
+	case "expiresAt":
+		return ec.fieldContext_LogStream_expiresAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LogStream", field.Name)
+}
+
 func (ec *executionContext) childFields_MutationResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "status":
@@ -4649,6 +4724,8 @@ func (ec *executionContext) childFields_ServiceEndpoint(ctx context.Context, fie
 		return ec.fieldContext_ServiceEndpoint_internalHost(ctx, field)
 	case "internalPort":
 		return ec.fieldContext_ServiceEndpoint_internalPort(ctx, field)
+	case "logStream":
+		return ec.fieldContext_ServiceEndpoint_logStream(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServiceEndpoint", field.Name)
 }
@@ -9212,6 +9289,121 @@ func (ec *executionContext) fieldContext_KeyValue_value(_ context.Context, field
 	return graphql.NewScalarFieldContext("KeyValue", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _LogStream_url(ctx context.Context, field graphql.CollectedField, obj *api.LogStream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LogStream_url(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LogStream_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LogStream", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LogStream_target(ctx context.Context, field graphql.CollectedField, obj *api.LogStream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LogStream_target(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Target, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LogStream_target(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LogStream", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LogStream_protocol(ctx context.Context, field graphql.CollectedField, obj *api.LogStream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LogStream_protocol(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Protocol, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LogStream_protocol(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LogStream", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LogStream_token(ctx context.Context, field graphql.CollectedField, obj *api.LogStream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LogStream_token(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Token, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_LogStream_token(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LogStream", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LogStream_expiresAt(ctx context.Context, field graphql.CollectedField, obj *api.LogStream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LogStream_expiresAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_LogStream_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LogStream", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _Mutation_stackInit(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -13020,6 +13212,38 @@ func (ec *executionContext) _ServiceEndpoint_internalPort(ctx context.Context, f
 }
 func (ec *executionContext) fieldContext_ServiceEndpoint_internalPort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ServiceEndpoint", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceEndpoint_logStream(ctx context.Context, field graphql.CollectedField, obj *api.ServiceEndpoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceEndpoint_logStream(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LogStream, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.LogStream) graphql.Marshaler {
+			return ec.marshalOLogStream2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐLogStream(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceEndpoint_logStream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServiceEndpoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_LogStream(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _ServiceState_id(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
@@ -21895,6 +22119,59 @@ func (ec *executionContext) _KeyValue(ctx context.Context, sel ast.SelectionSet,
 	return out
 }
 
+var logStreamImplementors = []string{"LogStream"}
+
+func (ec *executionContext) _LogStream(ctx context.Context, sel ast.SelectionSet, obj *api.LogStream) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, logStreamImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("LogStream")
+		case "url":
+			out.Values[i] = ec._LogStream_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "target":
+			out.Values[i] = ec._LogStream_target(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "protocol":
+			out.Values[i] = ec._LogStream_protocol(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "token":
+			out.Values[i] = ec._LogStream_token(ctx, field, obj)
+		case "expiresAt":
+			out.Values[i] = ec._LogStream_expiresAt(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var mutationImplementors = []string{"Mutation"}
 
 func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -23217,6 +23494,8 @@ func (ec *executionContext) _ServiceEndpoint(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "logStream":
+			out.Values[i] = ec._ServiceEndpoint_logStream(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -27112,6 +27391,13 @@ func (ec *executionContext) unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑe
 		}
 	}
 	return res, nil
+}
+
+func (ec *executionContext) marshalOLogStream2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐLogStream(ctx context.Context, sel ast.SelectionSet, v *api.LogStream) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._LogStream(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOMutationResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐMutationResult(ctx context.Context, sel ast.SelectionSet, v *model.MutationResult) graphql.Marshaler {

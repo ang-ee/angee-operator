@@ -251,6 +251,19 @@ type ServiceEndpoint {
   url: String!
   internalHost: String!
   internalPort: Int!
+  logStream: LogStream
+}
+
+# LogStream is the descriptor a consumer uses to open a service's live log
+# socket: a resolved URL plus a short-lived route token. Mirrors the REST
+# `GET /services/{name}/endpoint` `log_stream` field. token/expiresAt are null
+# in open (tokenless) dev.
+type LogStream {
+  url: String!
+  target: String!
+  protocol: String!
+  token: String
+  expiresAt: String
 }
 
 type IngressStatus {

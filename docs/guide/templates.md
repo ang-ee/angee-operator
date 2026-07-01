@@ -1,22 +1,34 @@
 # Templates
 
 Angee templates are how a *shape* of deployment is declared once and
-re-used. There are two kinds, both rendered with
-[copier-go](https://github.com/ang-ee/copier-go):
+re-used, rendered with [copier-go](https://github.com/ang-ee/copier-go).
+The operator renders three kinds:
 
-- **Stack template** — produces an `angee.yaml` (and optionally
-  generated runtime files) for a runnable Stack root.
-- **Workspace template** — produces a workspace tree under
-  `$ANGEE_ROOT/workspaces/<name>`, may declare Sources to materialize,
-  and may chain an inner Stack template.
+- **Stack template** (`kind: stack`) — produces an `angee.yaml` (and
+  generated runtime files) for a runnable Stack root. Stack templates come
+  in two flavours matching the
+  [two layouts](/operator/concepts#two-stack-layouts): a **dev** flavour
+  renders a `.angee/` overlay with `local` Sources (`angee init --dev`); a
+  **non-dev** flavour (local / staging / prod) renders a self-contained
+  root with cloned `git` Sources (`angee stack init`).
+- **Workspace template** (`kind: workspace`) — produces a workspace tree
+  under `$ANGEE_ROOT/workspaces/<name>`, may declare Sources to
+  materialize, and may chain an inner Stack template.
+- **Service template** (`kind: service`) — produces one Service
+  definition (see [Service templates](#service-templates)).
 
-Both kinds are themselves *abstract*: they only define which Services to
-run, which Sources to materialize, and which inputs the user supplies.
-The concrete result of rendering a template is a Stack root or a
-Workspace directory the engine can operate on.
+A fourth kind, **project** (`kind: project`), belongs to the Host rather
+than the operator: it scaffolds the application repository a Stack runs as
+a Source (for the default Host, a Django + React project — see the
+[Host glossary](/guide/glossary)). It is rendered by copier / the
+framework, not `angee stack init`; the operator lists it but does not
+render it.
 
-A template must contain `copier.yml` with Angee metadata under
-`_angee`.
+Every kind is *abstract*: it only declares which Services to run, which
+Sources to materialize, and which inputs the user supplies. Rendering
+produces a Stack root, a Workspace directory, a Service, or a project repo
+the engine can operate on. A template must contain `copier.yml` with Angee
+metadata under `_angee`.
 
 ## Kinds
 
