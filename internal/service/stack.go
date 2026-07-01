@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -56,6 +58,11 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err != nil {
 		return StackInitResult{}, err
 	}
+	// Render any chained templates (e.g. the project host this stack overlays) into
+	// the same target FIRST, so the stack template's own files overlay theirs.
+	if err := p.renderStackChain(ctx, templatePath, targetPath, mergedInputs); err != nil {
+		return StackInitResult{}, err
+	}
 	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: templatePath, Dest: targetPath, Inputs: resolvedInputs}); err != nil {
 		return StackInitResult{}, err
 	}
@@ -102,6 +109,71 @@ func pathExistsNonEmpty(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+var chainInputRef = regexp.MustCompile(`{{\s*(\w+)\s*}}`)
+
+// renderStackChain renders every template a stack chains (via `_angee.chain`) into
+// the same target BEFORE the stack's own files, so the stack overlays a real host.
+// A chained entry's inputs are Copier `{{ input }}` references resolved against the
+// stack's own inputs.
+func (p *Platform) renderStackChain(ctx context.Context, stackTemplatePath, targetPath string, stackInputs copierx.Inputs) error {
+	metadata, err := copierx.ReadMetadata(stackTemplatePath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range metadata.Chain {
+		if entry.Template == "" {
+			continue
+		}
+		chainTemplate, err := p.resolveChainTemplate(ctx, stackTemplatePath, entry.Template)
+		if err != nil {
+			return fmt.Errorf("resolve chained template %q: %w", entry.Template, err)
+		}
+		entryInputs := resolveChainInputs(entry.Inputs, stackInputs)
+		merged, err := copierx.TemplateInputs(chainTemplate, entryInputs)
+		if err != nil {
+			return err
+		}
+		resolved, err := copierx.ResolvePathInputs(chainTemplate, merged, targetPath, stackInputs["ANGEE_ROOT"])
+		if err != nil {
+			return err
+		}
+		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: chainTemplate, Dest: targetPath, Inputs: resolved}); err != nil {
+			return fmt.Errorf("render chained template %q: %w", entry.Template, err)
+		}
+	}
+	return nil
+}
+
+// resolveChainTemplate resolves a chain entry's template reference: a remote ref
+// through the git resolver, an absolute path as-is, otherwise a path relative to
+// the chaining stack template's own directory (e.g. `../../projects/web`).
+func (p *Platform) resolveChainTemplate(ctx context.Context, stackTemplatePath, ref string) (string, error) {
+	if isRemoteTemplateRef(ref) {
+		path, _, err := p.resolveRemoteTemplate(ctx, ref, "project")
+		return path, err
+	}
+	if filepath.IsAbs(ref) {
+		return ref, nil
+	}
+	return filepath.Clean(filepath.Join(stackTemplatePath, ref)), nil
+}
+
+// resolveChainInputs renders a chain entry's `{{ input }}` values against the
+// chaining stack's resolved inputs; unknown references are left verbatim.
+func resolveChainInputs(entryInputs map[string]string, stackInputs copierx.Inputs) copierx.Inputs {
+	out := make(copierx.Inputs, len(entryInputs))
+	for key, value := range entryInputs {
+		out[key] = chainInputRef.ReplaceAllStringFunc(value, func(match string) string {
+			name := chainInputRef.FindStringSubmatch(match)[1]
+			if resolved, ok := stackInputs[name]; ok {
+				return resolved
+			}
+			return match
+		})
+	}
+	return out
 }
 
 func (p *Platform) StackUpdate(ctx context.Context) error {
