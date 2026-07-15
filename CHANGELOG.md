@@ -42,6 +42,9 @@ latest tag.
   `process-compose.yaml`, and `run/secrets.env` artifacts transactionally, and
   roll back newly staged persist paths and source clones if reconciliation or
   state publication fails.
+- Updated the CI, release, and CodeQL toolchain to Go 1.25.12 and `go-git` to
+  5.19.1, resolving the reachable standard-library and SSH transport security
+  advisories reported by `govulncheck`.
 
 ## v0.7.6 — 2026-07-01
 
