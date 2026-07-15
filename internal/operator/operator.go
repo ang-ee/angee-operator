@@ -36,6 +36,7 @@ type Config struct {
 	JWTSecret      string
 	AllowedOrigins []string
 	LogBackend     string
+	jobOutput      io.Writer
 }
 
 type Server struct {
@@ -50,7 +51,7 @@ type Server struct {
 }
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	config := Config{Root: ".", Bind: "127.0.0.1", Port: 9000}
+	config := Config{Root: ".", Bind: "127.0.0.1", Port: 9000, jobOutput: stdout}
 	cmd := &cobra.Command{
 		Use:           "operator",
 		Short:         "Run the Angee operator",
@@ -95,7 +96,10 @@ func NewServer(config Config) (*Server, error) {
 		return nil, err
 	}
 	config.Root = root
-	platform, err := service.New(config.Root)
+	if config.jobOutput == nil {
+		config.jobOutput = os.Stdout
+	}
+	platform, err := service.New(config.Root, service.WithJobOutput(config.jobOutput))
 	if err != nil {
 		return nil, err
 	}
