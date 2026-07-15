@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,7 +89,14 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 		if workdir != "" && !filepath.IsAbs(workdir) {
 			workdir = filepath.Join(p.root, workdir)
 		}
-		return runLocalCommand(ctx, workdir, command, env)
+		p.jobOutput.status(name, "running")
+		out, err := runLocalCommand(ctx, workdir, command, env, p.jobOutput)
+		if err != nil {
+			p.jobOutput.status(name, "failed")
+		} else {
+			p.jobOutput.status(name, "finished")
+		}
+		return out, err
 	}
 	if job.Runtime == manifest.RuntimeContainer {
 		args := []string{"run", "--rm"}
@@ -98,12 +107,19 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 		args = append(args, command...)
 		cmd := exec.CommandContext(ctx, "docker", args...)
 		cmd.Dir = p.root
-		return cmd.CombinedOutput()
+		p.jobOutput.status(name, "running")
+		out, err := runCommand(cmd, p.jobOutput)
+		if err != nil {
+			p.jobOutput.status(name, "failed")
+			return out, fmt.Errorf("job container command failed: %w: %s", err, out)
+		}
+		p.jobOutput.status(name, "finished")
+		return out, nil
 	}
 	return nil, fmt.Errorf("job %q has unsupported runtime %q", name, job.Runtime)
 }
 
-func runLocalCommand(ctx context.Context, workdir string, command []string, env map[string]string) ([]byte, error) {
+func runLocalCommand(ctx context.Context, workdir string, command []string, env map[string]string, sink io.Writer) ([]byte, error) {
 	if len(command) == 0 {
 		return nil, &InvalidInputError{Field: "command", Reason: "command is empty"}
 	}
@@ -113,9 +129,22 @@ func runLocalCommand(ctx context.Context, workdir string, command []string, env 
 	for key, value := range env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
-	out, err := cmd.CombinedOutput()
+	out, err := runCommand(cmd, sink)
 	if err != nil {
 		return out, fmt.Errorf("job command failed: %w: %s", err, out)
 	}
 	return out, nil
+}
+
+func runCommand(cmd *exec.Cmd, sink io.Writer) ([]byte, error) {
+	var captured bytes.Buffer
+	output := io.Writer(&captured)
+	if sink != nil {
+		output = io.MultiWriter(&captured, sink)
+	}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err := cmd.Run()
+	out := captured.Bytes()
+	return out, err
 }

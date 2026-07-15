@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,6 +30,19 @@ type Platform struct {
 	composeBackend  runtime.Backend
 	procBackend     runtime.Backend
 	portUnavailable func(int) bool
+	jobOutput       *jobOutputSink
+}
+
+// Option configures a Platform.
+type Option func(*Platform)
+
+// WithJobOutput configures a best-effort sink for live manual-job output.
+// Platforms used directly by the CLI intentionally leave this unset and
+// continue returning buffered output for the CLI to print once.
+func WithJobOutput(writer io.Writer) Option {
+	return func(platform *Platform) {
+		platform.jobOutput = newJobOutputSink(writer)
+	}
 }
 
 type CompiledStack struct {
@@ -37,7 +51,7 @@ type CompiledStack struct {
 	SecretEnvVars  map[string]string
 }
 
-func New(root string) (*Platform, error) {
+func New(root string, options ...Option) (*Platform, error) {
 	if root == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -49,7 +63,11 @@ func New(root string) (*Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Platform{root: abs, composeBackend: compose.NewBackend(), procBackend: proccompose.NewBackend(), portUnavailable: hostPortUnavailable}, nil
+	platform := &Platform{root: abs, composeBackend: compose.NewBackend(), procBackend: proccompose.NewBackend(), portUnavailable: hostPortUnavailable}
+	for _, option := range options {
+		option(platform)
+	}
+	return platform, nil
 }
 
 func NewWithBackends(root string, composeBackend, procBackend runtime.Backend) (*Platform, error) {

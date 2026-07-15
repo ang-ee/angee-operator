@@ -4,6 +4,16 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- The standalone operator now streams manual job output (`angee job run`) to
+  its terminal live as it runs, while still returning the captured output to
+  the caller. Per-job status markers (`[job <name>] running|finished|failed`)
+  keep concurrent jobs readable on a shared terminal. CLI invocations keep the
+  existing buffered, once-at-the-end behaviour.
+
 ## v0.8.1 — 2026-07-15
 
 ### Added
