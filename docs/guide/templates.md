@@ -176,7 +176,7 @@ inputs, and per-instance port allocation.
 **Rendered output:** the template must emit a `service.yaml` containing
 exactly one service entry under `services:`. Anything else (jobs,
 volumes, secrets, sources) is rejected. Other files in the rendered
-tree — typically `docker/Dockerfile` and friends — are moved into
+tree — typically `docker/Dockerfile` and friends — are reconciled into
 `<stack_root>/services/<service_name>/` so the rendered
 `build.context: ./services/<service_name>/docker` resolves.
 
@@ -235,6 +235,21 @@ angee service create \
   --workspace my-pa \
   --input api_key=sk-...
 ```
+
+Template-created services can be refreshed in place:
+
+```sh
+angee service update agent-my-pa --template
+angee service update agent-my-pa --template --input api_key=sk-new --dry-run
+angee service update agent-my-pa --template --overwrite
+```
+
+Angee tracks the last rendered assets and `service.yaml`. Updates preserve
+independent local manifest edits, apply independent template edits, and report
+same-field or asset conflicts before writing. Lists and scalar values are
+atomic; maps such as `env`, structured `build`, and `route` merge recursively.
+`--overwrite` selects the newly rendered value for conflicts. The service name,
+workspace binding, and allocated ports remain authoritative from current state.
 
 `angee service destroy agent-my-pa` removes the manifest entry,
 releases the port lease, and deletes the build-context dir.

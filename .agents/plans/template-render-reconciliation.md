@@ -1,5 +1,7 @@
 # Template Render Reconciliation Implementation Plan
 
+**Status:** Implemented on `codex/template-render-reconciliation` (2026-07-15).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build one safe, stateful Copier reconciliation engine used by stacks, workspaces, chains, and template-created services, including conservative conflicts and explicit overwrite.

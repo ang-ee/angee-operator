@@ -4,6 +4,35 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- Added stateful, ordered Copier reconciliation shared by stacks, workspaces,
+  chains, and template-created services. Rendered files now carry versioned
+  fingerprints, conservative three-way conflict handling, dry-run support,
+  transactional apply/rollback, and explicit overwrite behavior.
+- Added `angee service update <name> --template [--input K=V] [--dry-run]
+  [--overwrite]`, REST `POST /services/{name}/template/update`, and GraphQL
+  `serviceUpdateFromTemplate`. Service manifests merge maps recursively while
+  scalars and lists remain atomic; service identity, workspace binding, and
+  allocations stay stable.
+
+### Changed
+
+- `angee stack update --template` now reconciles the complete stack and chain
+  output, so newly added files such as `AGENTS.md` are installed. Bare
+  `stack update` remains derived-files-only. `--overwrite` replaces conflicts.
+- `angee workspace update` now actually re-renders its workspace and chain
+  templates. Locally edited rendered files are preserved by default and can be
+  replaced with `--overwrite`; inner-stack runtime state and allocated ports
+  are retained.
+
+### Fixed
+
+- Stack template merges now refresh the `ingress` section while preserving
+  operator-managed runtime state.
+
 ## v0.7.6 — 2026-07-01
 
 ### Added

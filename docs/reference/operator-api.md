@@ -45,6 +45,7 @@ GET   /services
 POST  /services                 field-based init (image / command / env)
 POST  /services/create          template-based create (Copier template, kind=service)
 PATCH /services/{name}
+POST  /services/{name}/template/update  re-render and reconcile a template-created service
 POST  /services/{name}/up        idempotent create-and-start
 POST  /services/{name}/start
 POST  /services/{name}/stop
@@ -118,6 +119,21 @@ appends that entry to the outer stack's `services:` map, installs any
 other rendered files (typically `docker/`) at
 `<root>/services/<service_name>/`, and allocates ports from
 declared pools under owner `service/<name>/<pool>`.
+
+`POST /services/{name}/template/update` accepts:
+
+```json
+{
+  "inputs": {"auth_mode": "oauth"},
+  "dry_run": false,
+  "overwrite": false
+}
+```
+
+It returns the service name plus ordered `changes` and `conflicts`. The same
+operation is available in GraphQL as
+`serviceUpdateFromTemplate(name:, input:)`. Without `overwrite`, any locally
+modified rendered asset or conflicting service field fails before mutation.
 
 Jobs:
 

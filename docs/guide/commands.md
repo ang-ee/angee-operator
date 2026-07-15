@@ -35,15 +35,15 @@ init prints a notice and renders the template locally instead of failing. A
 reachable operator still handles init remotely.
 
 `angee stack update` regenerates the derived runtime files from `angee.yaml`.
-With `--template` it first **re-renders `angee.yaml` from the stack's Copier
-template** (so template changes — a new service, job, port, or source — reach an
-already-initialized stack), then regenerates. Template-origin sections are
-refreshed (the template wins for keys it emits), while user-added keys and
-operator-managed state (`operator`, `workspaces`, `port_leases`, and allocated
-port values) are preserved. `--dry-run` (with `--template`) prints the changes
-without writing. `--template` runs locally and needs the stack's
-`.copier-answers.yml`. This brings `stack update` to parity with
-`workspace update`, which already re-renders its templates.
+With `--template` it first re-renders the complete stack template and its chain,
+including files such as `AGENTS.md`, then structurally merges `angee.yaml` and
+regenerates runtime files. User-added manifest keys and operator-managed state
+(`operator`, `workspaces`, `port_leases`, and allocated port values) survive.
+Rendered files are tracked: unchanged template files update or delete
+automatically, while locally edited or ambiguous legacy files are preserved and
+reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
+prints all changes without writing. Bare `stack update` remains derived-files
+only; template reconciliation needs the stack's `.copier-answers.yml`.
 
 ## Runtime
 
@@ -63,6 +63,22 @@ and local-process services. Runtime actions are routed by each service's
 `runtime` value.
 
 ## Services
+
+```sh
+angee service create --template <template> --workspace <name> [--name name] [--input key=value ...]
+angee service update <name> [field flags]
+angee service update <name> --template [--input key=value ...] [--dry-run] [--overwrite]
+angee service destroy <name> [--stop=false]
+angee service list
+```
+
+Field-based `service update` is unchanged. With `--template`, Angee recovers the
+service's recorded template, workspace binding, inputs, and port allocations;
+re-renders `service.yaml` and build assets; and recursively three-way merges the
+service entry. Independent local and template map changes are preserved. A
+same-field or asset conflict fails before writing unless `--overwrite` is set.
+Service identity, workspace binding, and existing allocations cannot be changed
+through template inputs.
 
 ```sh
 angee service init <name> [flags]                       # field-based
@@ -144,7 +160,7 @@ matching `sourceDiff` / `workspaceSource*` GraphQL mutations). See
 
 ```sh
 angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--sync]
-angee workspace update <name> [--ttl duration] [--input key=value ...]
+angee workspace update <name> [--ttl duration] [--input key=value ...] [--overwrite]
 angee workspace list  # alias: ls
 angee workspace get <name>
 angee workspace status [name]

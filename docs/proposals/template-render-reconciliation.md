@@ -1,6 +1,6 @@
 # Proposal: reusable template render reconciliation
 
-**Status:** Approved for implementation (2026-07-15)
+**Status:** Implemented on `codex/template-render-reconciliation` (2026-07-15)
 
 ## Summary
 
