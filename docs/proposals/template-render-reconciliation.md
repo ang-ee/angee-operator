@@ -4,16 +4,19 @@
 
 ## Summary
 
-Replace the four independent Copier execution paths for stack initialization,
-stack template updates, workspace creation, and chain rendering with one ordered
-render-plan reconciler. The reconciler renders a composite template tree into a
-scratch directory, compares ordinary files against persisted render state and
-the live destination, reports conflicts before writing, and applies the result
-with consistent create, update, deletion, dry-run, and overwrite semantics.
+Replace the independent Copier execution paths for stack initialization, stack
+template updates, workspace creation, chain rendering, and template-created
+services with one ordered render-plan reconciler. The reconciler renders a
+composite template tree into a scratch directory, compares ordinary files
+against persisted render state and the live destination, reports conflicts
+before writing, and applies the result with consistent create, update, deletion,
+dry-run, and overwrite semantics.
 
 Stack manifests remain structurally merged through a service-owned file handler
 because `angee.yaml` contains both template-origin declarations and
-operator-managed runtime state. Copier answers remain machine-owned metadata.
+operator-managed runtime state. A service-owned `service.yaml` handler performs
+a three-way structural merge of template-created services. Copier answers remain
+machine-owned metadata.
 
 ## Motivation
 
@@ -25,6 +28,12 @@ overlay, destination selection, and direct `LocalRenderer.Copy` loop, while
 `workspace update` updates only manifest metadata despite the documentation
 claiming that it re-renders the workspace.
 
+`service create --template` has the same split in another form: it renders into
+a scratch directory, consumes `service.yaml`, destructively replaces the
+service's build-context directory, and discards the rendered baseline. There is
+no way to refresh that service from its recorded template without either losing
+local asset and manifest edits or implementing reconciliation a second time.
+
 The immediate symptom is a missing `AGENTS.md`, but copying that one file would
 leave the ownership and conflict problem unsolved. Existing rendered files may
 contain user edits, templates can delete files, chains overlay multiple
@@ -35,6 +44,8 @@ ordinary file.
 
 - Give stacks, workspaces, and their chains one render and reconciliation
   mechanism.
+- Render template-created services through the same mechanism and allow their
+  manifest entry and build assets to be refreshed safely.
 - Preserve the existing layer order: chained hosts first and stack overlays
   last; workspace template first and declared workspace chains afterward.
 - Create newly introduced template files in existing destinations.
@@ -46,14 +57,17 @@ ordinary file.
   subsequent updates.
 - Make `workspace update` actually re-render the workspace template and its
   declared chains.
+- Preserve the service name, bound workspace, and allocated ports across service
+  template updates.
 - Keep bare `stack update` derived-files-only; template reconciliation remains
   behind `stack update --template`.
 - Make dry-run report both manifest and ordinary-file changes without writing.
 
 ## Non-goals
 
-- Service-template updates. `service create --template` remains a one-shot
-  render, although it can adopt the reconciler later.
+- Changing field-based service update semantics. `service update` without
+  `--template` continues to apply explicit image, command, environment, mount,
+  port, and workdir changes.
 - Full three-way merge of individual `angee.yaml` keys. The existing structural
   ownership contract remains: emitted template keys refresh, user-only keys and
   runtime sections survive, and allocated ports are preserved. Manifest-key
@@ -91,10 +105,13 @@ The service layer owns Angee template composition:
 - resolving stack, workspace, and chain template references;
 - building the ordered layer plan;
 - constructing stack- and workspace-specific substitution contexts;
+- reconstructing stable service-template contexts from their recorded answers;
 - locating the original Copier render target;
 - registering machine-managed answer files;
 - registering `angee.yaml` handlers;
-- persisting stack and workspace records only after reconciliation succeeds;
+- registering `service.yaml` handlers and committing their merged service entry;
+- persisting stack, workspace, and service records only after reconciliation
+  succeeds;
 - regenerating runtime files after a stack template update.
 
 CLI, REST, and GraphQL remain thin adapters over `service.Platform`.
@@ -137,8 +154,9 @@ ones exactly as direct Copier copies do today.
 
 `Handlers` contains paths with domain-specific merge behavior. `Metadata`
 contains machine-owned paths, principally Copier answer files, which are updated
-without user-file conflict rules. Both are excluded from ordinary render-state
-ownership.
+without user-file conflict rules. Both are excluded from ordinary
+file-fingerprint ownership. A handler may opt into a stored rendered-document
+baseline when it needs a structured three-way merge.
 
 ## Render state
 
@@ -147,6 +165,7 @@ Render state is runtime-owned and stored outside the rendered file inventory:
 ```text
 <ANGEE_ROOT>/run/template-state/stack.json
 <ANGEE_ROOT>/run/template-state/workspaces/<name>.json
+<ANGEE_ROOT>/run/template-state/services/<name>.json
 ```
 
 The versioned JSON document stores slash-normalized paths relative to the plan
@@ -156,6 +175,12 @@ target. Every ordinary rendered entry records:
 - SHA-256 content hash for regular files;
 - permission bits relevant to executable-mode changes;
 - symlink target for symlinks.
+
+Handlers that request a structured baseline store their previous canonical
+rendered document in the same versioned state. This is content, not only a hash:
+a three-way merge needs the old rendered value. Stack manifest handlers retain
+their current provenance rules and do not require this baseline; service
+handlers do.
 
 Directories are created as needed but are not independently owned or deleted.
 Empty directory cleanup is limited to directories emptied by reconciler-owned
@@ -232,6 +257,38 @@ When flat overlays produce the same answer path, the later layer retains the
 same precedence it has today. Rooted chains with distinct answer files remain
 independently addressable.
 
+### Service manifests
+
+A service template plan targets `<ANGEE_ROOT>/services/<name>`. Its
+`service.yaml` is consumed by a service-owned handler and is never installed in
+the build context. Other outputs, such as `docker/Dockerfile` and startup
+scripts, are ordinary reconciler-managed files. The plan's answer file remains
+at `services/<name>/.copier-answers.yml`, matching current creation behavior.
+
+The handler parses exactly one service entry and reuses the existing
+blast-radius, service-name, build-context containment, and service validation
+checks. It stores the canonical rendered service entry as its handler baseline
+and merges maps recursively:
+
+- if current equals the old rendered value, use the new rendered value;
+- if new equals the old rendered value, preserve the local value;
+- if current equals new, accept it and advance the baseline;
+- recursively merge map keys, including `env`, structured `build`, and `route`;
+- treat scalars and lists as atomic values;
+- preserve current-only keys;
+- remove template-owned keys when current still equals the old rendered value;
+- report a conflict when current and new changed the same atomic value
+  differently;
+- with overwrite, use the new rendered value for every conflict.
+
+Conflicts name the structural path, for example
+`services.agent-x.env.AUTH_MODE`. After merging, the handler decodes the result
+back into `manifest.Service` and validates it before any asset or manifest write.
+
+For a legacy template-created service with answers but no handler baseline, an
+identical current and newly rendered service is adopted. A difference is
+ambiguous and therefore conflicts unless overwrite is requested.
+
 ### Persistent paths
 
 Paths declared through `_angee.persist` are never removed as a consequence of a
@@ -288,6 +345,49 @@ created by that attempt.
 This makes the existing documentation promise that workspace update re-renders
 its templates true.
 
+### Service creation
+
+1. Resolve and validate the service template, workspace, stable name, inputs,
+   and port allocations under the existing root lock.
+2. Build a one-layer plan targeting `services/<name>` and register
+   `service.yaml` plus the template answer file.
+3. Apply in create mode, install ordinary build assets, and record both their
+   fingerprints and the canonical rendered service baseline.
+4. Add the rendered service entry and newly referenced secret declarations to
+   the stack manifest.
+5. Release leases for a routed result, persist the stack, and regenerate runtime
+   files as today.
+
+Creation rollback covers the reconciled assets, render state, service entry,
+new secret declarations, and leases. The current destructive build-context
+`RemoveAll`/move path disappears.
+
+### Service template update
+
+1. Require the existing service, its build-context answer file, recorded
+   template source, and recorded workspace binding.
+2. Merge recorded non-reserved answers with requested input overrides. Recompute
+   `service_name`, `workspace_name`, `workspace_path`, and `alloc_*` from current
+   authoritative state; callers cannot override them.
+3. Preserve existing service leases and provision missing pool allocations with
+   the same pool policy as creation under the root lock; roll back allocations
+   the merged result does not retain.
+4. Render and preflight the service manifest handler and ordinary assets.
+5. For dry-run, return manifest, asset, and conflict changes without writing.
+6. Without overwrite, fail before mutation when either the structured service
+   entry or any asset conflicts.
+7. Apply assets, handler baseline, answer metadata, and the merged service entry
+   as one rollback-capable operation.
+8. Declare newly referenced secrets but never remove an existing stack secret
+   declaration merely because this service stopped referencing it.
+9. Release service leases if the merged result is routed, persist the stack, and
+   regenerate runtime files.
+
+Template update never renames the service, rebinds its workspace, or starts,
+stops, rebuilds, or restarts the running workload. Runtime lifecycle remains an
+explicit follow-up command. Destroy/create is the supported rename or rebind
+workflow.
+
 ## Commands and API surfaces
 
 Stack template reconciliation remains local-only:
@@ -309,6 +409,26 @@ angee workspace update <name> [--input key=value ...] [--ttl duration] [--overwr
 `api.WorkspaceUpdateRequest` gains `overwrite`. The service API consumes that
 request shape, and REST, GraphQL, the remote client, and CLI pass the field
 through without implementing reconciliation policy themselves.
+
+Service template update is an explicit mode on the existing CLI command:
+
+```text
+angee service update <name> --template
+  [--input key=value ...] [--dry-run] [--overwrite]
+```
+
+Template-mode flags are mutually exclusive with field-based update flags.
+`--dry-run` and `--overwrite` require `--template`. The CLI dispatches to a new
+`Platform.ServiceUpdateFromTemplate` method; field mode continues to dispatch to
+`Platform.ServiceUpdate`.
+
+The remote surfaces expose the same operation without overloading the existing
+field-update DTO:
+
+- API DTO: `ServiceUpdateTemplateRequest{Inputs, DryRun, Overwrite}`;
+- REST: `POST /services/{name}/template/update`;
+- GraphQL: `serviceUpdateFromTemplate(name, input)`;
+- remote client and surface matrix entries matching both.
 
 ## Result and error model
 
@@ -340,6 +460,10 @@ error payload where the surface supports extensions.
 Render errors include the layer name and template reference. Destination safety
 errors include the invalid relative root. Context cancellation is checked
 between layers, before diffing, and before apply.
+
+Service identity errors identify the missing or mismatched answer value. A
+rendered service key that differs from the stable existing name is invalid even
+under overwrite; overwrite resolves content conflicts, not identity changes.
 
 Apply first completes render, handler execution, state loading, destination
 inspection, and conflict preflight without mutation. It then uses temporary
@@ -382,6 +506,32 @@ entries changed earlier in the operation.
 - Workspace conflicts leave the parent manifest and destination unchanged.
 - CLI, REST, GraphQL, and the remote client propagate workspace overwrite.
 
+### Template-created service integration tests
+
+- Service creation installs assets through the reconciler and records answers,
+  ordinary-file state, and the canonical service baseline.
+- An unchanged service template update is a no-op.
+- A changed Docker asset updates when untouched locally, conflicts after a local
+  edit, and is replaced with overwrite.
+- A new and deleted asset follow the shared ownership matrix.
+- Independent local and template `env` key changes merge recursively.
+- A local and template edit to the same scalar conflicts at the exact service
+  field path; overwrite uses the template value.
+- Template deletion of an unchanged service field removes it; current-only
+  fields survive.
+- Legacy answers without state adopt an identical service and conflict on an
+  ambiguous difference.
+- Name, workspace, and allocations remain stable across input and template
+  changes.
+- A routed/non-routed change releases or retains leases consistently and rolls
+  allocation changes back on conflict.
+- Newly referenced secrets are declared; old declarations are not removed.
+- Dry-run changes neither service assets, state, leases, secrets, nor the stack
+  manifest.
+- CLI field and template modes reject mixed flags.
+- REST, GraphQL, and the remote client expose matching overwrite and dry-run
+  semantics.
+
 ### Verification
 
 - Focused red/green tests for every behavior slice.
@@ -400,6 +550,9 @@ entries changed earlier in the operation.
   mapping.
 - Refactor `internal/service/stack.go`, `stack_update.go`, and `workspaces.go`
   into thin callers of the shared plan builder and reconciler.
+- Refactor `internal/service/service_create.go` to use the reconciler and add the
+  service structured-document handler plus `ServiceUpdateFromTemplate`.
+- Extend reconciler state with optional canonical handler baselines.
 - Update `api/`, CLI, platform client, REST, GraphQL inputs, and surface tests
   for workspace overwrite.
 - Remove the now-unused direct chain rendering loops and the unused
@@ -420,6 +573,12 @@ mechanical plan construction rather than new filesystem code.
   overwrite.
 - Stack initialization, workspace creation, stack chains, and workspace chains
   render through one reconciler.
+- Service creation and service template update render assets through that same
+  reconciler.
+- Template-created service entries merge recursively against their previous
+  rendered baseline, preserving non-conflicting field edits and reporting
+  precise conflicts.
+- Service identity, workspace binding, and port allocations remain stable.
 - Workspace update re-renders its workspace and chain templates.
 - Bare stack update behavior remains unchanged.
 - Runtime-managed manifest state and workspace port allocations survive.
