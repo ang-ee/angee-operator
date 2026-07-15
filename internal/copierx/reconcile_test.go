@@ -41,6 +41,63 @@ func openTestTrustedRoot(t *testing.T, path string) *TrustedRoot {
 	return root
 }
 
+type fileInfoWithMode struct {
+	fs.FileInfo
+	mode fs.FileMode
+}
+
+func (i fileInfoWithMode) Mode() fs.FileMode {
+	return i.mode
+}
+
+func TestSameGuardedEntryIdentityRejectsFileTypeChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "entry")
+	if err := os.WriteFile(path, []byte("original\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	original, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat: %v", err)
+	}
+	replacement := fileInfoWithMode{FileInfo: original, mode: original.Mode() | os.ModeSymlink}
+	if sameGuardedEntryIdentity(original, replacement) {
+		t.Fatal("entry identity accepted a replacement with the same filesystem identity but a different file type")
+	}
+}
+
+func TestGuardedPathWriteFileRejectsReusedInodeFileTypeSwapBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "entry")
+	if err := os.WriteFile(path, []byte("original\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(original): %v", err)
+	}
+	guard, err := OpenGuardedPath(root, root, "entry", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	defer guard.Close()
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove(original): %v", err)
+	}
+	if err := os.Symlink("target", path); err != nil {
+		t.Fatalf("Symlink(replacement): %v", err)
+	}
+	replacement, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(replacement): %v", err)
+	}
+	if !os.SameFile(guard.entry, replacement) {
+		t.Skip("filesystem did not reuse the original inode for the replacement symlink")
+	}
+
+	if err := guard.WriteFile([]byte("replacement\n"), 0o600); err == nil {
+		t.Fatal("WriteFile accepted a type-swapped replacement with the retained inode")
+	}
+	if target, err := os.Readlink(path); err != nil || target != "target" {
+		t.Fatalf("replacement symlink changed: target=%q err=%v", target, err)
+	}
+}
+
 func TestPrepareReconcileLegacyMissingFile(t *testing.T) {
 	root := t.TempDir()
 	template := writeReconcileTemplate(t, root, "from template\n")

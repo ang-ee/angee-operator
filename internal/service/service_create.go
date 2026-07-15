@@ -280,7 +280,7 @@ func ensureServiceSecrets(stack *manifest.Stack, s manifest.Service) []string {
 // (and so may reference `${secret.NAME}`): env values, command, ports, mounts,
 // and workdir — the same set Compile resolves.
 func serviceSecretStrings(s manifest.Service) []string {
-	strs := make([]string, 0, len(s.Env)+len(s.Command)+len(s.Ports)+len(s.Mounts)+1)
+	strs := make([]string, 0, len(s.Env))
 	// Iterate env keys in sorted order so the referenced-secret discovery
 	// order is deterministic (Go map iteration is randomized).
 	for _, k := range slices.Sorted(maps.Keys(s.Env)) {

@@ -551,8 +551,8 @@ func applyRenderedDocuments(ctx context.Context, openPath guardedPathOpener, pub
 		noop := func() error { return nil }
 		return noop, noop, noop, nil
 	}
-	paths := make([]string, 0, len(documents)+len(deletions))
-	seen := make(map[string]bool, len(documents)+len(deletions))
+	paths := make([]string, 0, len(documents))
+	seen := make(map[string]bool, len(documents))
 	for path := range documents {
 		paths = append(paths, path)
 		seen[path] = true

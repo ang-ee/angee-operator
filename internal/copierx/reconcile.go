@@ -1724,7 +1724,7 @@ func (p *GuardedPath) verifyEntry() error {
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(p.entry, current) {
+	if !sameGuardedEntryIdentity(p.entry, current) {
 		return fmt.Errorf("guarded destination %q changed identity", p.leaf)
 	}
 	if p.entryRoot != nil {
@@ -1771,7 +1771,7 @@ func (p *GuardedPath) moveExpectedAside(prefix string) (string, bool, error) {
 		return "", false, err
 	}
 	moved, err := p.parent.Lstat(aside)
-	if err != nil || !os.SameFile(p.entry, moved) {
+	if err != nil || !sameGuardedEntryIdentity(p.entry, moved) {
 		if err != nil {
 			return "", false, fmt.Errorf("inspect quarantined guarded destination %q: %w", aside, err)
 		}
@@ -2245,10 +2245,14 @@ func (p *GuardedPath) VerifyPathEntryIdentity(path string) error {
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(p.entry, actual) {
+	if !sameGuardedEntryIdentity(p.entry, actual) {
 		return fmt.Errorf("path %q no longer identifies its guarded destination", path)
 	}
 	return nil
+}
+
+func sameGuardedEntryIdentity(expected, actual fs.FileInfo) bool {
+	return expected.Mode().Type() == actual.Mode().Type() && os.SameFile(expected, actual)
 }
 
 // VerifyPathAbsent confirms both the retained destination capability and its
