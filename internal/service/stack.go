@@ -8,7 +8,6 @@ import (
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
-	"github.com/ang-ee/angee-operator/internal/substitute"
 )
 
 type StackInitResult struct {
@@ -54,16 +53,35 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		return StackInitResult{}, err
 	}
-	resolvedInputs, err := copierx.ResolvePathInputs(templatePath, mergedInputs, targetPath, mergedInputs["ANGEE_ROOT"])
+	statePath := renderPlanStatePath(preparedRoot, "stack", "")
+	plan, documents, err := p.buildStackRenderPlan(ctx, templatePath, targetPath, mergedInputs, statePath, stackPlanOptions{})
 	if err != nil {
 		return StackInitResult{}, err
 	}
-	// Render any chained templates (e.g. the project host this stack overlays) into
-	// the same target FIRST, so the stack template's own files overlay theirs.
-	if err := p.renderStackChain(ctx, templatePath, targetPath, mergedInputs); err != nil {
+	if len(documents) == 0 {
+		return StackInitResult{}, fmt.Errorf("stack template %q rendered no angee.yaml", template)
+	}
+	prepared, err := copierx.PrepareReconcile(ctx, plan, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate, Overwrite: force})
+	if err != nil {
 		return StackInitResult{}, err
 	}
-	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: templatePath, Dest: targetPath, Inputs: resolvedInputs}); err != nil {
+	defer prepared.Close()
+	rollbackFiles, err := prepared.ApplyFiles()
+	if err != nil {
+		return StackInitResult{}, err
+	}
+	renderedDocuments := make(map[string][]byte, len(documents))
+	for _, document := range documents {
+		data, ok := prepared.RenderedDocument(document.Path)
+		if !ok {
+			_ = rollbackFiles()
+			return StackInitResult{}, fmt.Errorf("stack template did not render %s", document.Path)
+		}
+		renderedDocuments[document.Path] = data
+	}
+	rollbackDocuments, err := applyRenderedDocuments(targetPath, renderedDocuments, false)
+	if err != nil {
+		_ = rollbackFiles()
 		return StackInitResult{}, err
 	}
 	if _, err := os.Stat(manifest.Path(preparedRoot)); err != nil {
@@ -81,13 +99,24 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	}
 	initialized, err := New(preparedRoot)
 	if err != nil {
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
 		return StackInitResult{}, err
 	}
 	stack, err := initialized.LoadStack()
 	if err != nil {
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
 		return StackInitResult{}, err
 	}
 	if err := initialized.materializeReferencedSources(ctx, stack); err != nil {
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
+		return StackInitResult{}, err
+	}
+	if err := prepared.SaveState(); err != nil {
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
 		return StackInitResult{}, err
 	}
 	return StackInitResult{Template: template, Root: preparedRoot}, nil
@@ -124,60 +153,14 @@ func pathExistsNonEmpty(path string) (bool, error) {
 // refreshes the stack layer but not the host layer. Give a host its own `root` to keep
 // it independently updatable.
 func (p *Platform) renderStackChain(ctx context.Context, stackTemplatePath, targetPath string, stackInputs copierx.Inputs) error {
-	metadata, err := copierx.ReadMetadata(stackTemplatePath)
+	layers, _, err := p.buildStackChainLayers(ctx, stackTemplatePath, targetPath, stackInputs, stackPlanOptions{})
 	if err != nil {
 		return err
 	}
-	subCtx := substitute.Context{Inputs: stackInputs}
-	chainRoot := metadata.ChainRoot
-	if chainRoot != "" {
-		if chainRoot, err = substitute.Resolve(chainRoot, subCtx); err != nil {
-			return fmt.Errorf("resolve chain_root: %w", err)
-		}
-	}
-	for _, entry := range metadata.Chain {
-		if entry.Template == "" {
-			continue
-		}
-		templateRef, err := substitute.Resolve(entry.Template, subCtx)
-		if err != nil {
-			return fmt.Errorf("chained template %q: %w", entry.Template, err)
-		}
-		chainTemplate, err := p.resolveChainTemplate(ctx, stackTemplatePath, templateRef)
-		if err != nil {
-			return fmt.Errorf("resolve chained template %q: %w", entry.Template, err)
-		}
-		renderInputs := copierx.Inputs{}
-		for key, value := range stackInputs {
-			renderInputs[key] = value
-		}
-		for key, value := range entry.Inputs {
-			resolved, err := substitute.Resolve(value, subCtx)
-			if err != nil {
-				return fmt.Errorf("chained template %q input %q: %w", entry.Template, key, err)
-			}
-			renderInputs[key] = resolved
-		}
-		destRoot := chainRoot
-		if entry.Root != "" {
-			if destRoot, err = substitute.Resolve(entry.Root, subCtx); err != nil {
-				return fmt.Errorf("chained template %q root: %w", entry.Template, err)
-			}
-		}
-		dest := targetPath
-		if destRoot != "" {
-			dest = filepath.Join(targetPath, destRoot)
-		}
-		merged, err := copierx.TemplateInputs(chainTemplate, renderInputs)
-		if err != nil {
-			return fmt.Errorf("chained template %q inputs: %w", entry.Template, err)
-		}
-		resolved, err := copierx.ResolvePathInputs(chainTemplate, merged, dest, merged["ANGEE_ROOT"])
-		if err != nil {
-			return fmt.Errorf("chained template %q inputs: %w", entry.Template, err)
-		}
-		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: chainTemplate, Dest: dest, Inputs: resolved}); err != nil {
-			return fmt.Errorf("render chained template %q: %w", entry.Template, err)
+	for _, layer := range layers {
+		dest := filepath.Join(targetPath, filepath.FromSlash(layer.DestRoot))
+		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: layer.Template, Dest: dest, Inputs: layer.Inputs}); err != nil {
+			return fmt.Errorf("render chained template %q: %w", layer.Name, err)
 		}
 	}
 	return nil

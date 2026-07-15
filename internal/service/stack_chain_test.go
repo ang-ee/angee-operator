@@ -165,3 +165,68 @@ _angee:
 		t.Fatalf("host must not render flat into the target when root is set")
 	}
 }
+
+func TestStackUpdateFromTemplateReconcilesChainWithStackLast(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	hostDir := writeChainTemplate(t, filepath.Join(base, ".templates", "projects", "web"),
+		chainHostCopier, map[string]string{
+			"host.txt.jinja":   "host v1\n",
+			"shared.txt.jinja": "host v1\n",
+		})
+	stackDir := writeChainTemplate(t, filepath.Join(base, ".templates", "stacks", "local"),
+		`_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: stack
+  name: local
+  chain:
+    - template: "../../projects/web"
+ANGEE_ROOT:
+  type: str
+  default: .angee
+`, map[string]string{
+			"shared.txt.jinja": "stack v1\n",
+			"{{ ANGEE_ROOT }}/angee.yaml.jinja": `version: 1
+kind: stack
+name: demo
+template:
+  active: stacks/local
+  answers_file: .copier-answers.yml
+`,
+		})
+
+	p, _ := New(base)
+	initialized, err := p.StackInit(ctx, stackDir, base, map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	if got := readChainFile(t, filepath.Join(base, "shared.txt")); got != "stack v1\n" {
+		t.Fatalf("initial shared.txt = %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "template", "host.txt.jinja"), []byte("host v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(host update): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, "template", "shared.txt.jinja"), []byte("host v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(host shared update): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, "template", "shared.txt.jinja"), []byte("stack v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stack shared update): %v", err)
+	}
+
+	stackPlatform, _ := New(initialized.Root)
+	result, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate: %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result = %+v, want changed", result)
+	}
+	if got := readChainFile(t, filepath.Join(base, "host.txt")); got != "host v2\n" {
+		t.Fatalf("updated host.txt = %q", got)
+	}
+	if got := readChainFile(t, filepath.Join(base, "shared.txt")); got != "stack v2\n" {
+		t.Fatalf("updated shared.txt = %q, want stack layer to win", got)
+	}
+}

@@ -204,7 +204,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively")
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
 	cmd.AddCommand(initCmd)
-	var updateTemplate, updateDryRun bool
+	var updateTemplate, updateDryRun, updateOverwrite bool
 	updateCmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update generated runtime files (with --template, re-render angee.yaml from its stack template first)",
@@ -218,6 +218,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if updateDryRun && !updateTemplate {
 				return fmt.Errorf("--dry-run only applies with --template")
 			}
+			if updateOverwrite && !updateTemplate {
+				return fmt.Errorf("--overwrite only applies with --template")
+			}
 			if updateTemplate {
 				if operatorURL != nil && *operatorURL != "" {
 					return fmt.Errorf("--template re-renders the local stack template and is not supported with --operator")
@@ -230,12 +233,12 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun})
+				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun, Overwrite: updateOverwrite})
 				if err != nil {
 					return err
 				}
 				if !res.Changed {
-					_, err = fmt.Fprintln(stdout, "stack template up to date; angee.yaml unchanged")
+					_, err = fmt.Fprintln(stdout, "stack template up to date")
 					return err
 				}
 				if len(res.Changes) > 0 {
@@ -250,7 +253,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 					}
 				}
 				if updateDryRun {
-					_, err = fmt.Fprintln(stdout, "dry run: angee.yaml not written")
+					_, err = fmt.Fprintln(stdout, "dry run: no template output written")
 					return err
 				}
 				_, err = fmt.Fprintln(stdout, "stack updated from template")
@@ -267,8 +270,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			return err
 		},
 	}
-	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render angee.yaml from the stack's Copier template before regenerating runtime files")
-	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print the manifest changes without writing")
+	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render all stack template output before regenerating runtime files")
+	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print changes without writing")
+	updateCmd.Flags().BoolVar(&updateOverwrite, "overwrite", false, "with --template, replace conflicting locally modified files")
 	cmd.AddCommand(updateCmd)
 	var purge bool
 	destroyCmd := &cobra.Command{
