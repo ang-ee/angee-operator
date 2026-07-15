@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,18 @@ import (
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"gopkg.in/yaml.v3"
 )
+
+func TestServiceUpdateFromTemplateRejectsUnsafeServiceName(t *testing.T) {
+	p, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.ServiceUpdateFromTemplate(context.Background(), "../escape", api.ServiceUpdateTemplateRequest{})
+	var invalid *InvalidInputError
+	if !errors.As(err, &invalid) || invalid.Field != "name" {
+		t.Fatalf("ServiceUpdateFromTemplate error = %v, want invalid name", err)
+	}
+}
 
 func TestMergeRenderedService(t *testing.T) {
 	base := manifest.Service{

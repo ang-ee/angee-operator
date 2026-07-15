@@ -21,6 +21,9 @@ func (p *Platform) ServiceUpdateFromTemplate(ctx context.Context, name string, r
 	if name == "" {
 		return api.ServiceTemplateUpdateResult{}, &InvalidInputError{Field: "name", Reason: "service name is required"}
 	}
+	if !serviceNamePattern.MatchString(name) {
+		return api.ServiceTemplateUpdateResult{}, &InvalidInputError{Field: "name", Reason: "service name must match " + serviceNamePattern.String()}
+	}
 	var result api.ServiceTemplateUpdateResult
 	lock := fslock.RootLock(p.root)
 	if err := lock.With(ctx, func() error {
