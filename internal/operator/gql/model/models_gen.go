@@ -494,8 +494,9 @@ type WorkspacesPkColumnsInput struct {
 }
 
 type WorkspacesSetInput struct {
-	TTL    *string          `json:"ttl,omitempty"`
-	Inputs []*KeyValueInput `json:"inputs,omitempty"`
+	TTL       *string          `json:"ttl,omitempty"`
+	Inputs    []*KeyValueInput `json:"inputs,omitempty"`
+	Overwrite *bool            `json:"overwrite,omitempty"`
 }
 
 type Granularity string

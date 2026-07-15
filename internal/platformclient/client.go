@@ -370,9 +370,8 @@ func (p *RemoteClient) WorkspaceStatus(ctx context.Context, name string) (api.Wo
 	return status, nil
 }
 
-func (p *RemoteClient) WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error) {
+func (p *RemoteClient) WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error) {
 	var ref api.WorkspaceRef
-	req := api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl}
 	if err := p.doJSON(ctx, http.MethodPatch, "/workspaces/"+url.PathEscape(name), nil, req, &ref); err != nil {
 		return api.WorkspaceRef{}, err
 	}

@@ -229,8 +229,9 @@ type ServiceCreateRequest struct {
 }
 
 type WorkspaceUpdateRequest struct {
-	Inputs map[string]string `json:"inputs,omitempty"`
-	TTL    string            `json:"ttl,omitempty"`
+	Inputs    map[string]string `json:"inputs,omitempty"`
+	TTL       string            `json:"ttl,omitempty"`
+	Overwrite bool              `json:"overwrite,omitempty"`
 }
 
 type PreflightFailure struct {

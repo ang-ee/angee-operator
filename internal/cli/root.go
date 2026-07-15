@@ -992,6 +992,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var ttl string
 	var inputValues []string
+	var overwrite bool
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update workspace metadata",
@@ -1005,7 +1006,7 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			if err != nil {
 				return err
 			}
-			ref, err := platform.WorkspaceUpdate(cmd.Context(), args[0], inputs, ttl)
+			ref, err := platform.WorkspaceUpdate(cmd.Context(), args[0], api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl, Overwrite: overwrite})
 			if err != nil {
 				return err
 			}
@@ -1018,6 +1019,7 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	}
 	cmd.Flags().StringVar(&ttl, "ttl", "", "workspace TTL")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "workspace input K=V")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace conflicting locally modified template files")
 	return cmd
 }
 

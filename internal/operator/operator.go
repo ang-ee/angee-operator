@@ -701,7 +701,7 @@ func (s *Server) workspaceUpdate(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, err)
 		return
 	}
-	ref, err := s.platform.WorkspaceUpdate(r.Context(), r.PathValue("name"), req.Inputs, req.TTL)
+	ref, err := s.platform.WorkspaceUpdate(r.Context(), r.PathValue("name"), req)
 	if err != nil {
 		writeError(w, err)
 		return

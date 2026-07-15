@@ -69,10 +69,20 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	}
 	committed := false
 	var workspaceSources map[string]manifest.WorkspaceSource
+	var rollbackTemplateFiles func() error
+	var rollbackTemplateDocuments func() error
+	statePath := renderPlanStatePath(p.root, "workspaces", name)
 	defer func() {
 		if committed {
 			return
 		}
+		if rollbackTemplateDocuments != nil {
+			_ = rollbackTemplateDocuments()
+		}
+		if rollbackTemplateFiles != nil {
+			_ = rollbackTemplateFiles()
+		}
+		_ = os.Remove(statePath)
 		// Roll back only what this create materialized: deregister the worktrees
 		// it added (which also deletes their working trees), and remove the
 		// workspace directory only when this create created it. A create that
@@ -89,19 +99,34 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	renderInputs := copierx.Inputs(inputs)
-	renderInputs["workspace_name"] = name
-	for pool, port := range allocations {
-		renderInputs["alloc_"+pool] = strconv.Itoa(port)
-	}
-	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: templatePath, Dest: workspacePath, Inputs: renderInputs}); err != nil {
-		return api.WorkspaceRef{}, err
-	}
-	resolvedChain, chainRoot, err := p.renderWorkspaceChain(ctx, workspacePath, metadata, inputs, name, allocations)
+	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, inputs, name, allocations, workspaceSources, statePath)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	resolvedChain = append([]string{templateRef}, resolvedChain...)
+	prepared, err := copierx.PrepareReconcile(ctx, renderPlan.Plan, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	defer prepared.Close()
+	rollbackTemplateFiles, err = prepared.ApplyFiles()
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	renderedDocuments := make(map[string][]byte, len(renderPlan.Documents))
+	for _, document := range renderPlan.Documents {
+		data, ok := prepared.RenderedDocument(document.Path)
+		if !ok {
+			return api.WorkspaceRef{}, fmt.Errorf("workspace chain did not render %s", document.Path)
+		}
+		if _, err := decodeStackDocument(data); err != nil {
+			return api.WorkspaceRef{}, fmt.Errorf("load rendered workspace stack %s: %w", document.Path, err)
+		}
+		renderedDocuments[document.Path] = data
+	}
+	rollbackTemplateDocuments, err = applyRenderedDocuments(workspacePath, renderedDocuments, false)
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
 	if err := materializePersistPaths(workspacePath, metadata.Persist); err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -110,8 +135,8 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		Inputs:   map[string]string(inputs),
 		Sources:  workspaceSources,
 		Resolved: manifest.WorkspaceResolved{
-			Chain:        resolvedChain,
-			ChainRoot:    chainRoot,
+			Chain:        renderPlan.Chain,
+			ChainRoot:    renderPlan.ChainRoot,
 			Allocations:  copyIntMap(allocations),
 			PersistPaths: metadata.Persist,
 		},
@@ -130,6 +155,11 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	}
 	stack.Workspaces[name] = workspace
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	if err := prepared.SaveState(); err != nil {
+		delete(stack.Workspaces, name)
+		_ = manifest.SaveFile(manifest.Path(p.root), stack)
 		return api.WorkspaceRef{}, err
 	}
 	committed = true
@@ -544,7 +574,7 @@ func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, pa
 	return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
 }
 
-func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error) {
+func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error) {
 	if err := ctx.Err(); err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -556,28 +586,119 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, inputs map[
 	if !ok {
 		return api.WorkspaceRef{}, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	if inputs != nil {
+	parentBefore, err := manifest.Marshal(stack)
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	templatePath, templateRef, err := p.resolveTemplate(ctx, workspace.Template, "workspace")
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	if err := manifest.Ensure(stack, metadata.Ensure); err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	if req.Inputs != nil {
 		if workspace.Inputs == nil {
 			workspace.Inputs = map[string]string{}
 		}
-		for key, value := range inputs {
+		for key, value := range req.Inputs {
 			workspace.Inputs[key] = value
 		}
 	}
-	if ttl != "" {
-		duration, err := time.ParseDuration(ttl)
+	workspace.Inputs = workspaceInputs(metadata, workspace.Inputs)
+	if req.TTL != "" {
+		duration, err := time.ParseDuration(req.TTL)
 		if err != nil {
 			return api.WorkspaceRef{}, err
 		}
 		expires := time.Now().Add(duration).UTC()
-		workspace.TTL = ttl
+		workspace.TTL = req.TTL
 		workspace.TTLExpiresAt = &expires
 	}
-	stack.Workspaces[name] = workspace
-	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+	workspacePath := filepath.Join(p.root, "workspaces", name)
+	statePath := renderPlanStatePath(p.root, "workspaces", name)
+	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, workspace.Inputs, name, workspace.Resolved.Allocations, workspace.Sources, statePath)
+	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	return workspaceRef(name, filepath.Join(p.root, "workspaces", name), workspace), nil
+	prepared, err := copierx.PrepareReconcile(ctx, renderPlan.Plan, copierx.ReconcileOptions{
+		Mode: copierx.ReconcileUpdate, Overwrite: req.Overwrite,
+	})
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	defer prepared.Close()
+	if conflicts := prepared.Result().Conflicts; len(conflicts) != 0 {
+		paths := make([]string, 0, len(conflicts))
+		for _, conflict := range conflicts {
+			paths = append(paths, conflict.Path)
+		}
+		return api.WorkspaceRef{}, &ConflictError{Kind: "workspace-template", Name: name, Reason: fmt.Sprintf("locally modified paths: %s; use --overwrite to replace", strings.Join(paths, ", "))}
+	}
+	mergedDocuments := make(map[string][]byte, len(renderPlan.Documents))
+	for _, document := range renderPlan.Documents {
+		rendered, ok := prepared.RenderedDocument(document.Path)
+		if !ok {
+			return api.WorkspaceRef{}, fmt.Errorf("workspace chain did not render %s", document.Path)
+		}
+		theirs, err := decodeStackDocument(rendered)
+		if err != nil {
+			return api.WorkspaceRef{}, fmt.Errorf("load rendered workspace stack %s: %w", document.Path, err)
+		}
+		destination := filepath.Join(workspacePath, filepath.FromSlash(document.Path))
+		merged := theirs
+		if current, loadErr := manifest.LoadFile(destination); loadErr == nil {
+			merged = mergeStackFromTemplate(current, theirs, true)
+		} else if !os.IsNotExist(loadErr) {
+			return api.WorkspaceRef{}, fmt.Errorf("load workspace stack %s: %w", document.Path, loadErr)
+		}
+		documentMetadata, err := copierx.ReadMetadata(document.Template)
+		if err != nil {
+			return api.WorkspaceRef{}, err
+		}
+		if err := manifest.Ensure(merged, documentMetadata.Ensure); err != nil {
+			return api.WorkspaceRef{}, err
+		}
+		mergedDocuments[document.Path], err = manifest.Marshal(merged)
+		if err != nil {
+			return api.WorkspaceRef{}, err
+		}
+	}
+	rollbackFiles, err := prepared.ApplyFiles()
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	rollbackDocuments, err := applyRenderedDocuments(workspacePath, mergedDocuments, false)
+	if err != nil {
+		_ = rollbackFiles()
+		return api.WorkspaceRef{}, err
+	}
+	if err := materializePersistPaths(workspacePath, metadata.Persist); err != nil {
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
+		return api.WorkspaceRef{}, err
+	}
+	workspace.Template = templateRef
+	workspace.Resolved.Chain = renderPlan.Chain
+	workspace.Resolved.ChainRoot = renderPlan.ChainRoot
+	workspace.Resolved.PersistPaths = metadata.Persist
+	stack.Workspaces[name] = workspace
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
+		return api.WorkspaceRef{}, err
+	}
+	if err := prepared.SaveState(); err != nil {
+		_ = writeRenderedDocument(manifest.Path(p.root), parentBefore)
+		_ = rollbackDocuments()
+		_ = rollbackFiles()
+		return api.WorkspaceRef{}, err
+	}
+	return workspaceRef(name, workspacePath, workspace), nil
 }
 
 func (p *Platform) WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error) {
@@ -1311,73 +1432,6 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 		return "", fmt.Errorf("local source symlink target: %w", err)
 	}
 	return target, nil
-}
-
-func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath string, metadata copierx.Metadata, inputs map[string]string, workspaceName string, alloc map[string]int) ([]string, string, error) {
-	chain := []string{}
-	chainRoot := ""
-	subCtx := substitute.Context{
-		Inputs:        inputs,
-		Name:          workspaceName,
-		Alloc:         alloc,
-		WorkspacePath: workspacePath,
-	}
-	if metadata.ChainRoot != "" {
-		resolved, err := substitute.Resolve(metadata.ChainRoot, subCtx)
-		if err != nil {
-			return nil, "", err
-		}
-		chainRoot = resolved
-	}
-	for _, entry := range metadata.Chain {
-		if entry.Template == "" {
-			continue
-		}
-		templateRef, err := substitute.Resolve(entry.Template, subCtx)
-		if err != nil {
-			return nil, "", err
-		}
-		path, ref, err := p.resolveWorkspaceChainTemplate(ctx, workspacePath, templateRef)
-		if err != nil {
-			return nil, "", err
-		}
-		renderInputs := copierx.Inputs{}
-		for key, value := range inputs {
-			renderInputs[key] = value
-		}
-		for key, value := range entry.Inputs {
-			resolved, err := substitute.Resolve(value, subCtx)
-			if err != nil {
-				return nil, "", err
-			}
-			renderInputs[key] = resolved
-		}
-		destRoot := chainRoot
-		if entry.Root != "" {
-			resolved, err := substitute.Resolve(entry.Root, subCtx)
-			if err != nil {
-				return nil, "", err
-			}
-			destRoot = resolved
-		}
-		if destRoot == "" {
-			return nil, "", fmt.Errorf("chain entry %q requires a root", entry.Template)
-		}
-		dest := filepath.Join(workspacePath, destRoot)
-		mergedInner, err := copierx.TemplateInputs(path, renderInputs)
-		if err != nil {
-			return nil, "", err
-		}
-		mergedInner, err = copierx.ResolvePathInputs(path, mergedInner, dest, mergedInner["ANGEE_ROOT"])
-		if err != nil {
-			return nil, "", err
-		}
-		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: path, Dest: dest, Inputs: mergedInner}); err != nil {
-			return nil, "", err
-		}
-		chain = append(chain, ref)
-	}
-	return chain, chainRoot, nil
 }
 
 func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspacePath, ref string) (string, string, error) {

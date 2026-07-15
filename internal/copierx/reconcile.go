@@ -90,10 +90,11 @@ type RenderState struct {
 }
 
 type RenderPlan struct {
-	Target    string
-	StatePath string
-	Layers    []RenderLayer
-	Documents []string
+	Target                string
+	StatePath             string
+	Layers                []RenderLayer
+	Documents             []string
+	AllowedSymlinkParents []string
 }
 
 type ReconcileOptions struct {
@@ -386,7 +387,7 @@ func (p *PreparedReconcile) ApplyFiles() (func() error, error) {
 	}
 
 	for index, operation := range operations {
-		if err := validateDestinationParents(p.plan.Target, operation.path); err != nil {
+		if err := validateDestinationParents(p.plan.Target, operation.path, p.plan.AllowedSymlinkParents); err != nil {
 			_ = rollback()
 			return nil, err
 		}
@@ -608,7 +609,7 @@ func reconcilePath(path string, old Fingerprint, oldExists bool, current Fingerp
 	}
 }
 
-func validateDestinationParents(root, rel string) error {
+func validateDestinationParents(root, rel string, allowedSymlinkParents []string) error {
 	if err := validateRelativePath(rel); err != nil {
 		return err
 	}
@@ -626,6 +627,10 @@ func validateDestinationParents(root, rel string) error {
 
 	parts := strings.Split(filepath.Clean(filepath.FromSlash(rel)), string(filepath.Separator))
 	current := root
+	allowed := map[string]struct{}{}
+	for _, path := range allowedSymlinkParents {
+		allowed[filepath.Clean(filepath.FromSlash(path))] = struct{}{}
+	}
 	for _, part := range parts[:len(parts)-1] {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
@@ -636,7 +641,14 @@ func validateDestinationParents(root, rel string) error {
 			return fmt.Errorf("inspect destination parent %q: %w", current, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("destination parent %q is a symlink", current)
+			relParent, relErr := filepath.Rel(root, current)
+			if relErr != nil {
+				return relErr
+			}
+			if _, ok := allowed[filepath.Clean(relParent)]; !ok {
+				return fmt.Errorf("destination parent %q is a symlink", current)
+			}
+			continue
 		}
 		if !info.IsDir() {
 			return fmt.Errorf("destination parent %q is not a directory", current)

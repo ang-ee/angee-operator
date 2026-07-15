@@ -712,6 +712,7 @@ input workspaces_insert_input {
 input workspaces_set_input {
   ttl: String
   inputs: [KeyValueInput!]
+  overwrite: Boolean
 }
 
 input workspaces_pk_columns_input {

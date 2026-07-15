@@ -4123,6 +4123,7 @@ input workspaces_insert_input {
 input workspaces_set_input {
   ttl: String
   inputs: [KeyValueInput!]
+  overwrite: Boolean
 }
 
 input workspaces_pk_columns_input {
@@ -21124,7 +21125,7 @@ func (ec *executionContext) unmarshalInputworkspaces_set_input(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"ttl", "inputs"}
+	fieldsInOrder := [...]string{"ttl", "inputs", "overwrite"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -21145,6 +21146,13 @@ func (ec *executionContext) unmarshalInputworkspaces_set_input(ctx context.Conte
 				return it, err
 			}
 			it.Inputs = data
+		case "overwrite":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("overwrite"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Overwrite = data
 		}
 	}
 	return it, nil

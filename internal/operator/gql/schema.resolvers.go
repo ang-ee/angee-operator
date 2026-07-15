@@ -236,7 +236,9 @@ func (r *mutationResolver) InsertWorkspacesOne(ctx context.Context, object model
 
 // UpdateWorkspacesByPk is the resolver for the update_workspaces_by_pk field.
 func (r *mutationResolver) UpdateWorkspacesByPk(ctx context.Context, pkColumns model.WorkspacesPkColumnsInput, set model.WorkspacesSetInput) (*api.WorkspaceRef, error) {
-	ref, err := r.Platform.WorkspaceUpdate(ctx, pkColumns.ID, keyValuesFrom(set.Inputs), stringPtrValue(set.TTL))
+	ref, err := r.Platform.WorkspaceUpdate(ctx, pkColumns.ID, api.WorkspaceUpdateRequest{
+		Inputs: keyValuesFrom(set.Inputs), TTL: stringPtrValue(set.TTL), Overwrite: boolPtrValue(set.Overwrite),
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -92,6 +92,188 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 	}
 }
 
+func TestWorkspaceUpdateRerendersOuterAndInnerTemplates(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root): %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "host",
+		Operator: manifest.Operator{PortPool: map[string]manifest.PortPool{
+			"web": {Range: "8123-8123"},
+		}},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(host): %v", err)
+	}
+	workspaceTemplate, stackTemplate := writeRerenderWorkspaceTemplates(t, base, "outer v1\n", "inner v1\n")
+	platform, _ := New(root)
+	platform.portUnavailable = func(int) bool { return false }
+	created, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: workspaceTemplate, Name: "feature"})
+	if err != nil {
+		t.Fatalf("WorkspaceCreate: %v", err)
+	}
+	if created.Allocations["web"] != 8123 {
+		t.Fatalf("web allocation = %d, want 8123", created.Allocations["web"])
+	}
+
+	if err := os.WriteFile(filepath.Join(workspaceTemplate, "template", "outer.txt.jinja"), []byte("outer v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outer update): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stackTemplate, "template", "{{ ANGEE_ROOT }}", "inner.txt.jinja"), []byte("inner v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(inner update): %v", err)
+	}
+	updated, err := platform.WorkspaceUpdate(ctx, "feature", api.WorkspaceUpdateRequest{})
+	if err != nil {
+		t.Fatalf("WorkspaceUpdate: %v", err)
+	}
+	if updated.Allocations["web"] != 8123 {
+		t.Fatalf("updated web allocation = %d, want 8123", updated.Allocations["web"])
+	}
+	outer, _ := os.ReadFile(filepath.Join(created.Path, "outer.txt"))
+	if string(outer) != "outer v2\n" {
+		t.Fatalf("outer.txt = %q", outer)
+	}
+	inner, _ := os.ReadFile(filepath.Join(created.Path, ".angee", "inner.txt"))
+	if string(inner) != "inner v2\n" {
+		t.Fatalf("inner.txt = %q", inner)
+	}
+	innerStack, err := manifest.LoadFile(filepath.Join(created.Path, ".angee", "angee.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFile(inner stack): %v", err)
+	}
+	if innerStack.Ports["web"].Value != 8123 {
+		t.Fatalf("inner stack web port = %d, want 8123", innerStack.Ports["web"].Value)
+	}
+}
+
+func TestWorkspaceUpdatePreservesConflictUnlessOverwrite(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root): %v", err)
+	}
+	if err := manifest.SaveFile(manifest.Path(root), &manifest.Stack{
+		Version: 1, Kind: "stack", Name: "host",
+		Operator: manifest.Operator{PortPool: map[string]manifest.PortPool{"web": {Range: "8124-8124"}}},
+	}); err != nil {
+		t.Fatalf("SaveFile(host): %v", err)
+	}
+	workspaceTemplate, _ := writeRerenderWorkspaceTemplates(t, base, "outer v1\n", "inner v1\n")
+	platform, _ := New(root)
+	platform.portUnavailable = func(int) bool { return false }
+	created, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: workspaceTemplate, Name: "feature"})
+	if err != nil {
+		t.Fatalf("WorkspaceCreate: %v", err)
+	}
+	outerPath := filepath.Join(created.Path, "outer.txt")
+	if err := os.WriteFile(outerPath, []byte("local edit\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(local outer): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(created.Path, "user-only.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(user-only): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceTemplate, "template", "outer.txt.jinja"), []byte("outer v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(template outer): %v", err)
+	}
+	parentBefore, _ := os.ReadFile(manifest.Path(root))
+
+	if _, err := platform.WorkspaceUpdate(ctx, "feature", api.WorkspaceUpdateRequest{TTL: "1h"}); err == nil {
+		t.Fatal("WorkspaceUpdate succeeded despite a locally modified template file")
+	}
+	outer, _ := os.ReadFile(outerPath)
+	if string(outer) != "local edit\n" {
+		t.Fatalf("conflicting outer.txt changed: %q", outer)
+	}
+	parentAfterConflict, _ := os.ReadFile(manifest.Path(root))
+	if string(parentAfterConflict) != string(parentBefore) {
+		t.Fatal("parent manifest changed despite workspace template conflict")
+	}
+
+	updated, err := platform.WorkspaceUpdate(ctx, "feature", api.WorkspaceUpdateRequest{TTL: "1h", Overwrite: true})
+	if err != nil {
+		t.Fatalf("WorkspaceUpdate(overwrite): %v", err)
+	}
+	if updated.TTL != "1h" {
+		t.Fatalf("updated TTL = %q, want 1h", updated.TTL)
+	}
+	outer, _ = os.ReadFile(outerPath)
+	if string(outer) != "outer v2\n" {
+		t.Fatalf("overwritten outer.txt = %q", outer)
+	}
+	if data, err := os.ReadFile(filepath.Join(created.Path, "user-only.txt")); err != nil || string(data) != "keep\n" {
+		t.Fatalf("user-only file = %q, %v", data, err)
+	}
+}
+
+func writeRerenderWorkspaceTemplates(t *testing.T, base, outer, inner string) (string, string) {
+	t.Helper()
+	workspaceTemplate := filepath.Join(base, ".templates", "workspaces", "rerender")
+	if err := os.MkdirAll(filepath.Join(workspaceTemplate, "template"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace template): %v", err)
+	}
+	workspaceCopier := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: rerender
+  chain_root: .angee
+  chain:
+    - template: stacks/rerender-inner
+      root: .
+      inputs:
+        web_port: "${alloc.web}"
+`
+	if err := os.WriteFile(filepath.Join(workspaceTemplate, "copier.yml"), []byte(workspaceCopier), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceTemplate, "template", "outer.txt.jinja"), []byte(outer), 0o644); err != nil {
+		t.Fatalf("WriteFile(outer template): %v", err)
+	}
+
+	stackTemplate := filepath.Join(base, ".templates", "stacks", "rerender-inner")
+	innerRoot := filepath.Join(stackTemplate, "template", "{{ ANGEE_ROOT }}")
+	if err := os.MkdirAll(innerRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stack template): %v", err)
+	}
+	stackCopier := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: stack
+  name: rerender-inner
+ANGEE_ROOT:
+  type: str
+  default: .angee
+web_port:
+  type: int
+  default: 9999
+`
+	if err := os.WriteFile(filepath.Join(stackTemplate, "copier.yml"), []byte(stackCopier), 0o644); err != nil {
+		t.Fatalf("WriteFile(stack copier.yml): %v", err)
+	}
+	manifestBody := `version: 1
+kind: stack
+name: inner
+ports:
+  web:
+    value: {{ web_port }}
+`
+	if err := os.WriteFile(filepath.Join(innerRoot, "angee.yaml.jinja"), []byte(manifestBody), 0o644); err != nil {
+		t.Fatalf("WriteFile(inner angee.yaml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(innerRoot, "inner.txt.jinja"), []byte(inner), 0o644); err != nil {
+		t.Fatalf("WriteFile(inner template): %v", err)
+	}
+	return workspaceTemplate, stackTemplate
+}
+
 func TestWorkspaceCreateAllowsGitSourceAtWorkspaceRoot(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()

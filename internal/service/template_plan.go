@@ -22,6 +22,127 @@ type stackPlanOptions struct {
 	InputsAlreadyResolved bool
 }
 
+type workspaceRenderPlan struct {
+	Plan       copierx.RenderPlan
+	Documents  []stackDocument
+	Chain      []string
+	ChainRoot  string
+	Persistent map[string]manifest.PersistPath
+}
+
+func (p *Platform) buildWorkspaceRenderPlan(ctx context.Context, workspacePath, templatePath, templateRef string, metadata copierx.Metadata, inputs map[string]string, workspaceName string, allocations map[string]int, sources map[string]manifest.WorkspaceSource, statePath string) (workspaceRenderPlan, error) {
+	renderInputs := copierx.Inputs{}
+	for key, value := range inputs {
+		renderInputs[key] = value
+	}
+	renderInputs["workspace_name"] = workspaceName
+	for pool, port := range allocations {
+		renderInputs["alloc_"+pool] = fmt.Sprint(port)
+	}
+	mergedOuter, err := copierx.TemplateInputs(templatePath, renderInputs)
+	if err != nil {
+		return workspaceRenderPlan{}, err
+	}
+	layers := []copierx.RenderLayer{{Name: "workspace", Template: templatePath, Inputs: mergedOuter}}
+	resolvedChain := []string{templateRef}
+	documents := map[string]stackDocument{}
+	chainRoot := ""
+	subCtx := substitute.Context{
+		Inputs:        inputs,
+		Name:          workspaceName,
+		Alloc:         allocations,
+		WorkspacePath: workspacePath,
+	}
+	if metadata.ChainRoot != "" {
+		chainRoot, err = substitute.Resolve(metadata.ChainRoot, subCtx)
+		if err != nil {
+			return workspaceRenderPlan{}, err
+		}
+	}
+	for index, entry := range metadata.Chain {
+		if entry.Template == "" {
+			continue
+		}
+		templateEntry, err := substitute.Resolve(entry.Template, subCtx)
+		if err != nil {
+			return workspaceRenderPlan{}, err
+		}
+		path, ref, err := p.resolveWorkspaceChainTemplate(ctx, workspacePath, templateEntry)
+		if err != nil {
+			return workspaceRenderPlan{}, err
+		}
+		chainInputs := copierx.Inputs{}
+		for key, value := range inputs {
+			chainInputs[key] = value
+		}
+		for key, value := range entry.Inputs {
+			resolved, err := substitute.Resolve(value, subCtx)
+			if err != nil {
+				return workspaceRenderPlan{}, err
+			}
+			chainInputs[key] = resolved
+		}
+		destRoot := chainRoot
+		if entry.Root != "" {
+			destRoot, err = substitute.Resolve(entry.Root, subCtx)
+			if err != nil {
+				return workspaceRenderPlan{}, err
+			}
+		}
+		if destRoot == "" {
+			return workspaceRenderPlan{}, fmt.Errorf("chain entry %q requires a root", entry.Template)
+		}
+		dest := filepath.Join(workspacePath, filepath.FromSlash(destRoot))
+		merged, err := copierx.TemplateInputs(path, chainInputs)
+		if err != nil {
+			return workspaceRenderPlan{}, err
+		}
+		resolved, err := copierx.ResolvePathInputs(path, merged, dest, merged["ANGEE_ROOT"])
+		if err != nil {
+			return workspaceRenderPlan{}, err
+		}
+		layers = append(layers, copierx.RenderLayer{
+			Name:     fmt.Sprintf("chain-%d", index),
+			Template: path,
+			DestRoot: filepath.ToSlash(filepath.Clean(destRoot)),
+			Inputs:   resolved,
+		})
+		resolvedChain = append(resolvedChain, ref)
+		if emitsStackManifest(path) {
+			documentPath, err := stackDocumentPath(workspacePath, dest, merged)
+			if err != nil {
+				return workspaceRenderPlan{}, err
+			}
+			documents[documentPath] = stackDocument{Path: documentPath, Template: path}
+		}
+	}
+	documentPaths := make([]string, 0, len(documents))
+	for path := range documents {
+		documentPaths = append(documentPaths, path)
+	}
+	sort.Strings(documentPaths)
+	stackDocuments := make([]stackDocument, 0, len(documentPaths))
+	for _, path := range documentPaths {
+		stackDocuments = append(stackDocuments, documents[path])
+	}
+	allowedSymlinkParents := make([]string, 0, len(sources))
+	for _, source := range sources {
+		if source.Subpath != "" && source.Subpath != "." {
+			allowedSymlinkParents = append(allowedSymlinkParents, filepath.ToSlash(filepath.Clean(source.Subpath)))
+		}
+	}
+	sort.Strings(allowedSymlinkParents)
+	return workspaceRenderPlan{
+		Plan: copierx.RenderPlan{
+			Target: workspacePath, StatePath: statePath, Layers: layers, Documents: documentPaths, AllowedSymlinkParents: allowedSymlinkParents,
+		},
+		Documents:  stackDocuments,
+		Chain:      resolvedChain,
+		ChainRoot:  chainRoot,
+		Persistent: metadata.Persist,
+	}, nil
+}
+
 func (p *Platform) buildStackRenderPlan(ctx context.Context, templatePath, target string, inputs copierx.Inputs, statePath string, options stackPlanOptions) (copierx.RenderPlan, []stackDocument, error) {
 	layers, documents, err := p.buildStackChainLayers(ctx, templatePath, target, inputs, options)
 	if err != nil {
