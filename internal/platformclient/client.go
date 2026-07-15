@@ -233,6 +233,14 @@ func (p *RemoteClient) ServiceUpdate(ctx context.Context, req api.ServiceInitReq
 	return p.doJSON(ctx, http.MethodPatch, "/services/"+url.PathEscape(req.Name), nil, req, nil)
 }
 
+func (p *RemoteClient) ServiceUpdateFromTemplate(ctx context.Context, name string, req api.ServiceUpdateTemplateRequest) (api.ServiceTemplateUpdateResult, error) {
+	var result api.ServiceTemplateUpdateResult
+	if err := p.doJSON(ctx, http.MethodPost, "/services/"+url.PathEscape(name)+"/template/update", nil, req, &result); err != nil {
+		return api.ServiceTemplateUpdateResult{}, err
+	}
+	return result, nil
+}
+
 func (p *RemoteClient) ServiceDestroy(ctx context.Context, name string, _ bool) error {
 	return p.doJSON(ctx, http.MethodPost, "/services/"+url.PathEscape(name)+"/destroy", nil, nil, nil)
 }

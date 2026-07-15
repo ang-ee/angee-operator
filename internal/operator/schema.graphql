@@ -63,6 +63,23 @@ type ServiceState {
   health: String
 }
 
+type TemplateChange {
+  path: String!
+  kind: String!
+}
+
+type TemplateConflict {
+  path: String!
+  reason: String!
+}
+
+type ServiceTemplateUpdateResult {
+  name: String!
+  changed: Boolean!
+  changes: [TemplateChange!]!
+  conflicts: [TemplateConflict!]!
+}
+
 type JobState {
   id: ID!
   name: String!
@@ -763,6 +780,12 @@ input ServiceInput {
   start: Boolean
 }
 
+input ServiceTemplateUpdateInput {
+  inputs: [KeyValueInput!]
+  dryRun: Boolean
+  overwrite: Boolean
+}
+
 input WorkspaceCreateInput {
   template: String!
   name: String
@@ -832,6 +855,7 @@ type Mutation {
   fileWrite(source: String!, path: String!, content: String!, etag: String): FileRef!
 
   serviceInit(input: ServiceInput!): MutationResult
+  serviceUpdateFromTemplate(name: String!, input: ServiceTemplateUpdateInput): ServiceTemplateUpdateResult!
   insert_services_one(object: services_insert_input!): ServiceState
   update_services_by_pk(pk_columns: services_pk_columns_input!, _set: services_set_input!): ServiceState
   delete_services_by_pk(id: String!): ServiceState

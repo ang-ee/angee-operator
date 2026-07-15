@@ -159,6 +159,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /services", s.auth(http.HandlerFunc(s.serviceInit)))
 	mux.Handle("POST /services/create", s.auth(http.HandlerFunc(s.serviceCreate)))
 	mux.Handle("PATCH /services/{name}", s.auth(http.HandlerFunc(s.serviceUpdate)))
+	mux.Handle("POST /services/{name}/template/update", s.auth(http.HandlerFunc(s.serviceUpdateFromTemplate)))
 	mux.Handle("POST /services/{name}/up", s.auth(http.HandlerFunc(s.serviceUp)))
 	mux.Handle("POST /services/{name}/start", s.auth(http.HandlerFunc(s.serviceStart)))
 	mux.Handle("POST /services/{name}/stop", s.auth(http.HandlerFunc(s.serviceStop)))
@@ -539,6 +540,20 @@ func (s *Server) serviceUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": req.Name})
+}
+
+func (s *Server) serviceUpdateFromTemplate(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[api.ServiceUpdateTemplateRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	result, err := s.platform.ServiceUpdateFromTemplate(r.Context(), r.PathValue("name"), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) serviceUp(w http.ResponseWriter, r *http.Request) {

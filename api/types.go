@@ -228,6 +228,29 @@ type ServiceCreateRequest struct {
 	Start     bool              `json:"start,omitempty"`
 }
 
+type ServiceUpdateTemplateRequest struct {
+	Inputs    map[string]string `json:"inputs,omitempty"`
+	DryRun    bool              `json:"dry_run,omitempty"`
+	Overwrite bool              `json:"overwrite,omitempty"`
+}
+
+type TemplateChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+type TemplateConflict struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+type ServiceTemplateUpdateResult struct {
+	Name      string             `json:"name"`
+	Changed   bool               `json:"changed"`
+	Changes   []TemplateChange   `json:"changes,omitempty"`
+	Conflicts []TemplateConflict `json:"conflicts,omitempty"`
+}
+
 type WorkspaceUpdateRequest struct {
 	Inputs    map[string]string `json:"inputs,omitempty"`
 	TTL       string            `json:"ttl,omitempty"`

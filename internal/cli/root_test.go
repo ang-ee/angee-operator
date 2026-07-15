@@ -28,6 +28,26 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
+func TestServiceUpdateTemplateRejectsFieldFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"service", "update", "agent", "--template", "--image", "local:latest"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--image cannot be combined with --template") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestServiceUpdateOverwriteRequiresTemplate(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"service", "update", "agent", "--overwrite"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "only apply with --template") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
 func TestInitDevReportsTemplateAndRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)

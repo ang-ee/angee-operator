@@ -65,6 +65,12 @@ type ServiceInput struct {
 	Start   *bool            `json:"start,omitempty"`
 }
 
+type ServiceTemplateUpdateInput struct {
+	Inputs    []*KeyValueInput `json:"inputs,omitempty"`
+	DryRun    *bool            `json:"dryRun,omitempty"`
+	Overwrite *bool            `json:"overwrite,omitempty"`
+}
+
 type ServicesGroupBySpec struct {
 	Field       ServicesGroupableField `json:"field"`
 	Granularity *Granularity           `json:"granularity,omitempty"`

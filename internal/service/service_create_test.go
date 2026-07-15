@@ -366,11 +366,18 @@ func TestServiceDestroyReleasesLeaseAndBuildContext(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa")); err != nil {
 		t.Fatalf("expected build context pre-destroy: %v", err)
 	}
+	statePath := renderPlanStatePath(p.root, "services", "agent-my-pa")
+	if _, err := os.Stat(statePath); err != nil {
+		t.Fatalf("expected render state pre-destroy: %v", err)
+	}
 	if err := p.ServiceDestroy(context.Background(), "agent-my-pa", false); err != nil {
 		t.Fatalf("ServiceDestroy: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa")); !os.IsNotExist(err) {
 		t.Fatalf("build context not removed after destroy: %v", err)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("render state not removed after destroy: %v", err)
 	}
 	stack, _ := manifest.LoadFile(manifest.Path(p.root))
 	for _, lease := range stack.PortLeases["acp"] {

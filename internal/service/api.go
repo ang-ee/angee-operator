@@ -81,6 +81,7 @@ type ServiceAPI interface {
 	ServiceList(ctx context.Context, q query.Args) ([]api.ServiceState, int, error)
 	ServiceInit(ctx context.Context, req api.ServiceInitRequest) error
 	ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error
+	ServiceUpdateFromTemplate(ctx context.Context, name string, req api.ServiceUpdateTemplateRequest) (api.ServiceTemplateUpdateResult, error)
 	ServiceDestroy(ctx context.Context, name string, stop bool) error
 	ServiceCreate(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error)
 }

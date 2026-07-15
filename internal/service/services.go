@@ -113,6 +113,10 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 	if err := os.RemoveAll(buildContext); err != nil {
 		return fmt.Errorf("remove service build context %s: %w", buildContext, err)
 	}
+	statePath := renderPlanStatePath(p.root, "services", name)
+	if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove service render state %s: %w", statePath, err)
+	}
 	_, err = p.StackPrepare(ctx)
 	return err
 }

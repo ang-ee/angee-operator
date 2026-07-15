@@ -601,12 +601,51 @@ func serviceInitCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var req api.ServiceInitRequest
 	var env []string
+	var fromTemplate, dryRun, overwrite bool
+	var inputValues []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
-		Short: "Update a service in angee.yaml",
+		Short: "Update a service in angee.yaml or re-render its template",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Name = args[0]
+			if !fromTemplate && (dryRun || overwrite || len(inputValues) != 0) {
+				return fmt.Errorf("--input, --dry-run, and --overwrite only apply with --template")
+			}
+			if fromTemplate {
+				for _, flag := range []string{"runtime", "image", "command", "mount", "env", "port", "workdir"} {
+					if cmd.Flags().Changed(flag) {
+						return fmt.Errorf("--%s cannot be combined with --template", flag)
+					}
+				}
+				inputs, err := parseKeyValues(inputValues)
+				if err != nil {
+					return err
+				}
+				platform, err := localPlatform(root, operatorURL)
+				if err != nil {
+					return err
+				}
+				result, err := platform.ServiceUpdateFromTemplate(cmd.Context(), req.Name, api.ServiceUpdateTemplateRequest{Inputs: inputs, DryRun: dryRun, Overwrite: overwrite})
+				if err != nil {
+					return err
+				}
+				for _, change := range result.Changes {
+					if _, err := fmt.Fprintf(stdout, "  %s %s\n", change.Kind, change.Path); err != nil {
+						return err
+					}
+				}
+				if !result.Changed {
+					_, err = fmt.Fprintf(stdout, "service %s template up to date\n", req.Name)
+					return err
+				}
+				if dryRun {
+					_, err = fmt.Fprintf(stdout, "dry run: service %s template output not written\n", req.Name)
+					return err
+				}
+				_, err = fmt.Fprintf(stdout, "service %s updated from template\n", req.Name)
+				return err
+			}
 			if len(env) > 0 {
 				parsedEnv, err := parseKeyValues(env)
 				if err != nil {
@@ -626,6 +665,10 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 		},
 	}
 	bindServiceFlags(cmd, &req, &env)
+	cmd.Flags().BoolVar(&fromTemplate, "template", false, "re-render the service from its recorded Copier template")
+	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "with --template, override template input K=V")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "with --template, report changes without writing")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "with --template, replace conflicting local changes")
 	return cmd
 }
 

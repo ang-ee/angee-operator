@@ -147,23 +147,20 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		renderInputs["alloc_"+pool] = strconv.Itoa(port)
 	}
 
-	scratch, err := os.MkdirTemp("", "angee-service-render-*")
+	buildContext := filepath.Join(p.root, "services", serviceName)
+	statePath := renderPlanStatePath(p.root, "services", serviceName)
+	prepared, err := copierx.PrepareReconcile(ctx, copierx.RenderPlan{
+		Target: buildContext, StatePath: statePath,
+		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs}},
+		Documents: []string{"service.yaml"},
+	}, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
 	if err != nil {
-		return api.ServiceState{}, fmt.Errorf("create render scratch dir: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{
-		Template: templatePath,
-		Dest:     scratch,
-		Inputs:   renderInputs,
-	}); err != nil {
 		return api.ServiceState{}, fmt.Errorf("render service template: %w", err)
 	}
-
-	servicePath := filepath.Join(scratch, "service.yaml")
-	rendered, err := os.ReadFile(servicePath)
-	if err != nil {
-		return api.ServiceState{}, fmt.Errorf("read rendered service.yaml: %w", err)
+	defer prepared.Close()
+	rendered, ok := prepared.RenderedDocument("service.yaml")
+	if !ok {
+		return api.ServiceState{}, fmt.Errorf("service template rendered no service.yaml")
 	}
 	parsed, err := parsePartialServiceManifest(rendered)
 	if err != nil {
@@ -177,18 +174,6 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		return api.ServiceState{}, &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service key %q does not match resolved name %q", renderedName, serviceName)}
 	}
 
-	// Move the rest of the rendered tree (typically `docker/`) into the
-	// stack-owned build-context dir. service.yaml itself is consumed and
-	// not copied. p.root is the control root (ANGEE_ROOT, normally `.angee`),
-	// so the dir is `<root>/services/<name>` — a sibling of `workspaces/`,
-	// `run/`, etc. — not `<root>/.angee/services/<name>`.
-	buildContext := filepath.Join(p.root, "services", serviceName)
-	if err := os.RemoveAll(buildContext); err != nil {
-		return api.ServiceState{}, fmt.Errorf("clear previous build context %s: %w", buildContext, err)
-	}
-	if err := moveRenderedAssets(scratch, buildContext); err != nil {
-		return api.ServiceState{}, fmt.Errorf("install build context: %w", err)
-	}
 	// Validate the rendered service entry before installing the build
 	// context or registering it in the stack. Includes a containment
 	// check on `build.context` so a hostile template can't escape into
@@ -198,6 +183,10 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	}
 	if err := validateService(serviceName, renderedService); err != nil {
 		return api.ServiceState{}, err
+	}
+	rollbackFiles, err := prepared.ApplyFiles()
+	if err != nil {
+		return api.ServiceState{}, fmt.Errorf("install build context: %w", err)
 	}
 
 	// A routed service is reached through the edge and publishes no host port,
@@ -225,7 +214,8 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		for _, name := range declaredSecrets {
 			delete(stack.Secrets, name)
 		}
-		_ = os.RemoveAll(buildContext)
+		_ = rollbackFiles()
+		_ = os.Remove(statePath)
 		delete(stack.Services, serviceName)
 		prevRollback()
 	}
@@ -235,6 +225,9 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	}
 	stack.Services[serviceName] = renderedService
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		return api.ServiceState{}, err
+	}
+	if err := prepared.SaveState(); err != nil {
 		return api.ServiceState{}, err
 	}
 	// Past this point the manifest entry and leases are committed.
@@ -500,39 +493,4 @@ func singleService(services map[string]manifest.Service) (manifest.Service, stri
 		return svc, name
 	}
 	return manifest.Service{}, ""
-}
-
-// moveRenderedAssets walks src and moves every file/dir other than
-// service.yaml into dst. service.yaml is consumed by the parser and
-// not copied. Empty source produces an empty dst dir.
-func moveRenderedAssets(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	hasAssets := false
-	for _, entry := range entries {
-		if entry.Name() == "service.yaml" {
-			continue
-		}
-		hasAssets = true
-		break
-	}
-	if !hasAssets {
-		return nil
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.Name() == "service.yaml" {
-			continue
-		}
-		from := filepath.Join(src, entry.Name())
-		to := filepath.Join(dst, entry.Name())
-		if err := os.Rename(from, to); err != nil {
-			return fmt.Errorf("move %s -> %s: %w", from, to, err)
-		}
-	}
-	return nil
 }

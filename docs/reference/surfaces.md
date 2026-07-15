@@ -28,6 +28,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `ServiceInit` | Yes | Yes | Yes | - |
 | `ServiceCreate` | Yes | Yes | Yes | Template-based: `angee service create`; REST `POST /services/create`; GraphQL `serviceCreate`. |
 | `ServiceUpdate` | Yes | Yes | Yes | - |
+| `ServiceUpdateFromTemplate` | Yes | Yes | Yes | `service update --template`; REST `POST /services/{name}/template/update`; GraphQL `serviceUpdateFromTemplate`. |
 | `ServiceDestroy` | Yes | Yes | Yes | - |
 | `ServiceList` | Yes | Yes | Yes | - |
 | `ServiceEndpoint` | No | Yes | Yes | REST `GET /services/{name}/endpoint`; GraphQL `serviceEndpoint` ingress route lookup. |
