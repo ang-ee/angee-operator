@@ -141,7 +141,7 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 
 	result := StackUpdateTemplateResult{Conflicts: prepared.Result().Conflicts}
 	for _, change := range prepared.Result().Changes {

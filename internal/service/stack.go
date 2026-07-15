@@ -65,7 +65,7 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err != nil {
 		return StackInitResult{}, err
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	rollbackFiles, err := prepared.ApplyFiles()
 	if err != nil {
 		return StackInitResult{}, err

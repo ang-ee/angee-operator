@@ -185,14 +185,20 @@ func PrepareReconcile(ctx context.Context, plan RenderPlan, opts ReconcileOption
 		if err != nil {
 			return nil, fmt.Errorf("render layer %q: %w", layer.Name, err)
 		}
-		if err := (LocalRenderer{}).Copy(ctx, CopyRequest{Template: layer.Template, Dest: dest, Inputs: layer.Inputs}); err != nil {
-			return nil, fmt.Errorf("render layer %q: %w", layer.Name, err)
-		}
 		cfg, err := readConfig(layer.Template)
 		if err != nil {
 			return nil, fmt.Errorf("render layer %q config: %w", layer.Name, err)
 		}
+		if err := validateRelativePath(cfg.AnswersFile); err != nil {
+			return nil, fmt.Errorf("render layer %q answers file: %w", layer.Name, err)
+		}
 		answerRel := filepath.ToSlash(filepath.Clean(filepath.Join(layer.DestRoot, cfg.AnswersFile)))
+		if _, err := safePlanJoin(scratch, answerRel); err != nil {
+			return nil, fmt.Errorf("render layer %q answers file: %w", layer.Name, err)
+		}
+		if err := (LocalRenderer{}).Copy(ctx, CopyRequest{Template: layer.Template, Dest: dest, Inputs: layer.Inputs}); err != nil {
+			return nil, fmt.Errorf("render layer %q: %w", layer.Name, err)
+		}
 		metadata[answerRel] = struct{}{}
 		prepared.newState.Layers = append(prepared.newState.Layers, RenderLayerState{
 			Name:        layer.Name,
@@ -453,7 +459,7 @@ func (p *PreparedReconcile) SaveState() error {
 		return fmt.Errorf("create render state temporary file: %w", err)
 	}
 	tempPath := temp.Name()
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 	if _, err := temp.Write(data); err != nil {
 		temp.Close()
 		return fmt.Errorf("write render state: %w", err)
@@ -710,7 +716,7 @@ func copyEntry(source, dest string) error {
 			return err
 		}
 		tempPath := temp.Name()
-		defer os.Remove(tempPath)
+		defer func() { _ = os.Remove(tempPath) }()
 		if _, err := io.Copy(temp, input); err != nil {
 			temp.Close()
 			return err

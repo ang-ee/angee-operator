@@ -157,7 +157,7 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	if err != nil {
 		return api.ServiceState{}, fmt.Errorf("render service template: %w", err)
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	rendered, ok := prepared.RenderedDocument("service.yaml")
 	if !ok {
 		return api.ServiceState{}, fmt.Errorf("service template rendered no service.yaml")

@@ -57,6 +57,24 @@ func TestPrepareReconcileLegacyMissingFile(t *testing.T) {
 	}
 }
 
+func TestPrepareReconcileRejectsEscapingAnswersFileBeforeRender(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "from template\n")
+	config := "_subdirectory: template\n_templates_suffix: .jinja\n_answers_file: ../escaped.yml\n"
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+
+	_, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target:    filepath.Join(root, "target"),
+		StatePath: filepath.Join(root, "state.json"),
+		Layers:    []RenderLayer{{Name: "test", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err == nil {
+		t.Fatal("PrepareReconcile succeeded with an escaping answers file")
+	}
+}
+
 func TestPrepareReconcileConflictMatrix(t *testing.T) {
 	tests := []struct {
 		name          string

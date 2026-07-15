@@ -126,7 +126,7 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 	if err != nil {
 		return api.ServiceTemplateUpdateResult{}, err
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	rendered, ok := prepared.RenderedDocument("service.yaml")
 	if !ok {
 		return api.ServiceTemplateUpdateResult{}, fmt.Errorf("service template rendered no service.yaml")

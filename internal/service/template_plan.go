@@ -313,7 +313,7 @@ func writeRenderedDocument(path string, data []byte) error {
 		return err
 	}
 	tempPath := temp.Name()
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 	if _, err := temp.Write(data); err != nil {
 		temp.Close()
 		return err

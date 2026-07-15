@@ -48,6 +48,34 @@ func TestServiceUpdateOverwriteRequiresTemplate(t *testing.T) {
 	}
 }
 
+func TestServiceUpdateTemplateJSONOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/services/agent/template/update" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.EscapedPath())
+		}
+		_ = json.NewEncoder(w).Encode(api.ServiceTemplateUpdateResult{
+			Name:    "agent",
+			Changed: true,
+			Changes: []api.TemplateChange{{Path: "AGENTS.md", Kind: "modify"}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--operator", server.URL, "--json", "service", "update", "agent", "--template", "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	var result api.ServiceTemplateUpdateResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal(output): %v; output = %q", err, stdout.String())
+	}
+	if result.Name != "agent" || !result.Changed || len(result.Changes) != 1 || result.Changes[0].Path != "AGENTS.md" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestInitDevReportsTemplateAndRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)

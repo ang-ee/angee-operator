@@ -459,7 +459,7 @@ func serviceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 	cmd := &cobra.Command{Use: "service", Short: "Manage services"}
 	cmd.AddCommand(serviceInitCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceCreateCommand(stdout, root, operatorURL, jsonOutput))
-	cmd.AddCommand(serviceUpdateCommand(stdout, root, operatorURL))
+	cmd.AddCommand(serviceUpdateCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(serviceDestroyCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceListCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(serviceActionCommand(stdout, root, operatorURL, "up"))
@@ -598,7 +598,7 @@ func serviceInitCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 	return cmd
 }
 
-func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
+func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var req api.ServiceInitRequest
 	var env []string
 	var fromTemplate, dryRun, overwrite bool
@@ -629,6 +629,9 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 				result, err := platform.ServiceUpdateFromTemplate(cmd.Context(), req.Name, api.ServiceUpdateTemplateRequest{Inputs: inputs, DryRun: dryRun, Overwrite: overwrite})
 				if err != nil {
 					return err
+				}
+				if *jsonOutput {
+					return writeJSON(stdout, result)
 				}
 				for _, change := range result.Changes {
 					if _, err := fmt.Fprintf(stdout, "  %s %s\n", change.Kind, change.Path); err != nil {

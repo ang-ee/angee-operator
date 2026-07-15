@@ -107,7 +107,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	rollbackTemplateFiles, err = prepared.ApplyFiles()
 	if err != nil {
 		return api.WorkspaceRef{}, err
@@ -631,7 +631,7 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	if conflicts := prepared.Result().Conflicts; len(conflicts) != 0 {
 		paths := make([]string, 0, len(conflicts))
 		for _, conflict := range conflicts {
