@@ -183,6 +183,9 @@ func TestServiceUpdateFromTemplateUpdatesManifestAndAssets(t *testing.T) {
 	if !result.Changed {
 		t.Fatalf("result = %+v, want changed", result)
 	}
+	if result.Service.Name != "agent-my-pa" || result.Service.Runtime != "container" || result.Service.Status != "declared" {
+		t.Fatalf("result service = %+v", result.Service)
+	}
 	updated, _ := p.LoadStack()
 	if got := updated.Services["agent-my-pa"].Env["AUTH_MODE"]; got != "local-override" {
 		t.Fatalf("AUTH_MODE = %q, want local override preserved", got)
@@ -209,6 +212,13 @@ func TestServiceUpdateFromTemplatePreservesAssetConflictUnlessOverwrite(t *testi
 	}
 	if err := os.WriteFile(filepath.Join(template, "template", "docker", "Dockerfile"), []byte("template edit\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(template Dockerfile): %v", err)
+	}
+	dryRun, err := p.ServiceUpdateFromTemplate(ctx, "agent-my-pa", api.ServiceUpdateTemplateRequest{DryRun: true})
+	if err != nil {
+		t.Fatalf("ServiceUpdateFromTemplate(dry-run conflict): %v", err)
+	}
+	if len(dryRun.Conflicts) != 1 || dryRun.Conflicts[0].Path != "docker/Dockerfile" {
+		t.Fatalf("dry-run conflicts = %+v, want docker/Dockerfile", dryRun.Conflicts)
 	}
 
 	if _, err := p.ServiceUpdateFromTemplate(ctx, "agent-my-pa", api.ServiceUpdateTemplateRequest{}); err == nil {

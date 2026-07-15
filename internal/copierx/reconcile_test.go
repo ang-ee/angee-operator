@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -26,6 +29,16 @@ func writeReconcileTemplate(t *testing.T, root, body string) string {
 		t.Fatalf("WriteFile(managed.txt.jinja): %v", err)
 	}
 	return template
+}
+
+func openTestTrustedRoot(t *testing.T, path string) *TrustedRoot {
+	t.Helper()
+	root, err := OpenTrustedRoot(path)
+	if err != nil {
+		t.Fatalf("OpenTrustedRoot(%s): %v", path, err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	return root
 }
 
 func TestPrepareReconcileLegacyMissingFile(t *testing.T) {
@@ -72,6 +85,39 @@ func TestPrepareReconcileRejectsEscapingAnswersFileBeforeRender(t *testing.T) {
 	}, ReconcileOptions{Mode: ReconcileUpdate})
 	if err == nil {
 		t.Fatal("PrepareReconcile succeeded with an escaping answers file")
+	}
+}
+
+func TestPrepareReconcileRejectsPreservedSymlinks(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "from template\n")
+	config := "_subdirectory: template\n_templates_suffix: .jinja\n_preserve_symlinks: true\n"
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+
+	_, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: filepath.Join(root, "target"),
+		Layers: []RenderLayer{{Name: "test", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err == nil {
+		t.Fatal("PrepareReconcile succeeded with _preserve_symlinks enabled")
+	}
+}
+
+func TestPrepareReconcileRejectsTemplateOutputOverlappingState(t *testing.T) {
+	root := t.TempDir()
+	template := writeNamedReconcileTemplate(t, root, "template", map[string]string{"state.json.jinja": "managed\n"})
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	_, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: target, StatePath: filepath.Join(target, "state.json"),
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err == nil {
+		t.Fatal("PrepareReconcile accepted template output at the render state path")
 	}
 }
 
@@ -205,7 +251,7 @@ func TestPrepareReconcileOrderedLayersAndDocuments(t *testing.T) {
 		{Path: "shared.txt", Kind: ChangeAdd},
 	})
 
-	rollback, err := prepared.ApplyFiles()
+	rollback, err := prepared.ApplyFiles(context.Background())
 	if err != nil {
 		t.Fatalf("ApplyFiles: %v", err)
 	}
@@ -238,7 +284,7 @@ func TestPreparedReconcileApplyFailureRollsBack(t *testing.T) {
 		t.Fatalf("Remove(scratch b.txt): %v", err)
 	}
 
-	if _, err := prepared.ApplyFiles(); err == nil {
+	if _, err := prepared.ApplyFiles(context.Background()); err == nil {
 		t.Fatal("ApplyFiles succeeded, want injected source failure")
 	}
 	if _, err := os.Stat(filepath.Join(target, "a.txt")); !os.IsNotExist(err) {
@@ -250,6 +296,717 @@ func TestPreparedReconcileApplyFailureRollsBack(t *testing.T) {
 	}
 	if !bytes.Equal(gotState, oldState) {
 		t.Fatalf("state changed after failed apply: %q", gotState)
+	}
+}
+
+func TestPreparedReconcileRollbackRestoresDirectoryMode(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	directory := filepath.Join(target, "a")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("MkdirAll(directory): %v", err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatalf("Chmod(directory): %v", err)
+	}
+	writeTestFile(t, filepath.Join(directory, "keep.txt"), []byte("keep\n"), 0o600)
+	template := writeNamedReconcileTemplate(t, root, "template", map[string]string{
+		"a.jinja": "replacement\n",
+		"z.jinja": "later\n",
+	})
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate, Overwrite: true})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if err := os.Remove(filepath.Join(prepared.scratch, "z")); err != nil {
+		t.Fatalf("Remove(scratch z): %v", err)
+	}
+	if _, err := prepared.ApplyFiles(context.Background()); err == nil {
+		t.Fatal("ApplyFiles succeeded, want injected later failure")
+	}
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatalf("Stat(directory): %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("restored directory mode = %o, want 700", got)
+	}
+	assertFileContents(t, filepath.Join(directory, "keep.txt"), "keep\n")
+}
+
+func TestPreparedReconcileDeletesDescendantsBeforeWritingAncestor(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	statePath := filepath.Join(root, "state.json")
+	firstTemplate := writeNamedReconcileTemplate(t, root, "first-template", map[string]string{
+		"a/b.txt.jinja": "old\n",
+	})
+	first, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: firstTemplate}},
+	}, ReconcileOptions{Mode: ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile(first): %v", err)
+	}
+	if _, err := first.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles(first): %v", err)
+	}
+	if err := first.SaveState(context.Background()); err != nil {
+		t.Fatalf("SaveState(first): %v", err)
+	}
+	_ = first.Close()
+
+	secondTemplate := writeNamedReconcileTemplate(t, root, "second-template", map[string]string{
+		"a.jinja": "new\n",
+	})
+	second, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: secondTemplate}},
+	}, ReconcileOptions{Mode: ReconcileUpdate, Overwrite: true})
+	if err != nil {
+		t.Fatalf("PrepareReconcile(second): %v", err)
+	}
+	defer second.Close()
+	if _, err := second.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles(second): %v", err)
+	}
+	assertFileContents(t, filepath.Join(target, "a"), "new\n")
+}
+
+func TestPreparedReconcileApplyHonorsCanceledContext(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "rendered\n")
+	target := filepath.Join(root, "target")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := prepared.ApplyFiles(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ApplyFiles error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("canceled apply wrote managed file, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileRejectsLiveFileChangeAfterPrepare(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	managed := filepath.Join(target, "managed.txt")
+	writeTestFile(t, managed, []byte("old\n"), 0o644)
+	statePath := filepath.Join(root, "state.json")
+	writeTestState(t, statePath, map[string]Fingerprint{
+		"managed.txt": testRegularFingerprint([]byte("old\n"), 0o644),
+	})
+	template := writeReconcileTemplate(t, root, "new\n")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if err := os.WriteFile(managed, []byte("edited after prepare\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(edit): %v", err)
+	}
+	if _, err := prepared.ApplyFiles(context.Background()); err == nil {
+		t.Fatal("ApplyFiles accepted a file changed after prepare")
+	}
+	assertFileContents(t, managed, "edited after prepare\n")
+}
+
+func TestPreparedReconcileRejectsStateChangeAfterPrepare(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	statePath := filepath.Join(root, "state.json")
+	writeTestState(t, statePath, map[string]Fingerprint{})
+	template := writeReconcileTemplate(t, root, "new\n")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	rollback, err := prepared.ApplyFiles(context.Background())
+	if err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	writeTestState(t, statePath, map[string]Fingerprint{"concurrent.txt": testRegularFingerprint([]byte("edit\n"), 0o644)})
+	if err := prepared.SaveState(context.Background()); err == nil {
+		t.Fatal("SaveState accepted state changed after prepare")
+	}
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("rendered file remained after rollback, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileRejectsStateCreatedAfterPrepare(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	statePath := filepath.Join(root, "state.json")
+	template := writeReconcileTemplate(t, root, "new\n")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	writeTestState(t, statePath, map[string]Fingerprint{})
+	if err := prepared.SaveState(context.Background()); err == nil {
+		t.Fatal("SaveState accepted state created after prepare")
+	}
+}
+
+func TestPreparedReconcileRejectsRetargetedAllowedSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "rendered\n")
+	target := filepath.Join(root, "target")
+	expected := filepath.Join(root, "expected-source")
+	attacker := filepath.Join(root, "attacker-source")
+	for _, path := range []string{target, expected, attacker} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	link := filepath.Join(target, "source")
+	if err := os.Symlink(expected, link); err != nil {
+		t.Fatalf("Symlink(expected): %v", err)
+	}
+	trustedExpected := openTestTrustedRoot(t, expected)
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target:                target,
+		Layers:                []RenderLayer{{Name: "template", Template: template, DestRoot: "source"}},
+		AllowedSymlinkParents: map[string]*TrustedRoot{"source": trustedExpected},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("Remove(link): %v", err)
+	}
+	if err := os.Symlink(attacker, link); err != nil {
+		t.Fatalf("Symlink(attacker): %v", err)
+	}
+	if _, err := prepared.ApplyFiles(context.Background()); err == nil {
+		t.Fatal("ApplyFiles succeeded through a retargeted allowed symlink parent")
+	}
+	if _, err := os.Stat(filepath.Join(attacker, "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("attacker destination was written, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileRollbackKeepsOriginalSourceCapability(t *testing.T) {
+	root := t.TempDir()
+	template := writeNamedReconcileTemplate(t, root, "template-source", map[string]string{
+		"nested/managed.txt.jinja": "rendered\n",
+	})
+	target := filepath.Join(root, "target")
+	expected := filepath.Join(root, "expected-source")
+	attacker := filepath.Join(root, "attacker-source")
+	for _, path := range []string{target, expected, attacker} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	link := filepath.Join(target, "source")
+	if err := os.Symlink(expected, link); err != nil {
+		t.Fatalf("Symlink(expected): %v", err)
+	}
+	trustedExpected := openTestTrustedRoot(t, expected)
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target:                target,
+		Layers:                []RenderLayer{{Name: "template", Template: template, DestRoot: "source"}},
+		AllowedSymlinkParents: map[string]*TrustedRoot{"source": trustedExpected},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	rollback, err := prepared.ApplyFiles(context.Background())
+	if err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	assertFileContents(t, filepath.Join(expected, "nested", "managed.txt"), "rendered\n")
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("Remove(link): %v", err)
+	}
+	if err := os.Symlink(attacker, link); err != nil {
+		t.Fatalf("Symlink(attacker): %v", err)
+	}
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(expected, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("expected source retained rendered parents after rollback, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(attacker, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("attacker source was touched during rollback, stat error = %v", err)
+	}
+}
+
+func TestPrepareReconcileRejectsSymlinkedTargetAncestor(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "rendered\n")
+	trusted := filepath.Join(root, "stack")
+	outside := filepath.Join(root, "outside")
+	for _, path := range []string{trusted, outside} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(trusted, "services")); err != nil {
+		t.Fatalf("Symlink(services): %v", err)
+	}
+	_, err := PrepareReconcile(context.Background(), RenderPlan{
+		TargetRoot: trusted,
+		Target:     filepath.Join(trusted, "services", "agent"),
+		Layers:     []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err == nil {
+		t.Fatal("PrepareReconcile accepted a target beneath a symlinked ancestor")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "agent", "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("outside target was written, stat error = %v", err)
+	}
+}
+
+func TestGuardedTemplateSnapshotRejectsSymlinkEntries(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "template")
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.MkdirAll(template, 0o755); err != nil {
+		t.Fatalf("MkdirAll(template): %v", err)
+	}
+	writeTestFile(t, outside, []byte("outside\n"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(template, "linked.txt")); err != nil {
+		t.Fatalf("Symlink(linked.txt): %v", err)
+	}
+	guard, err := OpenGuardedPath(root, root, "template", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	defer guard.Close()
+	if _, _, err := guard.SnapshotDirectory(context.Background()); err == nil {
+		t.Fatal("SnapshotDirectory accepted a template containing a symlink")
+	}
+}
+
+func TestAllowedSymlinkParentDoesNotRecanonicalizeChangedSource(t *testing.T) {
+	root := t.TempDir()
+	expected := filepath.Join(root, "expected")
+	attacker := filepath.Join(root, "attacker")
+	for _, path := range []string{expected, attacker} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	trustedExpected := openTestTrustedRoot(t, expected)
+	original := expected + "-moved"
+	if err := os.Rename(expected, original); err != nil {
+		t.Fatalf("Rename(expected): %v", err)
+	}
+	if err := os.Symlink(attacker, expected); err != nil {
+		t.Fatalf("Symlink(attacker): %v", err)
+	}
+	if err := trustedExpected.VerifyPath(expected); err == nil {
+		t.Fatal("trusted root accepted a source path replaced by a symlink")
+	}
+}
+
+func TestGuardedPathAnchorsVerifiedParentAcrossRetarget(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "workspaces", "feature")
+	attacker := filepath.Join(root, "attacker")
+	for _, path := range []string{original, attacker} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	guard, err := OpenGuardedPath(root, root, "workspaces/feature/managed.txt", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	defer guard.Close()
+	moved := original + "-moved"
+	if err := os.Rename(original, moved); err != nil {
+		t.Fatalf("Rename(original): %v", err)
+	}
+	if err := os.Symlink(attacker, original); err != nil {
+		t.Fatalf("Symlink(attacker): %v", err)
+	}
+	if err := guard.WriteFile([]byte("managed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	assertFileContents(t, filepath.Join(moved, "managed.txt"), "managed\n")
+	if _, err := os.Stat(filepath.Join(attacker, "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("retargeted parent was written, stat error = %v", err)
+	}
+}
+
+func TestGuardedPathVerifyPathIdentityRejectsInstalledDirectorySwap(t *testing.T) {
+	root := t.TempDir()
+	stage := filepath.Join(root, "stage")
+	dest := filepath.Join(root, "dest")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stage): %v", err)
+	}
+	writeTestFile(t, filepath.Join(stage, "marker.txt"), []byte("original\n"), 0o644)
+	guard, err := OpenGuardedPath(root, root, "dest", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	defer guard.Close()
+	if err := guard.ReplaceFrom(context.Background(), stage); err != nil {
+		t.Fatalf("ReplaceFrom: %v", err)
+	}
+	if err := os.Rename(dest, dest+"-moved"); err != nil {
+		t.Fatalf("Rename(dest): %v", err)
+	}
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatalf("Mkdir(replacement): %v", err)
+	}
+	if err := guard.VerifyPathIdentity(dest); err == nil {
+		t.Fatal("VerifyPathIdentity accepted a replacement directory")
+	}
+}
+
+func TestGuardedPathReplaceFromCleansPartialOutput(t *testing.T) {
+	root := t.TempDir()
+	stage := filepath.Join(root, "stage")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stage): %v", err)
+	}
+	writeTestFile(t, filepath.Join(stage, "a.txt"), []byte("partial\n"), 0o644)
+	if err := syscall.Mkfifo(filepath.Join(stage, "z-fifo"), 0o600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	guard, err := OpenGuardedPath(root, root, "nested/dest", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	defer guard.Close()
+	if err := guard.ReplaceFrom(context.Background(), stage); err == nil {
+		t.Fatal("ReplaceFrom accepted an unsupported staged entry")
+	}
+	if _, err := os.Stat(filepath.Join(root, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("partial destination parents remained, stat error = %v", err)
+	}
+}
+
+func TestTrustedRootRejectsPathReplacedByRealDirectory(t *testing.T) {
+	root := t.TempDir()
+	expected := filepath.Join(root, "source")
+	if err := os.Mkdir(expected, 0o755); err != nil {
+		t.Fatalf("Mkdir(expected): %v", err)
+	}
+	trusted, err := OpenTrustedRoot(expected)
+	if err != nil {
+		t.Fatalf("OpenTrustedRoot: %v", err)
+	}
+	defer trusted.Close()
+	if err := os.Rename(expected, expected+"-moved"); err != nil {
+		t.Fatalf("Rename(expected): %v", err)
+	}
+	if err := os.Mkdir(expected, 0o755); err != nil {
+		t.Fatalf("Mkdir(replacement): %v", err)
+	}
+	if err := trusted.VerifyPath(expected); err == nil {
+		t.Fatal("VerifyPath accepted a replacement real directory")
+	}
+}
+
+func TestGuardedPathRejectsMissingAncestorBeforeDeclaredSourceLink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "workspace")
+	source := filepath.Join(root, "source")
+	for _, path := range []string{target, source} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatalf("Mkdir(%s): %v", path, err)
+		}
+	}
+	trusted := openTestTrustedRoot(t, source)
+	if _, err := OpenGuardedPath(root, target, "nested/app/managed.txt", map[string]*TrustedRoot{"nested/app": trusted}); err == nil {
+		t.Fatal("OpenGuardedPath accepted a missing ancestor before a declared source link")
+	}
+	if _, err := os.Stat(filepath.Join(target, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("missing source ancestors were created, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileRejectsSymlinkedStateParent(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "rendered\n")
+	target := filepath.Join(root, "target")
+	stateRoot := filepath.Join(root, "trusted")
+	outside := filepath.Join(root, "outside")
+	for _, path := range []string{target, stateRoot, outside} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: stateRoot, StatePath: filepath.Join(stateRoot, "run", "state.json"),
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if err := os.Symlink(outside, filepath.Join(stateRoot, "run")); err != nil {
+		t.Fatalf("Symlink(state parent): %v", err)
+	}
+	if err := prepared.SaveState(context.Background()); err == nil {
+		t.Fatal("SaveState succeeded through a symlinked state parent")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("outside state path was written, stat error = %v", err)
+	}
+}
+
+func TestRemoveRenderStateRootedRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "trusted")
+	outside := filepath.Join(root, "outside")
+	for _, path := range []string{stateRoot, outside} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	outsideState := filepath.Join(outside, "state.json")
+	writeTestFile(t, outsideState, []byte("keep\n"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(stateRoot, "run")); err != nil {
+		t.Fatalf("Symlink(state parent): %v", err)
+	}
+	if err := RemoveRenderStateRooted(stateRoot, filepath.Join(stateRoot, "run", "state.json")); err == nil {
+		t.Fatal("RemoveRenderStateRooted succeeded through a symlinked parent")
+	}
+	assertFileContents(t, outsideState, "keep\n")
+}
+
+func TestPreparedReconcilePreservesPreviousProtectedRootOnDeletion(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	managed := filepath.Join(target, "persist", "managed.txt")
+	writeTestFile(t, managed, []byte("old\n"), 0o644)
+	statePath := filepath.Join(root, "state.json")
+	state := RenderState{
+		Version: renderStateVersion,
+		Files: map[string]Fingerprint{
+			"persist":             {Kind: fingerprintDirectory, Mode: 0o755},
+			"persist/managed.txt": testRegularFingerprint([]byte("old\n"), 0o644),
+		},
+		ProtectedPaths: []string{"persist"},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("Marshal(state): %v", err)
+	}
+	writeTestFile(t, statePath, data, 0o644)
+
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(target, "persist")); err != nil || !info.IsDir() {
+		t.Fatalf("protected persist root was removed: info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(managed); !os.IsNotExist(err) {
+		t.Fatalf("managed file was not deleted, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcilePrunesEmptyManagedParentsAtCommit(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	managed := filepath.Join(target, "nested", "managed.txt")
+	writeTestFile(t, managed, []byte("old\n"), 0o644)
+	statePath := filepath.Join(root, "state.json")
+	writeTestState(t, statePath, map[string]Fingerprint{
+		"nested/managed.txt": testRegularFingerprint([]byte("old\n"), 0o644),
+	})
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+	}, ReconcileOptions{Mode: ReconcileUpdate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(target, "nested")); err != nil || !info.IsDir() {
+		t.Fatalf("parent was pruned before commit: info=%v err=%v", info, err)
+	}
+	if err := prepared.SaveState(context.Background()); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("empty managed parent remained after commit, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileCommitsStateThroughPreparedRootCapability(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "stack")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Mkdir(root): %v", err)
+	}
+	template := writeReconcileTemplate(t, base, "rendered\n")
+	statePath := filepath.Join(root, "run", "template-state", "stack.json")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: root, TargetRoot: root, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	moved := root + "-moved"
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatalf("Rename(root): %v", err)
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Mkdir(replacement): %v", err)
+	}
+	if err := prepared.SaveState(context.Background()); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "run", "template-state", "stack.json")); err != nil {
+		t.Fatalf("prepared root state missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "run")); !os.IsNotExist(err) {
+		t.Fatalf("replacement root received state, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileAppliesThroughPreparedTargetRootCapability(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "stack")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Mkdir(root): %v", err)
+	}
+	template := writeReconcileTemplate(t, base, "rendered\n")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: root, TargetRoot: root,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	moved := root + "-moved"
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatalf("Rename(root): %v", err)
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Mkdir(replacement): %v", err)
+	}
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	assertFileContents(t, filepath.Join(moved, "managed.txt"), "rendered\n")
+	if _, err := os.Stat(filepath.Join(root, "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("replacement root received output, stat error = %v", err)
+	}
+}
+
+func TestPreparedReconcileSharesNestedStateRootWithTargetWrites(t *testing.T) {
+	project := t.TempDir()
+	stackRoot := filepath.Join(project, ".angee")
+	if err := os.Mkdir(stackRoot, 0o755); err != nil {
+		t.Fatalf("Mkdir(stack root): %v", err)
+	}
+	template := writeNamedReconcileTemplate(t, project, "template-source", map[string]string{
+		".angee/managed.txt.jinja": "rendered\n",
+	})
+	statePath := filepath.Join(stackRoot, "run", "template-state", "stack.json")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: project, TargetRoot: project, StateRoot: stackRoot, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	moved := stackRoot + "-moved"
+	if err := os.Rename(stackRoot, moved); err != nil {
+		t.Fatalf("Rename(stack root): %v", err)
+	}
+	if err := os.Mkdir(stackRoot, 0o755); err != nil {
+		t.Fatalf("Mkdir(replacement): %v", err)
+	}
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	if err := prepared.SaveState(context.Background()); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	assertFileContents(t, filepath.Join(moved, "managed.txt"), "rendered\n")
+	if _, err := os.Stat(filepath.Join(moved, "run", "template-state", "stack.json")); err != nil {
+		t.Fatalf("nested retained state missing: %v", err)
+	}
+	if entries, err := os.ReadDir(stackRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("replacement nested root was modified: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestPreparedReconcilePoolsApplyParentCapabilities(t *testing.T) {
+	root := t.TempDir()
+	files := make(map[string]string, 128)
+	for index := 0; index < 128; index++ {
+		files[fmt.Sprintf("file-%03d.txt.jinja", index)] = "rendered\n"
+	}
+	template := writeNamedReconcileTemplate(t, root, "template-source", files)
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("Mkdir(target): %v", err)
+	}
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target,
+		Layers: []RenderLayer{{Name: "template", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	if got := len(prepared.applyParentRoots); got != 1 {
+		t.Fatalf("retained apply parent roots = %d, want 1 for flat output", got)
+	}
+	for _, guard := range prepared.applyGuards {
+		if len(guard.roots) != 0 {
+			t.Fatalf("apply guard retained %d private parent root(s), want shared capability", len(guard.roots))
+		}
 	}
 }
 
@@ -271,10 +1028,10 @@ func TestPreparedReconcileDryRunAndDeterministicState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareReconcile(dry-run): %v", err)
 	}
-	if _, err := dryRun.ApplyFiles(); err != nil {
+	if _, err := dryRun.ApplyFiles(context.Background()); err != nil {
 		t.Fatalf("ApplyFiles(dry-run): %v", err)
 	}
-	if err := dryRun.SaveState(); err != nil {
+	if err := dryRun.SaveState(context.Background()); err != nil {
 		t.Fatalf("SaveState(dry-run): %v", err)
 	}
 	dryRun.Close()
@@ -291,10 +1048,10 @@ func TestPreparedReconcileDryRunAndDeterministicState(t *testing.T) {
 			t.Fatalf("PrepareReconcile: %v", err)
 		}
 		defer prepared.Close()
-		if _, err := prepared.ApplyFiles(); err != nil {
+		if _, err := prepared.ApplyFiles(context.Background()); err != nil {
 			t.Fatalf("ApplyFiles: %v", err)
 		}
-		if err := prepared.SaveState(); err != nil {
+		if err := prepared.SaveState(context.Background()); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
 		data, err := os.ReadFile(statePath)
@@ -339,7 +1096,7 @@ func TestPrepareReconcileTracksExecutableMode(t *testing.T) {
 	}
 	defer prepared.Close()
 	assertChanges(t, prepared.Result().Changes, []Change{{Path: "managed.txt", Kind: ChangeModify}})
-	if _, err := prepared.ApplyFiles(); err != nil {
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
 		t.Fatalf("ApplyFiles: %v", err)
 	}
 	info, err := os.Stat(filepath.Join(target, "managed.txt"))

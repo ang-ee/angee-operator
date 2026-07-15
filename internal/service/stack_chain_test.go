@@ -50,6 +50,20 @@ func readChainFile(t *testing.T, path string) string {
 	return string(b)
 }
 
+func applyStackRenderPlan(ctx context.Context, p *Platform, stackTemplatePath, targetPath string, inputs copierx.Inputs) error {
+	plan, _, err := p.buildStackRenderPlan(ctx, stackTemplatePath, targetPath, inputs, "", stackPlanOptions{})
+	if err != nil {
+		return err
+	}
+	prepared, err := copierx.PrepareReconcile(ctx, plan, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = prepared.Close() }()
+	_, err = prepared.ApplyFiles(ctx)
+	return err
+}
+
 // A chain entry's inputs use the project-wide `${...}` grammar, the same as
 // workspace chains — not a bespoke `{{ }}` syntax — so a documented chain block
 // resolves against the stack's inputs instead of landing verbatim in host files.
@@ -73,8 +87,8 @@ _angee:
 		t.Fatalf("New: %v", err)
 	}
 	target := filepath.Join(base, "out")
-	if err := p.renderStackChain(context.Background(), stackDir, target, copierx.Inputs{"project_name": "acme"}); err != nil {
-		t.Fatalf("renderStackChain: %v", err)
+	if err := applyStackRenderPlan(context.Background(), p, stackDir, target, copierx.Inputs{"project_name": "acme"}); err != nil {
+		t.Fatalf("applyStackRenderPlan: %v", err)
 	}
 
 	got := readChainFile(t, filepath.Join(target, "manage.py"))
@@ -104,7 +118,7 @@ _angee:
 `, nil)
 
 	p, _ := New(base)
-	err := p.renderStackChain(context.Background(), stackDir, filepath.Join(base, "out"), copierx.Inputs{})
+	err := applyStackRenderPlan(context.Background(), p, stackDir, filepath.Join(base, "out"), copierx.Inputs{})
 	if err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("err = %v, want an error naming the unresolved input", err)
 	}
@@ -129,8 +143,8 @@ _angee:
 
 	p, _ := New(base)
 	target := filepath.Join(base, "out")
-	if err := p.renderStackChain(context.Background(), stackDir, target, copierx.Inputs{"project_name": "acme"}); err != nil {
-		t.Fatalf("renderStackChain: %v", err)
+	if err := applyStackRenderPlan(context.Background(), p, stackDir, target, copierx.Inputs{"project_name": "acme"}); err != nil {
+		t.Fatalf("applyStackRenderPlan: %v", err)
 	}
 	if got := readChainFile(t, filepath.Join(target, "host.txt")); !strings.Contains(got, "acme") {
 		t.Fatalf("host.txt = %q, want resolved input", got)
@@ -155,8 +169,8 @@ _angee:
 
 	p, _ := New(base)
 	target := filepath.Join(base, "out")
-	if err := p.renderStackChain(context.Background(), stackDir, target, copierx.Inputs{}); err != nil {
-		t.Fatalf("renderStackChain: %v", err)
+	if err := applyStackRenderPlan(context.Background(), p, stackDir, target, copierx.Inputs{}); err != nil {
+		t.Fatalf("applyStackRenderPlan: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(target, "host", "manage.py")); err != nil {
 		t.Fatalf("expected host rendered under root sub-directory: %v", err)

@@ -27,11 +27,21 @@ latest tag.
   templates. Locally edited rendered files are preserved by default and can be
   replaced with `--overwrite`; inner-stack runtime state and allocated ports
   are retained.
+- Template state and output writes are now rooted and symlink-aware. Reconcile
+  operations reject Copier `_preserve_symlinks`, verify declared local Source
+  targets before writes, retain fixed destination/source/state capabilities
+  through commit and rollback, revalidate live file and document baselines at
+  apply time, and retain current or previously declared persistent roots during
+  template deletions.
 
 ### Fixed
 
 - Stack template merges now refresh the `ingress` section while preserving
   operator-managed runtime state.
+- Stack template updates now remove obsolete `docker-compose.yaml`,
+  `process-compose.yaml`, and `run/secrets.env` artifacts transactionally, and
+  roll back newly staged persist paths and source clones if reconciliation or
+  state publication fails.
 
 ## v0.7.6 — 2026-07-01
 

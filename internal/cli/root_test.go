@@ -76,6 +76,30 @@ func TestServiceUpdateTemplateJSONOutput(t *testing.T) {
 	}
 }
 
+func TestServiceUpdateTemplateDryRunConflictOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(api.ServiceTemplateUpdateResult{
+			Name:      "agent",
+			Conflicts: []api.TemplateConflict{{Path: "docker/Dockerfile", Reason: "locally-modified"}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--operator", server.URL, "service", "update", "agent", "--template", "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "conflict docker/Dockerfile") || !strings.Contains(output, "dry run:") {
+		t.Fatalf("output = %q, want conflict and dry-run summary", output)
+	}
+	if strings.Contains(output, "up to date") {
+		t.Fatalf("output = %q, conflict-only preview must not say up to date", output)
+	}
+}
+
 func TestInitDevReportsTemplateAndRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)

@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/query"
@@ -15,6 +18,19 @@ import (
 )
 
 func (p *Platform) materializeReferencedSources(ctx context.Context, stack *manifest.Stack) error {
+	seen, err := referencedSourceNames(stack)
+	if err != nil {
+		return err
+	}
+	for _, name := range seen {
+		if err := p.materializeSource(ctx, name, stack.Sources[name]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func referencedSourceNames(stack *manifest.Stack) ([]string, error) {
 	seen := map[string]bool{}
 	for name := range stack.Sources {
 		seen[name] = true
@@ -47,16 +63,198 @@ func (p *Platform) materializeReferencedSources(ctx context.Context, stack *mani
 		}
 		collect(job.Workdir)
 	}
+	names := make([]string, 0, len(seen))
 	for name := range seen {
-		source, ok := stack.Sources[name]
+		_, ok := stack.Sources[name]
 		if !ok {
-			return fmt.Errorf("source %q is referenced but not declared", name)
+			return nil, fmt.Errorf("source %q is referenced but not declared", name)
 		}
-		if err := p.materializeSource(ctx, name, source); err != nil {
-			return err
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// stageReferencedSources validates existing sources and installs newly cloned
+// git sources through retained destination capabilities. It deliberately does
+// not fetch existing repositories: reconciliation must be rollback-safe, while
+// fetching remains part of StackPrepare and explicit source operations.
+type stagedSourcePath struct {
+	path           string
+	dest           *copierx.GuardedPath
+	created        bool
+	validationRoot *copierx.TrustedRoot
+	validationPath string
+}
+
+func (p *Platform) stageReferencedSources(ctx context.Context, stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, func() error, error) {
+	names, err := referencedSourceNames(stack)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	retained := []stagedSourcePath{}
+	closeGuards := func() error {
+		var result error
+		for _, path := range retained {
+			result = errors.Join(result, path.dest.Close())
+			if path.validationRoot != nil {
+				result = errors.Join(result, path.validationRoot.Close())
+			}
+		}
+		return result
+	}
+	rolledBack := false
+	rollback := func() error {
+		if rolledBack {
+			return nil
+		}
+		rolledBack = true
+		defer func() { _ = closeGuards() }()
+		var result error
+		for index := len(retained) - 1; index >= 0; index-- {
+			path := retained[index]
+			if !path.created {
+				continue
+			}
+			if err := path.dest.RemoveAll(); err != nil && !os.IsNotExist(err) {
+				result = errors.Join(result, err)
+			}
+			result = errors.Join(result, path.dest.RemoveMissingParents())
+		}
+		return result
+	}
+	fail := func(primary error, cleanup ...func() error) (func() error, func() error, func() error, error) {
+		cleanup = append(cleanup, rollback)
+		return nil, nil, nil, joinRollbackErrors(primary, cleanup...)
+	}
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
+		source := stack.Sources[name]
+		path := p.sourcePath(name, source)
+		switch source.Kind {
+		case "local":
+			destination, err := openAbsolute(path)
+			if err != nil {
+				return fail(fmt.Errorf("validate local source %q: %w", name, err))
+			}
+			_, exists, err := destination.Lstat()
+			if err != nil || !exists {
+				if err == nil {
+					err = os.ErrNotExist
+				}
+				return fail(fmt.Errorf("local source %q path %s: %w", name, path, err), destination.Close)
+			}
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return fail(fmt.Errorf("local source %q path %s: %w", name, path, err), destination.Close)
+			}
+			trusted, err := copierx.OpenTrustedRoot(resolved)
+			if err != nil {
+				return fail(fmt.Errorf("retain local source %q: %w", name, err), destination.Close)
+			}
+			retained = append(retained, stagedSourcePath{path: path, dest: destination, validationRoot: trusted, validationPath: path})
+		case "git":
+			destination, err := openAbsolute(path)
+			if err != nil {
+				return fail(fmt.Errorf("stage git source %q: %w", name, err))
+			}
+			_, exists, err := destination.Lstat()
+			if err != nil {
+				return fail(fmt.Errorf("stage git source %q: %w", name, err), destination.Close)
+			}
+			if exists {
+				repository, err := destination.HasRealDirectory(".git")
+				if err != nil {
+					return fail(fmt.Errorf("inspect git source %q: %w", name, err), destination.Close)
+				}
+				if !repository {
+					return fail(fmt.Errorf("git source %q destination %s exists but is not a repository", name, path), destination.Close)
+				}
+				gitRoot, err := destination.RetainRealSubdirectory(".git", filepath.Join(path, ".git"))
+				if err != nil {
+					return fail(fmt.Errorf("retain git source %q metadata: %w", name, err), destination.Close)
+				}
+				retained = append(retained, stagedSourcePath{path: path, dest: destination, validationRoot: gitRoot, validationPath: filepath.Join(path, ".git")})
+				continue
+			}
+			tempRoot, err := os.MkdirTemp("", "angee-source-stage-*")
+			if err != nil {
+				return fail(err, destination.Close)
+			}
+			cleanupTemp := func() error { return os.RemoveAll(tempRoot) }
+			staged := filepath.Join(tempRoot, "source")
+			if err := git.New().CloneRef(ctx, source.Repo, staged, source.DefaultRef); err != nil {
+				return fail(fmt.Errorf("clone git source %q: %w", name, err), cleanupTemp, destination.Close)
+			}
+			if err := destination.ReplaceFrom(ctx, staged); err != nil {
+				return fail(fmt.Errorf("install git source %q: %w", name, err), cleanupTemp, destination.Close)
+			}
+			retained = append(retained, stagedSourcePath{path: path, dest: destination, created: true})
+			gitRoot, err := destination.RetainRealSubdirectory(".git", filepath.Join(path, ".git"))
+			if err != nil {
+				return fail(fmt.Errorf("retain staged git source %q metadata: %w", name, err), cleanupTemp)
+			}
+			retained[len(retained)-1].validationRoot = gitRoot
+			retained[len(retained)-1].validationPath = filepath.Join(path, ".git")
+			if err := cleanupTemp(); err != nil {
+				return fail(fmt.Errorf("clean staged git source %q: %w", name, err))
+			}
+		default:
+			return fail(fmt.Errorf("source kind %q is not implemented", source.Kind))
 		}
 	}
-	return nil
+	verify := func() error {
+		var result error
+		for _, path := range retained {
+			result = errors.Join(result, path.dest.VerifyPathEntryIdentity(path.path))
+			if path.validationRoot != nil {
+				result = errors.Join(result, path.validationRoot.VerifyPath(path.validationPath))
+			}
+		}
+		return result
+	}
+	return rollback, closeGuards, verify, nil
+}
+
+func openAbsoluteGuardedPath(path string) (*copierx.GuardedPath, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	ancestor := filepath.Dir(abs)
+	for {
+		info, statErr := os.Lstat(ancestor)
+		if statErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return nil, fmt.Errorf("source destination ancestor %q is not a real directory", ancestor)
+			}
+			break
+		}
+		if !os.IsNotExist(statErr) {
+			return nil, statErr
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return nil, fmt.Errorf("source destination %q has no existing directory ancestor", abs)
+		}
+		ancestor = parent
+	}
+	root, err := copierx.OpenTrustedRoot(ancestor)
+	if err != nil {
+		return nil, err
+	}
+	destination, openErr := root.OpenGuardedPath(filepath.Dir(abs), filepath.Base(abs), nil)
+	closeErr := root.Close()
+	if openErr != nil {
+		return nil, errors.Join(openErr, closeErr)
+	}
+	if closeErr != nil {
+		_ = destination.Close()
+		return nil, closeErr
+	}
+	return destination, nil
 }
 
 func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error) {

@@ -237,7 +237,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if !res.Changed {
+				if !res.Changed && len(res.Conflicts) == 0 {
 					_, err = fmt.Fprintln(stdout, "stack template up to date")
 					return err
 				}
@@ -247,8 +247,13 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 							return err
 						}
 					}
-				} else {
+				} else if res.Changed {
 					if _, err := fmt.Fprintln(stdout, "  (template-origin sections refreshed)"); err != nil {
+						return err
+					}
+				}
+				for _, conflict := range res.Conflicts {
+					if _, err := fmt.Fprintf(stdout, "  ! files/%s (%s)\n", conflict.Path, conflict.Reason); err != nil {
 						return err
 					}
 				}
@@ -638,7 +643,12 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 						return err
 					}
 				}
-				if !result.Changed {
+				for _, conflict := range result.Conflicts {
+					if _, err := fmt.Fprintf(stdout, "  conflict %s (%s)\n", conflict.Path, conflict.Reason); err != nil {
+						return err
+					}
+				}
+				if !result.Changed && len(result.Conflicts) == 0 {
 					_, err = fmt.Fprintf(stdout, "service %s template up to date\n", req.Name)
 					return err
 				}

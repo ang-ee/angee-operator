@@ -58,6 +58,8 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err != nil {
 		return StackInitResult{}, err
 	}
+	plan.StateRoot = targetPath
+	plan.TargetRoot = targetPath
 	if len(documents) == 0 {
 		return StackInitResult{}, fmt.Errorf("stack template %q rendered no angee.yaml", template)
 	}
@@ -66,58 +68,57 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 		return StackInitResult{}, err
 	}
 	defer func() { _ = prepared.Close() }()
-	rollbackFiles, err := prepared.ApplyFiles()
-	if err != nil {
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), prepared.VerifyStateRootPath); err != nil {
 		return StackInitResult{}, err
 	}
 	renderedDocuments := make(map[string][]byte, len(documents))
+	var stack *manifest.Stack
 	for _, document := range documents {
 		data, ok := prepared.RenderedDocument(document.Path)
 		if !ok {
-			_ = rollbackFiles()
 			return StackInitResult{}, fmt.Errorf("stack template did not render %s", document.Path)
 		}
 		renderedDocuments[document.Path] = data
-	}
-	rollbackDocuments, err := applyRenderedDocuments(targetPath, renderedDocuments, false)
-	if err != nil {
-		_ = rollbackFiles()
-		return StackInitResult{}, err
-	}
-	if _, err := os.Stat(manifest.Path(preparedRoot)); err != nil {
-		if angeeRoot, ok := inputs["ANGEE_ROOT"]; ok && angeeRoot != "" {
-			candidate := manifest.ResolvePath(targetPath, angeeRoot)
-			if _, statErr := os.Stat(manifest.Path(candidate)); statErr == nil {
-				preparedRoot = candidate
-			}
-		} else {
-			candidate := filepath.Join(targetPath, ".angee")
-			if _, statErr := os.Stat(manifest.Path(candidate)); statErr == nil {
-				preparedRoot = candidate
+		if filepath.Clean(filepath.Join(targetPath, filepath.FromSlash(document.Path))) == filepath.Clean(manifest.Path(preparedRoot)) {
+			stack, err = decodeStackDocument(data)
+			if err != nil {
+				return StackInitResult{}, fmt.Errorf("load rendered stack %s: %w", document.Path, err)
 			}
 		}
 	}
+	if stack == nil {
+		return StackInitResult{}, fmt.Errorf("stack template rendered no manifest for %s", preparedRoot)
+	}
+	documentExpectations, err := captureRenderedDocumentExpectations(ctx, prepared.OpenTargetPath, renderedDocuments)
+	if err != nil {
+		return StackInitResult{}, err
+	}
 	initialized, err := New(preparedRoot)
 	if err != nil {
-		_ = rollbackDocuments()
-		_ = rollbackFiles()
 		return StackInitResult{}, err
 	}
-	stack, err := initialized.LoadStack()
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), prepared.VerifyStateRootPath); err != nil {
+		return StackInitResult{}, err
+	}
+	rollbackResources, closeResources, verifyResources, err := initialized.stageStackResources(ctx, stack, preparedAbsolutePathOpener(prepared, targetPath))
 	if err != nil {
-		_ = rollbackDocuments()
-		_ = rollbackFiles()
 		return StackInitResult{}, err
 	}
-	if err := initialized.materializeReferencedSources(ctx, stack); err != nil {
-		_ = rollbackDocuments()
-		_ = rollbackFiles()
-		return StackInitResult{}, err
+	defer func() { _ = closeResources() }()
+	rollbackFiles, err := prepared.ApplyFiles(ctx)
+	if err != nil {
+		return StackInitResult{}, joinRollbackErrors(err, rollbackResources)
 	}
-	if err := prepared.SaveState(); err != nil {
-		_ = rollbackDocuments()
-		_ = rollbackFiles()
-		return StackInitResult{}, err
+	rollbackDocuments, closeDocuments, verifyDocuments, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, targetPath, renderedDocuments, nil, nil, documentExpectations, false)
+	if err != nil {
+		return StackInitResult{}, joinRollbackErrors(err, rollbackFiles, rollbackResources)
+	}
+	defer func() { _ = closeDocuments() }()
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyDocuments, verifyResources); err != nil {
+		return StackInitResult{}, joinRollbackErrors(err, rollbackDocuments, rollbackFiles, rollbackResources)
+	}
+	if err := prepared.SaveState(ctx); err != nil {
+		return StackInitResult{}, joinRollbackErrors(err, rollbackDocuments, rollbackFiles, rollbackResources)
 	}
 	return StackInitResult{Template: template, Root: preparedRoot}, nil
 }
@@ -138,32 +139,6 @@ func pathExistsNonEmpty(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
-}
-
-// renderStackChain renders every template a stack chains (via `_angee.chain`) into
-// the same target BEFORE the stack's own files, so the stack overlays a real host.
-// Chain entries share the schema and grammar of workspace chains (renderWorkspaceChain):
-// the template ref and each input value are resolved through the project-wide `${...}`
-// substitution grammar against the stack's own inputs, and an optional `root`
-// (defaulting to `chain_root`) selects a sub-directory. Stack chains overlay in place,
-// so an empty root renders the host directly into the target.
-//
-// Known limitation: a flat overlay (empty root) shares Copier's `.copier-answers.yml`
-// with the stack render that follows, which overwrites it, so `angee stack update`
-// refreshes the stack layer but not the host layer. Give a host its own `root` to keep
-// it independently updatable.
-func (p *Platform) renderStackChain(ctx context.Context, stackTemplatePath, targetPath string, stackInputs copierx.Inputs) error {
-	layers, _, err := p.buildStackChainLayers(ctx, stackTemplatePath, targetPath, stackInputs, stackPlanOptions{})
-	if err != nil {
-		return err
-	}
-	for _, layer := range layers {
-		dest := filepath.Join(targetPath, filepath.FromSlash(layer.DestRoot))
-		if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: layer.Template, Dest: dest, Inputs: layer.Inputs}); err != nil {
-			return fmt.Errorf("render chained template %q: %w", layer.Name, err)
-		}
-	}
-	return nil
 }
 
 // resolveChainTemplate resolves a chain entry's template reference the same way

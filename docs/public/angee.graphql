@@ -299,6 +299,7 @@ input ServiceTemplateUpdateInput {
 }
 type ServiceTemplateUpdateResult {
 	name: String!
+	service: ServiceState!
 	changed: Boolean!
 	changes: [TemplateChange!]!
 	conflicts: [TemplateConflict!]!

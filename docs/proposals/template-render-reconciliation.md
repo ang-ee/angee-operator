@@ -122,11 +122,13 @@ The reconciler receives a complete plan rather than one template at a time:
 
 ```go
 type RenderPlan struct {
-	Target    string
-	StatePath string
-	Layers    []RenderLayer
-	Handlers  map[string]FileHandler
-	Metadata  map[string]MetadataFile
+	Target                string
+	StateRoot             string
+	StatePath             string
+	Layers                []RenderLayer
+	Documents             []string
+	AllowedSymlinkParents map[string]*TrustedRoot
+	ProtectedPaths        []string
 }
 
 type RenderLayer struct {
@@ -192,6 +194,25 @@ be tracked.
 State is written through a temporary file and rename only after the destination
 apply succeeds. A corrupt state document fails closed and identifies its path;
 it is never silently treated as missing state.
+
+Stack persist paths and newly required source clones are staged before this
+commit and carry rollback handles through state publication. New repositories
+clone into a private temporary tree before capability-bound installation;
+existing repositories are validated but not fetched during reconciliation.
+Generated runtime artifacts participate in the same journal, including explicit
+deletions when Compose, process-compose, or OpenBao output is no longer desired.
+
+Reconciliation rejects Copier `_preserve_symlinks`. Declared workspace local
+Source links are the only permitted symlink parents. The plan retains an opened
+root and filesystem identity for each approved Source, verifies that the link
+still resolves to that identity, and derives snapshots and destination guards
+from the retained root rather than reopening the pathname. Destination guards
+are anchored at the deepest verified parent, staged tree installs are copied
+under that parent before replacement, and recursive backups remain rooted in
+opened subdirectories. State I/O is rooted separately and cannot overlap
+managed output; its root is retained from prepare through commit. Live file,
+special-document, and parent-manifest baselines are revalidated immediately
+before mutation so concurrent edits fail closed.
 
 ## Ordinary-file reconciliation
 

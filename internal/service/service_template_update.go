@@ -45,21 +45,18 @@ func (p *Platform) ServiceUpdateFromTemplate(ctx context.Context, name string, r
 }
 
 func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name string, req api.ServiceUpdateTemplateRequest) (api.ServiceTemplateUpdateResult, error) {
-	stack, err := p.LoadStack()
+	parentTx, stack, err := openParentStackTransaction(p.root, false)
 	if err != nil {
 		return api.ServiceTemplateUpdateResult{}, err
 	}
+	defer func() { _ = parentTx.Close() }()
 	current, ok := stack.Services[name]
 	if !ok {
 		return api.ServiceTemplateUpdateResult{}, &NotFoundError{Kind: "service", Name: name}
 	}
-	stackBefore, err := manifest.Marshal(stack)
-	if err != nil {
-		return api.ServiceTemplateUpdateResult{}, err
-	}
 	buildContext := filepath.Join(p.root, "services", name)
 	statePath := renderPlanStatePath(p.root, "services", name)
-	state, hasState, err := copierx.ReadRenderState(statePath)
+	state, hasState, err := copierx.ReadRenderStateRooted(p.root, statePath)
 	if err != nil {
 		return api.ServiceTemplateUpdateResult{}, err
 	}
@@ -122,7 +119,7 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 		renderInputs["alloc_"+pool] = strconv.Itoa(port)
 	}
 	prepared, err := copierx.PrepareReconcile(ctx, copierx.RenderPlan{
-		Target: buildContext, StatePath: statePath,
+		Target: buildContext, TargetRoot: p.root, StateRoot: p.root, StatePath: statePath,
 		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs}},
 		Documents: []string{"service.yaml"},
 	}, copierx.ReconcileOptions{Mode: copierx.ReconcileUpdate, DryRun: req.DryRun, Overwrite: req.Overwrite})
@@ -130,6 +127,9 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 		return api.ServiceTemplateUpdateResult{}, err
 	}
 	defer func() { _ = prepared.Close() }()
+	if err := parentTx.VerifyPreparedRoot(p.root, prepared); err != nil {
+		return api.ServiceTemplateUpdateResult{}, fmt.Errorf("verify stack root transaction: %w", err)
+	}
 	rendered, ok := prepared.RenderedDocument("service.yaml")
 	if !ok {
 		return api.ServiceTemplateUpdateResult{}, fmt.Errorf("service template rendered no service.yaml")
@@ -140,7 +140,10 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 		return api.ServiceTemplateUpdateResult{}, err
 	}
 	fileResult := prepared.Result()
-	result := api.ServiceTemplateUpdateResult{Name: name}
+	result := api.ServiceTemplateUpdateResult{
+		Name:    name,
+		Service: api.ServiceState{Name: name, Runtime: string(merged.Runtime), Status: "declared"},
+	}
 	for _, change := range append(fileResult.Changes, serviceChanges...) {
 		result.Changes = append(result.Changes, api.TemplateChange{Path: change.Path, Kind: string(change.Kind)})
 		if change.Kind != copierx.ChangeAdopt {
@@ -151,6 +154,9 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 		result.Conflicts = append(result.Conflicts, api.TemplateConflict{Path: conflict.Path, Reason: string(conflict.Reason)})
 	}
 	if len(result.Conflicts) != 0 {
+		if req.DryRun {
+			return result, nil
+		}
 		paths := make([]string, 0, len(result.Conflicts))
 		for _, conflict := range result.Conflicts {
 			paths = append(paths, conflict.Path)
@@ -160,7 +166,7 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 	if req.DryRun {
 		return result, nil
 	}
-	rollbackFiles, err := prepared.ApplyFiles()
+	rollbackFiles, err := prepared.ApplyFiles(ctx)
 	if err != nil {
 		return api.ServiceTemplateUpdateResult{}, err
 	}
@@ -169,14 +175,11 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 	}
 	ensureServiceSecrets(stack, merged)
 	stack.Services[name] = merged
-	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
-		_ = rollbackFiles()
-		return api.ServiceTemplateUpdateResult{}, err
+	if err := parentTx.Save(stack); err != nil {
+		return api.ServiceTemplateUpdateResult{}, joinRollbackErrors(err, rollbackFiles)
 	}
-	if err := prepared.SaveState(); err != nil {
-		_ = writeRenderedDocument(manifest.Path(p.root), stackBefore)
-		_ = rollbackFiles()
-		return api.ServiceTemplateUpdateResult{}, err
+	if err := prepared.SaveState(ctx); err != nil {
+		return api.ServiceTemplateUpdateResult{}, joinRollbackErrors(err, parentTx.Rollback, rollbackFiles)
 	}
 	return result, nil
 }

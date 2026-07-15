@@ -2,13 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/fslock"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
@@ -79,35 +82,79 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 		if err != nil {
 			return err
 		}
-		// Ensure the stack's declared persist dirs exist before anything runs.
-		// These are gitignored local state (the SQLite db, caches, browser
-		// profiles) that no other step creates — SQLite, for one, never creates
-		// its file's parent directory. Subpaths are relative to the stack dir
-		// (the parent of ANGEE_ROOT), matching the workspace-create convention.
-		if err := materializePersistPaths(filepath.Dir(p.root), stack.Persist); err != nil {
+		if err := p.materializeStackResources(ctx, stack); err != nil {
 			return err
 		}
-		backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
+		compiledStack, resolvedSecrets, err := p.compileStackArtifacts(ctx, stack)
 		if err != nil {
-			return err
-		}
-		resolvedSecrets, err := secrets.ResolveDeclarations(ctx, backend, stack.Secrets, os.LookupEnv)
-		if err != nil {
-			return err
-		}
-		if err := p.materializeReferencedSources(ctx, stack); err != nil {
 			return err
 		}
 		if err := p.writeRuntimeEnv(stack, resolvedSecrets); err != nil {
 			return err
 		}
-		compiled, err = Compile(stack, p.root, resolvedSecrets)
-		if err != nil {
-			return err
-		}
+		compiled = compiledStack
 		return p.writeCompiled(compiled)
 	})
 	return compiled, err
+}
+
+func (p *Platform) materializeStackResources(ctx context.Context, stack *manifest.Stack) error {
+	// Ensure the stack's declared persist dirs exist before anything runs.
+	// Subpaths are relative to the stack dir (the parent of ANGEE_ROOT),
+	// matching the workspace-create convention.
+	persistRoot := filepath.Dir(p.root)
+	_, closePersistPaths, _, err := materializePersistPaths(ctx, targetPathOpener(persistRoot, persistRoot, nil), persistRoot, stack.Persist, nil)
+	if err != nil {
+		return err
+	}
+	if err := closePersistPaths(); err != nil {
+		return err
+	}
+	return p.materializeReferencedSources(ctx, stack)
+}
+
+func (p *Platform) stageStackResources(ctx context.Context, stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, func() error, error) {
+	persistRoot := filepath.Dir(p.root)
+	persistOpener := func(rel string) (*copierx.GuardedPath, error) {
+		return openAbsolute(filepath.Join(persistRoot, filepath.FromSlash(rel)))
+	}
+	rollbackPersist, closePersist, verifyPersist, err := materializePersistPaths(ctx, persistOpener, persistRoot, stack.Persist, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rollbackSources, closeSources, verifySources, err := p.stageReferencedSources(ctx, stack, openAbsolute)
+	if err != nil {
+		return nil, nil, nil, errors.Join(err, rollbackPersist())
+	}
+	rollback := func() error {
+		return errors.Join(rollbackSources(), rollbackPersist())
+	}
+	closeResources := func() error {
+		return errors.Join(closeSources(), closePersist())
+	}
+	verifyResources := func() error {
+		return errors.Join(verifySources(), verifyPersist())
+	}
+	return rollback, closeResources, verifyResources, nil
+}
+
+// compileStackArtifacts resolves inputs and compiles runtime documents without
+// materializing persist paths or source caches. Secret resolution retains its
+// normal backend semantics for imported and generated declarations.
+func (p *Platform) compileStackArtifacts(ctx context.Context, stack *manifest.Stack) (*CompiledStack, map[string]string, error) {
+	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolvedSecrets, err := secrets.ResolveDeclarations(ctx, backend, stack.Secrets, os.LookupEnv)
+	if err != nil {
+		return nil, nil, err
+	}
+	compiled, err := Compile(stack, p.root, resolvedSecrets)
+	if err != nil {
+		return nil, nil, err
+	}
+	return compiled, resolvedSecrets, nil
 }
 
 func (p *Platform) runtimeEnvFile(stack *manifest.Stack) string {
@@ -118,10 +165,11 @@ func (p *Platform) runtimeEnvFile(stack *manifest.Stack) string {
 }
 
 func (p *Platform) writeRuntimeEnv(stack *manifest.Stack, resolved map[string]string) error {
+	openBaoPath := filepath.Join(p.root, "run", "secrets.env")
 	if stack.SecretsBackend.Type != "openbao" || len(resolved) == 0 {
-		return nil
+		return p.removeObsoleteOpenBaoRuntimeEnv(stack, openBaoPath)
 	}
-	path := p.runtimeEnvFile(stack)
+	path := openBaoPath
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -133,6 +181,181 @@ func (p *Platform) writeRuntimeEnv(stack *manifest.Stack, resolved map[string]st
 		out.WriteByte('\n')
 	}
 	return os.WriteFile(path, []byte(out.String()), 0o600)
+}
+
+func (p *Platform) retainActiveEnvFile(stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, error) {
+	if stack.SecretsBackend.Type == "openbao" {
+		noop := func() error { return nil }
+		return noop, noop, nil
+	}
+	configured := stack.EnvFilePath(p.root)
+	entry, err := openAbsolute(configured)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, exists, err := entry.Lstat()
+	if err != nil {
+		_ = entry.Close()
+		return nil, nil, err
+	}
+	guards := []*copierx.GuardedPath{entry}
+	var target *copierx.GuardedPath
+	resolvedTarget := ""
+	if exists {
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(configured)
+			if err != nil {
+				_ = entry.Close()
+				return nil, nil, err
+			}
+			resolvedTarget = resolved
+			target, err = openAbsolute(resolved)
+			if err != nil {
+				_ = entry.Close()
+				return nil, nil, err
+			}
+			guards = append(guards, target)
+		}
+	}
+	verify := func() error {
+		var result error
+		if exists {
+			result = errors.Join(result, entry.VerifyPathEntryIdentity(configured))
+		} else {
+			result = errors.Join(result, entry.VerifyPathAbsent(configured))
+		}
+		if target != nil {
+			result = errors.Join(result, target.VerifyPathEntryIdentity(resolvedTarget))
+		}
+		return result
+	}
+	closeGuards := func() error {
+		var result error
+		for _, guard := range guards {
+			result = errors.Join(result, guard.Close())
+		}
+		return result
+	}
+	return verify, closeGuards, nil
+}
+
+func (p *Platform) activeEnvFileUsesPath(stack *manifest.Stack, candidate string) bool {
+	if stack.SecretsBackend.Type == "openbao" {
+		return false
+	}
+	configured := stack.EnvFilePath(p.root)
+	if filepath.Clean(configured) == filepath.Clean(candidate) {
+		return true
+	}
+	configuredInfo, configuredErr := os.Stat(configured)
+	candidateInfo, candidateErr := os.Stat(candidate)
+	return configuredErr == nil && candidateErr == nil && os.SameFile(configuredInfo, candidateInfo)
+}
+
+func (p *Platform) removeObsoleteOpenBaoRuntimeEnv(stack *manifest.Stack, candidate string) error {
+	if p.activeEnvFileUsesPath(stack, candidate) {
+		return nil
+	}
+	verifyEnv, closeEnv, err := p.retainActiveEnvFile(stack, openAbsoluteGuardedPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeEnv() }()
+	if p.activeEnvFileUsesPath(stack, candidate) {
+		return nil
+	}
+	destination, err := openAbsoluteGuardedPath(candidate)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = destination.Close() }()
+	data, info, exists, err := destination.ReadRegularFile()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.Join(verifyEnv(), destination.VerifyPathAbsent(candidate))
+	}
+	if err := destination.RemoveAll(); err != nil {
+		return err
+	}
+	postErr := errors.Join(verifyEnv(), destination.VerifyPathAbsent(candidate))
+	if postErr != nil {
+		return joinRollbackErrors(postErr, func() error { return destination.WriteFile(data, info.Mode().Perm()) })
+	}
+	return nil
+}
+
+func (p *Platform) runtimeArtifactDocuments(renderTarget string, stack *manifest.Stack, compiled *CompiledStack, resolved map[string]string) (map[string][]byte, map[string]bool, map[string]fs.FileMode, error) {
+	documents := map[string][]byte{}
+	deletions := map[string]bool{}
+	modes := map[string]fs.FileMode{}
+	relative := func(path string) (string, error) {
+		rel, err := filepath.Rel(renderTarget, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("runtime artifact %q escapes render target %q", path, renderTarget)
+		}
+		return filepath.ToSlash(rel), nil
+	}
+	add := func(path string, data []byte, mode fs.FileMode) error {
+		rel, err := relative(path)
+		if err != nil {
+			return err
+		}
+		documents[rel] = data
+		modes[rel] = mode
+		return nil
+	}
+	remove := func(path string) error {
+		rel, err := relative(path)
+		if err != nil {
+			return err
+		}
+		deletions[rel] = true
+		return nil
+	}
+	openBaoPath := filepath.Join(p.root, "run", "secrets.env")
+	if stack.SecretsBackend.Type == "openbao" && len(resolved) != 0 {
+		var out strings.Builder
+		for _, key := range sortedKeys(resolved) {
+			out.WriteString(substitute.SecretEnvName(key))
+			out.WriteByte('=')
+			out.WriteString(resolved[key])
+			out.WriteByte('\n')
+		}
+		if err := add(openBaoPath, []byte(out.String()), 0o600); err != nil {
+			return nil, nil, nil, err
+		}
+	} else if !p.activeEnvFileUsesPath(stack, openBaoPath) {
+		if err := remove(openBaoPath); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	composePath := filepath.Join(p.root, "docker-compose.yaml")
+	if len(compiled.Compose.Services) > 0 {
+		data, err := compose.Marshal(compiled.Compose)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if err := add(composePath, data, 0o644); err != nil {
+			return nil, nil, nil, err
+		}
+	} else if err := remove(composePath); err != nil {
+		return nil, nil, nil, err
+	}
+	processPath := filepath.Join(p.root, "process-compose.yaml")
+	if len(compiled.ProcessCompose.Processes) > 0 {
+		data, err := proccompose.Marshal(compiled.ProcessCompose)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if err := add(processPath, data, 0o644); err != nil {
+			return nil, nil, nil, err
+		}
+	} else if err := remove(processPath); err != nil {
+		return nil, nil, nil, err
+	}
+	return documents, deletions, modes, nil
 }
 
 func (p *Platform) StackCompile(ctx context.Context) (*CompiledStack, error) {
@@ -508,23 +731,29 @@ func isShellSafeRune(r rune) bool {
 }
 
 func (p *Platform) writeCompiled(compiled *CompiledStack) error {
+	composePath := filepath.Join(p.root, "docker-compose.yaml")
 	if len(compiled.Compose.Services) > 0 {
 		data, err := compose.Marshal(compiled.Compose)
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(p.root, "docker-compose.yaml"), data, 0o644); err != nil {
+		if err := os.WriteFile(composePath, data, 0o644); err != nil {
 			return err
 		}
+	} else if err := os.Remove(composePath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
+	processPath := filepath.Join(p.root, "process-compose.yaml")
 	if len(compiled.ProcessCompose.Processes) > 0 {
 		data, err := proccompose.Marshal(compiled.ProcessCompose)
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(p.root, "process-compose.yaml"), data, 0o644); err != nil {
+		if err := os.WriteFile(processPath, data, 0o644); err != nil {
 			return err
 		}
+	} else if err := os.Remove(processPath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

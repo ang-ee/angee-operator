@@ -50,15 +50,12 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if err := ctx.Err(); err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	ours, err := p.LoadStack()
+	ours, _, exists, err := readGuardedStackDocument(p.root, p.root, "angee.yaml", nil)
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	// Snapshot the current manifest before any merge/ensure mutation so change
-	// detection compares against a pristine baseline.
-	before, err := manifest.Marshal(ours)
-	if err != nil {
-		return StackUpdateTemplateResult{}, err
+	if !exists {
+		return StackUpdateTemplateResult{}, fmt.Errorf("stack manifest %q does not exist", manifest.Path(p.root))
 	}
 
 	// Resolve the template: prefer the recorded template.active, fall back to
@@ -135,6 +132,8 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
+	plan.StateRoot = p.root
+	plan.TargetRoot = renderTarget
 	prepared, err := copierx.PrepareReconcile(ctx, plan, copierx.ReconcileOptions{
 		Mode: copierx.ReconcileUpdate, DryRun: opts.DryRun, Overwrite: opts.Overwrite,
 	})
@@ -151,15 +150,19 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		}
 	}
 	if len(result.Conflicts) != 0 {
-		paths := make([]string, 0, len(result.Conflicts))
-		for _, conflict := range result.Conflicts {
-			paths = append(paths, conflict.Path)
+		if !opts.DryRun {
+			paths := make([]string, 0, len(result.Conflicts))
+			for _, conflict := range result.Conflicts {
+				paths = append(paths, conflict.Path)
+			}
+			return result, &ConflictError{Kind: "template-files", Name: strings.Join(paths, ", "), Reason: "locally modified; use --overwrite to replace"}
 		}
-		return result, &ConflictError{Kind: "template-files", Name: strings.Join(paths, ", "), Reason: "locally modified; use --overwrite to replace"}
 	}
 
 	mergedDocuments := make(map[string][]byte, len(stackDocuments))
+	documentExpectations := make(map[string]renderedDocumentExpectation, len(stackDocuments))
 	foundCurrentStack := false
+	var preparedStack *manifest.Stack
 	for _, document := range stackDocuments {
 		rendered, ok := prepared.RenderedDocument(document.Path)
 		if !ok {
@@ -173,18 +176,24 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		current := (*manifest.Stack)(nil)
 		documentBefore := []byte(nil)
 		isCurrentStack := filepath.Clean(destination) == filepath.Clean(manifest.Path(p.root))
-		if isCurrentStack {
-			current = ours
-			documentBefore = before
-			foundCurrentStack = true
-		} else if loaded, loadErr := manifest.LoadFile(destination); loadErr == nil {
+		loaded, documentExpectation, loadErr := readStackDocumentExpectation(prepared.OpenTargetPath, document.Path)
+		if loadErr != nil {
+			return StackUpdateTemplateResult{}, fmt.Errorf("load current chained manifest %s: %w", document.Path, loadErr)
+		}
+		exists := documentExpectation.Exists
+		if exists {
 			current = loaded
 			documentBefore, err = manifest.Marshal(loaded)
 			if err != nil {
 				return StackUpdateTemplateResult{}, err
 			}
-		} else if !os.IsNotExist(loadErr) {
-			return StackUpdateTemplateResult{}, fmt.Errorf("load current chained manifest %s: %w", document.Path, loadErr)
+		}
+		documentExpectations[document.Path] = documentExpectation
+		if isCurrentStack {
+			if !exists {
+				return StackUpdateTemplateResult{}, fmt.Errorf("current stack manifest %s disappeared during template update", document.Path)
+			}
+			foundCurrentStack = true
 		}
 		merged := theirs
 		if current != nil {
@@ -197,6 +206,9 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		if err := manifest.Ensure(merged, metadata.Ensure); err != nil {
 			return StackUpdateTemplateResult{}, err
 		}
+		if isCurrentStack {
+			preparedStack = merged
+		}
 		after, err := manifest.Marshal(merged)
 		if err != nil {
 			return StackUpdateTemplateResult{}, err
@@ -205,7 +217,7 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		if !bytes.Equal(documentBefore, after) {
 			result.Changed = true
 			if isCurrentStack {
-				result.Changes = append(result.Changes, summarizeStackChanges(ours, merged)...)
+				result.Changes = append(result.Changes, summarizeStackChanges(current, merged)...)
 			} else {
 				result.Changes = append(result.Changes, "~ manifests/"+document.Path)
 			}
@@ -217,26 +229,69 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if opts.DryRun {
 		return result, nil
 	}
+	compiled, resolvedSecrets, err := p.compileStackArtifacts(ctx, preparedStack)
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	runtimeDocuments, runtimeDeletions, runtimeModes, err := p.runtimeArtifactDocuments(renderTarget, preparedStack, compiled, resolvedSecrets)
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	runtimeExpectedPaths := make(map[string][]byte, len(runtimeDocuments)+len(runtimeDeletions))
+	for path, data := range runtimeDocuments {
+		runtimeExpectedPaths[path] = data
+	}
+	for path, deleted := range runtimeDeletions {
+		if deleted {
+			runtimeExpectedPaths[path] = nil
+		}
+	}
+	runtimeExpectations, err := captureRenderedDocumentExpectations(ctx, prepared.OpenTargetPath, runtimeExpectedPaths)
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	verifyRuntimeEnv := func() error { return nil }
+	closeRuntimeEnv := func() error { return nil }
+	openBaoRel, relErr := filepath.Rel(renderTarget, filepath.Join(p.root, "run", "secrets.env"))
+	if preparedStack.SecretsBackend.Type != "openbao" {
+		verifyRuntimeEnv, closeRuntimeEnv, err = p.retainActiveEnvFile(preparedStack, preparedAbsolutePathOpener(prepared, renderTarget))
+		if err != nil {
+			return StackUpdateTemplateResult{}, err
+		}
+		defer func() { _ = closeRuntimeEnv() }()
+		deletionPlanned := relErr == nil && runtimeDeletions[filepath.ToSlash(openBaoRel)]
+		if deletionPlanned && p.activeEnvFileUsesPath(preparedStack, filepath.Join(p.root, "run", "secrets.env")) {
+			return StackUpdateTemplateResult{}, fmt.Errorf("active env-file path changed to alias obsolete OpenBao runtime output during template update")
+		}
+	}
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), prepared.VerifyStateRootPath); err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	rollbackResources, closeResources, verifyResources, err := p.stageStackResources(ctx, preparedStack, preparedAbsolutePathOpener(prepared, renderTarget))
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	defer func() { _ = closeResources() }()
 
-	rollbackFiles, err := prepared.ApplyFiles()
+	rollbackFiles, err := prepared.ApplyFiles(ctx)
 	if err != nil {
-		return StackUpdateTemplateResult{}, err
+		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackResources)
 	}
-	rollbackDocuments, err := applyRenderedDocuments(renderTarget, mergedDocuments, false)
+	rollbackDocuments, closeDocuments, verifyDocuments, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, renderTarget, mergedDocuments, nil, nil, documentExpectations, false)
 	if err != nil {
-		_ = rollbackFiles()
-		return StackUpdateTemplateResult{}, err
+		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackFiles, rollbackResources)
 	}
-	if _, err := p.StackPrepare(ctx); err != nil {
-		_ = rollbackDocuments()
-		_ = rollbackFiles()
-		return StackUpdateTemplateResult{}, err
+	defer func() { _ = closeDocuments() }()
+	rollbackRuntime, closeRuntime, verifyRuntime, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, renderTarget, runtimeDocuments, runtimeDeletions, runtimeModes, runtimeExpectations, false)
+	if err != nil {
+		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackDocuments, rollbackFiles, rollbackResources)
 	}
-	if err := prepared.SaveState(); err != nil {
-		_ = rollbackDocuments()
-		_ = rollbackFiles()
-		_, _ = p.StackPrepare(ctx)
-		return StackUpdateTemplateResult{}, err
+	defer func() { _ = closeRuntime() }()
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyDocuments, verifyRuntime, verifyResources, verifyRuntimeEnv); err != nil {
+		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackRuntime, rollbackDocuments, rollbackFiles, rollbackResources)
+	}
+	if err := prepared.SaveState(ctx); err != nil {
+		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackRuntime, rollbackDocuments, rollbackFiles, rollbackResources)
 	}
 	return result, nil
 }

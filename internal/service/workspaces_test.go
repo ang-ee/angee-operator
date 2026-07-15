@@ -9,8 +9,41 @@ import (
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
+
+func TestWorkspaceSourceCleanupRetainsOriginalDestinationCapability(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspaces", "feature")
+	attacker := filepath.Join(root, "attacker")
+	for _, path := range []string{filepath.Join(workspace, "app"), attacker} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	guard, err := copierx.OpenGuardedPath(root, root, "workspaces/feature/app", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	cleanup := &workspaceSourceCleanup{entries: []workspaceSourceCleanupEntry{{dest: guard}}}
+	moved := workspace + "-moved"
+	if err := os.Rename(workspace, moved); err != nil {
+		t.Fatalf("Rename(workspace): %v", err)
+	}
+	if err := os.Symlink(attacker, workspace); err != nil {
+		t.Fatalf("Symlink(attacker): %v", err)
+	}
+	if err := cleanup.Rollback(context.Background()); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "app")); !os.IsNotExist(err) {
+		t.Fatalf("original destination remained, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(attacker, "app")); !os.IsNotExist(err) {
+		t.Fatalf("retargeted destination was touched, stat error = %v", err)
+	}
+}
 
 func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing.T) {
 	base := t.TempDir()
@@ -89,6 +122,46 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 		if resolvedTarget != canonicalSourceRoot {
 			t.Fatalf("workspace local source symlink resolves to %q, want %q", resolvedTarget, canonicalSourceRoot)
 		}
+	}
+}
+
+func TestWorkspaceCreateRejectsSymlinkedWorkspacesRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	template := filepath.Join(base, "workspace-template")
+	outside := filepath.Join(base, "outside")
+	for _, path := range []string{root, filepath.Join(template, "template"), outside} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	copierYAML := "_subdirectory: template\n_templates_suffix: .jinja\n_answers_file: .copier-answers.yml\n_angee:\n  kind: workspace\n  name: test\n"
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := manifest.SaveFile(manifest.Path(root), platform.EmptyStack("test")); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "workspaces")); err != nil {
+		t.Fatalf("Symlink(workspaces): %v", err)
+	}
+	_, err = platform.WorkspaceCreate(context.Background(), api.WorkspaceCreateRequest{Template: template, Name: "feature"})
+	if err == nil {
+		t.Fatal("WorkspaceCreate succeeded through a symlinked workspaces root")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "feature")); !os.IsNotExist(err) {
+		t.Fatalf("outside workspace was materialized, stat error = %v", err)
+	}
+	saved, err := manifest.LoadFile(manifest.Path(root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if _, exists := saved.Workspaces["feature"]; exists {
+		t.Fatal("workspace was persisted after destination validation failed")
 	}
 }
 
@@ -915,6 +988,48 @@ func TestWorkspaceDestroyRefusesUnpushedGitSource(t *testing.T) {
 	}
 	if _, ok := saved.Workspaces[workspaceName]; ok {
 		t.Fatalf("workspace still present in manifest after destroy")
+	}
+}
+
+func TestWorkspaceDestroyRejectsSymlinkedWorkspacesRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	outside := filepath.Join(base, "outside")
+	for _, path := range []string{root, filepath.Join(outside, "feature")} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack := platform.EmptyStack("test")
+	stack.Workspaces = map[string]manifest.Workspace{
+		"feature": {Template: "workspace-template"},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	marker := filepath.Join(outside, "feature", "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(marker): %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "workspaces")); err != nil {
+		t.Fatalf("Symlink(workspaces): %v", err)
+	}
+	if err := platform.WorkspaceDestroy(context.Background(), "feature", true); err == nil {
+		t.Fatal("WorkspaceDestroy succeeded through a symlinked workspaces root")
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep\n" {
+		t.Fatalf("outside marker = %q, %v; want unchanged", data, err)
+	}
+	saved, err := manifest.LoadFile(manifest.Path(root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if _, exists := saved.Workspaces["feature"]; !exists {
+		t.Fatal("workspace was removed from manifest after destination validation failed")
 	}
 }
 

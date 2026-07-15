@@ -98,6 +98,112 @@ func TestStackPrepareWritesSecretSafeGeneratedFiles(t *testing.T) {
 	}
 }
 
+func TestEnvFileAtOpenBaoRuntimePathIsNeverScheduledForDeletion(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "run", "secrets.env")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(run): %v", err)
+	}
+	if err := os.WriteFile(path, []byte("KEEP=value\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(env): %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack := &manifest.Stack{SecretsBackend: manifest.SecretsBackend{Type: "env-file", Path: "run/secrets.env"}}
+	if err := platform.writeRuntimeEnv(stack, nil); err != nil {
+		t.Fatalf("writeRuntimeEnv: %v", err)
+	}
+	_, deletions, _, err := platform.runtimeArtifactDocuments(root, stack, &CompiledStack{}, nil)
+	if err != nil {
+		t.Fatalf("runtimeArtifactDocuments: %v", err)
+	}
+	if deletions["run/secrets.env"] {
+		t.Fatal("active env-file backend path was scheduled for deletion")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "KEEP=value\n" {
+		t.Fatalf("env-file contents = %q, %v", data, err)
+	}
+	alias := filepath.Join(root, ".env")
+	if err := os.Symlink(filepath.Join("run", "secrets.env"), alias); err != nil {
+		t.Fatalf("Symlink(env alias): %v", err)
+	}
+	stack.SecretsBackend.Path = ".env"
+	if err := platform.writeRuntimeEnv(stack, nil); err != nil {
+		t.Fatalf("writeRuntimeEnv(alias): %v", err)
+	}
+	_, deletions, _, err = platform.runtimeArtifactDocuments(root, stack, &CompiledStack{}, nil)
+	if err != nil {
+		t.Fatalf("runtimeArtifactDocuments(alias): %v", err)
+	}
+	if deletions["run/secrets.env"] {
+		t.Fatal("symlinked active env-file backend target was scheduled for deletion")
+	}
+	if data, err := os.ReadFile(alias); err != nil || string(data) != "KEEP=value\n" {
+		t.Fatalf("env-file alias contents = %q, %v", data, err)
+	}
+}
+
+func TestRuntimeEnvDeletionRollsBackWhenEnvFileBecomesAlias(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "run", "secrets.env")
+	configured := filepath.Join(root, ".env")
+	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
+		t.Fatalf("MkdirAll(run): %v", err)
+	}
+	if err := os.WriteFile(candidate, []byte("STALE=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(candidate): %v", err)
+	}
+	if err := os.WriteFile(configured, []byte("ACTIVE=value\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(configured): %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack := &manifest.Stack{SecretsBackend: manifest.SecretsBackend{Type: "env-file", Path: ".env"}}
+	_, deletions, modes, err := platform.runtimeArtifactDocuments(root, stack, &CompiledStack{}, nil)
+	if err != nil {
+		t.Fatalf("runtimeArtifactDocuments: %v", err)
+	}
+	if !deletions["run/secrets.env"] {
+		t.Fatal("obsolete OpenBao runtime env was not scheduled for deletion")
+	}
+	opener := targetPathOpener(root, root, nil)
+	expectations, err := captureRenderedDocumentExpectations(context.Background(), opener, map[string][]byte{"run/secrets.env": nil})
+	if err != nil {
+		t.Fatalf("captureRenderedDocumentExpectations: %v", err)
+	}
+	verifyEnv, closeEnv, err := platform.retainActiveEnvFile(stack, openAbsoluteGuardedPath)
+	if err != nil {
+		t.Fatalf("retainActiveEnvFile: %v", err)
+	}
+	defer closeEnv()
+	if err := os.Remove(configured); err != nil {
+		t.Fatalf("Remove(configured): %v", err)
+	}
+	if err := os.Symlink(filepath.Join("run", "secrets.env"), configured); err != nil {
+		t.Fatalf("Symlink(alias): %v", err)
+	}
+	rollback, closeRuntime, _, err := applyRenderedDocuments(context.Background(), opener, root, nil, deletions, modes, expectations, false)
+	if err != nil {
+		t.Fatalf("applyRenderedDocuments: %v", err)
+	}
+	defer closeRuntime()
+	if err := verifyEnv(); err == nil {
+		t.Fatal("retained env-file identity accepted a new alias")
+	}
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback runtime deletion: %v", err)
+	}
+	data, err := os.ReadFile(candidate)
+	if err != nil || string(data) != "STALE=secret\n" {
+		t.Fatalf("restored candidate = %q, %v", data, err)
+	}
+}
+
 func TestStackStatusMergesRuntimeStateAndHealth(t *testing.T) {
 	root := t.TempDir()
 	stack := &manifest.Stack{

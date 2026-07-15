@@ -246,6 +246,7 @@ type TemplateConflict struct {
 
 type ServiceTemplateUpdateResult struct {
 	Name      string             `json:"name"`
+	Service   ServiceState       `json:"service"`
 	Changed   bool               `json:"changed"`
 	Changes   []TemplateChange   `json:"changes,omitempty"`
 	Conflicts []TemplateConflict `json:"conflicts,omitempty"`

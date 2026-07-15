@@ -130,8 +130,9 @@ declared pools under owner `service/<name>/<pool>`.
 }
 ```
 
-It returns the service name plus ordered `changes` and `conflicts`. The same
-operation is available in GraphQL as
+It returns the resulting declared service state plus ordered `changes` and
+`conflicts`. Dry runs report conflicts in the result without mutating files or
+returning an apply error. The same operation is available in GraphQL as
 `serviceUpdateFromTemplate(name:, input:)`. Without `overwrite`, any locally
 modified rendered asset or conflicting service field fails before mutation.
 

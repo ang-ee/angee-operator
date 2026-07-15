@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -142,6 +143,43 @@ func (c Client) WorktreeRemove(ctx context.Context, repoDir, dest string) error 
 func (c Client) WorktreePrune(ctx context.Context, repoDir string) error {
 	_, err := c.Run(ctx, repoDir, "worktree", "prune")
 	return err
+}
+
+// WorktreeRegistered reports whether repoDir has a worktree registered at dest.
+func (c Client) WorktreeRegistered(ctx context.Context, repoDir, dest string) (bool, error) {
+	out, err := c.runText(ctx, repoDir, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	want, err := canonicalWorktreePath(dest)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		path, err := canonicalWorktreePath(strings.TrimPrefix(line, "worktree "))
+		if err == nil && path == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func canonicalWorktreePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return filepath.Clean(abs), nil
+	}
+	return filepath.Clean(filepath.Join(parent, filepath.Base(abs))), nil
 }
 
 func (c Client) Pull(ctx context.Context, dir string) error {

@@ -180,6 +180,18 @@ services:
     image: vite:latest
 `
 
+const localServiceTemplate = `version: 1
+kind: stack
+name: demo
+template:
+  active: stacks/dev
+  answers_file: .copier-answers.yml
+services:
+  web:
+    runtime: local
+    command: ["echo", "ready"]
+`
+
 // TestStackUpdateFromTemplateReconcilesWorkspacePorts covers the workspace
 // inner-stack case: `stack update --template` must re-derive the workspace's
 // allocated ports from the parent stack's authoritative record, not from the
@@ -463,6 +475,52 @@ func TestStackUpdateFromTemplateEndToEnd(t *testing.T) {
 	}
 }
 
+func TestStackUpdateFromTemplateRemovesObsoleteRuntimeArtifacts(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	writeStackTemplate(t, project, oneServiceTemplate)
+	p, err := New(project)
+	if err != nil {
+		t.Fatalf("New(project): %v", err)
+	}
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, err := New(initialized.Root)
+	if err != nil {
+		t.Fatalf("New(stack root): %v", err)
+	}
+	if _, err := stackPlatform.StackPrepare(ctx); err != nil {
+		t.Fatalf("StackPrepare(container): %v", err)
+	}
+	composePath := filepath.Join(initialized.Root, "docker-compose.yaml")
+	if _, err := os.Stat(composePath); err != nil {
+		t.Fatalf("container runtime artifact missing: %v", err)
+	}
+	secretPath := filepath.Join(initialized.Root, "run", "secrets.env")
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(run): %v", err)
+	}
+	if err := os.WriteFile(secretPath, []byte("STALE=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(stale secrets): %v", err)
+	}
+
+	writeStackTemplate(t, project, localServiceTemplate)
+	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+		t.Fatalf("StackUpdateFromTemplate(local): %v", err)
+	}
+	if _, err := os.Stat(composePath); !os.IsNotExist(err) {
+		t.Fatalf("obsolete docker-compose.yaml remains, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(initialized.Root, "process-compose.yaml")); err != nil {
+		t.Fatalf("local runtime artifact missing: %v", err)
+	}
+	if _, err := os.Stat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("obsolete run/secrets.env remains, stat error = %v", err)
+	}
+}
+
 func TestStackUpdateFromTemplateAddsRenderedFile(t *testing.T) {
 	ctx := context.Background()
 	project := t.TempDir()
@@ -530,6 +588,13 @@ func TestStackUpdateFromTemplatePreservesConflictUnlessOverwrite(t *testing.T) {
 	}
 	if err := os.WriteFile(agentsTemplate, []byte("template v2\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(updated template): %v", err)
+	}
+	dryRun, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(dry-run conflict): %v", err)
+	}
+	if len(dryRun.Conflicts) != 1 || !strings.HasSuffix(dryRun.Conflicts[0].Path, "AGENTS.md") {
+		t.Fatalf("dry-run conflicts = %+v, want AGENTS.md", dryRun.Conflicts)
 	}
 
 	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err == nil {

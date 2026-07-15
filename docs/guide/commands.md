@@ -21,7 +21,7 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 angee doctor
 angee init --dev [path] [--input key=value ...] [--yes] [--force]
 angee stack init <template> [path] [--input key=value ...] [--yes] [--force]
-angee stack update [--template] [--dry-run]
+angee stack update [--template] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
@@ -78,7 +78,8 @@ re-renders `service.yaml` and build assets; and recursively three-way merges the
 service entry. Independent local and template map changes are preserved. A
 same-field or asset conflict fails before writing unless `--overwrite` is set.
 Service identity, workspace binding, and existing allocations cannot be changed
-through template inputs.
+through template inputs. With `--dry-run`, conflicts are reported without
+writing and without turning the preview into a failed apply.
 
 ```sh
 angee service init <name> [flags]                       # field-based
