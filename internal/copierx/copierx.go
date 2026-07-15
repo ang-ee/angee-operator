@@ -116,17 +116,6 @@ type CopyRequest struct {
 	Inputs   Inputs
 }
 
-type UpdateRequest struct {
-	Template string
-	Dest     string
-	Inputs   Inputs
-}
-
-type Renderer interface {
-	Copy(ctx context.Context, req CopyRequest) error
-	Update(ctx context.Context, req UpdateRequest) error
-}
-
 type Metadata struct {
 	Kind           string                          `yaml:"kind"`
 	Name           string                          `yaml:"name"`
@@ -178,12 +167,13 @@ type ChainEntry struct {
 }
 
 type config struct {
-	Subdirectory string           `yaml:"_subdirectory"`
-	Suffix       string           `yaml:"_templates_suffix"`
-	AnswersFile  string           `yaml:"_answers_file"`
-	Angee        Metadata         `yaml:"_angee"`
-	Defaults     Inputs           `yaml:"-"`
-	Questions    map[string]Input `yaml:"-"`
+	Subdirectory     string           `yaml:"_subdirectory"`
+	Suffix           string           `yaml:"_templates_suffix"`
+	AnswersFile      string           `yaml:"_answers_file"`
+	PreserveSymlinks bool             `yaml:"_preserve_symlinks"`
+	Angee            Metadata         `yaml:"_angee"`
+	Defaults         Inputs           `yaml:"-"`
+	Questions        map[string]Input `yaml:"-"`
 }
 
 type LocalRenderer struct{}
@@ -205,17 +195,6 @@ func (LocalRenderer) Copy(ctx context.Context, req CopyRequest) error {
 		return err
 	}
 	return copier.Copy(req.Template, req.Dest, copierOptions(cfg, req.Inputs)...)
-}
-
-func (LocalRenderer) Update(ctx context.Context, req UpdateRequest) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	cfg, err := readConfig(req.Template)
-	if err != nil {
-		return err
-	}
-	return copier.Update(req.Dest, copierOptions(cfg, req.Inputs)...)
 }
 
 func copierOptions(cfg config, inputs Inputs) []copier.Option {

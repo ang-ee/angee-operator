@@ -31,6 +31,15 @@ models:
     fields:
       id:
         resolver: true
+  TemplateChange:
+    model:
+      - github.com/ang-ee/angee-operator/api.TemplateChange
+  TemplateConflict:
+    model:
+      - github.com/ang-ee/angee-operator/api.TemplateConflict
+  ServiceTemplateUpdateResult:
+    model:
+      - github.com/ang-ee/angee-operator/api.ServiceTemplateUpdateResult
   JobState:
     model:
       - github.com/ang-ee/angee-operator/api.JobState

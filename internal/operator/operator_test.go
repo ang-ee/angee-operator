@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -405,6 +406,21 @@ services:
 	}
 	if invalid.Field != "name" || invalid.Reason == "" {
 		t.Fatalf("invalid service error = %#v", invalid)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/services/missing/template/update", strings.NewReader(`{"dry_run":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing service template update status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	response := doGraphQL(t, server, map[string]any{
+		"query": `mutation { serviceUpdateFromTemplate(name: "missing", input: {dryRun: true}) { name changed } }`,
+	})
+	if len(response.Errors) == 0 || !strings.Contains(fmt.Sprint(response.Errors[0]), "missing") {
+		t.Fatalf("GraphQL service template update errors = %#v", response.Errors)
 	}
 }
 

@@ -98,7 +98,7 @@ through the template search paths.
 # Stack
 angee doctor
 angee stack init <template> [path] [--input key=value ...]
-angee stack update
+angee stack update [--template] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 
@@ -115,6 +115,7 @@ angee logs [service...] [--follow]
 # Services and jobs
 angee service init <name> [--runtime container|local] [--image image] [--command arg ...]
 angee service update <name>
+angee service update <name> --template [--input key=value ...] [--dry-run] [--overwrite]
 angee service destroy <name> [--stop=false]
 angee service list  # or: angee service ls
 angee job list      # or: angee job ls
@@ -127,6 +128,7 @@ angee source status <name>
 angee source pull <name>
 angee source push <name> [--ref ref]
 angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...]
+angee workspace update <name> [--ttl duration] [--input key=value ...] [--overwrite]
 angee workspace list  # or: angee ws ls
 angee workspace get <name>
 angee workspace status [name]

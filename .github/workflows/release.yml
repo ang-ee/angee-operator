@@ -9,7 +9,7 @@ env:
   REGISTRY: ghcr.io
   OPERATOR_IMAGE: ghcr.io/ang-ee/angee-operator
   CLI_IMAGE: ghcr.io/ang-ee/angee-cli
-  GO_VERSION: "1.25.11"
+  GO_VERSION: "1.25.12"
 
 permissions:
   contents: read

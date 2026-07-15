@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -81,11 +80,18 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 	return state, nil
 }
 
-func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error) {
-	stack, err := p.LoadStack()
+func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreateRequest) (result api.ServiceState, retErr error) {
+	parentTx, stack, err := openParentStackTransaction(p.root, false)
 	if err != nil {
 		return api.ServiceState{}, err
 	}
+	defer func() { _ = parentTx.Close() }()
+	parentCommitted := false
+	defer func() {
+		if parentCommitted {
+			retErr = joinRollbackErrors(retErr, parentTx.Rollback)
+		}
+	}()
 	workspace, ok := stack.Workspaces[req.Workspace]
 	if !ok {
 		return api.ServiceState{}, &NotFoundError{Kind: "workspace", Name: req.Workspace}
@@ -128,14 +134,13 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	}
 	// Defer a rollback that releases the just-allocated leases if we
 	// return early with an error. Cleared on success.
-	rollback := func() {
+	rollback := func() error {
 		releaseServicePortLeases(stack, serviceName)
-		// Persist the release on disk so retries see clean state.
-		_ = manifest.SaveFile(manifest.Path(p.root), stack)
+		return nil
 	}
 	defer func() {
 		if rollback != nil {
-			rollback()
+			retErr = joinRollbackErrors(retErr, rollback)
 		}
 	}()
 
@@ -147,23 +152,23 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		renderInputs["alloc_"+pool] = strconv.Itoa(port)
 	}
 
-	scratch, err := os.MkdirTemp("", "angee-service-render-*")
+	buildContext := filepath.Join(p.root, "services", serviceName)
+	statePath := renderPlanStatePath(p.root, "services", serviceName)
+	prepared, err := copierx.PrepareReconcile(ctx, copierx.RenderPlan{
+		Target: buildContext, TargetRoot: p.root, StateRoot: p.root, StatePath: statePath,
+		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs}},
+		Documents: []string{"service.yaml"},
+	}, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
 	if err != nil {
-		return api.ServiceState{}, fmt.Errorf("create render scratch dir: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{
-		Template: templatePath,
-		Dest:     scratch,
-		Inputs:   renderInputs,
-	}); err != nil {
 		return api.ServiceState{}, fmt.Errorf("render service template: %w", err)
 	}
-
-	servicePath := filepath.Join(scratch, "service.yaml")
-	rendered, err := os.ReadFile(servicePath)
-	if err != nil {
-		return api.ServiceState{}, fmt.Errorf("read rendered service.yaml: %w", err)
+	defer func() { _ = prepared.Close() }()
+	if err := parentTx.VerifyPreparedRoot(p.root, prepared); err != nil {
+		return api.ServiceState{}, fmt.Errorf("verify stack root transaction: %w", err)
+	}
+	rendered, ok := prepared.RenderedDocument("service.yaml")
+	if !ok {
+		return api.ServiceState{}, fmt.Errorf("service template rendered no service.yaml")
 	}
 	parsed, err := parsePartialServiceManifest(rendered)
 	if err != nil {
@@ -177,18 +182,6 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 		return api.ServiceState{}, &InvalidInputError{Field: "template", Reason: fmt.Sprintf("rendered service key %q does not match resolved name %q", renderedName, serviceName)}
 	}
 
-	// Move the rest of the rendered tree (typically `docker/`) into the
-	// stack-owned build-context dir. service.yaml itself is consumed and
-	// not copied. p.root is the control root (ANGEE_ROOT, normally `.angee`),
-	// so the dir is `<root>/services/<name>` — a sibling of `workspaces/`,
-	// `run/`, etc. — not `<root>/.angee/services/<name>`.
-	buildContext := filepath.Join(p.root, "services", serviceName)
-	if err := os.RemoveAll(buildContext); err != nil {
-		return api.ServiceState{}, fmt.Errorf("clear previous build context %s: %w", buildContext, err)
-	}
-	if err := moveRenderedAssets(scratch, buildContext); err != nil {
-		return api.ServiceState{}, fmt.Errorf("install build context: %w", err)
-	}
 	// Validate the rendered service entry before installing the build
 	// context or registering it in the stack. Includes a containment
 	// check on `build.context` so a hostile template can't escape into
@@ -199,6 +192,16 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	if err := validateService(serviceName, renderedService); err != nil {
 		return api.ServiceState{}, err
 	}
+	rollbackFiles, err := prepared.ApplyFiles(ctx)
+	if err != nil {
+		return api.ServiceState{}, fmt.Errorf("install build context: %w", err)
+	}
+	filesCommitted := false
+	defer func() {
+		if !filesCommitted {
+			retErr = joinRollbackErrors(retErr, rollbackFiles)
+		}
+	}()
 
 	// A routed service is reached through the edge and publishes no host port,
 	// so release any pool lease optimistically taken before the template (which
@@ -221,26 +224,31 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	declaredSecrets := ensureServiceSecrets(stack, renderedService)
 
 	prevRollback := rollback
-	rollback = func() {
+	rollback = func() error {
 		for _, name := range declaredSecrets {
 			delete(stack.Secrets, name)
 		}
-		_ = os.RemoveAll(buildContext)
 		delete(stack.Services, serviceName)
-		prevRollback()
+		return prevRollback()
 	}
 
 	if stack.Services == nil {
 		stack.Services = map[string]manifest.Service{}
 	}
 	stack.Services[serviceName] = renderedService
-	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+	if err := parentTx.Save(stack); err != nil {
 		return api.ServiceState{}, err
 	}
+	parentCommitted = true
+	if err := prepared.SaveState(ctx); err != nil {
+		return api.ServiceState{}, joinRollbackErrors(err, parentTx.Rollback)
+	}
+	filesCommitted = true
 	// Past this point the manifest entry and leases are committed.
 	// Cancel the rollback; StackPrepare / ServiceUp run after the
 	// caller releases the lock (see ServiceCreate).
 	rollback = nil
+	parentCommitted = false
 
 	// Keep workspace reference alive in the returned state via the
 	// existing ServiceState shape; full workspace mount details are
@@ -272,7 +280,7 @@ func ensureServiceSecrets(stack *manifest.Stack, s manifest.Service) []string {
 // (and so may reference `${secret.NAME}`): env values, command, ports, mounts,
 // and workdir — the same set Compile resolves.
 func serviceSecretStrings(s manifest.Service) []string {
-	strs := make([]string, 0, len(s.Env)+len(s.Command)+len(s.Ports)+len(s.Mounts)+1)
+	strs := make([]string, 0, len(s.Env))
 	// Iterate env keys in sorted order so the referenced-secret discovery
 	// order is deterministic (Go map iteration is randomized).
 	for _, k := range slices.Sorted(maps.Keys(s.Env)) {
@@ -500,39 +508,4 @@ func singleService(services map[string]manifest.Service) (manifest.Service, stri
 		return svc, name
 	}
 	return manifest.Service{}, ""
-}
-
-// moveRenderedAssets walks src and moves every file/dir other than
-// service.yaml into dst. service.yaml is consumed by the parser and
-// not copied. Empty source produces an empty dst dir.
-func moveRenderedAssets(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	hasAssets := false
-	for _, entry := range entries {
-		if entry.Name() == "service.yaml" {
-			continue
-		}
-		hasAssets = true
-		break
-	}
-	if !hasAssets {
-		return nil
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.Name() == "service.yaml" {
-			continue
-		}
-		from := filepath.Join(src, entry.Name())
-		to := filepath.Join(dst, entry.Name())
-		if err := os.Rename(from, to); err != nil {
-			return fmt.Errorf("move %s -> %s: %w", from, to, err)
-		}
-	}
-	return nil
 }

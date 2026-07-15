@@ -198,6 +198,7 @@ type ComplexityRoot struct {
 		ServiceStart                  func(childComplexity int, name string) int
 		ServiceStop                   func(childComplexity int, name string) int
 		ServiceUp                     func(childComplexity int, name string) int
+		ServiceUpdateFromTemplate     func(childComplexity int, name string, input *model.ServiceTemplateUpdateInput) int
 		SourceFetch                   func(childComplexity int, name string) int
 		SourcePull                    func(childComplexity int, name string) int
 		SourcePush                    func(childComplexity int, name string, ref *string) int
@@ -312,6 +313,14 @@ type ComplexityRoot struct {
 		Status  func(childComplexity int) int
 	}
 
+	ServiceTemplateUpdateResult struct {
+		Changed   func(childComplexity int) int
+		Changes   func(childComplexity int) int
+		Conflicts func(childComplexity int) int
+		Name      func(childComplexity int) int
+		Service   func(childComplexity int) int
+	}
+
 	ServicesGroupKey struct {
 		Health  func(childComplexity int) int
 		Runtime func(childComplexity int) int
@@ -385,6 +394,16 @@ type ComplexityRoot struct {
 		Sources                 func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
 		Templates               func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
 		Workspaces              func(childComplexity int, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) int
+	}
+
+	TemplateChange struct {
+		Kind func(childComplexity int) int
+		Path func(childComplexity int) int
+	}
+
+	TemplateConflict struct {
+		Path   func(childComplexity int) int
+		Reason func(childComplexity int) int
 	}
 
 	TemplateDescriptor struct {
@@ -589,6 +608,7 @@ type MutationResolver interface {
 	JobRun(ctx context.Context, name string, inputs []*model.KeyValueInput) (string, error)
 	FileWrite(ctx context.Context, source string, path string, content string, etag *string) (*api.FileRef, error)
 	ServiceInit(ctx context.Context, input model.ServiceInput) (*model.MutationResult, error)
+	ServiceUpdateFromTemplate(ctx context.Context, name string, input *model.ServiceTemplateUpdateInput) (*api.ServiceTemplateUpdateResult, error)
 	InsertServicesOne(ctx context.Context, object model.ServicesInsertInput) (*api.ServiceState, error)
 	UpdateServicesByPk(ctx context.Context, pkColumns model.ServicesPkColumnsInput, set model.ServicesSetInput) (*api.ServiceState, error)
 	DeleteServicesByPk(ctx context.Context, id string) (*api.ServiceState, error)
@@ -1429,6 +1449,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ServiceUp(childComplexity, args["name"].(string)), true
+	case "Mutation.serviceUpdateFromTemplate":
+		if e.ComplexityRoot.Mutation.ServiceUpdateFromTemplate == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_serviceUpdateFromTemplate_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ServiceUpdateFromTemplate(childComplexity, args["name"].(string), args["input"].(*model.ServiceTemplateUpdateInput)), true
 	case "Mutation.sourceFetch":
 		if e.ComplexityRoot.Mutation.SourceFetch == nil {
 			break
@@ -2237,6 +2268,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceState.Status(childComplexity), true
 
+	case "ServiceTemplateUpdateResult.changed":
+		if e.ComplexityRoot.ServiceTemplateUpdateResult.Changed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceTemplateUpdateResult.Changed(childComplexity), true
+	case "ServiceTemplateUpdateResult.changes":
+		if e.ComplexityRoot.ServiceTemplateUpdateResult.Changes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceTemplateUpdateResult.Changes(childComplexity), true
+	case "ServiceTemplateUpdateResult.conflicts":
+		if e.ComplexityRoot.ServiceTemplateUpdateResult.Conflicts == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceTemplateUpdateResult.Conflicts(childComplexity), true
+	case "ServiceTemplateUpdateResult.name":
+		if e.ComplexityRoot.ServiceTemplateUpdateResult.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceTemplateUpdateResult.Name(childComplexity), true
+	case "ServiceTemplateUpdateResult.service":
+		if e.ComplexityRoot.ServiceTemplateUpdateResult.Service == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceTemplateUpdateResult.Service(childComplexity), true
+
 	case "ServicesGroupKey.health":
 		if e.ComplexityRoot.ServicesGroupKey.Health == nil {
 			break
@@ -2612,6 +2674,32 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.Workspaces(childComplexity, args["where"].(*model.WorkspacesBoolExp), args["order_by"].([]*model.WorkspacesOrderBy), args["limit"].(*int), args["offset"].(*int)), true
+
+	case "TemplateChange.kind":
+		if e.ComplexityRoot.TemplateChange.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateChange.Kind(childComplexity), true
+	case "TemplateChange.path":
+		if e.ComplexityRoot.TemplateChange.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateChange.Path(childComplexity), true
+
+	case "TemplateConflict.path":
+		if e.ComplexityRoot.TemplateConflict.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateConflict.Path(childComplexity), true
+	case "TemplateConflict.reason":
+		if e.ComplexityRoot.TemplateConflict.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateConflict.Reason(childComplexity), true
 
 	case "TemplateDescriptor.id":
 		if e.ComplexityRoot.TemplateDescriptor.ID == nil {
@@ -3286,6 +3374,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputInt_comparison_exp,
 		ec.unmarshalInputKeyValueInput,
 		ec.unmarshalInputServiceInput,
+		ec.unmarshalInputServiceTemplateUpdateInput,
 		ec.unmarshalInputServicesGroupBySpec,
 		ec.unmarshalInputServicesGroupOrder,
 		ec.unmarshalInputServicesHaving,
@@ -3472,6 +3561,24 @@ type ServiceState {
   runtime: String!
   status: String!
   health: String
+}
+
+type TemplateChange {
+  path: String!
+  kind: String!
+}
+
+type TemplateConflict {
+  path: String!
+  reason: String!
+}
+
+type ServiceTemplateUpdateResult {
+  name: String!
+  service: ServiceState!
+  changed: Boolean!
+  changes: [TemplateChange!]!
+  conflicts: [TemplateConflict!]!
 }
 
 type JobState {
@@ -4123,6 +4230,7 @@ input workspaces_insert_input {
 input workspaces_set_input {
   ttl: String
   inputs: [KeyValueInput!]
+  overwrite: Boolean
 }
 
 input workspaces_pk_columns_input {
@@ -4171,6 +4279,12 @@ input ServiceInput {
   ports: [String!]
   workdir: String
   start: Boolean
+}
+
+input ServiceTemplateUpdateInput {
+  inputs: [KeyValueInput!]
+  dryRun: Boolean
+  overwrite: Boolean
 }
 
 input WorkspaceCreateInput {
@@ -4242,6 +4356,7 @@ type Mutation {
   fileWrite(source: String!, path: String!, content: String!, etag: String): FileRef!
 
   serviceInit(input: ServiceInput!): MutationResult
+  serviceUpdateFromTemplate(name: String!, input: ServiceTemplateUpdateInput): ServiceTemplateUpdateResult!
   insert_services_one(object: services_insert_input!): ServiceState
   update_services_by_pk(pk_columns: services_pk_columns_input!, _set: services_set_input!): ServiceState
   delete_services_by_pk(id: String!): ServiceState
@@ -4746,6 +4861,22 @@ func (ec *executionContext) childFields_ServiceState(ctx context.Context, field 
 	return nil, fmt.Errorf("no field named %q was found under type ServiceState", field.Name)
 }
 
+func (ec *executionContext) childFields_ServiceTemplateUpdateResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_ServiceTemplateUpdateResult_name(ctx, field)
+	case "service":
+		return ec.fieldContext_ServiceTemplateUpdateResult_service(ctx, field)
+	case "changed":
+		return ec.fieldContext_ServiceTemplateUpdateResult_changed(ctx, field)
+	case "changes":
+		return ec.fieldContext_ServiceTemplateUpdateResult_changes(ctx, field)
+	case "conflicts":
+		return ec.fieldContext_ServiceTemplateUpdateResult_conflicts(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ServiceTemplateUpdateResult", field.Name)
+}
+
 func (ec *executionContext) childFields_ServicesGroupKey(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "status":
@@ -4866,6 +4997,26 @@ func (ec *executionContext) childFields_StackStatus(ctx context.Context, field g
 		return ec.fieldContext_StackStatus_workspaces(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type StackStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_TemplateChange(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "path":
+		return ec.fieldContext_TemplateChange_path(ctx, field)
+	case "kind":
+		return ec.fieldContext_TemplateChange_kind(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TemplateChange", field.Name)
+}
+
+func (ec *executionContext) childFields_TemplateConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "path":
+		return ec.fieldContext_TemplateConflict_path(ctx, field)
+	case "reason":
+		return ec.fieldContext_TemplateConflict_reason(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TemplateConflict", field.Name)
 }
 
 func (ec *executionContext) childFields_TemplateDescriptor(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5617,6 +5768,28 @@ func (ec *executionContext) field_Mutation_serviceUp_args(ctx context.Context, r
 		return nil, err
 	}
 	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_serviceUpdateFromTemplate_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (*model.ServiceTemplateUpdateInput, error) {
+			return ec.unmarshalOServiceTemplateUpdateInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceTemplateUpdateInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
 	return args, nil
 }
 
@@ -9852,6 +10025,50 @@ func (ec *executionContext) fieldContext_Mutation_serviceInit(ctx context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_serviceUpdateFromTemplate(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_serviceUpdateFromTemplate(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ServiceUpdateFromTemplate(ctx, fc.Args["name"].(string), fc.Args["input"].(*model.ServiceTemplateUpdateInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.ServiceTemplateUpdateResult) graphql.Marshaler {
+			return ec.marshalNServiceTemplateUpdateResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceTemplateUpdateResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_serviceUpdateFromTemplate(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceTemplateUpdateResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_serviceUpdateFromTemplate_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_insert_services_one(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -13361,6 +13578,148 @@ func (ec *executionContext) fieldContext_ServiceState_health(_ context.Context, 
 	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ServiceTemplateUpdateResult_name(ctx context.Context, field graphql.CollectedField, obj *api.ServiceTemplateUpdateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceTemplateUpdateResult_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceTemplateUpdateResult_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceTemplateUpdateResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceTemplateUpdateResult_service(ctx context.Context, field graphql.CollectedField, obj *api.ServiceTemplateUpdateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceTemplateUpdateResult_service(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Service, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v api.ServiceState) graphql.Marshaler {
+			return ec.marshalNServiceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceState(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceTemplateUpdateResult_service(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServiceTemplateUpdateResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ServiceState(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ServiceTemplateUpdateResult_changed(ctx context.Context, field graphql.CollectedField, obj *api.ServiceTemplateUpdateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceTemplateUpdateResult_changed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Changed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceTemplateUpdateResult_changed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceTemplateUpdateResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceTemplateUpdateResult_changes(ctx context.Context, field graphql.CollectedField, obj *api.ServiceTemplateUpdateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceTemplateUpdateResult_changes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Changes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []api.TemplateChange) graphql.Marshaler {
+			return ec.marshalNTemplateChange2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateChangeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceTemplateUpdateResult_changes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServiceTemplateUpdateResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateChange(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ServiceTemplateUpdateResult_conflicts(ctx context.Context, field graphql.CollectedField, obj *api.ServiceTemplateUpdateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceTemplateUpdateResult_conflicts(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflicts, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []api.TemplateConflict) graphql.Marshaler {
+			return ec.marshalNTemplateConflict2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateConflictᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceTemplateUpdateResult_conflicts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServiceTemplateUpdateResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateConflict(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ServicesGroupKey_status(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroupKey) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -14925,6 +15284,98 @@ func (ec *executionContext) fieldContext_Subscription_onStackSnapshotChange(_ co
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _TemplateChange_path(ctx context.Context, field graphql.CollectedField, obj *api.TemplateChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateChange_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateChange_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateChange", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateChange_kind(ctx context.Context, field graphql.CollectedField, obj *api.TemplateChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateChange_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateChange_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateChange", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateConflict_path(ctx context.Context, field graphql.CollectedField, obj *api.TemplateConflict) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateConflict_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateConflict_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateConflict", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateConflict_reason(ctx context.Context, field graphql.CollectedField, obj *api.TemplateConflict) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateConflict_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateConflict_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateConflict", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _TemplateDescriptor_id(ctx context.Context, field graphql.CollectedField, obj *api.TemplateDescriptor) (ret graphql.Marshaler) {
@@ -18925,6 +19376,50 @@ func (ec *executionContext) unmarshalInputServiceInput(ctx context.Context, obj 
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputServiceTemplateUpdateInput(ctx context.Context, obj any) (model.ServiceTemplateUpdateInput, error) {
+	var it model.ServiceTemplateUpdateInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"inputs", "dryRun", "overwrite"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "inputs":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inputs"))
+			data, err := ec.unmarshalOKeyValueInput2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Inputs = data
+		case "dryRun":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dryRun"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DryRun = data
+		case "overwrite":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("overwrite"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Overwrite = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputServicesGroupBySpec(ctx context.Context, obj any) (model.ServicesGroupBySpec, error) {
 	var it model.ServicesGroupBySpec
 	if obj == nil {
@@ -21124,7 +21619,7 @@ func (ec *executionContext) unmarshalInputworkspaces_set_input(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"ttl", "inputs"}
+	fieldsInOrder := [...]string{"ttl", "inputs", "overwrite"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -21145,6 +21640,13 @@ func (ec *executionContext) unmarshalInputworkspaces_set_input(ctx context.Conte
 				return it, err
 			}
 			it.Inputs = data
+		case "overwrite":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("overwrite"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Overwrite = data
 		}
 	}
 	return it, nil
@@ -22241,6 +22743,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_serviceInit(ctx, field)
 			})
+		case "serviceUpdateFromTemplate":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_serviceUpdateFromTemplate(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "insert_services_one":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_insert_services_one(ctx, field)
@@ -23606,6 +24115,65 @@ func (ec *executionContext) _ServiceState(ctx context.Context, sel ast.Selection
 	return out
 }
 
+var serviceTemplateUpdateResultImplementors = []string{"ServiceTemplateUpdateResult"}
+
+func (ec *executionContext) _ServiceTemplateUpdateResult(ctx context.Context, sel ast.SelectionSet, obj *api.ServiceTemplateUpdateResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, serviceTemplateUpdateResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ServiceTemplateUpdateResult")
+		case "name":
+			out.Values[i] = ec._ServiceTemplateUpdateResult_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "service":
+			out.Values[i] = ec._ServiceTemplateUpdateResult_service(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "changed":
+			out.Values[i] = ec._ServiceTemplateUpdateResult_changed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "changes":
+			out.Values[i] = ec._ServiceTemplateUpdateResult_changes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "conflicts":
+			out.Values[i] = ec._ServiceTemplateUpdateResult_conflicts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var servicesGroupKeyImplementors = []string{"ServicesGroupKey"}
 
 func (ec *executionContext) _ServicesGroupKey(ctx context.Context, sel ast.SelectionSet, obj *model.ServicesGroupKey) graphql.Marshaler {
@@ -24115,6 +24683,94 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}
+}
+
+var templateChangeImplementors = []string{"TemplateChange"}
+
+func (ec *executionContext) _TemplateChange(ctx context.Context, sel ast.SelectionSet, obj *api.TemplateChange) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, templateChangeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TemplateChange")
+		case "path":
+			out.Values[i] = ec._TemplateChange_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._TemplateChange_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var templateConflictImplementors = []string{"TemplateConflict"}
+
+func (ec *executionContext) _TemplateConflict(ctx context.Context, sel ast.SelectionSet, obj *api.TemplateConflict) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, templateConflictImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TemplateConflict")
+		case "path":
+			out.Values[i] = ec._TemplateConflict_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._TemplateConflict_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
 }
 
 var templateDescriptorImplementors = []string{"TemplateDescriptor"}
@@ -26303,6 +26959,10 @@ func (ec *executionContext) unmarshalNServiceInput2githubᚗcomᚋangᚑeeᚋang
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNServiceState2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceState(ctx context.Context, sel ast.SelectionSet, v api.ServiceState) graphql.Marshaler {
+	return ec._ServiceState(ctx, sel, &v)
+}
+
 func (ec *executionContext) marshalNServiceState2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceStateᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.ServiceState) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -26327,6 +26987,20 @@ func (ec *executionContext) marshalNServiceState2ᚖgithubᚗcomᚋangᚑeeᚋan
 		return graphql.Null
 	}
 	return ec._ServiceState(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNServiceTemplateUpdateResult2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceTemplateUpdateResult(ctx context.Context, sel ast.SelectionSet, v api.ServiceTemplateUpdateResult) graphql.Marshaler {
+	return ec._ServiceTemplateUpdateResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNServiceTemplateUpdateResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐServiceTemplateUpdateResult(ctx context.Context, sel ast.SelectionSet, v *api.ServiceTemplateUpdateResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ServiceTemplateUpdateResult(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNServicesGroupBySpec2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupBySpecᚄ(ctx context.Context, v any) ([]*model.ServicesGroupBySpec, error) {
@@ -26520,6 +27194,46 @@ func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel
 	for i := range v {
 		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
 	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTemplateChange2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateChange(ctx context.Context, sel ast.SelectionSet, v api.TemplateChange) graphql.Marshaler {
+	return ec._TemplateChange(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTemplateChange2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateChangeᚄ(ctx context.Context, sel ast.SelectionSet, v []api.TemplateChange) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTemplateChange2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateChange(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTemplateConflict2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateConflict(ctx context.Context, sel ast.SelectionSet, v api.TemplateConflict) graphql.Marshaler {
+	return ec._TemplateConflict(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTemplateConflict2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateConflictᚄ(ctx context.Context, sel ast.SelectionSet, v []api.TemplateConflict) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTemplateConflict2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateConflict(ctx, sel, v[i])
+	})
 
 	for _, e := range ret {
 		if e == graphql.Null {
@@ -27433,6 +28147,14 @@ func (ec *executionContext) marshalOServiceState2ᚖgithubᚗcomᚋangᚑeeᚋan
 		return graphql.Null
 	}
 	return ec._ServiceState(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOServiceTemplateUpdateInput2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServiceTemplateUpdateInput(ctx context.Context, v any) (*model.ServiceTemplateUpdateInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputServiceTemplateUpdateInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalOServicesGroupOrder2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐServicesGroupOrderᚄ(ctx context.Context, v any) ([]*model.ServicesGroupOrder, error) {

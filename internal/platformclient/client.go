@@ -233,6 +233,14 @@ func (p *RemoteClient) ServiceUpdate(ctx context.Context, req api.ServiceInitReq
 	return p.doJSON(ctx, http.MethodPatch, "/services/"+url.PathEscape(req.Name), nil, req, nil)
 }
 
+func (p *RemoteClient) ServiceUpdateFromTemplate(ctx context.Context, name string, req api.ServiceUpdateTemplateRequest) (api.ServiceTemplateUpdateResult, error) {
+	var result api.ServiceTemplateUpdateResult
+	if err := p.doJSON(ctx, http.MethodPost, "/services/"+url.PathEscape(name)+"/template/update", nil, req, &result); err != nil {
+		return api.ServiceTemplateUpdateResult{}, err
+	}
+	return result, nil
+}
+
 func (p *RemoteClient) ServiceDestroy(ctx context.Context, name string, _ bool) error {
 	return p.doJSON(ctx, http.MethodPost, "/services/"+url.PathEscape(name)+"/destroy", nil, nil, nil)
 }
@@ -370,9 +378,8 @@ func (p *RemoteClient) WorkspaceStatus(ctx context.Context, name string) (api.Wo
 	return status, nil
 }
 
-func (p *RemoteClient) WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error) {
+func (p *RemoteClient) WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error) {
 	var ref api.WorkspaceRef
-	req := api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl}
 	if err := p.doJSON(ctx, http.MethodPatch, "/workspaces/"+url.PathEscape(name), nil, req, &ref); err != nil {
 		return api.WorkspaceRef{}, err
 	}

@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
@@ -94,6 +94,14 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 	if !exists {
 		return &NotFoundError{Kind: "service", Name: name}
 	}
+	var buildContextGuard *copierx.GuardedPath
+	if serviceNamePattern.MatchString(name) {
+		buildContextGuard, err = copierx.OpenGuardedPath(p.root, p.root, filepath.ToSlash(filepath.Join("services", name)), nil)
+		if err != nil {
+			return fmt.Errorf("validate service build context: %w", err)
+		}
+		defer func() { _ = buildContextGuard.Close() }()
+	}
 	if stop && service.Runtime == manifest.RuntimeContainer {
 		_ = p.ServiceStop(ctx, []string{name})
 	}
@@ -105,13 +113,18 @@ func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) e
 	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
 		return err
 	}
-	// Remove the template-rendered build-context dir if one exists.
-	// Idempotent: services created via `ServiceInit` (field-based) have
-	// no dir under services/, and os.RemoveAll on a missing path
-	// is a no-op.
-	buildContext := filepath.Join(p.root, "services", name)
-	if err := os.RemoveAll(buildContext); err != nil {
-		return fmt.Errorf("remove service build context %s: %w", buildContext, err)
+	// Only template-created services own build-context and render-state paths;
+	// their names are always bounded by serviceNamePattern. Legacy field-based
+	// services may have broader manifest keys, which must never become paths.
+	if serviceNamePattern.MatchString(name) {
+		buildContext := filepath.Join(p.root, "services", name)
+		if err := buildContextGuard.RemoveAll(); err != nil {
+			return fmt.Errorf("remove service build context %s: %w", buildContext, err)
+		}
+		statePath := renderPlanStatePath(p.root, "services", name)
+		if err := copierx.RemoveRenderStateRooted(p.root, statePath); err != nil {
+			return fmt.Errorf("remove service render state %s: %w", statePath, err)
+		}
 	}
 	_, err = p.StackPrepare(ctx)
 	return err

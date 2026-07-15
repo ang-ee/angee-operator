@@ -81,6 +81,7 @@ type ServiceAPI interface {
 	ServiceList(ctx context.Context, q query.Args) ([]api.ServiceState, int, error)
 	ServiceInit(ctx context.Context, req api.ServiceInitRequest) error
 	ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error
+	ServiceUpdateFromTemplate(ctx context.Context, name string, req api.ServiceUpdateTemplateRequest) (api.ServiceTemplateUpdateResult, error)
 	ServiceDestroy(ctx context.Context, name string, stop bool) error
 	ServiceCreate(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error)
 }
@@ -97,7 +98,7 @@ type WorkspaceAPI interface {
 	WorkspaceList(ctx context.Context, q query.Args) ([]api.WorkspaceRef, int, error)
 	WorkspaceGet(ctx context.Context, name string) (api.WorkspaceRef, error)
 	WorkspaceStatus(ctx context.Context, name string) (api.WorkspaceStatusResponse, error)
-	WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error)
+	WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error)
 	WorkspaceDestroy(ctx context.Context, name string, purge bool) error
 	WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error)
 	WorkspaceLogsLimited(ctx context.Context, name string, follow bool, maxBytes int) (<-chan string, error)

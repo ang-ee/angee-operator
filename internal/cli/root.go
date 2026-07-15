@@ -204,7 +204,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively")
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
 	cmd.AddCommand(initCmd)
-	var updateTemplate, updateDryRun bool
+	var updateTemplate, updateDryRun, updateOverwrite bool
 	updateCmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update generated runtime files (with --template, re-render angee.yaml from its stack template first)",
@@ -218,6 +218,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if updateDryRun && !updateTemplate {
 				return fmt.Errorf("--dry-run only applies with --template")
 			}
+			if updateOverwrite && !updateTemplate {
+				return fmt.Errorf("--overwrite only applies with --template")
+			}
 			if updateTemplate {
 				if operatorURL != nil && *operatorURL != "" {
 					return fmt.Errorf("--template re-renders the local stack template and is not supported with --operator")
@@ -230,12 +233,12 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun})
+				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun, Overwrite: updateOverwrite})
 				if err != nil {
 					return err
 				}
-				if !res.Changed {
-					_, err = fmt.Fprintln(stdout, "stack template up to date; angee.yaml unchanged")
+				if !res.Changed && len(res.Conflicts) == 0 {
+					_, err = fmt.Fprintln(stdout, "stack template up to date")
 					return err
 				}
 				if len(res.Changes) > 0 {
@@ -244,13 +247,18 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 							return err
 						}
 					}
-				} else {
+				} else if res.Changed {
 					if _, err := fmt.Fprintln(stdout, "  (template-origin sections refreshed)"); err != nil {
 						return err
 					}
 				}
+				for _, conflict := range res.Conflicts {
+					if _, err := fmt.Fprintf(stdout, "  ! files/%s (%s)\n", conflict.Path, conflict.Reason); err != nil {
+						return err
+					}
+				}
 				if updateDryRun {
-					_, err = fmt.Fprintln(stdout, "dry run: angee.yaml not written")
+					_, err = fmt.Fprintln(stdout, "dry run: no template output written")
 					return err
 				}
 				_, err = fmt.Fprintln(stdout, "stack updated from template")
@@ -267,8 +275,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			return err
 		},
 	}
-	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render angee.yaml from the stack's Copier template before regenerating runtime files")
-	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print the manifest changes without writing")
+	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render all stack template output before regenerating runtime files")
+	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print changes without writing")
+	updateCmd.Flags().BoolVar(&updateOverwrite, "overwrite", false, "with --template, replace conflicting locally modified files")
 	cmd.AddCommand(updateCmd)
 	var purge bool
 	destroyCmd := &cobra.Command{
@@ -455,7 +464,7 @@ func serviceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 	cmd := &cobra.Command{Use: "service", Short: "Manage services"}
 	cmd.AddCommand(serviceInitCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceCreateCommand(stdout, root, operatorURL, jsonOutput))
-	cmd.AddCommand(serviceUpdateCommand(stdout, root, operatorURL))
+	cmd.AddCommand(serviceUpdateCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(serviceDestroyCommand(stdout, root, operatorURL))
 	cmd.AddCommand(serviceListCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(serviceActionCommand(stdout, root, operatorURL, "up"))
@@ -594,15 +603,62 @@ func serviceInitCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 	return cmd
 }
 
-func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
+func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var req api.ServiceInitRequest
 	var env []string
+	var fromTemplate, dryRun, overwrite bool
+	var inputValues []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
-		Short: "Update a service in angee.yaml",
+		Short: "Update a service in angee.yaml or re-render its template",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Name = args[0]
+			if !fromTemplate && (dryRun || overwrite || len(inputValues) != 0) {
+				return fmt.Errorf("--input, --dry-run, and --overwrite only apply with --template")
+			}
+			if fromTemplate {
+				for _, flag := range []string{"runtime", "image", "command", "mount", "env", "port", "workdir"} {
+					if cmd.Flags().Changed(flag) {
+						return fmt.Errorf("--%s cannot be combined with --template", flag)
+					}
+				}
+				inputs, err := parseKeyValues(inputValues)
+				if err != nil {
+					return err
+				}
+				platform, err := localPlatform(root, operatorURL)
+				if err != nil {
+					return err
+				}
+				result, err := platform.ServiceUpdateFromTemplate(cmd.Context(), req.Name, api.ServiceUpdateTemplateRequest{Inputs: inputs, DryRun: dryRun, Overwrite: overwrite})
+				if err != nil {
+					return err
+				}
+				if *jsonOutput {
+					return writeJSON(stdout, result)
+				}
+				for _, change := range result.Changes {
+					if _, err := fmt.Fprintf(stdout, "  %s %s\n", change.Kind, change.Path); err != nil {
+						return err
+					}
+				}
+				for _, conflict := range result.Conflicts {
+					if _, err := fmt.Fprintf(stdout, "  conflict %s (%s)\n", conflict.Path, conflict.Reason); err != nil {
+						return err
+					}
+				}
+				if !result.Changed && len(result.Conflicts) == 0 {
+					_, err = fmt.Fprintf(stdout, "service %s template up to date\n", req.Name)
+					return err
+				}
+				if dryRun {
+					_, err = fmt.Fprintf(stdout, "dry run: service %s template output not written\n", req.Name)
+					return err
+				}
+				_, err = fmt.Fprintf(stdout, "service %s updated from template\n", req.Name)
+				return err
+			}
 			if len(env) > 0 {
 				parsedEnv, err := parseKeyValues(env)
 				if err != nil {
@@ -622,6 +678,10 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 		},
 	}
 	bindServiceFlags(cmd, &req, &env)
+	cmd.Flags().BoolVar(&fromTemplate, "template", false, "re-render the service from its recorded Copier template")
+	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "with --template, override template input K=V")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "with --template, report changes without writing")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "with --template, replace conflicting local changes")
 	return cmd
 }
 
@@ -988,6 +1048,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var ttl string
 	var inputValues []string
+	var overwrite bool
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update workspace metadata",
@@ -1001,7 +1062,7 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			if err != nil {
 				return err
 			}
-			ref, err := platform.WorkspaceUpdate(cmd.Context(), args[0], inputs, ttl)
+			ref, err := platform.WorkspaceUpdate(cmd.Context(), args[0], api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl, Overwrite: overwrite})
 			if err != nil {
 				return err
 			}
@@ -1014,6 +1075,7 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	}
 	cmd.Flags().StringVar(&ttl, "ttl", "", "workspace TTL")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "workspace input K=V")
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace conflicting locally modified template files")
 	return cmd
 }
 

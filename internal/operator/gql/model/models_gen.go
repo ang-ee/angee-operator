@@ -65,6 +65,12 @@ type ServiceInput struct {
 	Start   *bool            `json:"start,omitempty"`
 }
 
+type ServiceTemplateUpdateInput struct {
+	Inputs    []*KeyValueInput `json:"inputs,omitempty"`
+	DryRun    *bool            `json:"dryRun,omitempty"`
+	Overwrite *bool            `json:"overwrite,omitempty"`
+}
+
 type ServicesGroupBySpec struct {
 	Field       ServicesGroupableField `json:"field"`
 	Granularity *Granularity           `json:"granularity,omitempty"`
@@ -494,8 +500,9 @@ type WorkspacesPkColumnsInput struct {
 }
 
 type WorkspacesSetInput struct {
-	TTL    *string          `json:"ttl,omitempty"`
-	Inputs []*KeyValueInput `json:"inputs,omitempty"`
+	TTL       *string          `json:"ttl,omitempty"`
+	Inputs    []*KeyValueInput `json:"inputs,omitempty"`
+	Overwrite *bool            `json:"overwrite,omitempty"`
 }
 
 type Granularity string

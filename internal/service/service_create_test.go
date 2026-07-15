@@ -366,17 +366,94 @@ func TestServiceDestroyReleasesLeaseAndBuildContext(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa")); err != nil {
 		t.Fatalf("expected build context pre-destroy: %v", err)
 	}
+	statePath := renderPlanStatePath(p.root, "services", "agent-my-pa")
+	if _, err := os.Stat(statePath); err != nil {
+		t.Fatalf("expected render state pre-destroy: %v", err)
+	}
 	if err := p.ServiceDestroy(context.Background(), "agent-my-pa", false); err != nil {
 		t.Fatalf("ServiceDestroy: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(p.root, "services", "agent-my-pa")); !os.IsNotExist(err) {
 		t.Fatalf("build context not removed after destroy: %v", err)
 	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("render state not removed after destroy: %v", err)
+	}
 	stack, _ := manifest.LoadFile(manifest.Path(p.root))
 	for _, lease := range stack.PortLeases["acp"] {
 		if strings.HasPrefix(lease.Owner, "service/agent-my-pa/") {
 			t.Fatalf("port lease not released after destroy: %+v", lease)
 		}
+	}
+}
+
+func TestServiceDestroyDoesNotUseLegacyServiceNameAsPath(t *testing.T) {
+	root := t.TempDir()
+	p, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack := p.EmptyStack("test")
+	stack.Services = map[string]manifest.Service{
+		"../outside": {Runtime: manifest.RuntimeContainer, Image: "example:latest"},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	marker := filepath.Join(root, "outside", "keep.txt")
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatalf("MkdirAll(marker): %v", err)
+	}
+	if err := os.WriteFile(marker, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(marker): %v", err)
+	}
+	if err := p.ServiceDestroy(context.Background(), "../outside", false); err != nil {
+		t.Fatalf("ServiceDestroy: %v", err)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep\n" {
+		t.Fatalf("legacy service destroy touched outside path: data=%q err=%v", data, err)
+	}
+}
+
+func TestServiceDestroyRejectsSymlinkedServicesRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	outside := filepath.Join(base, "outside")
+	for _, path := range []string{root, filepath.Join(outside, "agent")} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	p, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	stack := p.EmptyStack("test")
+	stack.Services = map[string]manifest.Service{
+		"agent": {Runtime: manifest.RuntimeContainer, Image: "example:latest"},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	marker := filepath.Join(outside, "agent", "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(marker): %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "services")); err != nil {
+		t.Fatalf("Symlink(services): %v", err)
+	}
+	if err := p.ServiceDestroy(context.Background(), "agent", false); err == nil {
+		t.Fatal("ServiceDestroy succeeded through a symlinked services root")
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep\n" {
+		t.Fatalf("outside marker = %q, %v; want unchanged", data, err)
+	}
+	saved, err := manifest.LoadFile(manifest.Path(root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if _, exists := saved.Services["agent"]; !exists {
+		t.Fatal("service was removed from the manifest after destination validation failed")
 	}
 }
 

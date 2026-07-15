@@ -28,6 +28,78 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
+func TestServiceUpdateTemplateRejectsFieldFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"service", "update", "agent", "--template", "--image", "local:latest"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--image cannot be combined with --template") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestServiceUpdateOverwriteRequiresTemplate(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"service", "update", "agent", "--overwrite"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "only apply with --template") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestServiceUpdateTemplateJSONOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/services/agent/template/update" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.EscapedPath())
+		}
+		_ = json.NewEncoder(w).Encode(api.ServiceTemplateUpdateResult{
+			Name:    "agent",
+			Changed: true,
+			Changes: []api.TemplateChange{{Path: "AGENTS.md", Kind: "modify"}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--operator", server.URL, "--json", "service", "update", "agent", "--template", "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	var result api.ServiceTemplateUpdateResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal(output): %v; output = %q", err, stdout.String())
+	}
+	if result.Name != "agent" || !result.Changed || len(result.Changes) != 1 || result.Changes[0].Path != "AGENTS.md" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestServiceUpdateTemplateDryRunConflictOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(api.ServiceTemplateUpdateResult{
+			Name:      "agent",
+			Conflicts: []api.TemplateConflict{{Path: "docker/Dockerfile", Reason: "locally-modified"}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--operator", server.URL, "service", "update", "agent", "--template", "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "conflict docker/Dockerfile") || !strings.Contains(output, "dry run:") {
+		t.Fatalf("output = %q, want conflict and dry-run summary", output)
+	}
+	if strings.Contains(output, "up to date") {
+		t.Fatalf("output = %q, conflict-only preview must not say up to date", output)
+	}
+}
+
 func TestInitDevReportsTemplateAndRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)

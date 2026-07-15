@@ -136,6 +136,21 @@ func (r *mutationResolver) ServiceInit(ctx context.Context, input model.ServiceI
 	return namedActionResult("created", req.Name), nil
 }
 
+// ServiceUpdateFromTemplate is the resolver for the serviceUpdateFromTemplate field.
+func (r *mutationResolver) ServiceUpdateFromTemplate(ctx context.Context, name string, input *model.ServiceTemplateUpdateInput) (*api.ServiceTemplateUpdateResult, error) {
+	req := api.ServiceUpdateTemplateRequest{}
+	if input != nil {
+		req.Inputs = keyValuesFrom(input.Inputs)
+		req.DryRun = boolPtrValue(input.DryRun)
+		req.Overwrite = boolPtrValue(input.Overwrite)
+	}
+	result, err := r.Platform.ServiceUpdateFromTemplate(ctx, name, req)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // InsertServicesOne is the resolver for the insert_services_one field.
 func (r *mutationResolver) InsertServicesOne(ctx context.Context, object model.ServicesInsertInput) (*api.ServiceState, error) {
 	state, err := r.Platform.ServiceCreate(ctx, serviceCreateRequestFrom(object))
@@ -236,7 +251,9 @@ func (r *mutationResolver) InsertWorkspacesOne(ctx context.Context, object model
 
 // UpdateWorkspacesByPk is the resolver for the update_workspaces_by_pk field.
 func (r *mutationResolver) UpdateWorkspacesByPk(ctx context.Context, pkColumns model.WorkspacesPkColumnsInput, set model.WorkspacesSetInput) (*api.WorkspaceRef, error) {
-	ref, err := r.Platform.WorkspaceUpdate(ctx, pkColumns.ID, keyValuesFrom(set.Inputs), stringPtrValue(set.TTL))
+	ref, err := r.Platform.WorkspaceUpdate(ctx, pkColumns.ID, api.WorkspaceUpdateRequest{
+		Inputs: keyValuesFrom(set.Inputs), TTL: stringPtrValue(set.TTL), Overwrite: boolPtrValue(set.Overwrite),
+	})
 	if err != nil {
 		return nil, err
 	}

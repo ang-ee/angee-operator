@@ -225,6 +225,7 @@ func TestLogStreamDescriptor(t *testing.T) {
 	ls := s.logStreamDescriptor(r.Context(), logSocketScheme(r), r.Host, "web")
 	if ls == nil {
 		t.Fatal("nil descriptor")
+		return
 	}
 	if ls.Target != "operator" || ls.Protocol != "ws" {
 		t.Fatalf("descriptor target/protocol = %q/%q", ls.Target, ls.Protocol)

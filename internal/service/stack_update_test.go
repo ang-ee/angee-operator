@@ -18,6 +18,7 @@ import (
 func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T) {
 	ours := &manifest.Stack{
 		Version: 1, Kind: "stack", Name: "demo",
+		Ingress: manifest.Ingress{Type: "none"},
 		Services: map[string]manifest.Service{
 			"web":        {Runtime: manifest.RuntimeContainer, Image: "nginx:1.0"}, // refreshed by theirs
 			"user-extra": {Runtime: manifest.RuntimeContainer, Image: "extra:1.0"}, // user-added, preserved
@@ -31,6 +32,7 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 	}
 	theirs := &manifest.Stack{
 		Version: 1, Kind: "stack", Name: "demo",
+		Ingress: manifest.Ingress{Type: "caddy", Domain: "agents.localhost"},
 		Services: map[string]manifest.Service{
 			"web":      {Runtime: manifest.RuntimeContainer, Image: "nginx:2.0"}, // newer image
 			"frontend": {Runtime: manifest.RuntimeContainer, Image: "vite:1.0"},  // new template service
@@ -70,6 +72,9 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 	}
 	if merged.Template == nil || merged.Template.Active != "stacks/dev" {
 		t.Fatalf("template metadata not refreshed: %+v", merged.Template)
+	}
+	if merged.Ingress.Type != "caddy" || merged.Ingress.Domain != "agents.localhost" {
+		t.Fatalf("ingress not refreshed: %+v", merged.Ingress)
 	}
 	// ours must be untouched (merge builds fresh maps).
 	if ours.Services["web"].Image != "nginx:1.0" {
@@ -173,6 +178,18 @@ services:
   frontend:
     runtime: container
     image: vite:latest
+`
+
+const localServiceTemplate = `version: 1
+kind: stack
+name: demo
+template:
+  active: stacks/dev
+  answers_file: .copier-answers.yml
+services:
+  web:
+    runtime: local
+    command: ["echo", "ready"]
 `
 
 // TestStackUpdateFromTemplateReconcilesWorkspacePorts covers the workspace
@@ -456,4 +473,185 @@ func TestStackUpdateFromTemplateEndToEnd(t *testing.T) {
 	if _, ok := updated.Workspaces["ws1"]; !ok {
 		t.Fatal("workspace lost across re-render")
 	}
+}
+
+func TestStackUpdateFromTemplateRemovesObsoleteRuntimeArtifacts(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	writeStackTemplate(t, project, oneServiceTemplate)
+	p, err := New(project)
+	if err != nil {
+		t.Fatalf("New(project): %v", err)
+	}
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, err := New(initialized.Root)
+	if err != nil {
+		t.Fatalf("New(stack root): %v", err)
+	}
+	if _, err := stackPlatform.StackPrepare(ctx); err != nil {
+		t.Fatalf("StackPrepare(container): %v", err)
+	}
+	composePath := filepath.Join(initialized.Root, "docker-compose.yaml")
+	if _, err := os.Stat(composePath); err != nil {
+		t.Fatalf("container runtime artifact missing: %v", err)
+	}
+	secretPath := filepath.Join(initialized.Root, "run", "secrets.env")
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(run): %v", err)
+	}
+	if err := os.WriteFile(secretPath, []byte("STALE=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(stale secrets): %v", err)
+	}
+
+	writeStackTemplate(t, project, localServiceTemplate)
+	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+		t.Fatalf("StackUpdateFromTemplate(local): %v", err)
+	}
+	if _, err := os.Stat(composePath); !os.IsNotExist(err) {
+		t.Fatalf("obsolete docker-compose.yaml remains, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(initialized.Root, "process-compose.yaml")); err != nil {
+		t.Fatalf("local runtime artifact missing: %v", err)
+	}
+	if _, err := os.Stat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("obsolete run/secrets.env remains, stat error = %v", err)
+	}
+}
+
+func TestStackUpdateFromTemplateAddsRenderedFile(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	template := writeStackTemplate(t, project, oneServiceTemplate)
+	p, err := New(project)
+	if err != nil {
+		t.Fatalf("New(project): %v", err)
+	}
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, err := New(initialized.Root)
+	if err != nil {
+		t.Fatalf("New(stack root): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "template", "{{ ANGEE_ROOT }}", "AGENTS.md.jinja"), []byte("# Agent instructions\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md.jinja): %v", err)
+	}
+
+	dryRun, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(dry-run): %v", err)
+	}
+	if !dryRun.Changed || !containsString(dryRun.Changes, "+ files/AGENTS.md") {
+		t.Fatalf("dry-run result = %+v, want + files/AGENTS.md", dryRun)
+	}
+	if _, err := os.Stat(filepath.Join(initialized.Root, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created AGENTS.md, stat err = %v", err)
+	}
+
+	applied, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(apply): %v", err)
+	}
+	if !applied.Changed || !containsString(applied.Changes, "+ files/AGENTS.md") {
+		t.Fatalf("apply result = %+v, want + files/AGENTS.md", applied)
+	}
+	data, err := os.ReadFile(filepath.Join(initialized.Root, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(AGENTS.md): %v", err)
+	}
+	if string(data) != "# Agent instructions\n" {
+		t.Fatalf("AGENTS.md = %q", data)
+	}
+}
+
+func TestStackUpdateFromTemplatePreservesConflictUnlessOverwrite(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	template := writeStackTemplate(t, project, oneServiceTemplate)
+	agentsTemplate := filepath.Join(template, "template", "{{ ANGEE_ROOT }}", "AGENTS.md.jinja")
+	if err := os.WriteFile(agentsTemplate, []byte("template v1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md.jinja): %v", err)
+	}
+	p, _ := New(project)
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, _ := New(initialized.Root)
+	agentsPath := filepath.Join(initialized.Root, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("local edit\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(local AGENTS.md): %v", err)
+	}
+	if err := os.WriteFile(agentsTemplate, []byte("template v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(updated template): %v", err)
+	}
+	dryRun, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(dry-run conflict): %v", err)
+	}
+	if len(dryRun.Conflicts) != 1 || !strings.HasSuffix(dryRun.Conflicts[0].Path, "AGENTS.md") {
+		t.Fatalf("dry-run conflicts = %+v, want AGENTS.md", dryRun.Conflicts)
+	}
+
+	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err == nil {
+		t.Fatal("StackUpdateFromTemplate succeeded despite a locally modified tracked file")
+	}
+	data, _ := os.ReadFile(agentsPath)
+	if string(data) != "local edit\n" {
+		t.Fatalf("conflicting file changed without overwrite: %q", data)
+	}
+
+	result, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(overwrite): %v", err)
+	}
+	if !containsString(result.Changes, "~ files/AGENTS.md") {
+		t.Fatalf("overwrite changes = %v", result.Changes)
+	}
+	data, _ = os.ReadFile(agentsPath)
+	if string(data) != "template v2\n" {
+		t.Fatalf("overwritten AGENTS.md = %q", data)
+	}
+}
+
+func TestStackUpdateFromTemplateDeletesTrackedUnchangedFile(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	template := writeStackTemplate(t, project, oneServiceTemplate)
+	managedTemplate := filepath.Join(template, "template", "{{ ANGEE_ROOT }}", "obsolete.txt.jinja")
+	if err := os.WriteFile(managedTemplate, []byte("obsolete\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(obsolete template): %v", err)
+	}
+	p, _ := New(project)
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	if err := os.Remove(managedTemplate); err != nil {
+		t.Fatalf("Remove(obsolete template): %v", err)
+	}
+	stackPlatform, _ := New(initialized.Root)
+	result, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate: %v", err)
+	}
+	if !containsString(result.Changes, "- files/obsolete.txt") {
+		t.Fatalf("changes = %v, want tracked deletion", result.Changes)
+	}
+	if _, err := os.Stat(filepath.Join(initialized.Root, "obsolete.txt")); !os.IsNotExist(err) {
+		t.Fatalf("obsolete.txt remains, stat err = %v", err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
