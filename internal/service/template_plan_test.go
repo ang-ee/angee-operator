@@ -537,6 +537,53 @@ func TestMaterializePersistPathEqualToLocalSourceRoot(t *testing.T) {
 	}
 }
 
+func TestPreparedAbsolutePathOpenerOpensTargetRootSource(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "stack")
+	template := filepath.Join(base, "template")
+	sibling := filepath.Join(base, "framework")
+	for _, path := range []string{filepath.Join(template, "template"), target, sibling} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte("_subdirectory: template\n_templates_suffix: .jinja\n_answers_file: .copier-answers.yml\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "template", "managed.txt.jinja"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(template body): %v", err)
+	}
+	prepared, err := copierx.PrepareReconcile(context.Background(), copierx.RenderPlan{
+		Target: target, TargetRoot: target,
+		Layers: []copierx.RenderLayer{{Name: "template", Template: template}},
+	}, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	defer prepared.Close()
+	opener := preparedAbsolutePathOpener(prepared, target)
+
+	// A local source whose path IS the render target root (a `framework` source
+	// at the repo root in the repo layout) must open through the absolute opener,
+	// not fail with "escapes render target".
+	dest, err := opener(target)
+	if err != nil {
+		t.Fatalf("opener(target root): %v", err)
+	}
+	info, exists, err := dest.Lstat()
+	_ = dest.Close()
+	if err != nil || !exists || !info.IsDir() {
+		t.Fatalf("target-root source: info=%v exists=%v err=%v", info, exists, err)
+	}
+
+	// A source outside the target still routes to the absolute opener.
+	outside, err := opener(sibling)
+	if err != nil {
+		t.Fatalf("opener(sibling): %v", err)
+	}
+	_ = outside.Close()
+}
+
 func TestStagedLocalSourceVerifierRejectsSymlinkTargetReplacement(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "stack")

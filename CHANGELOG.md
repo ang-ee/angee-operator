@@ -4,6 +4,18 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.8.4 — 2026-07-16
+
+### Fixed
+
+- Staging a `local` source whose path is the render target root itself no longer
+  fails with `validate local source "framework": path "." escapes render
+  target`. `preparedAbsolutePathOpener` now routes the target-root case
+  (`rel == "."`) to the absolute opener, the same as a path outside the target,
+  instead of asking the target capability to open ".". This unblocks
+  `angee init --dev` in the repo layout, where the dev stack's `framework` local
+  source resolves to the repo root (the render target), one level above `.angee`.
+
 ## v0.8.3 — 2026-07-16
 
 ### Fixed

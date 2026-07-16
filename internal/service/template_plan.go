@@ -474,8 +474,14 @@ func preparedAbsolutePathOpener(prepared *copierx.PreparedReconcile, target stri
 		if err != nil {
 			return nil, err
 		}
+		// A path strictly inside the render target is opened through the prepared
+		// target root so it shares the transaction's guards. rel == "." means the
+		// path IS the target root itself — e.g. a `framework` local source at the
+		// repo root, which is the render target in the repo layout — and the root
+		// is not a child the target capability can open, so fall back to the
+		// absolute opener just like an escaping (rel == "..") path.
 		rel, err := filepath.Rel(target, abs)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return prepared.OpenTargetPath(filepath.ToSlash(rel))
 		}
 		return openAbsoluteGuardedPath(abs)
