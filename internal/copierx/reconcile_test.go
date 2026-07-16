@@ -145,20 +145,58 @@ func TestPrepareReconcileRejectsEscapingAnswersFileBeforeRender(t *testing.T) {
 	}
 }
 
-func TestPrepareReconcileRejectsPreservedSymlinks(t *testing.T) {
+func TestPrepareReconcilePreservesSymlinks(t *testing.T) {
 	root := t.TempDir()
-	template := writeReconcileTemplate(t, root, "from template\n")
-	config := "_subdirectory: template\n_templates_suffix: .jinja\n_preserve_symlinks: true\n"
-	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
-		t.Fatalf("WriteFile(copier.yml): %v", err)
+	template := filepath.Join(root, "template-source")
+	writeTestFile(t, filepath.Join(template, "copier.yml"),
+		[]byte("_subdirectory: template\n_templates_suffix: .jinja\n_answers_file: .copier-answers.yml\n_preserve_symlinks: true\n"), 0o644)
+	writeTestFile(t, filepath.Join(template, "template", "AGENTS.md.jinja"), []byte("agent instructions\n"), 0o644)
+	// In-tree relative symlink (CLAUDE.md -> AGENTS.md) and an escaping relative
+	// symlink (templates -> ../templates), mirroring the dev/local stack templates
+	// that _preserve_symlinks exists for.
+	if err := os.Symlink("AGENTS.md", filepath.Join(template, "template", "CLAUDE.md")); err != nil {
+		t.Fatalf("Symlink(CLAUDE.md): %v", err)
+	}
+	if err := os.Symlink("../templates", filepath.Join(template, "template", "templates")); err != nil {
+		t.Fatalf("Symlink(templates): %v", err)
 	}
 
-	_, err := PrepareReconcile(context.Background(), RenderPlan{
-		Target: filepath.Join(root, "target"),
-		Layers: []RenderLayer{{Name: "test", Template: template}},
+	target := filepath.Join(root, "target")
+	statePath := filepath.Join(root, "state.json")
+	prepared, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "stack", Template: template}},
+	}, ReconcileOptions{Mode: ReconcileCreate})
+	if err != nil {
+		t.Fatalf("PrepareReconcile: %v", err)
+	}
+	if _, err := prepared.ApplyFiles(context.Background()); err != nil {
+		t.Fatalf("ApplyFiles: %v", err)
+	}
+	if err := prepared.SaveState(context.Background()); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	_ = prepared.Close()
+
+	assertFileContents(t, filepath.Join(target, "AGENTS.md"), "agent instructions\n")
+	assertSymlinkTarget(t, filepath.Join(target, "CLAUDE.md"), "AGENTS.md")
+	assertSymlinkTarget(t, filepath.Join(target, "templates"), "../templates")
+
+	// Re-rendering identical inputs reconciles the persisted symlink fingerprints
+	// to a no-op: nothing to change.
+	second, err := PrepareReconcile(context.Background(), RenderPlan{
+		Target: target, StateRoot: root, StatePath: statePath,
+		Layers: []RenderLayer{{Name: "stack", Template: template}},
 	}, ReconcileOptions{Mode: ReconcileUpdate})
-	if err == nil {
-		t.Fatal("PrepareReconcile succeeded with _preserve_symlinks enabled")
+	if err != nil {
+		t.Fatalf("PrepareReconcile(second): %v", err)
+	}
+	defer second.Close()
+	if changes := second.Result().Changes; len(changes) != 0 {
+		t.Fatalf("second reconcile changed preserved symlinks: %+v", changes)
+	}
+	if conflicts := second.Result().Conflicts; len(conflicts) != 0 {
+		t.Fatalf("second reconcile reported conflicts on preserved symlinks: %+v", conflicts)
 	}
 }
 
@@ -1261,5 +1299,23 @@ func assertFileContents(t *testing.T, path, want string) {
 	}
 	if string(data) != want {
 		t.Fatalf("%s = %q, want %q", path, data, want)
+	}
+}
+
+func assertSymlinkTarget(t *testing.T, path, want string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat(%s): %v", path, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is not a symlink (mode %s)", path, info.Mode())
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		t.Fatalf("Readlink(%s): %v", path, err)
+	}
+	if target != want {
+		t.Fatalf("%s -> %q, want %q", path, target, want)
 	}
 }

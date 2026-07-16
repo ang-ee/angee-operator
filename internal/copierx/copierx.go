@@ -166,14 +166,18 @@ type ChainEntry struct {
 	Inputs   map[string]string `yaml:"inputs"`
 }
 
+// config models the copier.yml keys copierx itself consumes. `_preserve_symlinks`
+// is deliberately absent: the renderer (copier-go) reads it straight off the
+// template config and emits symlinks verbatim, and safe reconciliation already
+// treats a symlink as a first-class entry kind (fingerprint + apply), so copierx
+// needs no view of the flag.
 type config struct {
-	Subdirectory     string           `yaml:"_subdirectory"`
-	Suffix           string           `yaml:"_templates_suffix"`
-	AnswersFile      string           `yaml:"_answers_file"`
-	PreserveSymlinks bool             `yaml:"_preserve_symlinks"`
-	Angee            Metadata         `yaml:"_angee"`
-	Defaults         Inputs           `yaml:"-"`
-	Questions        map[string]Input `yaml:"-"`
+	Subdirectory string           `yaml:"_subdirectory"`
+	Suffix       string           `yaml:"_templates_suffix"`
+	AnswersFile  string           `yaml:"_answers_file"`
+	Angee        Metadata         `yaml:"_angee"`
+	Defaults     Inputs           `yaml:"-"`
+	Questions    map[string]Input `yaml:"-"`
 }
 
 type LocalRenderer struct{}

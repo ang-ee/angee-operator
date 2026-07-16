@@ -349,9 +349,6 @@ func PrepareReconcile(ctx context.Context, plan RenderPlan, opts ReconcileOption
 		if err != nil {
 			return nil, fmt.Errorf("render layer %q config: %w", layer.Name, err)
 		}
-		if cfg.PreserveSymlinks {
-			return nil, fmt.Errorf("render layer %q: _preserve_symlinks is not supported by safe reconciliation", layer.Name)
-		}
 		if err := validateRelativePath(cfg.AnswersFile); err != nil {
 			return nil, fmt.Errorf("render layer %q answers file: %w", layer.Name, err)
 		}

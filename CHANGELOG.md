@@ -4,6 +4,18 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## v0.8.3 — 2026-07-16
+
+### Fixed
+
+- Stateful Copier reconciliation now preserves `_preserve_symlinks: true`
+  templates instead of refusing them, so `angee init --dev` (and every other
+  reconciled render) can materialize the stack templates' `CLAUDE.md ->
+  AGENTS.md` and `.angee/templates -> ../templates` links. A rendered symlink is
+  already a first-class entry kind end-to-end — fingerprinted by its link
+  target, applied through a rooted symlink write, and round-tripped through
+  render state — so the earlier blanket rejection was unnecessary.
+
 ## v0.8.2 — 2026-07-15
 
 ### Added

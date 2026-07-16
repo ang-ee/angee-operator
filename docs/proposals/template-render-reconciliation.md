@@ -202,7 +202,9 @@ existing repositories are validated but not fetched during reconciliation.
 Generated runtime artifacts participate in the same journal, including explicit
 deletions when Compose, process-compose, or OpenBao output is no longer desired.
 
-Reconciliation rejects Copier `_preserve_symlinks`. Declared workspace local
+Reconciliation preserves Copier `_preserve_symlinks`: a rendered symlink is
+fingerprinted by its target and applied through a rooted symlink write, so it
+round-trips through render state like any other entry. Declared workspace local
 Source links are the only permitted symlink parents. The plan retains an opened
 root and filesystem identity for each approved Source, verifies that the link
 still resolves to that identity, and derives snapshots and destination guards

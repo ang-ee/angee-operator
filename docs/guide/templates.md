@@ -30,11 +30,13 @@ produces a Stack root, a Workspace directory, a Service, or a project repo
 the engine can operate on. A template must contain `copier.yml` with Angee
 metadata under `_angee`.
 
-Angee's stateful reconciliation does not accept Copier templates with
-`_preserve_symlinks: true`. Rendered symlinks would make layered and dry-run
-writes unsafe. Existing workspace links for declared local Sources are handled
-separately: their resolved target is verified before Angee reads or writes
-through them.
+Angee's stateful reconciliation preserves Copier templates with
+`_preserve_symlinks: true`: it treats each rendered symlink as a first-class
+entry, fingerprinting it by its link target and applying it through a rooted
+symlink write, so layered and dry-run writes stay safe. Symlink *parents* are
+governed separately: existing workspace links for declared local Sources have
+their resolved target verified before Angee reads or writes through them, and an
+undeclared symlink parent is rejected.
 
 ## Kinds
 
