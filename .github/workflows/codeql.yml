@@ -19,16 +19,16 @@ jobs:
     name: analyze (go)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: "1.25.12"
           cache: true
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@v4.37.4
         with:
           languages: go
           config-file: ./.github/codeql/codeql-config.yml
@@ -37,6 +37,6 @@ jobs:
         run: go build ./...
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@v4.37.4
         with:
           category: "/language:go"
