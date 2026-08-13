@@ -60,6 +60,15 @@ for the REST + GraphQL contract.
 
 ## Install
 
+With Homebrew (macOS and Linux) — also installs `process-compose`, but not
+Docker:
+
+```sh
+brew tap ang-ee/tap
+brew trust ang-ee/tap
+brew install angee
+```
+
 From a release:
 
 ```sh
@@ -177,6 +186,8 @@ a running HTTP operator.
 | `internal/runtime/` | Runtime backend interface plus compose and process-compose backends. |
 | `internal/service/` | Shared business logic for stacks, services, sources, jobs, and workspaces. |
 | `scripts/install.sh` | Release/local binary installer. |
+| `scripts/update-homebrew-formula.sh` | Regenerates the `angee` formula in [ang-ee/homebrew-tap](https://github.com/ang-ee/homebrew-tap); run by the release workflow. |
+| `scripts/update-process-compose-formula.sh` | Regenerates the vendored `process-compose` formula in that tap; run by hand. |
 | `docs/` | VitePress source for [docs.angee.ai](https://docs.angee.ai). |
 
 ## Documentation

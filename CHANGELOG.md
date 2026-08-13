@@ -4,6 +4,26 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- Homebrew install: `brew tap ang-ee/tap && brew trust ang-ee/tap && brew
+  install angee`. Installs `angee`, `angee-operator`, and `process-compose`.
+  Docker is deliberately left out — it is only needed for `runtime: container`
+  services and container jobs, and the formula's caveats point at Docker
+  Desktop, OrbStack, and Colima instead.
+- `scripts/update-homebrew-formula.sh` regenerates the formula from a
+  published release's SHA256SUMS. The release workflow runs it and pushes to
+  [ang-ee/homebrew-tap](https://github.com/ang-ee/homebrew-tap), skipping with
+  a warning when `HOMEBREW_TAP_TOKEN` is unset rather than failing the release.
+- `scripts/update-process-compose-formula.sh` regenerates the vendored
+  `process-compose` formula from upstream's. It is vendored rather than
+  depended on across taps because Homebrew 6 auto-trusts only the formula named
+  on the command line and refuses to load dependencies from an untrusted tap,
+  so a cross-tap dependency would stop every install at a trust prompt for a
+  third-party tap the user never named.
+
 ## v0.8.6 — 2026-08-13
 
 ### Added

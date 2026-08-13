@@ -245,3 +245,60 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: scripts/install.sh
+
+  publish-homebrew:
+    name: publish homebrew formula
+    runs-on: ubuntu-latest
+    # Needs the release to exist: the formula's sha256 values are read from its
+    # SHA256SUMS asset.
+    needs: create-release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      # A PAT or GitHub App token with contents:write on ang-ee/homebrew-tap.
+      # The default GITHUB_TOKEN is scoped to this repo only and cannot push
+      # there. Without the secret the job is skipped rather than failing the
+      # release — the formula can be regenerated later with
+      # scripts/update-homebrew-formula.sh.
+      - name: Check for tap token
+        id: token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping formula publish"
+          fi
+
+      - name: Check out the tap
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: ang-ee/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Regenerate the formula
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/update-homebrew-formula.sh "${{ github.ref_name }}" tap/Formula/angee.rb
+
+      - name: Commit and push
+        if: steps.token.outputs.present == 'true'
+        working-directory: tap
+        run: |
+          set -e
+          if git diff --quiet -- Formula/angee.rb; then
+            echo "formula already current for ${{ github.ref_name }}"
+            exit 0
+          fi
+          git config user.name "angee-release[bot]"
+          git config user.email "release@angee.ai"
+          git add Formula/angee.rb
+          git commit -m "angee ${{ github.ref_name }}"
+          git push
