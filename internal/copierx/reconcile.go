@@ -2190,8 +2190,11 @@ func (p *GuardedPath) ReplaceFrom(ctx context.Context, source string) (result er
 
 // SnapshotDirectory copies a guarded real directory to a private temporary
 // directory and returns the snapshot plus an idempotent cleanup function.
-// Symlinks are rejected so the snapshot cannot gain new escape semantics when
-// moved away from its original parent tree.
+// Symlinks are copied verbatim and never followed, mirroring the reconciliation
+// policy for _preserve_symlinks templates. The snapshot may therefore contain
+// links that resolve differently than they did under the original parent tree,
+// so callers must re-guard any subpath they join onto the returned root rather
+// than trusting a lexical join.
 func (p *GuardedPath) SnapshotDirectory(ctx context.Context) (string, func() error, error) {
 	if len(p.pendingParents) != 0 || !p.exists {
 		return "", nil, os.ErrNotExist
@@ -2526,11 +2529,18 @@ func copySnapshotEntryAt(ctx context.Context, root *os.Root, rel, dest string) e
 	if err != nil {
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("template snapshot contains unsupported symlink %q", rel)
-	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := readRootedSymlinkExpected(root, rel, info)
+		if err != nil {
+			return err
+		}
+		if err := os.Symlink(target, dest); err != nil {
+			return fmt.Errorf("snapshot symlink %q: %w", rel, err)
+		}
+		return nil
 	}
 	if info.IsDir() {
 		if err := os.Mkdir(dest, 0o700); err != nil && !os.IsExist(err) {

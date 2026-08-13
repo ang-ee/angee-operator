@@ -663,3 +663,87 @@ func TestResolveWorkspaceChainTemplateSnapshotsGuardedSource(t *testing.T) {
 		t.Fatalf("snapshot changed after source modification: %q", config)
 	}
 }
+
+// A chain template that includes a sibling collection entry with a relative
+// path must keep resolving it from the pinned snapshot, which means the
+// snapshot root is the collection, not the template directory alone.
+func TestResolveWorkspaceChainTemplateSnapshotsSiblingCollectionEntries(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspaces", "feature")
+	template := filepath.Join(workspace, "templates", "stacks", "dev")
+	shared := filepath.Join(workspace, "templates", "_shared")
+	for _, path := range []string{filepath.Join(template, "template"), shared} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte("_subdirectory: template\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "AGENTS.md.jinja"), []byte("shared\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md.jinja): %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	snapshot, _, cleanup, err := platform.resolveWorkspaceChainTemplate(context.Background(), workspace, "templates/stacks/dev", nil)
+	if err != nil {
+		t.Fatalf("resolveWorkspaceChainTemplate: %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("resolveWorkspaceChainTemplate returned no snapshot cleanup")
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(snapshot, "copier.yml")); err != nil {
+		t.Fatalf("snapshot path does not point at the template directory: %v", err)
+	}
+	include := filepath.Join(snapshot, "..", "..", "_shared", "AGENTS.md.jinja")
+	if _, err := os.Stat(include); err != nil {
+		t.Fatalf("relative include does not resolve inside the snapshot: %v", err)
+	}
+}
+
+// SnapshotDirectory copies symlinks verbatim, so re-attaching the template
+// subpath must re-guard each component instead of joining it lexically —
+// otherwise a directory symlink in the collection root hands copier-go a
+// template root outside the snapshot, which its lexical containment check
+// cannot detect.
+func TestVerifiedSnapshotTemplatePathRejectsSymlinkedSubpath(t *testing.T) {
+	base := t.TempDir()
+	snapshot := filepath.Join(base, "snapshot")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "dev"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside/dev): %v", err)
+	}
+	if err := os.MkdirAll(snapshot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(snapshot): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "dev", "evil.yml"), []byte("evil: true\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(evil.yml): %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(snapshot, "stacks")); err != nil {
+		t.Fatalf("Symlink(stacks): %v", err)
+	}
+	if path, err := verifiedSnapshotTemplatePath(snapshot, "stacks/dev"); err == nil {
+		t.Fatalf("verifiedSnapshotTemplatePath accepted a path through a symlinked collection entry: %q", path)
+	}
+}
+
+// A subpath that does not name a real directory fails at resolution with a
+// pointed error rather than surfacing as an opaque copier-go failure later.
+func TestVerifiedSnapshotTemplatePathRequiresDirectory(t *testing.T) {
+	snapshot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(snapshot, "stacks"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(stacks): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshot, "stacks", "dev"), []byte("not a dir\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(dev): %v", err)
+	}
+	if _, err := verifiedSnapshotTemplatePath(snapshot, "stacks/dev"); err == nil {
+		t.Fatal("verifiedSnapshotTemplatePath accepted a regular file as a template directory")
+	}
+	if _, err := verifiedSnapshotTemplatePath(snapshot, "stacks/missing"); err == nil {
+		t.Fatal("verifiedSnapshotTemplatePath accepted a missing template directory")
+	}
+}

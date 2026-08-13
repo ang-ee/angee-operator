@@ -4,6 +4,33 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Fixed
+
+- `angee ws create` no longer fails to snapshot a chain template that contains
+  symlinks (`snapshot workspace chain template ...: template snapshot contains
+  unsupported symlink "templates"`). The guarded snapshot now copies symlinks
+  verbatim — mirroring the v0.8.3 reconciliation policy — instead of rejecting
+  the `_preserve_symlinks` links the dev/local stack templates ship. Verbatim
+  copies never read the link target and never recurse through a directory link,
+  and copier-go itself refuses to follow a symlink escaping the template root
+  when `_preserve_symlinks` is off.
+- Workspace chain templates shaped like `<collection>/<kind-family>/<name>`
+  (e.g. `templates/stacks/dev`) are now snapshotted from the collection root
+  instead of the template directory alone, so relative includes into sibling
+  entries (the dev stack's `{% include "../../_shared/AGENTS.md.jinja" %}`)
+  keep resolving from the pinned snapshot. Together these unblock
+  `angee ws create --template dev`.
+- The template subpath re-attached to that collection snapshot is re-guarded
+  component by component inside the snapshot rather than joined lexically.
+  Because snapshots now retain symlinks, a plain join could have traversed a
+  directory link and handed copier-go a template root outside the snapshot —
+  copier-go's own containment check is lexical against that root and would not
+  have caught it. Guarded-source containment is therefore preserved by the
+  re-guard, not by symlink copying being inherently safe. Resolution also fails
+  early and pointedly when the subpath is missing or is not a real directory.
+
 ## v0.8.4 — 2026-07-16
 
 ### Fixed

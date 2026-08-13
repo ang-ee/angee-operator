@@ -1390,3 +1390,33 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 	}
 	return string(out)
 }
+
+func TestChainTemplateSnapshotRoot(t *testing.T) {
+	for _, tc := range []struct {
+		ref     string
+		root    string
+		subpath string
+	}{
+		{"templates/stacks/dev", "templates", "stacks/dev"},
+		{"app/.templates/stacks/dev", "app/.templates", "stacks/dev"},
+		{"a/b/workspaces/dev-pr", "a/b", "workspaces/dev-pr"},
+		{"templates/projects/web", "templates", "projects/web"},
+		// A collection name is only a family when it is the parent segment.
+		{"templates/workspaces/stacks", "templates", "workspaces/stacks"},
+		// Fewer than three segments: the collection root would be the
+		// workspace itself, so the template directory is snapshotted alone.
+		{"stacks/dev", "stacks/dev", "."},
+		{"templates/stacks", "templates/stacks", "."},
+		{"plain", "plain", "."},
+		// Unrecognised parent segments are not collection families.
+		{"templates/misc/dev", "templates/misc/dev", "."},
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			root, subpath := chainTemplateSnapshotRoot(tc.ref)
+			if root != tc.root || subpath != tc.subpath {
+				t.Fatalf("chainTemplateSnapshotRoot(%q) = (%q, %q), want (%q, %q)",
+					tc.ref, root, subpath, tc.root, tc.subpath)
+			}
+		})
+	}
+}

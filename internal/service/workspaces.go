@@ -1769,6 +1769,65 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 	return target, nil
 }
 
+// chainTemplateCollectionFamilies are the plural ref segments that group
+// sibling templates inside one collection directory. This is deliberately a
+// superset of the kinds templateKindFromRef maps: `projects` groups chain
+// hosts that are only ever reached as relative refs from a sibling template
+// (`../../projects/web`), never resolved through resolveTemplate, so it has a
+// collection root here but no singular kind there.
+var chainTemplateCollectionFamilies = map[string]bool{
+	"stacks":     true,
+	"workspaces": true,
+	"projects":   true,
+}
+
+// chainTemplateSnapshotRoot returns the workspace-relative directory to
+// snapshot for a chain template ref, plus the template's location inside the
+// snapshot. Templates reference sibling collection entries with relative
+// includes (e.g. stacks/dev includes ../../_shared/...), so a ref shaped like
+// `<collection>/<kind-family>/<name>` snapshots the whole collection root to
+// keep those includes resolvable. Any other shape snapshots the template
+// directory alone. Refs with fewer than three segments are excluded because
+// their collection root would be the workspace itself, which is far more than
+// a chain entry should pin.
+func chainTemplateSnapshotRoot(clean string) (snapshotRoot, templateSubpath string) {
+	parts := strings.Split(clean, "/")
+	if len(parts) >= 3 && chainTemplateCollectionFamilies[parts[len(parts)-2]] {
+		return strings.Join(parts[:len(parts)-2], "/"), strings.Join(parts[len(parts)-2:], "/")
+	}
+	return clean, "."
+}
+
+// verifiedSnapshotTemplatePath resolves a template subpath inside a chain
+// template snapshot. SnapshotDirectory copies symlinks verbatim, so joining
+// the subpath lexically could traverse one and hand copier-go a template root
+// outside the snapshot — copier-go's own containment check is lexical against
+// that root and would not notice. Re-guarding inside the private snapshot
+// directory restores the per-component containment the outer guard covered
+// before the collection root became the snapshot root.
+func verifiedSnapshotTemplatePath(snapshot, templateSubpath string) (string, error) {
+	path := filepath.Join(snapshot, filepath.FromSlash(templateSubpath))
+	if templateSubpath == "." {
+		return path, nil
+	}
+	guard, err := copierx.OpenGuardedPath(snapshot, snapshot, templateSubpath, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = guard.Close() }()
+	info, exists, err := guard.Lstat()
+	if err != nil {
+		return "", err
+	}
+	if !exists || !info.IsDir() {
+		return "", fmt.Errorf("template subpath %q is not a directory", templateSubpath)
+	}
+	if err := guard.VerifyPathIdentity(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspacePath, ref string, allowedSymlinkParents map[string]*copierx.TrustedRoot) (string, string, func() error, error) {
 	if ref != "" && !filepath.IsAbs(ref) && !isRemoteTemplateRef(ref) {
 		clean, err := normalizeWorkspaceSubpath(ref)
@@ -1786,7 +1845,8 @@ func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspaceP
 			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, readErr)
 		}
 		if exists {
-			templateDir, err := copierx.OpenGuardedPath(p.root, workspacePath, clean, allowedSymlinkParents)
+			snapshotRoot, templateSubpath := chainTemplateSnapshotRoot(clean)
+			templateDir, err := copierx.OpenGuardedPath(p.root, workspacePath, snapshotRoot, allowedSymlinkParents)
 			if err != nil {
 				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
 			}
@@ -1795,7 +1855,12 @@ func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspaceP
 			if err != nil {
 				return "", "", nil, fmt.Errorf("snapshot workspace chain template %q: %w", ref, err)
 			}
-			return snapshot, ref, cleanup, nil
+			templatePath, err := verifiedSnapshotTemplatePath(snapshot, templateSubpath)
+			if err != nil {
+				_ = cleanup()
+				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
+			}
+			return templatePath, ref, cleanup, nil
 		}
 	}
 	path, resolvedRef, err := p.resolveTemplate(ctx, ref, "stack")
