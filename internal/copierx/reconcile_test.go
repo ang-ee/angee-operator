@@ -684,7 +684,7 @@ func TestPrepareReconcileRejectsSymlinkedTargetAncestor(t *testing.T) {
 	}
 }
 
-func TestGuardedTemplateSnapshotRejectsSymlinkEntries(t *testing.T) {
+func TestGuardedTemplateSnapshotPreservesSymlinkEntries(t *testing.T) {
 	root := t.TempDir()
 	template := filepath.Join(root, "template")
 	outside := filepath.Join(root, "outside.txt")
@@ -692,16 +692,99 @@ func TestGuardedTemplateSnapshotRejectsSymlinkEntries(t *testing.T) {
 		t.Fatalf("MkdirAll(template): %v", err)
 	}
 	writeTestFile(t, outside, []byte("outside\n"), 0o644)
-	if err := os.Symlink(outside, filepath.Join(template, "linked.txt")); err != nil {
-		t.Fatalf("Symlink(linked.txt): %v", err)
+	if err := os.Symlink(outside, filepath.Join(template, "escaping.txt")); err != nil {
+		t.Fatalf("Symlink(escaping.txt): %v", err)
+	}
+	if err := os.Symlink("sibling.txt", filepath.Join(template, "relative.txt")); err != nil {
+		t.Fatalf("Symlink(relative.txt): %v", err)
 	}
 	guard, err := OpenGuardedPath(root, root, "template", nil)
 	if err != nil {
 		t.Fatalf("OpenGuardedPath: %v", err)
 	}
 	defer guard.Close()
-	if _, _, err := guard.SnapshotDirectory(context.Background()); err == nil {
-		t.Fatal("SnapshotDirectory accepted a template containing a symlink")
+	snapshot, cleanup, err := guard.SnapshotDirectory(context.Background())
+	if err != nil {
+		t.Fatalf("SnapshotDirectory: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+	}()
+	for name, want := range map[string]string{
+		"escaping.txt": outside,
+		"relative.txt": "sibling.txt",
+	} {
+		copied := filepath.Join(snapshot, name)
+		info, err := os.Lstat(copied)
+		if err != nil {
+			t.Fatalf("Lstat(%s): %v", name, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("snapshot entry %q is not a symlink; the target content was materialized", name)
+		}
+		target, err := os.Readlink(copied)
+		if err != nil {
+			t.Fatalf("Readlink(%s): %v", name, err)
+		}
+		if target != want {
+			t.Fatalf("snapshot symlink %q target = %q, want %q", name, target, want)
+		}
+	}
+}
+
+// A directory symlink is the escape-capable case: it is what a subpath joined
+// onto the snapshot could traverse, and copying it verbatim must also prune the
+// walk rather than materializing the linked tree inside the snapshot.
+func TestGuardedTemplateSnapshotPreservesDirectorySymlinkWithoutRecursing(t *testing.T) {
+	root := t.TempDir()
+	template := filepath.Join(root, "template")
+	outside := filepath.Join(root, "elsewhere")
+	if err := os.MkdirAll(filepath.Join(outside, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(elsewhere/nested): %v", err)
+	}
+	if err := os.MkdirAll(template, 0o755); err != nil {
+		t.Fatalf("MkdirAll(template): %v", err)
+	}
+	writeTestFile(t, filepath.Join(outside, "nested", "secret.txt"), []byte("secret\n"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(template, "linkdir")); err != nil {
+		t.Fatalf("Symlink(linkdir): %v", err)
+	}
+	guard, err := OpenGuardedPath(root, root, "template", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath: %v", err)
+	}
+	defer guard.Close()
+	snapshot, cleanup, err := guard.SnapshotDirectory(context.Background())
+	if err != nil {
+		t.Fatalf("SnapshotDirectory: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+	}()
+	copied := filepath.Join(snapshot, "linkdir")
+	info, err := os.Lstat(copied)
+	if err != nil {
+		t.Fatalf("Lstat(linkdir): %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("snapshot entry \"linkdir\" is not a symlink; the linked directory was materialized")
+	}
+	target, err := os.Readlink(copied)
+	if err != nil {
+		t.Fatalf("Readlink(linkdir): %v", err)
+	}
+	if target != outside {
+		t.Fatalf("snapshot symlink \"linkdir\" target = %q, want %q", target, outside)
+	}
+	if err := os.RemoveAll(outside); err != nil {
+		t.Fatalf("RemoveAll(elsewhere): %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(copied, "nested", "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot recursed through the directory symlink, Lstat error = %v", err)
 	}
 }
 

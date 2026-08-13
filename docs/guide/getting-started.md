@@ -13,6 +13,19 @@ is the first default Host), and the difference between abstract terms
 
 ## Install
 
+With Homebrew (macOS and Linux):
+
+```sh
+brew tap ang-ee/tap
+brew trust ang-ee/tap
+brew install angee
+```
+
+`brew trust` is a one-time step — Homebrew 6 refuses to load dependencies from
+a tap you have not trusted, and `angee` pulls in `process-compose`. Installing
+this way gets you both binaries plus `process-compose`; Docker is deliberately
+left out, since it is only needed for `runtime: container` Services.
+
 From a release:
 
 ```sh

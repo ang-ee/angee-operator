@@ -133,3 +133,55 @@ func TestResolvePathInputsHandlesAngeeInputsBlock(t *testing.T) {
 		t.Fatalf("project_path = %q, want %q", got, "../examples/foo")
 	}
 }
+
+// ParseMetadata is the entry point for callers that already hold copier.yml
+// bytes from a guarded read, so it must agree with ReadMetadata on well-formed
+// input and fail loudly rather than silently on malformed input.
+func TestParseMetadata(t *testing.T) {
+	t.Run("reads angee metadata", func(t *testing.T) {
+		metadata, err := ParseMetadata([]byte("_subdirectory: template\n_angee:\n  kind: stack\n  name: dev\n  include_root: \"../..\"\n"))
+		if err != nil {
+			t.Fatalf("ParseMetadata: %v", err)
+		}
+		if metadata.Kind != "stack" || metadata.Name != "dev" {
+			t.Fatalf("metadata kind/name = %q/%q, want stack/dev", metadata.Kind, metadata.Name)
+		}
+		if metadata.IncludeRoot != "../.." {
+			t.Fatalf("IncludeRoot = %q, want ../..", metadata.IncludeRoot)
+		}
+	})
+	t.Run("absent angee block is zero", func(t *testing.T) {
+		metadata, err := ParseMetadata([]byte("_subdirectory: template\n"))
+		if err != nil {
+			t.Fatalf("ParseMetadata: %v", err)
+		}
+		if metadata.Kind != "" || metadata.IncludeRoot != "" {
+			t.Fatalf("metadata = %+v, want the zero value", metadata)
+		}
+	})
+	t.Run("empty input is zero", func(t *testing.T) {
+		if _, err := ParseMetadata(nil); err != nil {
+			t.Fatalf("ParseMetadata(nil): %v", err)
+		}
+	})
+	t.Run("malformed yaml errors", func(t *testing.T) {
+		if _, err := ParseMetadata([]byte("_angee:\n  kind: [unterminated\n")); err == nil {
+			t.Fatal("ParseMetadata accepted malformed YAML")
+		}
+	})
+	t.Run("agrees with ReadMetadata", func(t *testing.T) {
+		body := "_subdirectory: template\n_angee:\n  kind: stack\n  include_root: \"..\"\n"
+		templatePath := writeTemplate(t, filepath.Join(t.TempDir(), "tpl"), body)
+		fromPath, err := ReadMetadata(templatePath)
+		if err != nil {
+			t.Fatalf("ReadMetadata: %v", err)
+		}
+		fromBytes, err := ParseMetadata([]byte(body))
+		if err != nil {
+			t.Fatalf("ParseMetadata: %v", err)
+		}
+		if fromPath.Kind != fromBytes.Kind || fromPath.IncludeRoot != fromBytes.IncludeRoot {
+			t.Fatalf("ReadMetadata = %+v, ParseMetadata = %+v", fromPath, fromBytes)
+		}
+	})
+}

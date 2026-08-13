@@ -138,6 +138,51 @@ Stack templates use the same Copier rendering path and must produce an
 simpler — just `_angee.kind: stack` plus the Jinja-templated
 `angee.yaml` and any seed files (env templates, runtime overlays).
 
+### Reaching outside the template directory
+
+When a workspace renders a chained template, Angee first snapshots that
+template to a private directory so the render is pinned against edits
+mid-flight. By default the snapshot is the template directory alone, so a
+template that includes a file from outside it — a shared partial kept beside
+the collection, say — would not find it.
+
+Declare how far the template reaches with `_angee.include_root`, and that
+ancestor is snapshotted instead:
+
+```yaml
+# templates/stacks/dev/copier.yml
+_angee:
+  kind: stack
+  name: dev
+  include_root: "../.."   # pins templates/, so ../../_shared/ resolves
+```
+
+```jinja
+{% include "../../_shared/AGENTS.md.jinja" %}
+```
+
+`include_root` is relative to the template directory, must name one of its
+ancestors, and must stay inside the workspace — pointing it at the workspace
+root or beyond is rejected. Angee does not infer this from directory names:
+how you lay out a template collection is your business, so a collection named
+`hosts/` behaves exactly like one named `stacks/`.
+
+Leave it unset for a self-contained template; the snapshot is then exactly the
+template, which is both cheaper and tighter.
+
+::: warning Keep the root tight
+Everything under `include_root` is recursively copied on **every** chain
+render. The workspace is the only bound Angee enforces, so a template living
+inside a materialized Source can legitimately declare a root that pins the
+whole checkout — `node_modules` and all. Point it at the smallest directory
+that makes your includes resolve.
+:::
+
+`include_root` only applies to templates chained from inside a workspace, which
+is where the snapshot happens. It is ignored for absolute and remote refs, and
+for renders that are not chained — those read the template in place, so their
+relative includes already resolve against the real tree.
+
 ## How "self-building" works
 
 Putting templates and Sources together, the loop is:

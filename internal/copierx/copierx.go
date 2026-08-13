@@ -123,6 +123,7 @@ type Metadata struct {
 	InstanceNaming InstanceNaming                  `yaml:"instance_naming"`
 	Inputs         map[string]Input                `yaml:"inputs"`
 	Sources        map[string]TemplateSource       `yaml:"sources"`
+	IncludeRoot    string                          `yaml:"include_root"`
 	ChainRoot      string                          `yaml:"chain_root"`
 	Chain          []ChainEntry                    `yaml:"chain"`
 	Ensure         map[string]any                  `yaml:"ensure"`
@@ -190,6 +191,18 @@ func ReadMetadata(templatePath string) (Metadata, error) {
 	return cfg.Angee, nil
 }
 
+// ParseMetadata reads `_angee` out of copier.yml bytes a caller already holds.
+// Callers that obtained the bytes through a guarded read use this instead of
+// ReadMetadata so the config is not re-opened by pathname, which would let the
+// file change between the two reads.
+func ParseMetadata(data []byte) (Metadata, error) {
+	cfg, err := parseConfig(data)
+	if err != nil {
+		return Metadata{}, err
+	}
+	return cfg.Angee, nil
+}
+
 func (LocalRenderer) Copy(ctx context.Context, req CopyRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -241,6 +254,10 @@ func readConfig(templatePath string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	return parseConfig(data)
+}
+
+func parseConfig(data []byte) (config, error) {
 	var cfg config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return config{}, err

@@ -4,6 +4,90 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- Homebrew install: `brew tap ang-ee/tap && brew trust ang-ee/tap && brew
+  install angee`. Installs `angee`, `angee-operator`, and `process-compose`.
+  Docker is deliberately left out — it is only needed for `runtime: container`
+  services and container jobs, and the formula's caveats point at Docker
+  Desktop, OrbStack, and Colima instead.
+- `scripts/update-homebrew-formula.sh` regenerates the formula from a
+  published release's SHA256SUMS. The release workflow runs it and pushes to
+  [ang-ee/homebrew-tap](https://github.com/ang-ee/homebrew-tap), skipping with
+  a warning when `HOMEBREW_TAP_TOKEN` is unset rather than failing the release.
+- `scripts/update-process-compose-formula.sh` regenerates the vendored
+  `process-compose` formula from upstream's. It is vendored rather than
+  depended on across taps because Homebrew 6 auto-trusts only the formula named
+  on the command line and refuses to load dependencies from an untrusted tap,
+  so a cross-tap dependency would stop every install at a trust prompt for a
+  third-party tap the user never named.
+
+## v0.8.6 — 2026-08-13
+
+### Added
+
+- Templates declare how far outside their own directory they reach with
+  `_angee.include_root`. A chain template is snapshotted before rendering so
+  the render is pinned against mid-flight edits; `include_root` names the
+  ancestor to snapshot instead of the template directory alone, so a relative
+  include like `{% include "../../_shared/AGENTS.md.jinja" %}` keeps resolving
+  from the pinned copy. It must name an ancestor of the template and stay
+  inside the workspace — pointing it at the workspace root or beyond is
+  rejected. Unset (the default) pins exactly the template directory. The
+  workspace is the only bound, so a template inside a materialized Source can
+  pin that whole checkout; `docs/guide/templates.md` says so out loud.
+
+### Fixed
+
+- A chain template ref that normalizes to the workspace root (`.`, `a/..`)
+  no longer snapshots the entire workspace — sources, worktrees and all — and
+  is rejected with a pointed error instead. Present since v0.8.5.
+- A malformed `copier.yml` in a chain template now fails resolution instead of
+  deferring an unrelated error to copier-go, and its `_angee` block is parsed
+  from the bytes the guarded probe already read rather than reopened by
+  pathname, which a swapped-in symlink could have redirected.
+
+### Changed
+
+- v0.8.5 decided the snapshot root by matching directory names against a
+  built-in list of collection segments (`stacks`, `workspaces`, `projects`).
+  That heuristic is replaced by the `include_root` declaration above. The name
+  list was wrong in both directions: a collection named anything else (say
+  `hosts/`) still lost its relative includes, while any `*/stacks/*` ref pinned
+  its whole sibling collection whether or not it reached outside itself. How a
+  template collection is laid out is the collection author's business, not a
+  vocabulary this repo should carry — `projects` in particular was never a
+  primitive here and never reachable through the snapshot path.
+
+## v0.8.5 — 2026-08-13
+
+### Fixed
+
+- `angee ws create` no longer fails to snapshot a chain template that contains
+  symlinks (`snapshot workspace chain template ...: template snapshot contains
+  unsupported symlink "templates"`). The guarded snapshot now copies symlinks
+  verbatim — mirroring the v0.8.3 reconciliation policy — instead of rejecting
+  the `_preserve_symlinks` links the dev/local stack templates ship. Verbatim
+  copies never read the link target and never recurse through a directory link,
+  and copier-go itself refuses to follow a symlink escaping the template root
+  when `_preserve_symlinks` is off.
+- Workspace chain templates shaped like `<collection>/<kind-family>/<name>`
+  (e.g. `templates/stacks/dev`) are now snapshotted from the collection root
+  instead of the template directory alone, so relative includes into sibling
+  entries (the dev stack's `{% include "../../_shared/AGENTS.md.jinja" %}`)
+  keep resolving from the pinned snapshot. Together these unblock
+  `angee ws create --template dev`.
+- The template subpath re-attached to that collection snapshot is re-guarded
+  component by component inside the snapshot rather than joined lexically.
+  Because snapshots now retain symlinks, a plain join could have traversed a
+  directory link and handed copier-go a template root outside the snapshot —
+  copier-go's own containment check is lexical against that root and would not
+  have caught it. Guarded-source containment is therefore preserved by the
+  re-guard, not by symlink copying being inherently safe. Resolution also fails
+  early and pointedly when the subpath is missing or is not a real directory.
+
 ## v0.8.4 — 2026-07-16
 
 ### Fixed
