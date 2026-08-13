@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1769,33 +1770,55 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 	return target, nil
 }
 
-// chainTemplateCollectionFamilies are the plural ref segments that group
-// sibling templates inside one collection directory. This is deliberately a
-// superset of the kinds templateKindFromRef maps: `projects` groups chain
-// hosts that are only ever reached as relative refs from a sibling template
-// (`../../projects/web`), never resolved through resolveTemplate, so it has a
-// collection root here but no singular kind there.
-var chainTemplateCollectionFamilies = map[string]bool{
-	"stacks":     true,
-	"workspaces": true,
-	"projects":   true,
-}
-
 // chainTemplateSnapshotRoot returns the workspace-relative directory to
 // snapshot for a chain template ref, plus the template's location inside the
-// snapshot. Templates reference sibling collection entries with relative
-// includes (e.g. stacks/dev includes ../../_shared/...), so a ref shaped like
-// `<collection>/<kind-family>/<name>` snapshots the whole collection root to
-// keep those includes resolvable. Any other shape snapshots the template
-// directory alone. Refs with fewer than three segments are excluded because
-// their collection root would be the workspace itself, which is far more than
-// a chain entry should pin.
-func chainTemplateSnapshotRoot(clean string) (snapshotRoot, templateSubpath string) {
-	parts := strings.Split(clean, "/")
-	if len(parts) >= 3 && chainTemplateCollectionFamilies[parts[len(parts)-2]] {
-		return strings.Join(parts[:len(parts)-2], "/"), strings.Join(parts[len(parts)-2:], "/")
+// snapshot.
+//
+// A template that reaches outside its own directory — typically to include a
+// sibling collection entry, as `stacks/dev` does with
+// `{% include "../../_shared/AGENTS.md.jinja" %}` — declares how far it reaches
+// via `_angee.include_root`, and that ancestor is snapshotted instead of the
+// template directory alone so the include still resolves from the pinned copy.
+// The default is the template directory, so a self-contained template pins
+// exactly itself. Angee deliberately does not infer this from directory names:
+// how a template collection is laid out is the collection author's business,
+// not a vocabulary this repo should carry.
+//
+// include_root must name an ancestor of the template and must stay inside the
+// workspace. Escaping the workspace, or resolving to the workspace root itself,
+// is rejected: a chain entry should pin its own template material, not the
+// whole tree it happens to live in. Note that the workspace is the only bound —
+// a template inside a materialized source can legitimately declare a root that
+// pins that whole checkout, which is the author's cost to pay and is called out
+// in docs/guide/templates.md.
+func chainTemplateSnapshotRoot(clean, includeRoot string) (snapshotRoot, templateSubpath string, err error) {
+	// The workspace root is out of bounds however it is reached: normalizing a
+	// ref like `.` or `a/..` lands here too, not just an over-reaching
+	// declaration.
+	if clean == "." {
+		return "", "", fmt.Errorf("chain template ref resolves to the workspace root, which is more than a chain entry may pin")
 	}
-	return clean, "."
+	includeRoot = strings.TrimSpace(includeRoot)
+	if includeRoot == "" || includeRoot == "." {
+		return clean, ".", nil
+	}
+	if slashpath.IsAbs(includeRoot) {
+		return "", "", fmt.Errorf("_angee.include_root %q must be relative to the template", includeRoot)
+	}
+	root := slashpath.Join(clean, includeRoot)
+	if root == ".." || strings.HasPrefix(root, "../") {
+		return "", "", fmt.Errorf("_angee.include_root %q escapes the workspace", includeRoot)
+	}
+	if root == "." {
+		return "", "", fmt.Errorf("_angee.include_root %q resolves to the workspace root, which is more than a chain entry may pin", includeRoot)
+	}
+	if root == clean {
+		return clean, ".", nil
+	}
+	if !strings.HasPrefix(clean, root+"/") {
+		return "", "", fmt.Errorf("_angee.include_root %q is not an ancestor of the template", includeRoot)
+	}
+	return root, strings.TrimPrefix(clean, root+"/"), nil
 }
 
 // verifiedSnapshotTemplatePath resolves a template subpath inside a chain
@@ -1839,13 +1862,29 @@ func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspaceP
 		if err != nil {
 			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
 		}
-		_, _, exists, readErr := config.ReadRegularFile()
+		configData, _, exists, readErr := config.ReadRegularFile()
 		_ = config.Close()
 		if readErr != nil {
 			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, readErr)
 		}
 		if exists {
-			snapshotRoot, templateSubpath := chainTemplateSnapshotRoot(clean)
+			// Reuse the bytes the guarded probe already read. Reopening by
+			// pathname (ReadMetadata) would be a plain os.ReadFile, so a
+			// copier.yml swapped for a symlink between the two reads would be
+			// followed anywhere on disk; these bytes came through the retained
+			// root with an entry-identity check. The tree can still change
+			// before SnapshotDirectory runs, so the snapshot's own copier.yml
+			// may declare a different include_root than the one honoured here —
+			// harmless in both directions, since a larger declared root is
+			// ignored and a smaller one only over-snapshots within the guard.
+			metadata, err := copierx.ParseMetadata(configData)
+			if err != nil {
+				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
+			}
+			snapshotRoot, templateSubpath, err := chainTemplateSnapshotRoot(clean, metadata.IncludeRoot)
+			if err != nil {
+				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
+			}
 			templateDir, err := copierx.OpenGuardedPath(p.root, workspacePath, snapshotRoot, allowedSymlinkParents)
 			if err != nil {
 				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)

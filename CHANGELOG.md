@@ -4,6 +4,43 @@ All notable changes to this repository should be recorded here. Sections
 correspond to released git tags; `Unreleased` collects work merged after the
 latest tag.
 
+## Unreleased
+
+### Added
+
+- Templates declare how far outside their own directory they reach with
+  `_angee.include_root`. A chain template is snapshotted before rendering so
+  the render is pinned against mid-flight edits; `include_root` names the
+  ancestor to snapshot instead of the template directory alone, so a relative
+  include like `{% include "../../_shared/AGENTS.md.jinja" %}` keeps resolving
+  from the pinned copy. It must name an ancestor of the template and stay
+  inside the workspace — pointing it at the workspace root or beyond is
+  rejected. Unset (the default) pins exactly the template directory. The
+  workspace is the only bound, so a template inside a materialized Source can
+  pin that whole checkout; `docs/guide/templates.md` says so out loud.
+
+### Fixed
+
+- A chain template ref that normalizes to the workspace root (`.`, `a/..`)
+  no longer snapshots the entire workspace — sources, worktrees and all — and
+  is rejected with a pointed error instead. Present since v0.8.5.
+- A malformed `copier.yml` in a chain template now fails resolution instead of
+  deferring an unrelated error to copier-go, and its `_angee` block is parsed
+  from the bytes the guarded probe already read rather than reopened by
+  pathname, which a swapped-in symlink could have redirected.
+
+### Changed
+
+- v0.8.5 decided the snapshot root by matching directory names against a
+  built-in list of collection segments (`stacks`, `workspaces`, `projects`).
+  That heuristic is replaced by the `include_root` declaration above. The name
+  list was wrong in both directions: a collection named anything else (say
+  `hosts/`) still lost its relative includes, while any `*/stacks/*` ref pinned
+  its whole sibling collection whether or not it reached outside itself. How a
+  template collection is laid out is the collection author's business, not a
+  vocabulary this repo should carry — `projects` in particular was never a
+  primitive here and never reachable through the snapshot path.
+
 ## v0.8.5 — 2026-08-13
 
 ### Fixed

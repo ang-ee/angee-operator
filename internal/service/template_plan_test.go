@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
@@ -664,10 +665,10 @@ func TestResolveWorkspaceChainTemplateSnapshotsGuardedSource(t *testing.T) {
 	}
 }
 
-// A chain template that includes a sibling collection entry with a relative
-// path must keep resolving it from the pinned snapshot, which means the
-// snapshot root is the collection, not the template directory alone.
-func TestResolveWorkspaceChainTemplateSnapshotsSiblingCollectionEntries(t *testing.T) {
+// A chain template that declares `_angee.include_root` gets that ancestor
+// snapshotted, so its relative includes into sibling collection entries keep
+// resolving from the pinned copy.
+func TestResolveWorkspaceChainTemplateSnapshotsDeclaredIncludeRoot(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspaces", "feature")
 	template := filepath.Join(workspace, "templates", "stacks", "dev")
@@ -677,7 +678,8 @@ func TestResolveWorkspaceChainTemplateSnapshotsSiblingCollectionEntries(t *testi
 			t.Fatalf("MkdirAll(%s): %v", path, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte("_subdirectory: template\n"), 0o644); err != nil {
+	config := "_subdirectory: template\n_angee:\n  kind: stack\n  include_root: \"../..\"\n"
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
 		t.Fatalf("WriteFile(copier.yml): %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(shared, "AGENTS.md.jinja"), []byte("shared\n"), 0o644); err != nil {
@@ -701,6 +703,72 @@ func TestResolveWorkspaceChainTemplateSnapshotsSiblingCollectionEntries(t *testi
 	include := filepath.Join(snapshot, "..", "..", "_shared", "AGENTS.md.jinja")
 	if _, err := os.Stat(include); err != nil {
 		t.Fatalf("relative include does not resolve inside the snapshot: %v", err)
+	}
+}
+
+// Without a declared include_root a template pins exactly itself, so a sibling
+// collection entry is deliberately absent from the snapshot.
+func TestResolveWorkspaceChainTemplateSnapshotsTemplateDirectoryByDefault(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspaces", "feature")
+	template := filepath.Join(workspace, "templates", "stacks", "dev")
+	shared := filepath.Join(workspace, "templates", "_shared")
+	for _, path := range []string{filepath.Join(template, "template"), shared} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", path, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte("_subdirectory: template\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "AGENTS.md.jinja"), []byte("shared\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md.jinja): %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	snapshot, _, cleanup, err := platform.resolveWorkspaceChainTemplate(context.Background(), workspace, "templates/stacks/dev", nil)
+	if err != nil {
+		t.Fatalf("resolveWorkspaceChainTemplate: %v", err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(snapshot, "copier.yml")); err != nil {
+		t.Fatalf("snapshot path does not point at the template directory: %v", err)
+	}
+	// The snapshot root is the template itself, so the template is at the top
+	// of the temporary tree rather than nested under a collection directory.
+	if got := filepath.Base(snapshot); got != "template" {
+		t.Fatalf("snapshot root is not the template directory: %s", snapshot)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot, "..", "_shared")); !os.IsNotExist(err) {
+		t.Fatalf("undeclared sibling collection entry was snapshotted, stat error = %v", err)
+	}
+}
+
+// An include_root that cannot be honoured fails at resolution rather than
+// silently snapshotting something else.
+func TestResolveWorkspaceChainTemplateRejectsEscapingIncludeRoot(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspaces", "feature")
+	template := filepath.Join(workspace, "templates", "stacks", "dev")
+	if err := os.MkdirAll(filepath.Join(template, "template"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(template): %v", err)
+	}
+	config := "_subdirectory: template\n_angee:\n  include_root: \"../../../..\"\n"
+	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, _, cleanup, err := platform.resolveWorkspaceChainTemplate(context.Background(), workspace, "templates/stacks/dev", nil)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "escapes the workspace") {
+		t.Fatalf("resolveWorkspaceChainTemplate error = %v, want an escape rejection", err)
 	}
 }
 

@@ -1393,29 +1393,74 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 
 func TestChainTemplateSnapshotRoot(t *testing.T) {
 	for _, tc := range []struct {
-		ref     string
-		root    string
-		subpath string
+		name        string
+		ref         string
+		includeRoot string
+		root        string
+		subpath     string
 	}{
-		{"templates/stacks/dev", "templates", "stacks/dev"},
-		{"app/.templates/stacks/dev", "app/.templates", "stacks/dev"},
-		{"a/b/workspaces/dev-pr", "a/b", "workspaces/dev-pr"},
-		{"templates/projects/web", "templates", "projects/web"},
-		// A collection name is only a family when it is the parent segment.
-		{"templates/workspaces/stacks", "templates", "workspaces/stacks"},
-		// Fewer than three segments: the collection root would be the
-		// workspace itself, so the template directory is snapshotted alone.
-		{"stacks/dev", "stacks/dev", "."},
-		{"templates/stacks", "templates/stacks", "."},
-		{"plain", "plain", "."},
-		// Unrecognised parent segments are not collection families.
-		{"templates/misc/dev", "templates/misc/dev", "."},
+		// The default pins exactly the template directory, whatever the
+		// collection is called.
+		{"undeclared", "templates/stacks/dev", "", "templates/stacks/dev", "."},
+		{"explicit self", "templates/stacks/dev", ".", "templates/stacks/dev", "."},
+		{"single segment", "plain", "", "plain", "."},
+		// A template that reaches sideways declares how far it reaches.
+		{"collection root", "templates/stacks/dev", "../..", "templates", "stacks/dev"},
+		{"one level", "templates/stacks/dev", "..", "templates/stacks", "dev"},
+		{"nested collection", "a/b/c/workspaces/dev-pr", "../..", "a/b/c", "workspaces/dev-pr"},
+		// Directory names carry no meaning: an unconventional collection
+		// works exactly like a conventional one.
+		{"unconventional name", "templates/hosts/web", "../..", "templates", "hosts/web"},
+		{"guarded source", "app/.templates/stacks/dev", "../..", "app/.templates", "stacks/dev"},
+		// Trailing slashes and redundant segments normalize.
+		{"redundant segments", "templates/stacks/dev", "./../..", "templates", "stacks/dev"},
+		{"no-op traversal", "templates/stacks/dev", "foo/..", "templates/stacks/dev", "."},
+		// Whitespace is trimmed rather than treated as a path segment, which
+		// would cancel against a following `..` and silently pin only self.
+		{"padded value", "templates/stacks/dev", "  ../..  ", "templates", "stacks/dev"},
 	} {
-		t.Run(tc.ref, func(t *testing.T) {
-			root, subpath := chainTemplateSnapshotRoot(tc.ref)
+		t.Run(tc.name, func(t *testing.T) {
+			root, subpath, err := chainTemplateSnapshotRoot(tc.ref, tc.includeRoot)
+			if err != nil {
+				t.Fatalf("chainTemplateSnapshotRoot(%q, %q): %v", tc.ref, tc.includeRoot, err)
+			}
 			if root != tc.root || subpath != tc.subpath {
-				t.Fatalf("chainTemplateSnapshotRoot(%q) = (%q, %q), want (%q, %q)",
-					tc.ref, root, subpath, tc.root, tc.subpath)
+				t.Fatalf("chainTemplateSnapshotRoot(%q, %q) = (%q, %q), want (%q, %q)",
+					tc.ref, tc.includeRoot, root, subpath, tc.root, tc.subpath)
+			}
+		})
+	}
+}
+
+func TestChainTemplateSnapshotRootRejectsUnusableIncludeRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ref         string
+		includeRoot string
+	}{
+		// Reaching past the workspace is not something a chain entry may pin.
+		{"escapes workspace", "templates/stacks/dev", "../../.."},
+		{"escapes far", "templates/stacks/dev", "../../../../elsewhere"},
+		// The workspace root itself is far more than a chain entry should pin.
+		{"workspace root", "templates/stacks", "../.."},
+		{"single segment parent", "plain", ".."},
+		// An include root must contain the template, not sit beside it.
+		{"sibling", "templates/stacks/dev", "../other"},
+		{"descendant", "templates/stacks/dev", "template"},
+		{"absolute", "templates/stacks/dev", "/etc"},
+		// Backslashes are not path separators here; failing closed as
+		// not-an-ancestor is the behaviour to keep.
+		{"backslash", "templates/stacks/dev", `..\..`},
+		// The ref itself resolving to the workspace root is out of bounds even
+		// with no declaration to blame.
+		{"ref is workspace root", ".", ""},
+		{"ref is workspace root with declaration", ".", "../.."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, subpath, err := chainTemplateSnapshotRoot(tc.ref, tc.includeRoot)
+			if err == nil {
+				t.Fatalf("chainTemplateSnapshotRoot(%q, %q) = (%q, %q), want an error",
+					tc.ref, tc.includeRoot, root, subpath)
 			}
 		})
 	}
