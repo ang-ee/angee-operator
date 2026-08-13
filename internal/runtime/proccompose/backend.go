@@ -54,12 +54,13 @@ func (b Backend) Build(context.Context, runtime.Target) error {
 
 func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 	args := b.baseArgs(target.Root, target.ControlPort)
-	// `-d` daemonises; `--tui=false` prevents the supervisor from trying
-	// to attach a TUI on a process that has no controlling terminal
+	// `-D` daemonises (`-d` hides disabled processes); `--tui=false`
+	// prevents the supervisor from trying to attach a TUI on a process
+	// that has no controlling terminal
 	// (which is the normal case for `angee stack up --root ...` against
 	// a workspace's inner stack from a non-interactive shell or under
 	// another supervisor).
-	args = append(args, "up", "-d", "--tui=false")
+	args = append(args, "up", "-D", "--tui=false")
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
@@ -196,11 +197,16 @@ type processListEntry struct {
 
 func parseList(data []byte) []runtime.ServiceStatus {
 	// process-compose emits status banner lines on stderr before the
-	// JSON array on stdout (when invoked via CombinedOutput). Trim
-	// anything before the first '[' to make the response parseable.
+	// JSON array on stdout (when invoked via CombinedOutput). A banner
+	// can itself contain brackets (for example a searched-path list), so
+	// trim to the array opener at the start of its own line.
 	trimmed := bytes.TrimSpace(data)
-	if idx := bytes.IndexByte(trimmed, '['); idx > 0 {
-		trimmed = trimmed[idx:]
+	if !bytes.HasPrefix(trimmed, []byte("[")) {
+		idx := bytes.LastIndex(trimmed, []byte("\n["))
+		if idx < 0 {
+			return nil
+		}
+		trimmed = trimmed[idx+1:]
 	}
 	var entries []processListEntry
 	if err := json.Unmarshal(trimmed, &entries); err != nil {

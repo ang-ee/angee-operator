@@ -80,7 +80,7 @@ func TestBackendUpCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-d", "--tui=false", "web"}
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--tui=false", "web"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
 	}
@@ -125,7 +125,8 @@ func (r *stubListRunner) Run(_ context.Context, _ string, _ []string, _ string, 
 }
 
 func TestBackendStatusParsesProcessList(t *testing.T) {
-	const payload = `[
+	const payload = `{"level":"debug","error":"searched paths: [/home/user/.config /etc/xdg]"}
+[
 	{"name":"build-watch","status":"Running","is_running":true,"exit_code":0,"is_ready":"-"},
 	{"name":"web","status":"Running","is_running":true,"exit_code":0,"is_ready":"Ready"},
 	{"name":"migrate","status":"Completed","is_running":false,"exit_code":0,"is_ready":"-"}
