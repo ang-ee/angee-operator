@@ -6,6 +6,17 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- Every `runtime: local` service was reported as `declared` by `angee status`
+  and `angee service list` even while running. The process-compose backend
+  parses `list -o json` out of combined stdout+stderr by trimming to the first
+  `[`, but process-compose writes debug records ahead of the array whenever it
+  cannot find a config home — the ordinary case on a stock macOS install — and
+  those records embed a `[` of their own (`... following paths: [/Users/...`).
+  The trim landed mid-record, the decode failed, and `Status` swallowed it as
+  "nothing observed running". The array is now located by line.
+
 ## v0.9.0 — 2026-08-15
 
 ### Changed (breaking)
