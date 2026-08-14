@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,33 @@ import (
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
+
+func TestLoadStackMissingManifestExplainsNextStep(t *testing.T) {
+	root := t.TempDir()
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = platform.LoadStack()
+	if err == nil {
+		t.Fatal("LoadStack() error is nil")
+	}
+	// A missing manifest is the normal "not in a stack yet" case; the message
+	// should name the next step instead of leaking a raw file-open error.
+	if !strings.Contains(err.Error(), "angee init") {
+		t.Fatalf("error = %q, want it to suggest `angee init`", err)
+	}
+	if strings.Contains(err.Error(), "no such file or directory") {
+		t.Fatalf("error = %q, want no raw open error", err)
+	}
+	// Callers branch on the missing-manifest case (workspacePortInputs treats
+	// it as "not a managed workspace inner stack"), so the friendlier message
+	// must not cost the error its os.ErrNotExist identity.
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %q, want errors.Is(err, os.ErrNotExist)", err)
+	}
+}
 
 type stubStatusBackend struct {
 	statuses []runtime.ServiceStatus

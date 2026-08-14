@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -122,12 +124,27 @@ func (r *doctorRunner) add(name string, status doctorStatus, detail string, hint
 	})
 }
 
-func (r *doctorRunner) checkTools(ctx context.Context) {
-	tools := []struct {
-		name string
-		args []string
-		hint string
-	}{
+// doctorTool is one prerequisite probe. bin defaults to name, and differs when
+// the capability is a subcommand of another binary (docker compose).
+type doctorTool struct {
+	name string
+	bin  string
+	args []string
+	hint string
+	// missingHint replaces hint when bin itself is absent, so a plugin check
+	// does not tell you to install a plugin for a binary you do not have.
+	missingHint string
+}
+
+func (t doctorTool) binary() string {
+	if t.bin != "" {
+		return t.bin
+	}
+	return t.name
+}
+
+func doctorTools() []doctorTool {
+	return []doctorTool{
 		{name: "git", args: []string{"--version"}, hint: "Required for source and workspace commands."},
 		{name: "go", args: []string{"version"}, hint: "Required to build angee-go and to auto-install process-compose."},
 		{name: "uv", args: []string{"--version"}, hint: "Required by the bundled Django dev stack."},
@@ -135,12 +152,27 @@ func (r *doctorRunner) checkTools(ctx context.Context) {
 		{name: "pnpm", args: []string{"--version"}, hint: "Required by the bundled React/Vite dev stack."},
 		{name: "npx", args: []string{"--version"}, hint: "Required by the bundled playwright-mcp service."},
 		{name: "docker", args: []string{"--version"}, hint: "Required for container runtime services."},
-		{name: "process-compose", args: []string{"--version"}, hint: "Required for local dev runtime services; angee can prompt to install it when needed."},
+		// The compose backend shells out to `docker compose`, which is a
+		// separate CLI plugin: the docker binary alone is not enough.
+		{
+			name: "docker-compose", bin: "docker", args: []string{"compose", "version"},
+			hint:        "Required for container runtime services; install the Compose v2 plugin (`docker compose`).",
+			missingHint: "Required for container runtime services; install Docker, which provides `docker compose`.",
+		},
+		{name: "process-compose", args: []string{"version"}, hint: "Required for local dev runtime services; angee can prompt to install it when needed."},
 	}
-	for _, tool := range tools {
-		path, err := exec.LookPath(tool.name)
+}
+
+func (r *doctorRunner) checkTools(ctx context.Context) {
+	for _, tool := range doctorTools() {
+		bin := tool.binary()
+		path, err := exec.LookPath(bin)
 		if err != nil {
-			r.add("tool."+tool.name, doctorWarn, "not found on PATH", tool.hint)
+			hint := tool.hint
+			if tool.missingHint != "" {
+				hint = tool.missingHint
+			}
+			r.add("tool."+tool.name, doctorWarn, bin+" not found on PATH", hint)
 			continue
 		}
 		version, err := commandVersion(ctx, path, tool.args)
@@ -155,22 +187,74 @@ func (r *doctorRunner) checkTools(ctx context.Context) {
 	}
 }
 
+// commandVersionTimeout bounds a single `--version` probe. Node-based tools
+// (pnpm, npx) routinely need several seconds on a cold start, so a short
+// timeout reports a healthy tool as broken.
+const commandVersionTimeout = 10 * time.Second
+
 func commandVersion(ctx context.Context, path string, args []string) (string, error) {
-	childCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	childCtx, cancel := context.WithTimeout(ctx, commandVersionTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(childCtx, path, args...)
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if childCtx.Err() != nil {
 		return "", childCtx.Err()
 	}
 	if err != nil {
+		// Say why it failed. A docker without the compose plugin explains
+		// itself only on stderr, and "exit status 1" alone helps nobody.
+		if detail := firstUsefulLine(stderr.String()); detail != "" {
+			return "", fmt.Errorf("%w: %s", err, detail)
+		}
 		return "", err
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) == 0 {
-		return "", nil
+	return pickVersion(stdout.String(), stderr.String()), nil
+}
+
+var versionNumber = regexp.MustCompile(`\d+\.\d+`)
+
+// pickVersion reports the most informative line of a version probe. Tools do
+// not agree on shape or stream: most answer with one line on stdout, while
+// process-compose prints a banner plus structured debug records. Prefer a line
+// carrying an actual version number from either stream before falling back.
+func pickVersion(streams ...string) string {
+	for _, out := range streams {
+		for _, line := range usefulLines(out) {
+			if versionNumber.MatchString(line) {
+				return line
+			}
+		}
 	}
-	return strings.TrimSpace(lines[0]), nil
+	for _, out := range streams {
+		if line := firstUsefulLine(out); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func firstUsefulLine(out string) string {
+	for _, line := range usefulLines(out) {
+		return line
+	}
+	return ""
+}
+
+// usefulLines drops blank lines and structured log records, and collapses
+// interior whitespace so a picked line stays inside the report's columns.
+func usefulLines(out string) []string {
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" || strings.HasPrefix(line, "{") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func (r *doctorRunner) checkManifest(root string) *manifest.Stack {

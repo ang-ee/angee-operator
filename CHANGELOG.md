@@ -6,6 +6,30 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- `angee version` as a subcommand alongside the existing `--version` flag,
+  matching the shape of the neighbouring tools (`go`, `docker`,
+  `process-compose`).
+
+### Fixed
+
+- `angee doctor` probed `process-compose --version`, a flag process-compose does
+  not accept, so a working install was always reported as `version check failed:
+  exit status 1`. The probe now calls the `version` subcommand, and reads the
+  version from the first line carrying a version number so the banner and the
+  structured debug records process-compose writes around it are skipped.
+- `angee doctor` gave every tool a 2s budget, which a cold Node start regularly
+  exceeds — `pnpm` was reported as `context deadline exceeded` while responding
+  fine by hand. The budget is now 10s.
+- `angee doctor` checked the `docker` binary but never `docker compose`, the
+  separate CLI plugin the compose backend actually shells out to. Doctor passed
+  clean on installs where `angee up` then failed with `unknown shorthand flag:
+  'f' in -f`; the plugin is now its own `tool.docker-compose` check.
+- Commands that need a manifest reported a missing one as
+  `open /path/angee.yaml: no such file or directory`. Not being in a stack yet
+  is the ordinary first-run case, so the message now names the next step.
+
 ## v0.10.0 — 2026-08-25
 
 ### Added
