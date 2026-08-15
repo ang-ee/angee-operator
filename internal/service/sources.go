@@ -375,6 +375,15 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 		return client.CloneRef(ctx, source.Repo, path, source.DefaultRef)
 	case "local":
 		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				if rel, relErr := filepath.Rel(p.root, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					// A local source inside the stack root that does not exist
+					// yet is stack-owned machinery — e.g. a workspace slot the
+					// declared `src` workspace cuts right after source
+					// materialization on the same bring-up.
+					return nil
+				}
+			}
 			return fmt.Errorf("local source %q path %s: %w", name, path, err)
 		}
 		return nil
