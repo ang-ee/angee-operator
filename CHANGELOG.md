@@ -6,7 +6,50 @@ latest tag.
 
 ## Unreleased
 
+## v0.9.0 — 2026-08-15
+
+### Changed (breaking)
+
+- **`angee init --dev` is removed.** Plain `angee init` renders the default
+  `dev` stack template — the framework-dev stack: a project host at the stack
+  root whose manifest declares the framework repos as git sources and the
+  `src` workspace. The redundant `angee init stack` subcommand is deleted
+  (`angee stack init <template>` stays). The repo-local `.angee/` overlay
+  story is gone with it; see angee-django's `docs/howto/upgrade-to-split-repos.md`.
+
 ### Added
+
+- **Template registry.** Bare and kind-qualified template names (`dev`,
+  `stacks/dev`) resolve from the local search paths first and fall back to
+  [ang-ee/angee-templates](https://github.com/ang-ee/angee-templates);
+  `ANGEE_TEMPLATE_REGISTRY` overrides the registry (URL, `owner/repo`, or a
+  local path). The ref grammar gains `name@ref` pins and explicit
+  `owner/repo//subpath` references.
+- **`angee dev` cuts declared workspaces.** StackPrepare materializes every
+  stack-declared workspace whose directory does not exist yet
+  (`WorkspaceCreate` adopts declared-but-unmaterialized records), so
+  `angee init && angee dev` is the whole bring-up: sources, the src
+  workspace, provision, boot.
+- Workspace slot source names are input-substitutable, and an `optional`
+  slot whose source is undeclared is skipped — the opt-in work-state and
+  bridge/example slots render only where their sources exist.
+- `scripts/install.sh` honours `ANGEE_VERSION` for pinned installs.
+
+### Fixed
+
+- Template repo caches refresh on every hit (fetch + detach at
+  `origin/<ref>`, or `origin/HEAD` for an unpinned name), so a moving ref
+  never serves a stale template.
+- Path-input translation defaults to project-at-root: a template with path
+  inputs but no `ANGEE_ROOT` input no longer gains a spurious `../` hop.
+- Stack init and dev tolerate local sources inside the stack root that do
+  not exist yet (workspace slots the declared `src` workspace cuts on the
+  same bring-up).
+- Create and update of `_preserve_symlinks` templates carrying relative
+  in-template symlinks (`CLAUDE.md -> AGENTS.md`) are covered by regression
+  tests.
+
+### Packaging
 
 - Homebrew install: `brew tap ang-ee/tap && brew trust ang-ee/tap && brew
   install angee`. Installs `angee`, `angee-operator`, and `process-compose`.
