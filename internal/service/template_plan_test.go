@@ -193,11 +193,13 @@ func TestTemplateDocumentsAndPersistPathsUsePreparedTargetRoot(t *testing.T) {
 	}
 }
 
-func TestStagedSourceCloneUsesPreparedTargetRootAndRollsBack(t *testing.T) {
+func TestStageReferencedSourcesLeavesAbsentGitCachesToDev(t *testing.T) {
+	// The two-command contract: init renders, dev materializes — staging an
+	// absent git cache clones nothing (dev owns it). A destination that exists
+	// but is not a repository still fails fast.
 	base := t.TempDir()
 	target := filepath.Join(base, "stack")
 	template := filepath.Join(base, "template")
-	remote := filepath.Join(base, "remote.git")
 	if err := os.MkdirAll(filepath.Join(template, "template"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(template): %v", err)
 	}
@@ -207,7 +209,6 @@ func TestStagedSourceCloneUsesPreparedTargetRootAndRollsBack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte("_subdirectory: template\n_templates_suffix: .jinja\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(copier.yml): %v", err)
 	}
-	seedWorktreeRemote(t, base, remote)
 	prepared, err := copierx.PrepareReconcile(context.Background(), copierx.RenderPlan{
 		Target: target, TargetRoot: target,
 		Layers: []copierx.RenderLayer{{Name: "template", Template: template}},
@@ -216,39 +217,36 @@ func TestStagedSourceCloneUsesPreparedTargetRootAndRollsBack(t *testing.T) {
 		t.Fatalf("PrepareReconcile: %v", err)
 	}
 	defer prepared.Close()
-	moved := target + "-moved"
-	if err := os.Rename(target, moved); err != nil {
-		t.Fatalf("Rename(target): %v", err)
-	}
-	if err := os.Mkdir(target, 0o755); err != nil {
-		t.Fatalf("Mkdir(replacement): %v", err)
-	}
 	platform, err := New(target)
 	if err != nil {
 		t.Fatalf("New(target): %v", err)
 	}
 	stack := &manifest.Stack{Sources: map[string]manifest.Source{
-		"app": {Kind: "git", Repo: remote, DefaultRef: "main"},
+		"app": {Kind: "git", Repo: filepath.Join(base, "remote.git"), DefaultRef: "main"},
 	}}
 	rollback, closeSources, verifySources, err := platform.stageReferencedSources(context.Background(), stack, preparedAbsolutePathOpener(prepared, target))
 	if err != nil {
 		t.Fatalf("stageReferencedSources: %v", err)
 	}
-	defer closeSources()
-	if _, err := os.Stat(filepath.Join(moved, "sources", "app", ".git")); err != nil {
-		t.Fatalf("prepared target clone missing: %v", err)
-	}
 	if _, err := os.Stat(filepath.Join(target, "sources")); !os.IsNotExist(err) {
-		t.Fatalf("replacement target received source clone, stat error = %v", err)
+		t.Fatalf("staging cloned an absent git cache, stat error = %v", err)
 	}
-	if err := verifySources(); err == nil {
-		t.Fatal("verifySources accepted a replaced public target")
+	if err := verifySources(); err != nil {
+		t.Fatalf("verifySources: %v", err)
 	}
 	if err := rollback(); err != nil {
-		t.Fatalf("rollback staged source: %v", err)
+		t.Fatalf("rollback: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(moved, "sources")); !os.IsNotExist(err) {
-		t.Fatalf("staged source parents remain after rollback, stat error = %v", err)
+	if err := closeSources(); err != nil {
+		t.Fatalf("closeSources: %v", err)
+	}
+
+	// An existing non-repository destination is a user error, not dev's.
+	if err := os.MkdirAll(filepath.Join(target, "sources", "app"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(bogus cache): %v", err)
+	}
+	if _, _, _, err := platform.stageReferencedSources(context.Background(), stack, preparedAbsolutePathOpener(prepared, target)); err == nil {
+		t.Fatal("staging accepted a non-repository git destination")
 	}
 }
 

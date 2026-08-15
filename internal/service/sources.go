@@ -174,43 +174,25 @@ func (p *Platform) stageReferencedSources(ctx context.Context, stack *manifest.S
 			if err != nil {
 				return fail(fmt.Errorf("stage git source %q: %w", name, err), destination.Close)
 			}
-			if exists {
-				repository, err := destination.HasRealDirectory(".git")
-				if err != nil {
-					return fail(fmt.Errorf("inspect git source %q: %w", name, err), destination.Close)
-				}
-				if !repository {
-					return fail(fmt.Errorf("git source %q destination %s exists but is not a repository", name, path), destination.Close)
-				}
-				gitRoot, err := destination.RetainRealSubdirectory(".git", filepath.Join(path, ".git"))
-				if err != nil {
-					return fail(fmt.Errorf("retain git source %q metadata: %w", name, err), destination.Close)
-				}
-				retained = append(retained, stagedSourcePath{path: path, dest: destination, validationRoot: gitRoot, validationPath: filepath.Join(path, ".git")})
+			if !exists {
+				// The two-command contract: `angee init` renders; `angee dev`
+				// materializes. An absent git cache is dev's to clone — init
+				// stays fast and render-only.
+				_ = destination.Close()
 				continue
 			}
-			tempRoot, err := os.MkdirTemp("", "angee-source-stage-*")
+			repository, err := destination.HasRealDirectory(".git")
 			if err != nil {
-				return fail(err, destination.Close)
+				return fail(fmt.Errorf("inspect git source %q: %w", name, err), destination.Close)
 			}
-			cleanupTemp := func() error { return os.RemoveAll(tempRoot) }
-			staged := filepath.Join(tempRoot, "source")
-			if err := git.New().CloneRef(ctx, source.Repo, staged, source.DefaultRef); err != nil {
-				return fail(fmt.Errorf("clone git source %q: %w", name, err), cleanupTemp, destination.Close)
+			if !repository {
+				return fail(fmt.Errorf("git source %q destination %s exists but is not a repository", name, path), destination.Close)
 			}
-			if err := destination.ReplaceFrom(ctx, staged); err != nil {
-				return fail(fmt.Errorf("install git source %q: %w", name, err), cleanupTemp, destination.Close)
-			}
-			retained = append(retained, stagedSourcePath{path: path, dest: destination, created: true})
 			gitRoot, err := destination.RetainRealSubdirectory(".git", filepath.Join(path, ".git"))
 			if err != nil {
-				return fail(fmt.Errorf("retain staged git source %q metadata: %w", name, err), cleanupTemp)
+				return fail(fmt.Errorf("retain git source %q metadata: %w", name, err), destination.Close)
 			}
-			retained[len(retained)-1].validationRoot = gitRoot
-			retained[len(retained)-1].validationPath = filepath.Join(path, ".git")
-			if err := cleanupTemp(); err != nil {
-				return fail(fmt.Errorf("clean staged git source %q: %w", name, err))
-			}
+			retained = append(retained, stagedSourcePath{path: path, dest: destination, validationRoot: gitRoot, validationPath: filepath.Join(path, ".git")})
 		default:
 			return fail(fmt.Errorf("source kind %q is not implemented", source.Kind))
 		}
