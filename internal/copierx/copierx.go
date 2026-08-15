@@ -64,7 +64,9 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 		return nil, fmt.Errorf("resolve path inputs: abs(%q): %w", destDir, err)
 	}
 	if angeeRoot == "" {
-		angeeRoot = ".angee"
+		// A template without an ANGEE_ROOT input renders the stack at the
+		// destination itself (project-at-root) — translation is identity.
+		angeeRoot = "."
 	}
 	absAngeeRoot := angeeRoot
 	if !filepath.IsAbs(absAngeeRoot) {

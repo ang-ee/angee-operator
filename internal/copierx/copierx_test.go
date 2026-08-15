@@ -46,6 +46,39 @@ func TestResolvePathInputsRewritesRelativePathsAsAngeeRootRelative(t *testing.T)
 	}
 }
 
+func TestResolvePathInputsWithoutAngeeRootIsIdentity(t *testing.T) {
+	// A template with path inputs but no ANGEE_ROOT input renders the stack at
+	// the destination itself (project-at-root, e.g. stacks/dev post-overlay):
+	// relative inputs must pass through untranslated, never gain a ".." hop.
+	tmp := t.TempDir()
+	tpl := writeTemplate(t, filepath.Join(tmp, "tpl"), strings.Join([]string{
+		"_angee:",
+		"  kind: stack",
+		"  name: dev",
+		"project_path:",
+		"  type: path",
+		"  default: \".\"",
+		"framework_path:",
+		"  type: path",
+		"  default: workspaces/src/angee-django",
+	}, "\n"))
+	dest := filepath.Join(tmp, "host")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatalf("MkdirAll(host) = %v", err)
+	}
+	inputs := Inputs{"project_path": ".", "framework_path": "workspaces/src/angee-django"}
+	out, err := ResolvePathInputs(tpl, inputs, dest, "")
+	if err != nil {
+		t.Fatalf("ResolvePathInputs() = %v", err)
+	}
+	if got := out["project_path"]; got != "." {
+		t.Fatalf("project_path = %q, want %q", got, ".")
+	}
+	if got := out["framework_path"]; got != "workspaces/src/angee-django" {
+		t.Fatalf("framework_path = %q, want %q", got, "workspaces/src/angee-django")
+	}
+}
+
 func TestResolvePathInputsKeepsAbsolutePathsUnchanged(t *testing.T) {
 	tmp := t.TempDir()
 	tpl := writeTemplate(t, filepath.Join(tmp, "tpl"), strings.Join([]string{
