@@ -1465,3 +1465,147 @@ func TestChainTemplateSnapshotRootRejectsUnusableIncludeRoots(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceCreateAndUpdatePreserveInTemplateSymlinks(t *testing.T) {
+	// Regression: a `_preserve_symlinks: true` template carrying a relative,
+	// in-template symlink (CLAUDE.md -> AGENTS.md — every stack/workspace
+	// template ships one) must render on create AND re-render on update.
+	// The update path used to fail with "symlink CLAUDE.md points outside
+	// template root".
+	ctx := context.Background()
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root): %v", err)
+	}
+	stack := &manifest.Stack{Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "host"}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(host): %v", err)
+	}
+	templateRoot := filepath.Join(base, ".templates", "workspaces", "linked")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(template): %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_preserve_symlinks: true
+_angee:
+  kind: workspace
+  name: linked
+  inputs:
+    note:
+      type: str
+      default: v1
+note:
+  type: str
+  default: v1
+`
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "AGENTS.md.jinja"), []byte("note {{ note }}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md.jinja): %v", err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(templateDir, "CLAUDE.md")); err != nil {
+		t.Fatalf("Symlink(CLAUDE.md): %v", err)
+	}
+
+	platform, _ := New(root)
+	created, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: templateRoot, Name: "feature"})
+	if err != nil {
+		t.Fatalf("WorkspaceCreate: %v", err)
+	}
+	link, err := os.Readlink(filepath.Join(created.Path, "CLAUDE.md"))
+	if err != nil || link != "AGENTS.md" {
+		t.Fatalf("created CLAUDE.md link = %q, err = %v; want AGENTS.md", link, err)
+	}
+
+	if _, err := platform.WorkspaceUpdate(ctx, "feature", api.WorkspaceUpdateRequest{Inputs: map[string]string{"note": "v2"}}); err != nil {
+		t.Fatalf("WorkspaceUpdate: %v", err)
+	}
+	agents, _ := os.ReadFile(filepath.Join(created.Path, "AGENTS.md"))
+	if string(agents) != "note v2\n" {
+		t.Fatalf("AGENTS.md after update = %q, want note v2", agents)
+	}
+	link, err = os.Readlink(filepath.Join(created.Path, "CLAUDE.md"))
+	if err != nil || link != "AGENTS.md" {
+		t.Fatalf("updated CLAUDE.md link = %q, err = %v; want AGENTS.md", link, err)
+	}
+}
+
+func TestStackPrepareMaterializesDeclaredWorkspaces(t *testing.T) {
+	// The two-command contract: `angee init` renders a manifest that DECLARES
+	// the src workspace; materializeDeclaredWorkspaces (run by StackPrepare on
+	// `angee dev`) cuts it, fleshing the declaration out into a full record.
+	ctx := context.Background()
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root): %v", err)
+	}
+	templateRoot := filepath.Join(base, ".templates", "workspaces", "srclike")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(template): %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: srclike
+  inputs:
+    note:
+      type: str
+      default: unset
+note:
+  type: str
+  default: unset
+`
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "NOTE.md.jinja"), []byte("note {{ note }}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(NOTE.md.jinja): %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "host",
+		Workspaces: map[string]manifest.Workspace{
+			"src": {Template: "srclike", Inputs: map[string]string{"note": "declared"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(host): %v", err)
+	}
+
+	platform, _ := New(root)
+	t.Chdir(base) // template resolves via cwd candidates (.templates/…)
+	cut, err := platform.materializeDeclaredWorkspaces(ctx, stack)
+	if err != nil {
+		t.Fatalf("materializeDeclaredWorkspaces: %v", err)
+	}
+	if !cut {
+		t.Fatal("expected the declared workspace to be cut")
+	}
+	note, err := os.ReadFile(filepath.Join(root, "workspaces", "src", "NOTE.md"))
+	if err != nil || string(note) != "note declared\n" {
+		t.Fatalf("NOTE.md = %q, err = %v; want the declared input rendered", note, err)
+	}
+
+	// Idempotent: an existing directory is never re-cut.
+	reloaded, err := manifest.LoadFile(manifest.Path(root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	cut, err = platform.materializeDeclaredWorkspaces(ctx, reloaded)
+	if err != nil {
+		t.Fatalf("materializeDeclaredWorkspaces (second): %v", err)
+	}
+	if cut {
+		t.Fatal("second run must be a no-op")
+	}
+}

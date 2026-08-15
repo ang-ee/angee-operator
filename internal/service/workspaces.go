@@ -72,8 +72,21 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	if _, exists := stack.Workspaces[name]; exists {
-		return api.WorkspaceRef{}, &ConflictError{Kind: "workspace", Name: name, Reason: "already exists"}
+	if declared, exists := stack.Workspaces[name]; exists {
+		if _, statErr := os.Stat(filepath.Join(p.root, "workspaces", name)); statErr == nil {
+			return api.WorkspaceRef{}, &ConflictError{Kind: "workspace", Name: name, Reason: "already exists"}
+		}
+		// Declared but never materialized (a rendered manifest carries the
+		// declaration; `angee dev` owns the cut): adopt the declaration's
+		// inputs as defaults under the request's explicit inputs.
+		merged := map[string]string{}
+		for key, value := range declared.Inputs {
+			merged[key] = value
+		}
+		for key, value := range req.Inputs {
+			merged[key] = value
+		}
+		inputs = workspaceInputs(metadata, merged)
 	}
 	allocations, err := p.allocateWorkspacePorts(stack, name)
 	if err != nil {
@@ -1321,7 +1334,13 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	items := []workspaceSourceMaterialization{}
 	for _, slot := range sortedKeys(metadata.Sources) {
 		spec := metadata.Sources[slot]
-		sourceName := spec.Source
+		// The slot's source name is input-substitutable (e.g. an opt-in
+		// work-state slot names its source through an input; empty + optional
+		// skips the slot below).
+		sourceName, err := substitute.Resolve(spec.Source, substitute.Context{Inputs: inputs, Name: workspaceName, Alloc: alloc})
+		if err != nil {
+			return nil, cleanup, fmt.Errorf("workspace source %q name: %w", slot, err)
+		}
 		if sourceName == "" {
 			sourceName = slot
 		}
@@ -1993,6 +2012,12 @@ func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (strin
 		}
 		return ref, ref, nil
 	}
+	if base, pin := splitTemplateRefPin(ref); pin != "" || strings.Contains(base, "//") {
+		// A pinned ref or an explicit owner/repo//subpath never resolves
+		// locally — it names a repository state, so it goes straight to the
+		// registry resolver.
+		return p.resolveRegistryTemplate(ctx, ref, kind)
+	}
 	family := kind + "s"
 	kindRef := ref
 	if !strings.Contains(ref, "/") {
@@ -2025,7 +2050,12 @@ func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (strin
 			return candidate, kindRef, nil
 		}
 	}
-	return "", "", fmt.Errorf("template %q was not found", ref)
+	// Every local candidate missed: fall through to the template registry so a
+	// clean machine resolves the conventional names remotely.
+	if path, activeRef, err := p.resolveRegistryTemplate(ctx, ref, kind); err == nil {
+		return path, activeRef, nil
+	}
+	return "", "", fmt.Errorf("template %q was not found locally or in the template registry", ref)
 }
 
 // ancestorTemplatePaths walks up from start (exclusive) and returns

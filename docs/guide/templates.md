@@ -7,10 +7,11 @@ The operator renders three kinds:
 - **Stack template** (`kind: stack`) — produces an `angee.yaml` (and
   generated runtime files) for a runnable Stack root. Stack templates come
   in two flavours matching the
-  [two layouts](/operator/concepts#two-stack-layouts): a **dev** flavour
-  renders a `.angee/` overlay with `local` Sources (`angee init --dev`); a
-  **non-dev** flavour (local / staging / prod) renders a self-contained
-  root with cloned `git` Sources (`angee stack init`).
+  [two layouts](/operator/concepts#two-stack-layouts): the **dev** flavour
+  renders the framework-dev stack — the project host at the Stack root with
+  the framework repos as `git` Sources and a `src` Workspace (plain
+  `angee init`); the **local** flavour (local / staging / prod) renders a
+  self-contained docker-compose root (`angee stack init`).
 - **Workspace template** (`kind: workspace`) — produces a workspace tree
   under `$ANGEE_ROOT/workspaces/<name>`, may declare Sources to
   materialize, and may chain an inner Stack template.
@@ -76,10 +77,11 @@ ancestor-of-PWD/.templates/<kind>/<name>
 
 `<kind>` is `stacks` or `workspaces`.
 
-`angee init --dev` requires a local or remote `stacks/dev` template. The
-default Host that ships one is
-[`angee-django`](https://github.com/ang-ee/angee-django), under
-`templates/stacks/dev/`.
+`angee init` resolves `stacks/dev` from the local search paths first, then
+from the template registry —
+[`ang-ee/angee-templates`](https://github.com/ang-ee/angee-templates) by
+default; `ANGEE_TEMPLATE_REGISTRY` overrides it with another repository
+(URL, `owner/repo`, or a local path).
 
 ## Remote Resolution
 

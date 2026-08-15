@@ -103,6 +103,17 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 		if err := p.materializeStackResources(ctx, stack); err != nil {
 			return err
 		}
+		cut, err := p.materializeDeclaredWorkspaces(ctx, stack)
+		if err != nil {
+			return err
+		}
+		if cut {
+			// The cut wrote full workspace records (sources, allocations,
+			// resolved chain) to the manifest; reload before compiling.
+			if stack, err = p.LoadStack(); err != nil {
+				return err
+			}
+		}
 		compiledStack, resolvedSecrets, err := p.compileStackArtifacts(ctx, stack)
 		if err != nil {
 			return err
@@ -129,6 +140,36 @@ func (p *Platform) materializeStackResources(ctx context.Context, stack *manifes
 		return err
 	}
 	return p.materializeReferencedSources(ctx, stack)
+}
+
+// materializeDeclaredWorkspaces cuts every stack-declared workspace whose
+// directory does not exist yet — the two-command contract: `angee init`
+// renders a manifest that declares the src workspace and `angee dev`
+// materializes it. It reports whether any workspace was cut (the manifest
+// changed on disk and the caller must reload it).
+func (p *Platform) materializeDeclaredWorkspaces(ctx context.Context, stack *manifest.Stack) (bool, error) {
+	cut := false
+	for _, name := range sortedKeys(stack.Workspaces) {
+		workspace := stack.Workspaces[name]
+		if workspace.Template == "" {
+			continue
+		}
+		path := filepath.Join(p.root, "workspaces", name)
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return cut, err
+		}
+		if _, err := p.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
+			Template: workspace.Template,
+			Name:     name,
+			Inputs:   workspace.Inputs,
+		}); err != nil {
+			return cut, fmt.Errorf("materialize declared workspace %q: %w", name, err)
+		}
+		cut = true
+	}
+	return cut, nil
 }
 
 func (p *Platform) stageStackResources(ctx context.Context, stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, func() error, error) {

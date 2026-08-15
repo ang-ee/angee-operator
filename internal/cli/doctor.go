@@ -177,7 +177,7 @@ func (r *doctorRunner) checkManifest(root string) *manifest.Stack {
 	path := manifest.Path(root)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			r.add("manifest", doctorWarn, fmt.Sprintf("%s does not exist", displayPath(path)), "Run `angee init --dev --yes` or `angee stack init <template>` before starting services.")
+			r.add("manifest", doctorWarn, fmt.Sprintf("%s does not exist", displayPath(path)), "Run `angee init --yes` or `angee stack init <template>` before starting services.")
 			return nil
 		}
 		r.add("manifest", doctorError, err.Error(), "")

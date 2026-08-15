@@ -19,15 +19,18 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 
 ```sh
 angee doctor
-angee init --dev [path] [--input key=value ...] [--yes] [--force]
+angee init [path] [--template <ref>] [--input key=value ...] [--yes] [--force]
 angee stack init <template> [path] [--input key=value ...] [--yes] [--force]
 angee stack update [--template] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
 
-`angee init --dev` is shorthand for the `dev` stack template. The template must
-be available through the local or remote template resolver.
+`angee init` renders the `dev` stack template by default. `--template` takes a
+name (`dev`), a pinned name (`dev@v1.2`), an `owner/repo//subpath` reference,
+a URL, or a local path; names resolve from the local template search paths
+first and fall back to the template registry (ang-ee/angee-templates, or
+`ANGEE_TEMPLATE_REGISTRY`).
 
 The init commands bootstrap a new root, so they tolerate a missing operator: if
 `ANGEE_OPERATOR_URL` (or `--operator`) is set but the operator is not reachable,

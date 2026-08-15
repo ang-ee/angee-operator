@@ -100,14 +100,14 @@ func TestServiceUpdateTemplateDryRunConflictOutput(t *testing.T) {
 	}
 }
 
-func TestInitDevReportsTemplateAndRoot(t *testing.T) {
+func TestInitReportsTemplateAndRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)
 	t.Chdir(root)
 
 	var stdout, stderr bytes.Buffer
 	cmd := NewRootWithIO(strings.NewReader("\n"), &stdout, &stderr)
-	cmd.SetArgs([]string{"init", "--dev"})
+	cmd.SetArgs([]string{"init"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -180,7 +180,7 @@ func TestStackInitRoutesToReachableOperator(t *testing.T) {
 	}
 }
 
-func TestInitDevRefusesNonEmptyRoot(t *testing.T) {
+func TestInitRefusesNonEmptyRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)
 	writeExistingStackRoot(t, root)
@@ -188,7 +188,7 @@ func TestInitDevRefusesNonEmptyRoot(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cmd := NewRoot(&stdout, &stderr)
-	cmd.SetArgs([]string{"init", "--dev", "--yes"})
+	cmd.SetArgs([]string{"init", "--yes"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("Execute() error is nil")
@@ -199,7 +199,7 @@ func TestInitDevRefusesNonEmptyRoot(t *testing.T) {
 	}
 }
 
-func TestInitDevForceAllowsNonEmptyRoot(t *testing.T) {
+func TestInitForceAllowsNonEmptyRoot(t *testing.T) {
 	root := t.TempDir()
 	writeStackTemplate(t, root)
 	writeExistingStackRoot(t, root)
@@ -207,7 +207,7 @@ func TestInitDevForceAllowsNonEmptyRoot(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	cmd := NewRoot(&stdout, &stderr)
-	cmd.SetArgs([]string{"init", "--dev", "--force", "--yes"})
+	cmd.SetArgs([]string{"init", "--force", "--yes"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -220,14 +220,14 @@ func TestInitDevForceAllowsNonEmptyRoot(t *testing.T) {
 	}
 }
 
-func TestInitStackTemplateInitializesNamedRoot(t *testing.T) {
+func TestInitTemplateFlagInitializesNamedRoot(t *testing.T) {
 	root := t.TempDir()
 	templateRoot := writeStackTemplate(t, root)
 	t.Chdir(root)
 
 	var stdout, stderr bytes.Buffer
 	cmd := NewRoot(&stdout, &stderr)
-	cmd.SetArgs([]string{"init", "stack", "--template", templateRoot, "angee-notes", "--yes"})
+	cmd.SetArgs([]string{"init", "--template", templateRoot, "angee-notes", "--yes", "--input", "ANGEE_ROOT=."})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

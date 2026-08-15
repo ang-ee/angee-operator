@@ -140,6 +140,16 @@ func (p *Platform) stageReferencedSources(ctx context.Context, stack *manifest.S
 				return fail(fmt.Errorf("validate local source %q: %w", name, err))
 			}
 			_, exists, err := destination.Lstat()
+			if err == nil && !exists {
+				if rel, relErr := filepath.Rel(p.root, path); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					// A local source inside the stack root that does not exist
+					// yet is stack-owned machinery — e.g. a workspace slot the
+					// declared `src` workspace cuts on `angee dev` — so init
+					// staging skips it instead of failing the render.
+					_ = destination.Close()
+					continue
+				}
+			}
 			if err != nil || !exists {
 				if err == nil {
 					err = os.ErrNotExist

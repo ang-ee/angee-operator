@@ -47,13 +47,14 @@ Requirements:
 - Docker, for `runtime: container` Services.
 - `process-compose`, for `runtime: local` Services.
 - `git`, for git-kind Sources.
-- A configured Host (typically [`angee-django`](https://github.com/ang-ee/angee-django)) when bootstrapping with `angee init --dev`.
+- Nothing else: `angee init` resolves its templates from the template
+  registry ([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates))
+  and `angee dev` clones the Host sources the rendered manifest declares.
 
 ## First commands
 
 Angee operates on one `ANGEE_ROOT` containing `angee.yaml`. The CLI
-walks upward from the current directory; in a dev checkout that ships
-workspace templates, it uses `.angee/`.
+walks upward from the current directory to find it.
 
 ```sh
 angee doctor       # check tooling and root
@@ -65,15 +66,16 @@ angee dev          # start container + local Services together
 To bootstrap a fresh stack from a Stack template:
 
 ```sh
-angee init --dev --yes
+angee init --yes
+angee dev
 ```
 
-`--dev` resolves the `dev` Stack template through the configured
-template search paths (see [Templates](/guide/templates)). The default
-Host that ships a `dev` Stack template is
-[`angee-django`](https://github.com/ang-ee/angee-django) — its
-`templates/stacks/dev/` is what gets rendered when you run `angee init
---dev` from inside that repo or its workspaces.
+`angee init` renders the default `dev` Stack template — the framework-dev
+stack from the template registry
+([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates); see
+[Templates](/guide/templates)). The rendered manifest declares the
+framework repos as Sources and the `src` Workspace; `angee dev`
+materializes them all and boots.
 
 ## A typical development loop
 

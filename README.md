@@ -98,8 +98,9 @@ angee up
 angee dev
 ```
 
-`angee init --dev --yes` is supported when a `dev` stack template is available
-through the template search paths.
+`angee init --yes` renders the default `dev` stack template — resolved from
+the local template search paths first, then from the template registry
+([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates)).
 
 ## Core Commands
 

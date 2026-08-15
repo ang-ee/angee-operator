@@ -3,7 +3,8 @@
 # Usage: curl https://angee.ai/install.sh | sh
 set -e
 
-ANGEE_VERSION=latest
+# Release tag to install; override with ANGEE_VERSION=<tag> (CI pins releases).
+ANGEE_VERSION="${ANGEE_VERSION:-latest}"
 REPO="ang-ee/angee-operator"
 INSTALL_DIR="${ANGEE_INSTALL_DIR:-/usr/local/bin}"
 
@@ -65,7 +66,7 @@ build_from_source() {
   echo "  ✔ angee ${BUILD_VERSION} installed to ${INSTALL_DIR}/angee"
   echo ""
   echo "  Get started:"
-  echo "    angee init --dev --yes"
+  echo "    angee init --yes"
   echo "    angee dev"
   echo ""
   exit 0
@@ -116,7 +117,7 @@ if [ -n "${ANGEE_DIST_DIR:-}" ]; then
   fi
   echo ""
   echo "  Get started:"
-  echo "    angee init --dev --yes"
+  echo "    angee init --yes"
   echo "    angee dev"
   echo ""
   exit 0
@@ -181,6 +182,6 @@ if [ -f "${INSTALL_DIR}/angee-operator" ]; then
 fi
 echo ""
 echo "  Get started:"
-echo "    angee init --dev --yes"
+echo "    angee init --yes"
 echo "    angee dev"
 echo ""

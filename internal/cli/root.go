@@ -75,19 +75,19 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 }
 
 func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Command {
-	var dev bool
+	var template string
 	var force bool
 	var yes bool
 	var inputs []string
 	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Initialize a stack",
-		Args:  cobra.MaximumNArgs(1),
+		Long: "Initialize a stack from a template. The default `dev` template renders the\n" +
+			"framework-dev stack from the template registry (ang-ee/angee-templates):\n" +
+			"a project host at the stack root whose manifest declares the framework\n" +
+			"repos as sources — `angee dev` then materializes and boots everything.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			template := "dev"
-			if !dev {
-				return fmt.Errorf("init requires --dev or use stack init <template>")
-			}
 			path := ""
 			if len(args) == 1 {
 				path = args[0]
@@ -112,57 +112,10 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&dev, "dev", false, "use the dev stack template")
+	cmd.Flags().StringVarP(&template, "template", "t", "dev", "stack template (name, name@ref, owner/repo//path, URL, or local path)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively")
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
-	cmd.AddCommand(initStackCommand(stdout, root, operatorURL))
-	return cmd
-}
-
-func initStackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
-	var template string
-	var force bool
-	var yes bool
-	var inputValues []string
-	cmd := &cobra.Command{
-		Use:   "stack --template <template> <ANGEE_ROOT>",
-		Short: "Initialize a stack root from a template",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if template == "" {
-				return fmt.Errorf("--template is required")
-			}
-			inputs, err := parseKeyValues(inputValues)
-			if err != nil {
-				return err
-			}
-			if inputs == nil {
-				inputs = map[string]string{}
-			}
-			if _, ok := inputs["ANGEE_ROOT"]; !ok {
-				inputs["ANGEE_ROOT"] = "."
-			}
-			platform, err := initPlatform(cmd.Context(), root, operatorURL, cmd.ErrOrStderr())
-			if err != nil {
-				return err
-			}
-			inputs, err = resolveStackTemplateInputs(cmd, platform, template, inputs, yes)
-			if err != nil {
-				return err
-			}
-			result, err := platform.StackInit(cmd.Context(), template, args[0], inputs, force)
-			if err != nil {
-				return stackInitError(template, err)
-			}
-			_, err = fmt.Fprintf(stdout, "stack template %s initialized as %s\n", result.Template, displayPath(result.Root))
-			return err
-		},
-	}
-	cmd.Flags().StringVarP(&template, "template", "t", "", "template ref, URL, or path")
-	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
-	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively")
-	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "template input K=V")
 	return cmd
 }
 

@@ -78,13 +78,14 @@ entirely **where `ANGEE_ROOT` sits** and **how its Sources are
 materialized** — the operator treats both as the same Stack primitive;
 the Stack template picks the layout.
 
-- **Dev overlay** (`ANGEE_ROOT: .angee`). The Stack root is a `.angee/`
-  directory *inside a checkout you already have*. Its Sources are
-  `local` — path-mounted to the surrounding code (`framework_path: ..`,
-  `project_path: ..`) — so nothing is cloned; you edit files on disk and
-  the overlay runs them. A developer adds it with `angee init --dev`, and
-  `.angee/` is gitignored and regenerable per clone. This is the layout
-  for iterating on checkouts you already have.
+- **Framework-dev stack** (`ANGEE_ROOT: .`). The folder *is* the Stack
+  root AND the project host. Its manifest declares the framework repos as
+  `git` Sources and a `src` Workspace; `angee dev` clones the caches, cuts
+  the workspace (every repo a sibling worktree slot under
+  `workspaces/src/`), and runs the host's processes against those slots.
+  A developer renders it with plain `angee init`. This is the layout for
+  developing the framework — or a consumer project against live framework
+  source.
 
 - **Self-contained instance** (`ANGEE_ROOT: .`). The folder *is* the
   Stack root — `angee.yaml` and the compiled compose live at the root —
@@ -228,11 +229,11 @@ Django + GraphQL + React application:
   deterministic `runtime/` tree.
 - The output runs as a single Django Service inside an Angee Stack.
 
-`angee-django` ships its own Stack and Workspace Copier templates under
-`templates/stacks/dev/` and `templates/workspaces/dev-pr/` — those
-templates are what `angee init --dev` and
-`angee workspace create <name> --template dev-pr` render when you work on a
-Django consumer.
+The Stack and Workspace Copier templates live in
+[`angee-templates`](https://github.com/ang-ee/angee-templates) —
+`templates/stacks/dev` and `templates/workspaces/src` are what plain
+`angee init` and `angee workspace create <name> --template src` render
+when you work on a Django consumer.
 
 Other Hosts (a Node service, a Go API, a static site, anything that runs
 in a container or as a local process) plug in the same way: ship a Stack
