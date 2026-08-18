@@ -187,6 +187,10 @@ func TestJSONArrayStart(t *testing.T) {
 		{name: "log record embedding a bracket", in: "{\"m\":\"paths: [/a /b]\"}\n[1]", want: "[1]"},
 		{name: "no array", in: "{\"m\":\"paths: [/a]\"}\n", want: ""},
 		{name: "empty", in: "", want: ""},
+		// The scan trims each line rather than matching a bare "\n", so neither
+		// CRLF output nor a log line padded with trailing spaces hides the array.
+		{name: "crlf line endings", in: "{\"m\":\"paths: [/a]\"}\r\n[1]\r\n", want: "[1]"},
+		{name: "trailing whitespace on the log line", in: "{\"m\":\"x\"}   \n  [1]", want: "[1]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := string(jsonArrayStart([]byte(tc.in))); got != tc.want {
