@@ -10,7 +10,7 @@ Editor schema:
 
 The checked-in schema lives at `docs/public/angee.schema.json` and is
 refreshed with `make schema`. A field-by-field reference is available at
-[Manifest schema reference](/reference/manifest-schema). The schema is
+[Manifest schema reference](/cli/manifest-schema). The schema is
 intentionally a completion/type aid; runtime validation in
 `internal/manifest` remains authoritative for cross-field rules such as
 local services requiring `command` and container services requiring
