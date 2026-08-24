@@ -67,7 +67,7 @@ React, or any specific framework.
 
 Every concept above has a `service.Platform` method and at least one of
 {CLI, REST, GraphQL}. The full classification is tracked in
-[Surface parity](/reference/surfaces) and enforced by
+[Surface parity](/operator/surfaces) and enforced by
 `internal/service/surface_matrix_test.go`.
 
 ## Two stack layouts
@@ -197,7 +197,7 @@ subscription.
   HKDF-derived from the admin bearer, then a per-process random
   fallback for loopback dev.
 
-See the [Operator API reference](/reference/operator-api) for the
+See the [Operator API reference](/operator/api) for the
 detailed REST + GraphQL contract.
 
 ## Above the engine
@@ -275,9 +275,9 @@ Everything else is just running them.
 
 ## Where to next
 
-- [Getting started](/guide/getting-started) — install and first commands.
-- [Manifest](/guide/manifest) — `angee.yaml` schema and substitutions.
-- [Templates](/guide/templates) — how Stack and Workspace templates are
+- [Getting started](/cli/getting-started) — install and first commands.
+- [Manifest](/cli/manifest) — `angee.yaml` schema and substitutions.
+- [Templates](/cli/templates) — how Stack and Workspace templates are
   resolved and what the `_angee` metadata block declares.
-- [Commands](/guide/commands) — full CLI surface.
-- [Operator API](/reference/operator-api) — REST + GraphQL transports.
+- [Commands](/cli/commands) — full CLI surface.
+- [Operator API](/operator/api) — REST + GraphQL transports.

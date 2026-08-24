@@ -100,7 +100,7 @@ angee service logs <name> [--follow]
 env, ports). `service create` renders a Copier template with
 `_angee.kind: service` into the stack — useful for bundling agent
 runtimes or other reusable service shapes that need a Dockerfile and
-multiple inputs. See [Templates](/guide/templates) for the template
+multiple inputs. See [Templates](/cli/templates) for the template
 contract.
 
 `service init` flags:
@@ -158,7 +158,7 @@ do not yet have CLI subcommands — they're reachable via the operator's
 REST + GraphQL surfaces (`GET /sources/{name}/diff`,
 `POST /workspaces/{name}/sources/{slot}/{merge,rebase,...}` and the
 matching `sourceDiff` / `workspaceSource*` GraphQL mutations). See
-[Operator API](/reference/operator-api).
+[Operator API](/operator/api).
 
 ## Workspaces
 
@@ -299,7 +299,7 @@ angee secret delete <name>
 match `^[A-Za-z0-9._-]{1,256}$`.
 
 The same operations are reachable over REST and GraphQL — see
-[Operator API](/reference/operator-api).
+[Operator API](/operator/api).
 
 ## Files
 
@@ -319,7 +319,7 @@ symlink-escape are rejected) and content is UTF-8 text within a 1 MiB cap.
 `get` returns the current `etag`; pass it back to `set --etag` as a
 compare-and-set precondition — a stale value is a conflict. The same
 operations are reachable over REST (`GET`/`PUT /files`) and GraphQL
-(`file` / `fileWrite`) — see [Operator API](/reference/operator-api).
+(`file` / `fileWrite`) — see [Operator API](/operator/api).
 
 ## Operator
 
