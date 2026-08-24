@@ -5,7 +5,7 @@ operator (`angee-operator`) that pulls source repositories, renders them
 into Stacks for production and into Workspaces for development, and runs
 the result on docker-compose or process-compose.
 
-If you have not already, skim [Concepts](/guide/concepts) first — it
+If you have not already, skim [Concepts](/operator/concepts) first — it
 explains what the engine does, what a **Host** is (e.g. `angee-django`
 is the first default Host), and the difference between abstract terms
 (Stack template, Workspace template) and concrete runtime objects
@@ -73,7 +73,7 @@ angee dev
 `angee init` renders the default `dev` Stack template — the framework-dev
 stack from the template registry
 ([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates); see
-[Templates](/guide/templates)). The rendered manifest declares the
+[Templates](/cli/templates)). The rendered manifest declares the
 framework repos as Sources and the `src` Workspace; `angee dev`
 materializes them all and boots.
 
@@ -104,11 +104,11 @@ Stack. The only difference is which root the operator points at.
 
 ## Where to next
 
-- [Concepts](/guide/concepts) — Stack, Source, Workspace, Service, Host,
+- [Concepts](/operator/concepts) — Stack, Source, Workspace, Service, Host,
   and the engine boundary.
-- [Commands](/guide/commands) — every CLI subcommand and flag.
-- [Manifest](/guide/manifest) — `angee.yaml` schema and patterns.
-- [Templates](/guide/templates) — Copier templates for stacks and workspaces.
-- [Operator API](/reference/operator-api) — REST + GraphQL transports.
-- [Surface parity](/reference/surfaces) — which Platform methods are exposed
+- [Commands](/cli/commands) — every CLI subcommand and flag.
+- [Manifest](/cli/manifest) — `angee.yaml` schema and patterns.
+- [Templates](/cli/templates) — Copier templates for stacks and workspaces.
+- [Operator API](/operator/api) — REST + GraphQL transports.
+- [Surface parity](/operator/surfaces) — which Platform methods are exposed
   on which surface.

@@ -50,7 +50,7 @@ destructive `stack init --force` or hand-editing `angee.yaml` — neither is a
 template *update*.
 
 This is an asymmetry, not just a gap: **`workspace update` already re-renders its
-Copier templates** (see [Commands](/guide/commands) → Workspaces: "create/update
+Copier templates** (see [Commands](/cli/commands) → Workspaces: "create/update
 render Copier templates, including any chained inner-stack templates"). Top-level
 stacks should behave the same way.
 
