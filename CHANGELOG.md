@@ -6,6 +6,21 @@ latest tag.
 
 ## Unreleased
 
+## v0.10.0 — 2026-08-25
+
+### Added
+
+- **`angee dev` interactive control menu.** When attached to a terminal,
+  pressing any key during the foreground log stream opens a control menu:
+  `R` restarts a service, `Q` stops one. Each opens a numbered picker of every
+  service (with its runtime and observed state) plus `A` for the whole stack
+  and `Esc` to cancel. Restarting a stopped service starts it; quitting a
+  single service stops just it while the rest keep streaming, and quitting the
+  whole stack tears everything down and exits. The terminal runs in cbreak
+  mode so the streamed logs keep rendering and Ctrl-C still shuts the stack
+  down; a non-terminal stdin (pipes, CI) falls back to the plain streaming
+  behaviour unchanged.
+
 ## v0.9.0 — 2026-08-15
 
 ### Changed (breaking)
