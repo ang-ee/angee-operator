@@ -2,7 +2,11 @@
 
 package cli
 
-import "golang.org/x/sys/unix"
+import (
+	"time"
+
+	"golang.org/x/sys/unix"
+)
 
 // termState captures the terminal mode saved before entering cbreak so the
 // original mode can be restored on exit.
@@ -44,4 +48,21 @@ func (s *termState) restore() error {
 	}
 	saved := s.saved
 	return unix.IoctlSetTermios(s.fd, ioctlWriteTermios, &saved)
+}
+
+// pollReadable waits until fd has data to read or timeout elapses, returning
+// whether input is ready. It lets the key reader wait for input without
+// blocking indefinitely in Read, so it can observe context cancellation.
+func pollReadable(fd int, timeout time.Duration) (bool, error) {
+	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	n, err := unix.Poll(fds, int(timeout/time.Millisecond))
+	if err != nil {
+		if err == unix.EINTR {
+			// Interrupted by a signal (e.g. SIGWINCH); treat as "not ready" so
+			// the caller loops and re-checks its context.
+			return false, nil
+		}
+		return false, err
+	}
+	return n > 0, nil
 }

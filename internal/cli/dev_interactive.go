@@ -6,9 +6,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/spf13/cobra"
@@ -32,15 +34,13 @@ func runDevForeground(cmd *cobra.Command, platform service.API, build bool, stdo
 	// first use (see proccompose.confirmInstall / canPrompt). Taking the
 	// terminal into cbreak mode and reading keys concurrently would steal that
 	// prompt's input and hang startup. If the stack runs local processes and
-	// process-compose isn't already on PATH, stream without the interactive
-	// menu for this run so the backend can run its install prompt in normal
-	// cooked mode; the menu is available on the next run once the binary is in
-	// place. (When process-compose is present — the bundled default — or the
-	// stack has no local processes, there is no prompt and no contention.)
-	if devStackHasLocalProcesses(ctx, platform) {
-		if _, err := exec.LookPath("process-compose"); err != nil {
-			return platform.StackDevForeground(ctx, build, stdout, stderr)
-		}
+	// process-compose isn't installed yet, stream without the interactive menu
+	// for this run so the backend can run its install prompt in normal cooked
+	// mode; the menu is available on the next run once the binary is in place.
+	// (When process-compose is present — the bundled default — or the stack has
+	// no local processes, there is no prompt and no contention.)
+	if devStackHasLocalProcesses(ctx, platform) && !processComposeInstalled(ctx) {
+		return platform.StackDevForeground(ctx, build, stdout, stderr)
 	}
 
 	// Derive a cancellable context so quitting the whole stack can cancel it,
@@ -85,6 +85,27 @@ func devStackHasLocalProcesses(ctx context.Context, platform service.API) bool {
 	return false
 }
 
+// processComposeInstalled reports whether the process-compose binary is
+// resolvable the same way the runtime backend resolves it: on PATH, or in the
+// Go bin directory ($(go env GOPATH)/bin). Mirroring proccompose.Backend keeps
+// the interactive fallback in step with the backend — it only bypasses the menu
+// when the backend would actually prompt to install process-compose.
+func processComposeInstalled(ctx context.Context) bool {
+	if _, err := exec.LookPath("process-compose"); err == nil {
+		return true
+	}
+	out, err := exec.CommandContext(ctx, "go", "env", "GOPATH").Output()
+	if err != nil {
+		return false
+	}
+	gopath := strings.TrimSpace(string(out))
+	if gopath == "" {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(gopath, "bin", "process-compose"))
+	return err == nil
+}
+
 // devController drives the interactive control menu over a running dev session.
 type devController struct {
 	platform    service.API
@@ -112,7 +133,15 @@ func (c *devController) run(ctx context.Context) {
 	}()
 
 	c.keys = make(chan byte, 16)
-	go c.readLoop(ctx)
+	readerDone := make(chan struct{})
+	go func() {
+		c.readLoop(ctx)
+		close(readerDone)
+	}()
+	// Join the reader before restoring the terminal (deferred later, so it runs
+	// first): the poll-based readLoop exits within one poll interval of ctx
+	// cancellation, so no key read outlives the session or races the restore.
+	defer func() { <-readerDone }()
 
 	c.line("[angee dev] press any key for the control menu (restart / quit)")
 
@@ -138,15 +167,25 @@ func (c *devController) run(ctx context.Context) {
 }
 
 // readLoop feeds keypresses onto c.keys until stdin closes or ctx is done. It
-// is the sole reader of stdin so cbreak-mode reads never contend. A blocking
-// c.in.Read cannot observe ctx cancellation, so once the session ends this
-// goroutine stays parked until one more byte or EOF arrives and then returns;
-// that only happens as the process is tearing down, so the parked read is
-// harmless.
+// is the sole reader of stdin so cbreak-mode reads never contend. It polls for
+// readability with a short timeout rather than blocking in Read, so it observes
+// ctx cancellation within one poll interval and exits promptly on teardown
+// (letting run join it before restoring the terminal).
 func (c *devController) readLoop(ctx context.Context) {
 	defer close(c.keys)
+	fd := int(c.in.Fd())
 	buf := make([]byte, 1)
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		ready, err := pollReadable(fd, 200*time.Millisecond)
+		if err != nil {
+			return
+		}
+		if !ready {
+			continue // timed out with no input; re-check ctx and poll again
+		}
 		n, err := c.in.Read(buf)
 		if n > 0 {
 			select {
@@ -155,7 +194,7 @@ func (c *devController) readLoop(ctx context.Context) {
 				return
 			}
 		}
-		if err != nil || ctx.Err() != nil {
+		if err != nil {
 			return
 		}
 	}
