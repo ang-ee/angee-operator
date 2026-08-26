@@ -150,6 +150,30 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 	}
 }
 
+// process-compose prints an ANSI-coloured "new version available" notice to
+// stderr, which CombinedOutput folds in ahead of the JSON array. Its escape
+// codes (e.g. "\x1b[33m") contain a '[', so a naive "trim to the first '['"
+// would slice into the banner and fail to parse — leaving every local service
+// reported as "declared". Status must still read the real array.
+func TestBackendStatusParsesProcessListWithANSIBanner(t *testing.T) {
+	const jsonPart = `[
+	{"name":"storybook","status":"Running","is_running":true,"exit_code":0,"is_ready":"-"}
+]`
+	payload := "\n\x1b[33mInfo:\x1b[0m New version available: v1.120.0 -> v1.122.0. Run 'process-compose version update'\n" + jsonPart
+	runner := &stubListRunner{output: []byte(payload)}
+	backend := Backend{Runner: runner}
+	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: "/stack", ControlPort: 8080})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	want := []runtime.ServiceStatus{
+		{Name: "storybook", Runtime: "local", State: "running"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %#v, want %#v", got, want)
+	}
+}
+
 func TestBackendStatusSwallowsErrors(t *testing.T) {
 	runner := &stubListRunner{err: errors.New("supervisor offline")}
 	backend := Backend{Runner: runner}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -134,6 +135,36 @@ func TestDevStackHasLocalProcesses(t *testing.T) {
 	}}
 	if devStackHasLocalProcesses(context.Background(), containerOnly) {
 		t.Fatal("a container-only stack has no local processes")
+	}
+}
+
+func TestHandleKeyRestartHotkeyOpensPickerDirectly(t *testing.T) {
+	var buf bytes.Buffer
+	c := newTestController(&fakeDevPlatform{}) // no services
+	c.out = &buf
+
+	if c.handleKey(context.Background(), 'r') {
+		t.Fatal("restart hotkey must not signal quit-all")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "restart") {
+		t.Fatalf("R should open the restart picker directly; got %q", out)
+	}
+	if strings.Contains(out, "[R] restart   [Q] quit") {
+		t.Fatalf("R should skip the menu hint and go straight to the picker; got %q", out)
+	}
+}
+
+func TestHandleKeyNonHotkeyShowsMenu(t *testing.T) {
+	var buf bytes.Buffer
+	c := newTestController(&fakeDevPlatform{})
+	c.out = &buf
+	c.keys = make(chan byte, 1)
+	c.keys <- 'x' // the menu reads this as "resume"
+
+	c.handleKey(context.Background(), ' ')
+	if !strings.Contains(buf.String(), "[R] restart") {
+		t.Fatalf("a non-hotkey should show the menu hint; got %q", buf.String())
 	}
 }
 
