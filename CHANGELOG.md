@@ -20,6 +20,9 @@ latest tag.
   value). This also fixes `angee dev` restart, which read the wrong status and
   tried to *start* an already-running process ("process is already running")
   instead of restarting it.
+- Bump `github.com/gorilla/websocket` to v1.5.3, clearing govulncheck advisory
+  GO-2026-6278 (cryptographically weak PRNG for the WebSocket mask key) reached
+  through the operator's log-stream endpoint.
 
 ### Changed
 
