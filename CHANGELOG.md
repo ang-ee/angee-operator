@@ -6,6 +6,28 @@ latest tag.
 
 ## Unreleased
 
+## v0.10.1 — 2026-08-26
+
+### Fixed
+
+- **Local (process-compose) service status was always reported as
+  `declared`.** process-compose's ANSI-coloured "new version available" notice
+  is folded into command output (CombinedOutput), and its escape codes contain
+  a `[`, which defeated the "trim to the first `[`" JSON extraction in the
+  status parser — so every `runtime: local` service showed as `declared` in
+  `angee status` and to the `angee dev` control menu. The parser now locates
+  the real JSON array robustly (tries each `[` and decodes the first valid
+  value). This also fixes `angee dev` restart, which read the wrong status and
+  tried to *start* an already-running process ("process is already running")
+  instead of restarting it.
+
+### Changed
+
+- **`angee dev` control menu: `R` and `Q` are direct hotkeys.** Pressing `R` or
+  `Q` opens the restart/quit picker in a single keystroke; any other key still
+  shows the menu hint. Previously any key opened the menu and `R`/`Q` needed a
+  second press.
+
 ## v0.10.0 — 2026-08-25
 
 ### Added

@@ -195,15 +195,8 @@ type processListEntry struct {
 }
 
 func parseList(data []byte) []runtime.ServiceStatus {
-	// process-compose emits status banner lines on stderr before the
-	// JSON array on stdout (when invoked via CombinedOutput). Trim
-	// anything before the first '[' to make the response parseable.
-	trimmed := bytes.TrimSpace(data)
-	if idx := bytes.IndexByte(trimmed, '['); idx > 0 {
-		trimmed = trimmed[idx:]
-	}
-	var entries []processListEntry
-	if err := json.Unmarshal(trimmed, &entries); err != nil {
+	entries, ok := decodeProcessList(data)
+	if !ok {
 		return nil
 	}
 	statuses := make([]runtime.ServiceStatus, 0, len(entries))
@@ -219,6 +212,28 @@ func parseList(data []byte) []runtime.ServiceStatus {
 		})
 	}
 	return statuses
+}
+
+// decodeProcessList extracts the JSON array that `process-compose list -o json`
+// prints. process-compose merges human-readable banner lines ahead of the array
+// (ExecRunner folds stderr in via CombinedOutput) — including ANSI-coloured
+// notices such as "New version available" whose escape codes (e.g. "\x1b[33m")
+// contain a '['. So the array does not necessarily begin at the first '[': try
+// each '[' as a candidate start and decode the first JSON value from there,
+// which also tolerates any trailing banner text after the array.
+func decodeProcessList(data []byte) ([]processListEntry, bool) {
+	trimmed := bytes.TrimSpace(data)
+	for {
+		idx := bytes.IndexByte(trimmed, '[')
+		if idx < 0 {
+			return nil, false
+		}
+		var entries []processListEntry
+		if err := json.NewDecoder(bytes.NewReader(trimmed[idx:])).Decode(&entries); err == nil {
+			return entries, true
+		}
+		trimmed = trimmed[idx+1:]
+	}
 }
 
 func procHealth(entry processListEntry) string {

@@ -143,7 +143,7 @@ func (c *devController) run(ctx context.Context) {
 	// cancellation, so no key read outlives the session or races the restore.
 	defer func() { <-readerDone }()
 
-	c.line("[angee dev] press any key for the control menu (restart / quit)")
+	c.line("[angee dev] press R to restart or Q to quit a service (any other key for the menu)")
 
 	for {
 		select {
@@ -154,15 +154,29 @@ func (c *devController) run(ctx context.Context) {
 				<-ctx.Done()
 				return
 			}
-			// Ignore stray newlines as the menu opener so an accidental Enter
-			// (or the Enter after an "A") doesn't pop the menu on its own.
+			// Ignore stray newlines so an accidental Enter (or the Enter after
+			// an "A") doesn't open anything on its own.
 			if b == '\r' || b == '\n' {
 				continue
 			}
-			if quitAll := c.menu(ctx); quitAll {
+			if quitAll := c.handleKey(ctx, b); quitAll {
 				return
 			}
 		}
+	}
+}
+
+// handleKey dispatches the first keypress. R and Q are direct hotkeys straight
+// to the restart or quit picker — no second press — while any other key shows
+// the menu hint and waits for a choice.
+func (c *devController) handleKey(ctx context.Context, b byte) bool {
+	switch b {
+	case 'r', 'R':
+		return c.pick(ctx, actionRestart)
+	case 'q', 'Q':
+		return c.pick(ctx, actionQuit)
+	default:
+		return c.menu(ctx)
 	}
 }
 
