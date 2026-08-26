@@ -195,15 +195,8 @@ type processListEntry struct {
 }
 
 func parseList(data []byte) []runtime.ServiceStatus {
-	// process-compose emits status banner lines on stderr before the
-	// JSON array on stdout (when invoked via CombinedOutput). Trim
-	// anything before the first '[' to make the response parseable.
-	trimmed := bytes.TrimSpace(data)
-	if idx := bytes.IndexByte(trimmed, '['); idx > 0 {
-		trimmed = trimmed[idx:]
-	}
 	var entries []processListEntry
-	if err := json.Unmarshal(trimmed, &entries); err != nil {
+	if err := json.Unmarshal(jsonArrayStart(data), &entries); err != nil {
 		return nil
 	}
 	statuses := make([]runtime.ServiceStatus, 0, len(entries))
@@ -219,6 +212,30 @@ func parseList(data []byte) []runtime.ServiceStatus {
 		})
 	}
 	return statuses
+}
+
+// jsonArrayStart returns data from the line that opens the JSON array, or nil
+// when no line does.
+//
+// The runner hands back stdout and stderr combined, and process-compose writes
+// debug records to stderr ahead of the array whenever it cannot find a config
+// home — the ordinary case on a stock macOS install. Those records embed a '['
+// of their own ("could not locate ... in any of the following paths: [/Users/
+// ..."), so seeking the first '[' byte lands mid-record and the decode fails.
+// process-compose opens the array on its own line, so scan by line instead.
+func jsonArrayStart(data []byte) []byte {
+	rest := bytes.TrimSpace(data)
+	for len(rest) > 0 {
+		if rest[0] == '[' {
+			return rest
+		}
+		newline := bytes.IndexByte(rest, '\n')
+		if newline < 0 {
+			return nil
+		}
+		rest = bytes.TrimSpace(rest[newline+1:])
+	}
+	return nil
 }
 
 func procHealth(entry processListEntry) string {

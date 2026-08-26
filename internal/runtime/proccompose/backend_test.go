@@ -150,6 +150,56 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 	}
 }
 
+func TestBackendStatusSkipsLeadingDebugRecords(t *testing.T) {
+	// Verbatim shape of a stock macOS run: process-compose cannot find a
+	// config home, so it writes debug records to stderr ahead of the array.
+	// Each record embeds a '[' of its own, which is what defeated seeking
+	// the first '[' byte and left every local service reported as declared.
+	const payload = `{"level":"debug","error":"could not locate ` + "`process-compose`" + ` in any of the following paths: [/Users/u/Library/Application Support /Users/u/.config]","time":"2026-08-14T02:06:56-04:00","message":"Path not found for process compose config home"}
+{"level":"debug","error":"could not locate ` + "`process-compose`" + ` in any of the following paths: [/Users/u/Library/Application Support /Users/u/.config]","time":"2026-08-14T02:06:56-04:00","message":"Path not found for process compose config home"}
+[
+	{"name":"django","status":"Running","is_running":true,"exit_code":0,"is_ready":"-"},
+	{"name":"frontend","status":"Running","is_running":true,"exit_code":0,"is_ready":"Ready"}
+]`
+	runner := &stubListRunner{output: []byte(payload)}
+	backend := Backend{Runner: runner}
+	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: "/stack", ControlPort: 10006})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	want := []runtime.ServiceStatus{
+		{Name: "django", Runtime: "local", State: "running"},
+		{Name: "frontend", Runtime: "local", State: "running", Health: "healthy"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("statuses = %#v, want %#v", got, want)
+	}
+}
+
+func TestJSONArrayStart(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "bare array", in: "[1]", want: "[1]"},
+		{name: "leading blank lines", in: "\n\n[1]", want: "[1]"},
+		{name: "log record embedding a bracket", in: "{\"m\":\"paths: [/a /b]\"}\n[1]", want: "[1]"},
+		{name: "no array", in: "{\"m\":\"paths: [/a]\"}\n", want: ""},
+		{name: "empty", in: "", want: ""},
+		// The scan trims each line rather than matching a bare "\n", so neither
+		// CRLF output nor a log line padded with trailing spaces hides the array.
+		{name: "crlf line endings", in: "{\"m\":\"paths: [/a]\"}\r\n[1]\r\n", want: "[1]"},
+		{name: "trailing whitespace on the log line", in: "{\"m\":\"x\"}   \n  [1]", want: "[1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(jsonArrayStart([]byte(tc.in))); got != tc.want {
+				t.Fatalf("jsonArrayStart() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBackendStatusSwallowsErrors(t *testing.T) {
 	runner := &stubListRunner{err: errors.New("supervisor offline")}
 	backend := Backend{Runner: runner}
