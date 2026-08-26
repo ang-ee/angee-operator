@@ -88,8 +88,28 @@ func (p *Platform) Root() string {
 	return p.root
 }
 
+// NoManifestError reports that a root holds no angee.yaml. It unwraps to
+// os.ErrNotExist so callers that branch on the missing-manifest case keep
+// working; check it with errors.Is, since os.IsNotExist does not unwrap.
+type NoManifestError struct{ Root string }
+
+func (e *NoManifestError) Error() string {
+	return fmt.Sprintf("no angee.yaml found in %s: run `angee init` to create a stack here, or pass --root with the ANGEE_ROOT that owns this checkout", e.Root)
+}
+
+func (e *NoManifestError) Unwrap() error { return os.ErrNotExist }
+
 func (p *Platform) LoadStack() (*manifest.Stack, error) {
-	return manifest.LoadFile(manifest.Path(p.root))
+	stack, err := manifest.LoadFile(manifest.Path(p.root))
+	if err != nil {
+		// A missing manifest is the normal "you are not in a stack yet" case,
+		// so answer with the next step instead of a raw open error.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, &NoManifestError{Root: p.root}
+		}
+		return nil, err
+	}
+	return stack, nil
 }
 
 func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {

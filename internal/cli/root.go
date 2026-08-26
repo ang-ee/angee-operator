@@ -73,9 +73,25 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(secretCommand(stdout, stderr, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(fileCommand(stdout, stderr, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(doctorCommand(stdout, &root, &jsonOutput))
+	cmd.AddCommand(versionCommand(stdout))
 	cmd.AddCommand(internalCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(operatorCommand(stdout, stderr))
 	return cmd
+}
+
+// versionCommand mirrors the root --version flag. Cobra wires only the flag,
+// but `<tool> version` is the shape the neighbouring tools use (go, docker,
+// process-compose), so accept both spellings.
+func versionCommand(stdout io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the angee version",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintf(stdout, "angee version %s\n", Version)
+			return err
+		},
+	}
 }
 
 func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Command {
