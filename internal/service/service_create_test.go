@@ -93,6 +93,9 @@ func TestServiceCreateHappyPath(t *testing.T) {
 	if len(svc.Ports) != 1 || !strings.Contains(string(svc.Ports[0]), ":3007") {
 		t.Fatalf("rendered ports = %v, want one mapping to 3007", svc.Ports)
 	}
+	if got := svc.Env["STACK_ROOT"]; got != p.root || !filepath.IsAbs(got) {
+		t.Fatalf("rendered STACK_ROOT = %q, want absolute platform root %q", got, p.root)
+	}
 	// Lease persisted with the service-prefixed owner.
 	owner := servicePortOwner("agent-my-pa", "acp")
 	found := false

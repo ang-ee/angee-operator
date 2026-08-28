@@ -46,6 +46,9 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	if !contains(edge.Networks, "demo_edge") {
 		t.Fatalf("edge.Networks = %#v, want demo_edge", edge.Networks)
 	}
+	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(edge.ExtraHosts, want) {
+		t.Fatalf("edge.ExtraHosts = %#v, want %#v", edge.ExtraHosts, want)
+	}
 
 	agent := file.Services["agent"]
 	if len(agent.Ports) != 0 {

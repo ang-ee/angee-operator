@@ -146,6 +146,7 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 
 	renderInputs := copierx.Inputs(inputs)
 	renderInputs["service_name"] = serviceName
+	renderInputs["stack_root"] = p.root
 	renderInputs["workspace_name"] = req.Workspace
 	renderInputs["workspace_path"] = workspacePath
 	for pool, port := range allocations {

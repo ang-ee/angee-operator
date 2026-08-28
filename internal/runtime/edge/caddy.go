@@ -86,10 +86,13 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	// TLS at the edge is handled automatically by Caddy when the host is a real
 	// domain (no label needed); the spike confirmed HTTP-only works for dev.
 	compiled.Services["edge"] = compose.Service{
-		Image:    image,
-		Ports:    edgePorts,
-		Volumes:  []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
-		Networks: []string{network},
+		Image:   image,
+		Ports:   edgePorts,
+		Volumes: []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
+		// host.docker.internal is Docker Desktop magic; host-gateway gives
+		// plain-Linux edge containers host-local forward auth and is harmless on Desktop.
+		ExtraHosts: []string{"host.docker.internal:host-gateway"},
+		Networks:   []string{network},
 	}
 
 	for name, svc := range compiled.Services {

@@ -12,9 +12,10 @@ func TestMarshalNetworksAndLabelsRoundTrip(t *testing.T) {
 	file := File{
 		Services: map[string]Service{
 			"web": {
-				Image:    "caddy:latest",
-				Labels:   map[string]string{"caddy": "route"},
-				Networks: []string{"edge"},
+				Image:      "caddy:latest",
+				Labels:     map[string]string{"caddy": "route"},
+				ExtraHosts: []string{"host.docker.internal:host-gateway"},
+				Networks:   []string{"edge"},
 			},
 		},
 		Networks: map[string]Network{
@@ -33,6 +34,9 @@ func TestMarshalNetworksAndLabelsRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(text, "labels:") {
 		t.Fatalf("Marshal() output missing labels:\n%s", text)
+	}
+	if !strings.Contains(text, "extra_hosts:") || !strings.Contains(text, "host.docker.internal:host-gateway") {
+		t.Fatalf("Marshal() output missing extra_hosts:\n%s", text)
 	}
 	if !strings.Contains(text, "edge: {}") {
 		t.Fatalf("Marshal() output missing empty network object:\n%s", text)

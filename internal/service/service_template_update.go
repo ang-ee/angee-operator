@@ -113,6 +113,7 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 		}
 	}
 	renderInputs["service_name"] = name
+	renderInputs["stack_root"] = p.root
 	renderInputs["workspace_name"] = workspaceName
 	renderInputs["workspace_path"] = workspacePath
 	for pool, port := range allocations {
@@ -210,7 +211,7 @@ func serviceTemplateOrigin(buildContext string, state copierx.RenderState, hasSt
 }
 
 func isReservedServiceTemplateInput(key string) bool {
-	return key == "service_name" || key == "workspace_name" || key == "workspace_path" || strings.HasPrefix(key, "alloc_")
+	return key == "service_name" || key == "stack_root" || key == "workspace_name" || key == "workspace_path" || strings.HasPrefix(key, "alloc_")
 }
 
 func mergeRenderedService(base []byte, current manifest.Service, rendered []byte, name string, overwrite bool) (manifest.Service, []copierx.Change, []copierx.Conflict, error) {

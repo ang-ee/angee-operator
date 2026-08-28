@@ -566,8 +566,11 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Environment: env,
 				Ports:       ports,
 				Volumes:     containerMounts,
-				WorkingDir:  workdir,
-				DependsOn:   composeDependsOn(append(service.After, service.DependsOn...), stack),
+				// host.docker.internal is Docker Desktop magic; host-gateway gives
+				// plain-Linux containers host-local operator access and is harmless on Desktop.
+				ExtraHosts: []string{"host.docker.internal:host-gateway"},
+				WorkingDir: workdir,
+				DependsOn:  composeDependsOn(append(service.After, service.DependsOn...), stack),
 			}
 		case manifest.RuntimeLocal:
 			localEnv, err := localMountEnv(mounts, mountResolver)
