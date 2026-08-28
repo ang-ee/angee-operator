@@ -142,17 +142,26 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	return nil
 }
 
-// routedServiceIndex assigns a stable 0-based index to each routed service,
-// ordered by service name. Path mode uses it as caddy-docker-proxy's directive
-// order prefix so that each container's handle_path label keys are unique.
+// routedServiceIndex assigns a stable 0-based index to each routed service.
+// Non-root routes are ordered by service name before root routes, which are also
+// name-sorted. Path mode uses the index as caddy-docker-proxy's directive order
+// prefix; root routes must have the highest indices because their catch-all
+// handle_path would otherwise shadow every later prefixed route.
 func routedServiceIndex(stack *manifest.Stack) map[string]int {
 	names := make([]string, 0, len(stack.Services))
+	rootNames := make([]string, 0, 1)
 	for name, svc := range stack.Services {
 		if svc.Route != nil {
-			names = append(names, name)
+			if svc.Route.PathPrefix(name) == "" {
+				rootNames = append(rootNames, name)
+			} else {
+				names = append(names, name)
+			}
 		}
 	}
 	sort.Strings(names)
+	sort.Strings(rootNames)
+	names = append(names, rootNames...)
 	index := make(map[string]int, len(names))
 	for i, name := range names {
 		index[name] = i
