@@ -19,11 +19,15 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git wget
+# su-exec: the entrypoint drops to the stack root's owning uid so git and
+# compose writes on the bind mount stay host-owned (see operator-entrypoint.sh).
+RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git wget su-exec
 COPY --from=builder /build/angee-operator /usr/local/bin/angee-operator
+COPY docker/operator-entrypoint.sh /usr/local/bin/operator-entrypoint
+RUN chmod +x /usr/local/bin/operator-entrypoint
 
 EXPOSE 9000
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
     CMD wget -q -O - http://localhost:9000/healthz || exit 1
 
-ENTRYPOINT ["/usr/local/bin/angee-operator"]
+ENTRYPOINT ["/usr/local/bin/operator-entrypoint"]

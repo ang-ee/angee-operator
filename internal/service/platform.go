@@ -129,9 +129,12 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 
 func (p *Platform) materializeStackResources(ctx context.Context, stack *manifest.Stack) error {
 	// Ensure the stack's declared persist dirs exist before anything runs.
-	// Subpaths are relative to the stack dir (the parent of ANGEE_ROOT),
-	// matching the workspace-create convention.
-	persistRoot := filepath.Dir(p.root)
+	// Stack-scope subpaths (./data, ./data/pgdata) are relative to the stack
+	// root — where the compose file's own ./ binds resolve. Resolving against
+	// the root's PARENT silently littered persist dirs one level up for years
+	// (and hard-failed once the containerized operator dropped privileges:
+	// the parent of the bind mount is a root-owned docker intermediate dir).
+	persistRoot := p.root
 	_, closePersistPaths, _, err := materializePersistPaths(ctx, targetPathOpener(persistRoot, persistRoot, nil), persistRoot, stack.Persist, nil)
 	if err != nil {
 		return err
@@ -173,7 +176,7 @@ func (p *Platform) materializeDeclaredWorkspaces(ctx context.Context, stack *man
 }
 
 func (p *Platform) stageStackResources(ctx context.Context, stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, func() error, error) {
-	persistRoot := filepath.Dir(p.root)
+	persistRoot := p.root
 	persistOpener := func(rel string) (*copierx.GuardedPath, error) {
 		return openAbsolute(filepath.Join(persistRoot, filepath.FromSlash(rel)))
 	}
