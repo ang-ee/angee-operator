@@ -79,7 +79,7 @@ ancestor-of-PWD/.templates/<kind>/<name>
 
 `angee init` resolves `stacks/dev` from the local search paths first, then
 from the template registry —
-[`ang-ee/angee-templates`](https://github.com/ang-ee/angee-templates) by
+[`ang-ee/angee-django`](https://github.com/ang-ee/angee-django) by
 default; `ANGEE_TEMPLATE_REGISTRY` overrides it with another repository
 (URL, `owner/repo`, or a local path).
 

@@ -17,7 +17,7 @@ import (
 // template names (`dev`, `stacks/dev`) resolve from when no local template
 // answers. Tests and enterprises override it with ANGEE_TEMPLATE_REGISTRY —
 // a clone URL, an `owner/repo` GitHub shorthand, or a local repository path.
-const defaultTemplateRegistry = "https://github.com/ang-ee/angee-templates.git"
+const defaultTemplateRegistry = "https://github.com/ang-ee/angee-django.git"
 
 const templateRegistryEnv = "ANGEE_TEMPLATE_REGISTRY"
 

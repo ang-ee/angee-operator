@@ -230,7 +230,7 @@ Django + GraphQL + React application:
 - The output runs as a single Django Service inside an Angee Stack.
 
 The Stack and Workspace Copier templates live in
-[`angee-templates`](https://github.com/ang-ee/angee-templates) —
+[`angee-django`](https://github.com/ang-ee/angee-django) —
 `templates/stacks/dev` and `templates/workspaces/src` are what plain
 `angee init` and `angee workspace create <name> --template src` render
 when you work on a Django consumer.
