@@ -44,14 +44,17 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	if !contains(edge.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
 		t.Fatalf("edge.Volumes = %#v, want docker socket mount", edge.Volumes)
 	}
-	if !contains(edge.Networks, "demo_edge") {
-		t.Fatalf("edge.Networks = %#v, want demo_edge", edge.Networks)
+	if want := []string{"default", "demo_edge"}; !reflect.DeepEqual(edge.Networks, want) {
+		t.Fatalf("edge.Networks = %#v, want %#v (default resolves a containerized forward_auth target)", edge.Networks, want)
 	}
 	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(edge.ExtraHosts, want) {
 		t.Fatalf("edge.ExtraHosts = %#v, want %#v", edge.ExtraHosts, want)
 	}
 
 	agent := file.Services["agent"]
+	if want := []string{"default", "demo_edge"}; !reflect.DeepEqual(agent.Networks, want) {
+		t.Fatalf("agent.Networks = %#v, want %#v (routed services keep the default network AND join the edge)", agent.Networks, want)
+	}
 	if len(agent.Ports) != 0 {
 		t.Fatalf("agent.Ports = %#v, want empty", agent.Ports)
 	}

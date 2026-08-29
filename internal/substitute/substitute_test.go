@@ -66,6 +66,38 @@ func TestResolveCurrentWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestResolveStackRootInEnv(t *testing.T) {
+	// A service passing its own root as an argument (env value form).
+	got, err := Resolve("--root=${stack.root}", Context{Root: "/srv/stacks/demo"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if want := "--root=/srv/stacks/demo"; got != want {
+		t.Fatalf("Resolve() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveStackRootInMount(t *testing.T) {
+	// The identical-path mount the operator service declares: the container
+	// side is the absolute host root, which the token supplies.
+	got, err := Resolve("bind://.:${stack.root}", Context{Root: "/srv/stacks/demo"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if want := "bind://.:/srv/stacks/demo"; got != want {
+		t.Fatalf("Resolve() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveStackRootUnresolved(t *testing.T) {
+	if _, err := Resolve("${stack.root}", Context{}); err == nil {
+		t.Fatal("Resolve() error = nil, want error for unresolved stack root")
+	}
+	if _, err := Resolve("${stack.branch}", Context{Root: "/srv/demo"}); err == nil {
+		t.Fatal("Resolve() error = nil, want error for unknown stack field")
+	}
+}
+
 func TestRequiredFilterRejectsEmpty(t *testing.T) {
 	_, err := Resolve("${name | required('name required')}", Context{})
 	if err == nil {

@@ -873,6 +873,7 @@ func baseSubstitutionContext(stack *manifest.Stack, root string, resolvedSecrets
 		Ports:         ports,
 		Workspaces:    workspaces,
 		Sources:       sources,
+		Root:          root,
 		Operator: substitute.Operator{
 			URL:    stack.Operator.URL,
 			Domain: stack.Operator.Domain,

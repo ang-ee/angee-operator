@@ -78,6 +78,12 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	if _, ok := compiled.Networks[network]; !ok {
 		compiled.Networks[network] = compose.Network{}
 	}
+	// Explicitly declare the implicit default network: services list it by
+	// name (edge, routed upstreams), and the compose validator requires every
+	// referenced network to be declared.
+	if _, ok := compiled.Networks["default"]; !ok {
+		compiled.Networks["default"] = compose.Network{}
+	}
 
 	if compiled.Services == nil {
 		compiled.Services = map[string]compose.Service{}
@@ -92,7 +98,10 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		// host.docker.internal is Docker Desktop magic; host-gateway gives
 		// plain-Linux edge containers host-local forward auth and is harmless on Desktop.
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-		Networks:   []string{network},
+		// The edge lives on both networks: the edge network carries routed
+		// upstreams; the default network resolves the forward_auth target when
+		// it is a compose service (the docker-mode operator container).
+		Networks: []string{"default", network},
 	}
 
 	for name, svc := range compiled.Services {
@@ -103,6 +112,12 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 
 		route := manifestService.Route
 		svc.Ports = nil
+		// A compose service with an explicit network list loses the implicit
+		// default network — a routed service must stay on it (its backends,
+		// e.g. vite -> django, resolve by compose DNS there) AND join the edge.
+		if len(svc.Networks) == 0 {
+			svc.Networks = []string{"default"}
+		}
 		svc.Networks = appendUnique(svc.Networks, network)
 		if svc.Labels == nil {
 			svc.Labels = map[string]string{}

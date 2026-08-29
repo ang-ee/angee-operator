@@ -27,6 +27,11 @@ type Context struct {
 	Operator      Operator
 	Inputs        map[string]string
 	Name          string
+	// Root is the absolute stack root on the host. It is exposed as
+	// ${stack.root} so a manifest can name a path templates cannot know at
+	// render time — most importantly the container side of an identical-path
+	// bind mount (see resolvePath's "stack" case).
+	Root string
 }
 
 type Service struct {
@@ -238,6 +243,16 @@ func resolvePath(path string, ctx Context) (string, error) {
 			return "", fmt.Errorf("input %q is not set", rest)
 		}
 		return value, nil
+	case "stack":
+		switch rest {
+		case "root":
+			if ctx.Root == "" {
+				return "", errors.New("stack root is not resolved")
+			}
+			return ctx.Root, nil
+		default:
+			return "", fmt.Errorf("unknown stack field %q", rest)
+		}
 	default:
 		return "", fmt.Errorf("unknown substitution namespace %q", ns)
 	}
