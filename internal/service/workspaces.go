@@ -900,6 +900,16 @@ func materializePersistPaths(ctx context.Context, openPath guardedPathOpener, pu
 		}
 		dir, err := openPath(clean)
 		if err != nil {
+			// A persist dir owned by a service container (postgres pgdata is
+			// 0700 uid 999) cannot be OPENED by the privilege-dropped operator.
+			// It only needs to exist — nothing is written on this path — so a
+			// no-follow stat is enough to accept it and skip creation.
+			if errors.Is(err, os.ErrPermission) {
+				full := filepath.Join(publicRoot, filepath.FromSlash(clean))
+				if info, lerr := os.Lstat(full); lerr == nil && info.IsDir() {
+					continue
+				}
+			}
 			return fail(fmt.Errorf("persist %q: %w", key, err))
 		}
 		info, exists, err := dir.Lstat()
