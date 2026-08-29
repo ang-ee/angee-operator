@@ -92,7 +92,10 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		// host.docker.internal is Docker Desktop magic; host-gateway gives
 		// plain-Linux edge containers host-local forward auth and is harmless on Desktop.
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
-		Networks:   []string{network},
+		// The edge lives on both networks: the edge network carries routed
+		// upstreams; the default network resolves the forward_auth target when
+		// it is a compose service (the docker-mode operator container).
+		Networks:   []string{"default", network},
 	}
 
 	for name, svc := range compiled.Services {
