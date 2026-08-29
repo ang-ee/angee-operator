@@ -78,6 +78,12 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	if _, ok := compiled.Networks[network]; !ok {
 		compiled.Networks[network] = compose.Network{}
 	}
+	// Explicitly declare the implicit default network: services list it by
+	// name (edge, routed upstreams), and the compose validator requires every
+	// referenced network to be declared.
+	if _, ok := compiled.Networks["default"]; !ok {
+		compiled.Networks["default"] = compose.Network{}
+	}
 
 	if compiled.Services == nil {
 		compiled.Services = map[string]compose.Service{}
