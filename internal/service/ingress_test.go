@@ -178,6 +178,14 @@ func TestRouteURL(t *testing.T) {
 			want:    "wss://notes.localhost/custom/",
 		},
 		{
+			name:    "path root",
+			ingress: manifest.Ingress{Type: "caddy", Routing: "path"},
+			service: "frontend",
+			route:   &manifest.Route{Port: 5173, Path: "/", Auth: "none"},
+			domain:  "dev.example.com",
+			want:    "wss://dev.example.com/",
+		},
+		{
 			name:    "path tls off",
 			ingress: manifest.Ingress{Type: "caddy", Routing: "path", TLS: "off"},
 			service: "agent",

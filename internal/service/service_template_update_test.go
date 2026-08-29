@@ -199,6 +199,41 @@ func TestServiceUpdateFromTemplateUpdatesManifestAndAssets(t *testing.T) {
 	}
 }
 
+func TestServiceUpdateFromTemplateRefreshesStackRootAfterMove(t *testing.T) {
+	base := t.TempDir()
+	originalRoot := filepath.Join(base, "original")
+	p, fixture := setupServiceCreateFixtureAt(t, originalRoot)
+	template := copyServiceTemplateFixture(t, fixture)
+	ctx := context.Background()
+	if _, err := p.ServiceCreate(ctx, api.ServiceCreateRequest{Template: template, Workspace: "my-pa"}); err != nil {
+		t.Fatalf("ServiceCreate: %v", err)
+	}
+
+	movedRoot := filepath.Join(base, "moved")
+	if err := os.Rename(originalRoot, movedRoot); err != nil {
+		t.Fatalf("Rename(stack root): %v", err)
+	}
+	moved, err := New(movedRoot)
+	if err != nil {
+		t.Fatalf("New(moved root): %v", err)
+	}
+	moved.portUnavailable = func(int) bool { return false }
+	result, err := moved.ServiceUpdateFromTemplate(ctx, "agent-my-pa", api.ServiceUpdateTemplateRequest{})
+	if err != nil {
+		t.Fatalf("ServiceUpdateFromTemplate: %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result = %+v, want stack_root change", result)
+	}
+	stack, err := moved.LoadStack()
+	if err != nil {
+		t.Fatalf("LoadStack: %v", err)
+	}
+	if got := stack.Services["agent-my-pa"].Env["STACK_ROOT"]; got != moved.root {
+		t.Fatalf("STACK_ROOT = %q, want moved platform root %q", got, moved.root)
+	}
+}
+
 func TestServiceUpdateFromTemplatePreservesAssetConflictUnlessOverwrite(t *testing.T) {
 	p, fixture := setupServiceCreateFixture(t)
 	template := copyServiceTemplateFixture(t, fixture)
@@ -267,10 +302,14 @@ func TestServiceUpdateFromTemplateRejectsReservedInput(t *testing.T) {
 	if _, err := p.ServiceCreate(ctx, api.ServiceCreateRequest{Template: template, Workspace: "my-pa"}); err != nil {
 		t.Fatalf("ServiceCreate: %v", err)
 	}
-	if _, err := p.ServiceUpdateFromTemplate(ctx, "agent-my-pa", api.ServiceUpdateTemplateRequest{
-		Inputs: map[string]string{"workspace_name": "other"},
-	}); err == nil {
-		t.Fatal("ServiceUpdateFromTemplate accepted workspace_name override")
+	for _, key := range []string{"workspace_name", "stack_root"} {
+		t.Run(key, func(t *testing.T) {
+			if _, err := p.ServiceUpdateFromTemplate(ctx, "agent-my-pa", api.ServiceUpdateTemplateRequest{
+				Inputs: map[string]string{key: "other"},
+			}); err == nil {
+				t.Fatalf("ServiceUpdateFromTemplate accepted %s override", key)
+			}
+		})
 	}
 }
 

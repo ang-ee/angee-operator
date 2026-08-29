@@ -1,6 +1,7 @@
 package service
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -31,6 +32,10 @@ func TestCompileIngress_NoneIsInert(t *testing.T) {
 	if len(compiled.Compose.Networks) != 0 {
 		t.Fatalf("compiled.Compose.Networks = %#v, want empty", compiled.Compose.Networks)
 	}
+	web := compiled.Compose.Services["web"]
+	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(web.ExtraHosts, want) {
+		t.Fatalf("web.ExtraHosts = %#v, want %#v", web.ExtraHosts, want)
+	}
 }
 
 func TestCompileIngress_CaddyInjects(t *testing.T) {
@@ -55,11 +60,18 @@ func TestCompileIngress_CaddyInjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	if _, ok := compiled.Compose.Services["edge"]; !ok {
+	edge, ok := compiled.Compose.Services["edge"]
+	if !ok {
 		t.Fatal(`compiled.Compose.Services["edge"] missing`)
+	}
+	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(edge.ExtraHosts, want) {
+		t.Fatalf("edge.ExtraHosts = %#v, want %#v", edge.ExtraHosts, want)
 	}
 	agent := compiled.Compose.Services["agent"]
 	if len(agent.Ports) != 0 {
 		t.Fatalf("agent.Ports = %#v, want empty", agent.Ports)
+	}
+	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(agent.ExtraHosts, want) {
+		t.Fatalf("agent.ExtraHosts = %#v, want %#v", agent.ExtraHosts, want)
 	}
 }

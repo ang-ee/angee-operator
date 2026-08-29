@@ -2,6 +2,7 @@ package edge
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -45,6 +46,9 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	}
 	if !contains(edge.Networks, "demo_edge") {
 		t.Fatalf("edge.Networks = %#v, want demo_edge", edge.Networks)
+	}
+	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(edge.ExtraHosts, want) {
+		t.Fatalf("edge.ExtraHosts = %#v, want %#v", edge.ExtraHosts, want)
 	}
 
 	agent := file.Services["agent"]
@@ -220,6 +224,92 @@ func TestCaddyBackend_ContributePathMode(t *testing.T) {
 	}
 	if db.Labels["caddy"] != "" {
 		t.Fatalf(`db.Labels["caddy"] = %q, want empty`, db.Labels["caddy"])
+	}
+}
+
+func TestCaddyBackend_ContributePathModeOrdersRootRouteLast(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "demo",
+		Ingress: manifest.Ingress{
+			Type:    "caddy",
+			Routing: "path",
+			TLS:     "off",
+			Domain:  "localhost",
+		},
+		Services: map[string]manifest.Service{
+			"agent": {Runtime: "container", Route: &manifest.Route{Port: 3008}},
+			// Alphabetically between agent and chat, but the root catch-all must
+			// still be ordered after both prefixed routes.
+			"app":  {Runtime: "container", Route: &manifest.Route{Port: 5173, Path: "/", Auth: "none"}},
+			"chat": {Runtime: "container", Route: &manifest.Route{Port: 3009}},
+		},
+	}
+	file := compose.File{
+		Services: map[string]compose.Service{
+			"agent": {Ports: []string{"3008:3008"}},
+			"app":   {Ports: []string{"5173:5173"}},
+			"chat":  {Ports: []string{"3009:3009"}},
+		},
+	}
+
+	if err := NewCaddyBackend(stack.Ingress).Contribute(stack, &file); err != nil {
+		t.Fatalf("Contribute() error = %v", err)
+	}
+
+	agent := file.Services["agent"]
+	chat := file.Services["chat"]
+	app := file.Services["app"]
+	if got, want := agent.Labels["caddy.0_handle_path"], "/agent/*"; got != want {
+		t.Fatalf("agent path label = %q, want %q", got, want)
+	}
+	if got, want := chat.Labels["caddy.1_handle_path"], "/chat/*"; got != want {
+		t.Fatalf("chat path label = %q, want %q", got, want)
+	}
+	if got, want := app.Labels["caddy.2_handle_path"], "/*"; got != want {
+		t.Fatalf("app root path label = %q, want %q", got, want)
+	}
+	if got, want := agent.Labels["caddy.0_handle_path.forward_auth"], "operator:9000"; got != want {
+		t.Fatalf("agent forward_auth label = %q, want %q", got, want)
+	}
+	if got, want := chat.Labels["caddy.1_handle_path.forward_auth"], "operator:9000"; got != want {
+		t.Fatalf("chat forward_auth label = %q, want %q", got, want)
+	}
+	for label := range app.Labels {
+		if strings.Contains(label, "forward_auth") {
+			t.Fatalf("app emitted forward_auth label %q: %#v", label, app.Labels)
+		}
+	}
+	if len(app.Ports) != 0 {
+		t.Fatalf("app.Ports = %#v, want empty", app.Ports)
+	}
+}
+
+func TestCaddyBackend_ContributePathModeTLSAuto(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "demo",
+		Ingress: manifest.Ingress{
+			Type:    "caddy",
+			Routing: "path",
+			TLS:     "auto",
+			Domain:  "dev.example.com",
+		},
+		Services: map[string]manifest.Service{
+			"frontend": {Runtime: "container", Route: &manifest.Route{Port: 5173, Path: "/", Auth: "none"}},
+		},
+	}
+	file := compose.File{
+		Services: map[string]compose.Service{"frontend": {Ports: []string{"5173:5173"}}},
+	}
+
+	if err := NewCaddyBackend(stack.Ingress).Contribute(stack, &file); err != nil {
+		t.Fatalf("Contribute() error = %v", err)
+	}
+
+	if got, want := file.Services["edge"].Ports, []string{"443:443", "80:80"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("edge.Ports = %#v, want %#v", got, want)
+	}
+	if got, want := file.Services["frontend"].Labels["caddy"], "dev.example.com"; got != want {
+		t.Fatalf(`frontend.Labels["caddy"] = %q, want %q`, got, want)
 	}
 }
 

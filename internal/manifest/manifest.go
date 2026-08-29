@@ -234,14 +234,18 @@ type Route struct {
 }
 
 // PathPrefix returns the normalized public prefix for path routing: a single
-// leading slash and no trailing slash (e.g. "/agent"). It defaults to
-// "/<serviceName>" when route.path is unset.
+// leading slash and no trailing slash (e.g. "/agent"). An explicit path that
+// trims to empty (such as "/") denotes the ingress root and returns "". An
+// unset path still defaults to "/<serviceName>".
 func (r *Route) PathPrefix(serviceName string) string {
-	p := r.Path
-	if p == "" {
-		p = serviceName
+	if r.Path == "" {
+		return "/" + strings.Trim(serviceName, "/")
 	}
-	return "/" + strings.Trim(p, "/")
+	p := strings.Trim(r.Path, "/")
+	if p == "" {
+		return ""
+	}
+	return "/" + p
 }
 
 // HostName returns the host for host-mode routing: route.host when set,
@@ -483,6 +487,7 @@ func (s *Stack) ValidateExtended() error {
 		if s.Ingress.RoutingMode() == "path" && s.Ingress.Domain == "" && s.Operator.Domain == "" {
 			return errors.New("ingress.routing: path requires ingress.domain or operator.domain")
 		}
+		rootRouteFound := false
 		for name, service := range s.Services {
 			if service.Route == nil {
 				continue
@@ -504,6 +509,12 @@ func (s *Stack) ValidateExtended() error {
 			}
 			if s.Ingress.RoutingMode() == "path" && service.Route.Host != "" {
 				return fmt.Errorf("service %q: route.host requires ingress.routing: host", name)
+			}
+			if s.Ingress.RoutingMode() == "path" && service.Route.PathPrefix(name) == "" {
+				if rootRouteFound {
+					return errors.New("multiple services route the ingress root")
+				}
+				rootRouteFound = true
 			}
 			if service.Route.Host != "" && !routeHostPattern.MatchString(service.Route.Host) {
 				return fmt.Errorf("service %q: route.host %q contains invalid characters", name, service.Route.Host)

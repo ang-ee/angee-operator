@@ -86,10 +86,13 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	// TLS at the edge is handled automatically by Caddy when the host is a real
 	// domain (no label needed); the spike confirmed HTTP-only works for dev.
 	compiled.Services["edge"] = compose.Service{
-		Image:    image,
-		Ports:    edgePorts,
-		Volumes:  []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
-		Networks: []string{network},
+		Image:   image,
+		Ports:   edgePorts,
+		Volumes: []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
+		// host.docker.internal is Docker Desktop magic; host-gateway gives
+		// plain-Linux edge containers host-local forward auth and is harmless on Desktop.
+		ExtraHosts: []string{"host.docker.internal:host-gateway"},
+		Networks:   []string{network},
 	}
 
 	for name, svc := range compiled.Services {
@@ -139,17 +142,26 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	return nil
 }
 
-// routedServiceIndex assigns a stable 0-based index to each routed service,
-// ordered by service name. Path mode uses it as caddy-docker-proxy's directive
-// order prefix so that each container's handle_path label keys are unique.
+// routedServiceIndex assigns a stable 0-based index to each routed service.
+// Non-root routes are ordered by service name before root routes, which are also
+// name-sorted. Path mode uses the index as caddy-docker-proxy's directive order
+// prefix; root routes must have the highest indices because their catch-all
+// handle_path would otherwise shadow every later prefixed route.
 func routedServiceIndex(stack *manifest.Stack) map[string]int {
 	names := make([]string, 0, len(stack.Services))
+	rootNames := make([]string, 0, 1)
 	for name, svc := range stack.Services {
 		if svc.Route != nil {
-			names = append(names, name)
+			if svc.Route.PathPrefix(name) == "" {
+				rootNames = append(rootNames, name)
+			} else {
+				names = append(names, name)
+			}
 		}
 	}
 	sort.Strings(names)
+	sort.Strings(rootNames)
+	names = append(names, rootNames...)
 	index := make(map[string]int, len(names))
 	for i, name := range names {
 		index[name] = i

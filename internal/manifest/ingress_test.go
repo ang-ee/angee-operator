@@ -145,6 +145,52 @@ func TestValidateAllowsCleanCaddyPathRoute(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsSingleRootPathRoute(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "single-root-path",
+		Ingress: Ingress{Type: "caddy", Routing: "path", Domain: "dev.example.com"},
+		Services: map[string]Service{
+			"frontend": {
+				Runtime: RuntimeContainer,
+				Image:   "example/frontend:latest",
+				Route:   &Route{Port: 5173, Path: "/", Auth: "none"},
+			},
+		},
+	}
+
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsMultipleRootPathRoutes(t *testing.T) {
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "multiple-root-paths",
+		Ingress: Ingress{Type: "caddy", Routing: "path", Domain: "dev.example.com"},
+		Services: map[string]Service{
+			"frontend": {
+				Runtime: RuntimeContainer,
+				Image:   "example/frontend:latest",
+				Route:   &Route{Port: 5173, Path: "/", Auth: "none"},
+			},
+			"other": {
+				Runtime: RuntimeContainer,
+				Image:   "example/other:latest",
+				Route:   &Route{Port: 3000, Path: "///"},
+			},
+		},
+	}
+
+	err := stack.Validate()
+	if err == nil || !strings.Contains(err.Error(), "multiple services route the ingress root") {
+		t.Fatalf("Validate() error = %v, want multiple-root rejection", err)
+	}
+}
+
 func TestValidateAcceptsIngressPortWithTLSOff(t *testing.T) {
 	stack := &Stack{
 		Version: VersionCurrent,
@@ -313,6 +359,8 @@ func TestRoutePathPrefix(t *testing.T) {
 		{path: "/agent", service: "agent", want: "/agent"},
 		{path: "agent", service: "agent", want: "/agent"},
 		{path: "/v1/agent/", service: "agent", want: "/v1/agent"},
+		{path: "/", service: "frontend", want: ""},
+		{path: "///", service: "frontend", want: ""},
 	}
 	for _, tt := range tests {
 		r := &Route{Port: 3008, Path: tt.path}

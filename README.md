@@ -100,7 +100,7 @@ angee dev
 
 `angee init --yes` renders the default `dev` stack template — resolved from
 the local template search paths first, then from the template registry
-([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates)).
+([ang-ee/angee-django](https://github.com/ang-ee/angee-django)).
 
 ## Core Commands
 

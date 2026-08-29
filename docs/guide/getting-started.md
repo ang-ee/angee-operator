@@ -48,7 +48,7 @@ Requirements:
 - `process-compose`, for `runtime: local` Services.
 - `git`, for git-kind Sources.
 - Nothing else: `angee init` resolves its templates from the template
-  registry ([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates))
+  registry ([ang-ee/angee-django](https://github.com/ang-ee/angee-django))
   and `angee dev` clones the Host sources the rendered manifest declares.
 
 ## First commands
@@ -72,7 +72,7 @@ angee dev
 
 `angee init` renders the default `dev` Stack template — the framework-dev
 stack from the template registry
-([ang-ee/angee-templates](https://github.com/ang-ee/angee-templates); see
+([ang-ee/angee-django](https://github.com/ang-ee/angee-django); see
 [Templates](/cli/templates)). The rendered manifest declares the
 framework repos as Sources and the `src` Workspace; `angee dev`
 materializes them all and boots.

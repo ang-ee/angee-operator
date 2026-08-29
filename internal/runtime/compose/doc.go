@@ -17,6 +17,7 @@ type Service struct {
 	Labels      map[string]string            `yaml:"labels,omitempty"`
 	Ports       []string                     `yaml:"ports,omitempty"`
 	Volumes     []string                     `yaml:"volumes,omitempty"`
+	ExtraHosts  []string                     `yaml:"extra_hosts,omitempty" json:"extra_hosts,omitempty"`
 	Networks    []string                     `yaml:"networks,omitempty"`
 	WorkingDir  string                       `yaml:"working_dir,omitempty"`
 	DependsOn   map[string]ServiceDependency `yaml:"depends_on,omitempty"`
