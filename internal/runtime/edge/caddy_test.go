@@ -52,6 +52,9 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	}
 
 	agent := file.Services["agent"]
+	if want := []string{"default", "demo_edge"}; !reflect.DeepEqual(agent.Networks, want) {
+		t.Fatalf("agent.Networks = %#v, want %#v (routed services keep the default network AND join the edge)", agent.Networks, want)
+	}
 	if len(agent.Ports) != 0 {
 		t.Fatalf("agent.Ports = %#v, want empty", agent.Ports)
 	}

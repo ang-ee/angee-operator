@@ -103,6 +103,12 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 
 		route := manifestService.Route
 		svc.Ports = nil
+		// A compose service with an explicit network list loses the implicit
+		// default network — a routed service must stay on it (its backends,
+		// e.g. vite -> django, resolve by compose DNS there) AND join the edge.
+		if len(svc.Networks) == 0 {
+			svc.Networks = []string{"default"}
+		}
 		svc.Networks = appendUnique(svc.Networks, network)
 		if svc.Labels == nil {
 			svc.Labels = map[string]string{}
