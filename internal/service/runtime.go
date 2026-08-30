@@ -56,6 +56,13 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 	if len(compiled.Compose.Services) == 0 || len(selected) == 0 && len(services) > 0 {
 		return nil
 	}
+	if len(services) == 0 {
+		// No explicit selection: start the WHOLE compiled compose. It carries
+		// exactly the container services plus compile-contributed ones (the
+		// caddy edge) — a manifest-derived list silently skips the edge, so a
+		// fresh `angee up` served no ingress (StackDev already passes no filter).
+		selected = nil
+	}
 	return p.composeBackend.Up(ctx, runtime.Target{Root: p.root, Services: selected, Build: build, EnvFile: p.runtimeEnvFile(stack)})
 }
 
@@ -77,6 +84,13 @@ func (p *Platform) StackUpForeground(ctx context.Context, services []string, bui
 	}
 	if len(compiled.Compose.Services) == 0 || len(selected) == 0 && len(services) > 0 {
 		return nil
+	}
+	if len(services) == 0 {
+		// No explicit selection: start the WHOLE compiled compose. It carries
+		// exactly the container services plus compile-contributed ones (the
+		// caddy edge) — a manifest-derived list silently skips the edge, so a
+		// fresh `angee up` served no ingress (StackDev already passes no filter).
+		selected = nil
 	}
 	return p.composeBackend.UpForeground(ctx, runtime.Target{Root: p.root, Services: selected, Build: build, EnvFile: p.runtimeEnvFile(stack)}, stdout, stderr)
 }
