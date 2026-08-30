@@ -275,6 +275,51 @@ func TestServiceCreateRejectsMissingWorkspace(t *testing.T) {
 	}
 }
 
+func TestServiceCreateRollsBackOnRenderFailure(t *testing.T) {
+	p, templatePath := setupServiceCreateFixture(t)
+	// Sabotage the post-persist compose re-render: a stack persist whose
+	// path exists as a regular FILE fails materialization inside StackPrepare.
+	stack, err := manifest.LoadFile(manifest.Path(p.root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if stack.Persist == nil {
+		stack.Persist = map[string]manifest.PersistPath{}
+	}
+	stack.Persist["poison"] = manifest.PersistPath{Subpath: "./poison-data"}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(p.root, "poison-data"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err = p.ServiceCreate(context.Background(), api.ServiceCreateRequest{
+		Template:  templatePath,
+		Workspace: "my-pa",
+		Inputs:    map[string]string{"auth_mode": "api_key"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "re-render compose after service create") {
+		t.Fatalf("err = %v, want re-render failure", err)
+	}
+
+	// The persisted entry and its lease must be rolled back so a retry
+	// starts clean instead of 409ing on the orphan.
+	stack, err = manifest.LoadFile(manifest.Path(p.root))
+	if err != nil {
+		t.Fatalf("LoadFile after failure: %v", err)
+	}
+	if _, ok := stack.Services["agent-my-pa"]; ok {
+		t.Fatalf("orphaned service entry survived the failed create: %#v", stack.Services)
+	}
+	owner := servicePortOwner("agent-my-pa", "acp")
+	for _, lease := range stack.PortLeases["acp"] {
+		if lease.Owner == owner {
+			t.Fatalf("port lease for %q survived the failed create", owner)
+		}
+	}
+}
+
 func TestServiceCreateRejectsDuplicateName(t *testing.T) {
 	p, templatePath := setupServiceCreateFixture(t)
 	if _, err := p.ServiceCreate(context.Background(), api.ServiceCreateRequest{Template: templatePath, Workspace: "my-pa"}); err != nil {
@@ -305,58 +350,6 @@ _angee:
 	_, err := p.ServiceCreate(context.Background(), api.ServiceCreateRequest{Template: wsTemplate, Workspace: "my-pa"})
 	if err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("err = %v, want kind-mismatch", err)
-	}
-}
-
-func TestServiceCreateRollsBackOnRenderFailure(t *testing.T) {
-	p, _ := setupServiceCreateFixture(t)
-	// Build a service template that renders an invalid YAML output;
-	// the render itself succeeds but parsePartialServiceManifest fails.
-	bad := filepath.Join(p.root, ".templates", "services", "broken")
-	if err := os.MkdirAll(filepath.Join(bad, "template"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bad, "copier.yml"), []byte(`_subdirectory: template
-_templates_suffix: .jinja
-_angee:
-  kind: service
-  name: broken
-  ensure:
-    operator.port_pool.acp:
-      range: "3000-3999"
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	// service.yaml contains an unknown top-level key — partial parser rejects.
-	if err := os.WriteFile(filepath.Join(bad, "template", "service.yaml.jinja"), []byte(`services:
-  agent-{{ workspace_name }}:
-    runtime: container
-    image: nginx
-jobs:
-  forbidden:
-    runtime: container
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	_, err := p.ServiceCreate(context.Background(), api.ServiceCreateRequest{Template: bad, Workspace: "my-pa"})
-	if err == nil || !strings.Contains(err.Error(), "jobs") {
-		t.Fatalf("err = %v, want rejection mentioning forbidden field", err)
-	}
-
-	// Port lease must have been released.
-	stack, err := manifest.LoadFile(manifest.Path(p.root))
-	if err != nil {
-		t.Fatalf("LoadFile: %v", err)
-	}
-	for _, lease := range stack.PortLeases["acp"] {
-		if strings.HasPrefix(lease.Owner, "service/agent-my-pa/") {
-			t.Fatalf("port lease not released after rollback: %+v", lease)
-		}
-	}
-	// And no service entry was persisted.
-	if _, exists := stack.Services["agent-my-pa"]; exists {
-		t.Fatalf("service was persisted despite rollback")
 	}
 }
 

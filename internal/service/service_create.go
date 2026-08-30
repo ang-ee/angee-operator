@@ -67,9 +67,15 @@ func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateReque
 		return api.ServiceState{}, err
 	}
 	// Out of the critical section now: compose re-render and optional
-	// boot. If these fail the manifest entry persists; the caller can
-	// recover with `angee service destroy <name>`.
+	// boot. A re-render failure means the service never integrated into
+	// the stack — and the API caller never learned the resolved name, so
+	// the entry just persisted would be unreachable garbage (an agent
+	// retrying its provision hits 409 forever). Roll it back best-effort;
+	// the original error wins. A ServiceUp failure below keeps the entry
+	// deliberately: the service is validly integrated, the caller has the
+	// name, and `angee service destroy <name>` recovers.
 	if _, err := p.StackPrepare(ctx); err != nil {
+		_ = p.ServiceDestroy(ctx, state.Name, false)
 		return api.ServiceState{}, fmt.Errorf("re-render compose after service create: %w", err)
 	}
 	if req.Start {
