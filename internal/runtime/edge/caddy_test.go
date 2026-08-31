@@ -44,6 +44,9 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	if !contains(edge.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
 		t.Fatalf("edge.Volumes = %#v, want docker socket mount", edge.Volumes)
 	}
+	if got := edge.Environment["CADDY_INGRESS_NETWORKS"]; got != "demo_edge" && !strings.HasSuffix(got, "_demo_edge") {
+		t.Fatalf("edge CADDY_INGRESS_NETWORKS = %q, want the edge network runtime name (dual-network upstreams flip caddy-docker-proxy's config otherwise)", got)
+	}
 	if want := []string{"default", "demo_edge"}; !reflect.DeepEqual(edge.Networks, want) {
 		t.Fatalf("edge.Networks = %#v, want %#v (default resolves a containerized forward_auth target)", edge.Networks, want)
 	}

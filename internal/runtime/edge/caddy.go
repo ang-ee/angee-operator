@@ -91,10 +91,24 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	// TODO: name-collision with a user service "edge" is out of scope.
 	// TLS at the edge is handled automatically by Caddy when the host is a real
 	// domain (no label needed); the spike confirmed HTTP-only works for dev.
+	// caddy-docker-proxy resolves upstream IPs from every network it shares
+	// with a container. Routed services sit on default+edge, so unpinned it
+	// emits BOTH IPs per upstream in nondeterministic map order — the
+	// generated config flip-flops, caddy reloads on every poll, and every
+	// long-lived websocket through the edge (vite HMR, agent chat) drops,
+	// force-reloading browser pages every few minutes. Pin ingress routing to
+	// the edge network's runtime name (<compose project>_<network key>).
+	ingressNetworks := network
+	if compiled.Name != "" {
+		ingressNetworks = compiled.Name + "_" + network
+	}
 	compiled.Services["edge"] = compose.Service{
 		Image:   image,
 		Ports:   edgePorts,
 		Volumes: []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
+		Environment: map[string]string{
+			"CADDY_INGRESS_NETWORKS": ingressNetworks,
+		},
 		// host.docker.internal is Docker Desktop magic; host-gateway gives
 		// plain-Linux edge containers host-local forward auth and is harmless on Desktop.
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
