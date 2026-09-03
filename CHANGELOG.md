@@ -23,6 +23,12 @@ latest tag.
   `angee workspace source pull` / `fetch`, `angee workspace sync-base`) still
   fetch and fail loudly — caches are refreshed through those paths.
 
+### Security
+
+- Bump `golang.org/x/crypto` to v0.56.0, clearing govulncheck advisories
+  GO-2026-6354 and GO-2026-6355. This raises the module's `go` directive to
+  1.26 (the toolchain CI and releases already build with).
+
 ## v0.10.1 — 2026-08-26
 
 ### Fixed
