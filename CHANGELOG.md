@@ -6,6 +6,23 @@ latest tag.
 
 ## Unreleased
 
+## v0.10.8 — 2026-09-03
+
+### Fixed
+
+- **Workspace materialization no longer hard-fails when an existing source cache
+  cannot be refreshed.** Before cutting worktrees, `materializeSource` refreshes
+  a source's clone cache with `git fetch --all --prune`. For a private or SSH
+  source the (containerized) operator cannot authenticate, that fetch failed
+  (`cannot run ssh`, `Host key verification failed`) and aborted
+  `POST /workspaces` and stack bring-up with a 500 — even though the
+  already-cloned cache held everything needed to cut the worktree. Refreshing an
+  **existing** cache is now best-effort: on failure the operator logs a warning
+  and materializes from the cache. Cloning a **missing** cache still requires the
+  remote and surfaces errors, and the explicit update verbs (`angee source pull`,
+  `angee workspace source pull` / `fetch`, `angee workspace sync-base`) still
+  fetch and fail loudly — caches are refreshed through those paths.
+
 ## v0.10.1 — 2026-08-26
 
 ### Fixed

@@ -1569,7 +1569,7 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			if insideDest {
 				return nil, fmt.Errorf("workspace source cache path %s cannot be inside destination %s", cachePath, dest)
 			}
-			if err := p.materializeSource(ctx, sourceName, source); err != nil {
+			if err := p.materializeSource(ctx, sourceName, source, true); err != nil {
 				return nil, err
 			}
 			client := git.New()

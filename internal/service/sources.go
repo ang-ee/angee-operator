@@ -23,7 +23,7 @@ func (p *Platform) materializeReferencedSources(ctx context.Context, stack *mani
 		return err
 	}
 	for _, name := range seen {
-		if err := p.materializeSource(ctx, name, stack.Sources[name]); err != nil {
+		if err := p.materializeSource(ctx, name, stack.Sources[name], true); err != nil {
 			return err
 		}
 	}
@@ -278,7 +278,7 @@ func (p *Platform) SourceFetch(ctx context.Context, name string) (api.SourceStat
 	if !ok {
 		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
-	if err := p.materializeSource(ctx, name, source); err != nil {
+	if err := p.materializeSource(ctx, name, source, false); err != nil {
 		return api.SourceState{}, err
 	}
 	return p.sourceState(ctx, name, source)
@@ -308,7 +308,7 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState
 	if source.Kind != "git" {
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
 	}
-	if err := p.materializeSource(ctx, name, source); err != nil {
+	if err := p.materializeSource(ctx, name, source, false); err != nil {
 		return api.SourceState{}, err
 	}
 	if err := git.New().Pull(ctx, p.sourcePath(name, source)); err != nil {
@@ -343,13 +343,32 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (api.Source
 	return p.sourceState(ctx, name, source)
 }
 
-func (p *Platform) materializeSource(ctx context.Context, name string, source manifest.Source) error {
+// materializeSource ensures a source's cache exists on disk. A missing cache is
+// cloned, and a clone failure is always returned. When the cache already exists
+// it is refreshed with a fetch, and bestEffortRefresh decides what a failed
+// refresh means. The explicit `angee source fetch` / `source pull` verbs pass
+// false so a stale-or-unreachable remote surfaces to the caller. Bring-up and
+// workspace provisioning pass true: the cache already holds what worktree
+// materialization and stack up read, so a source the operator cannot reach or
+// authenticate — a private or SSH repo with no in-container key — must not block
+// them; the refresh is only a freshness step, and a failure warns and keeps the
+// existing cache. A cancelled or timed-out context is never best-effort.
+func (p *Platform) materializeSource(ctx context.Context, name string, source manifest.Source, bestEffortRefresh bool) error {
 	path := p.sourcePath(name, source)
 	switch source.Kind {
 	case "git":
 		client := git.New()
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
-			return client.Fetch(ctx, path)
+			if err := client.Fetch(ctx, path); err != nil {
+				if !bestEffortRefresh || ctx.Err() != nil {
+					return err
+				}
+				// The git error can carry the remote URL (a token, for an
+				// HTTPS-with-credentials remote), so keep it out of the log and
+				// point at `source pull`, which surfaces the full error on demand.
+				fmt.Fprintf(os.Stderr, "warning: could not refresh source %q; using the existing cache (update it with `angee source pull %s`)\n", name, name)
+			}
+			return nil
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
