@@ -1,6 +1,6 @@
 module github.com/ang-ee/angee-operator
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/fyltr/copier-go v0.0.0-20260615213950-5a55ba2e7116
@@ -82,7 +82,7 @@ require (
 	github.com/urfave/cli/v3 v3.8.0 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
