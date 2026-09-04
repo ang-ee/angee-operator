@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.12.0 — 2026-09-04
+
 ### Added
 
 - **Service readiness probes.** Services can declare a `ready` block with an
