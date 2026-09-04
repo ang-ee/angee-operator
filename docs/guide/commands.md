@@ -31,6 +31,11 @@ it starts and prints a heartbeat every few seconds while a phase is still
 running, so you can distinguish slow work from a stalled command; use `-vv` to
 identify the specific subprocess or HTTP request.
 
+`-vv` output includes up to 4 KiB of what each subprocess printed. Resolved
+secret values and credential-bearing URLs are masked before anything is
+written, and control characters are escaped, but review the output before
+sharing it, since a tool may print other data you consider sensitive.
+
 Without `--root`, the CLI walks upward from the current directory, preferring
 `angee.yaml`, then `.angee/angee.yaml`. In dev checkouts that expose workspace
 templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses

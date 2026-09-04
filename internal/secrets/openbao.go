@@ -38,6 +38,8 @@ func NewOpenBaoBackend(config OpenBaoConfig) *OpenBaoBackend {
 	if config.Path == "" {
 		config.Path = "angee"
 	}
+	// The vault token must never appear in diagnostics, whatever prints it.
+	logctx.RegisterSecrets(config.Token)
 	return &OpenBaoBackend{config: config, client: &http.Client{Timeout: 10 * time.Second}}
 }
 

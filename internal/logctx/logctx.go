@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -144,7 +145,7 @@ func (h *cliHandler) Handle(_ context.Context, record slog.Record) error {
 	default:
 		line.WriteString("angee: ")
 	}
-	line.WriteString(record.Message)
+	line.WriteString(sanitizeText(record.Message))
 
 	for _, stored := range h.attrs {
 		appendAttr(&line, stored.groups, stored.attr)
@@ -270,11 +271,71 @@ func RedactURL(rawURL string) string {
 
 var credentialURLPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@`)
 
+var (
+	secretsMu    sync.RWMutex
+	secretValues []string
+)
+
+// RegisterSecrets records resolved secret values so RedactText masks them
+// wherever they appear in logged text: argv, captured subprocess output, or
+// error strings. Values shorter than four bytes are ignored because masking
+// them would garble unrelated output. Safe for concurrent use.
+func RegisterSecrets(values ...string) {
+	secretsMu.Lock()
+	defer secretsMu.Unlock()
+	for _, value := range values {
+		if len(value) < 4 || slices.Contains(secretValues, value) {
+			continue
+		}
+		secretValues = append(secretValues, value)
+	}
+	// Longest first so a value that contains another is masked whole.
+	slices.SortFunc(secretValues, func(a, b string) int { return len(b) - len(a) })
+}
+
+// sanitizeText escapes control characters so a value derived from user input
+// (a path, an argv element, subprocess output) cannot forge or split log lines.
+func sanitizeText(s string) string {
+	clean := true
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // RedactText masks the userinfo of every credential-bearing URL
-// (scheme://user:secret@host) found in free text such as captured subprocess
-// output, which may echo remotes verbatim.
+// (scheme://user:secret@host) and every value registered with RegisterSecrets
+// found in free text such as argv, error strings, or captured subprocess
+// output, which may echo remotes or environment values verbatim.
 func RedactText(s string) string {
-	return credentialURLPattern.ReplaceAllString(s, "${1}***@")
+	s = credentialURLPattern.ReplaceAllString(s, "${1}***@")
+	secretsMu.RLock()
+	defer secretsMu.RUnlock()
+	for _, value := range secretValues {
+		s = strings.ReplaceAll(s, value, "***")
+	}
+	return s
 }
 
 // RedactArgs returns a copy of args with common secret flag values and URL
@@ -282,7 +343,7 @@ func RedactText(s string) string {
 func RedactArgs(args []string) []string {
 	redacted := append([]string(nil), args...)
 	for i := 0; i < len(redacted); i++ {
-		redacted[i] = RedactURL(redacted[i])
+		redacted[i] = RedactText(RedactURL(redacted[i]))
 		if redacted[i] == "-e" || redacted[i] == "--env" {
 			if i+1 < len(redacted) && strings.Contains(redacted[i+1], "=") {
 				redacted[i+1] = redactEnvEntry(redacted[i+1])
@@ -401,7 +462,7 @@ func TraceHTTP(ctx context.Context, method, rawURL string) func(status int, err 
 				slog.Duration("duration", time.Since(started)),
 			}
 			if err != nil {
-				attrs = append(attrs, slog.Any("err", redactHTTPError(err)))
+				attrs = append(attrs, slog.String("err", RedactText(redactHTTPError(err).Error())))
 			}
 			logger.LogAttrs(ctx, slog.LevelDebug, "http finished", attrs...)
 		})

@@ -393,6 +393,33 @@ func TestStepFailureIsAnInfoBreadcrumb(t *testing.T) {
 	}
 }
 
+func TestSanitizeTextEscapesControlCharacters(t *testing.T) {
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+	logger.Info("exec sh -c line one\nwarning: forged line two\x1b[0m")
+	got := output.String()
+	if strings.Count(got, "\n") != 1 || !strings.Contains(got, `line one\nwarning: forged line two\x1b[0m`) {
+		t.Fatalf("message was not sanitized: %q", got)
+	}
+}
+
+func TestRegisterSecretsMasksLoggedText(t *testing.T) {
+	RegisterSecrets("s3cr3t-value-for-test", "ab")
+	if got := RedactText("token=s3cr3t-value-for-test rest ab"); got != "token=*** rest ab" {
+		t.Fatalf("RedactText = %q", got)
+	}
+	if got := RedactArgs([]string{"-e", "PASSWORD=s3cr3t-value-for-test", "s3cr3t-value-for-test"}); got[2] != "***" {
+		t.Fatalf("RedactArgs = %q", got)
+	}
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	done := TraceExec(With(context.Background(), logger), "sh", []string{"-c", "echo"}, "")
+	done([]byte("printed s3cr3t-value-for-test\n"), nil)
+	if got := output.String(); strings.Contains(got, "s3cr3t-value-for-test") {
+		t.Fatalf("captured output leaked a registered secret: %q", got)
+	}
+}
+
 func TestRedactText(t *testing.T) {
 	in := "origin\thttps://alexis:secret@example.com/repo (fetch)\nssh://git@host/x and plain text user@example.com"
 	want := "origin\thttps://***@example.com/repo (fetch)\nssh://***@host/x and plain text user@example.com"

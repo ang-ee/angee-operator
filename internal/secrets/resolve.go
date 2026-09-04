@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
+
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
 type EnvLookup func(string) (string, bool)
@@ -53,6 +55,8 @@ func ResolveDeclarations(ctx context.Context, backend Backend, declarations map[
 		}
 		if ok {
 			resolved[name] = value
+			// Every resolved value is masked in diagnostic output from here on.
+			logctx.RegisterSecrets(value)
 		}
 	}
 	return resolved, nil
