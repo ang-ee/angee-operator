@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
@@ -587,9 +589,10 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Volumes:     containerMounts,
 				// host.docker.internal is Docker Desktop magic; host-gateway gives
 				// plain-Linux containers host-local operator access and is harmless on Desktop.
-				ExtraHosts: []string{"host.docker.internal:host-gateway"},
-				WorkingDir: workdir,
-				DependsOn:  composeDependsOn(append(service.After, service.DependsOn...), stack),
+				ExtraHosts:  []string{"host.docker.internal:host-gateway"},
+				WorkingDir:  workdir,
+				Healthcheck: composeHealthcheck(service.Ready),
+				DependsOn:   composeDependsOn(append(service.After, service.DependsOn...), stack),
 			}
 		case manifest.RuntimeLocal:
 			localEnv, err := localMountEnv(mounts, mountResolver)
@@ -609,11 +612,16 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			if workdir != "" && !filepath.IsAbs(workdir) {
 				workdir = filepath.Join(root, workdir)
 			}
+			readinessProbe, err := processReadinessProbe(service.Ready)
+			if err != nil {
+				return nil, fmt.Errorf("service %s ready: %w", name, err)
+			}
 			compiled.ProcessCompose.Processes[name] = proccompose.Process{
-				Command:     shellCommand(command),
-				Environment: envList(env),
-				WorkingDir:  workdir,
-				DependsOn:   processDependsOn(append(service.After, service.DependsOn...), stack),
+				Command:        shellCommand(command),
+				Environment:    envList(env),
+				WorkingDir:     workdir,
+				ReadinessProbe: readinessProbe,
+				DependsOn:      processDependsOn(append(service.After, service.DependsOn...), stack),
 			}
 		}
 	}
@@ -698,6 +706,8 @@ func processDependsOn(names []string, stack *manifest.Stack) map[string]proccomp
 		condition := "process_started"
 		if _, ok := stack.Jobs[name]; ok {
 			condition = "process_completed_successfully"
+		} else if service, ok := stack.Services[name]; ok && service.Ready != nil {
+			condition = "process_healthy"
 		}
 		deps[name] = proccompose.ProcessDependency{Condition: condition}
 	}
@@ -713,10 +723,102 @@ func composeDependsOn(names []string, stack *manifest.Stack) map[string]compose.
 		condition := "service_started"
 		if _, ok := stack.Jobs[name]; ok {
 			condition = "service_completed_successfully"
+		} else if service, ok := stack.Services[name]; ok && service.Ready != nil {
+			condition = "service_healthy"
 		}
 		deps[name] = compose.ServiceDependency{Condition: condition}
 	}
 	return deps
+}
+
+func composeHealthcheck(probe *manifest.ReadyProbe) *compose.Healthcheck {
+	if probe == nil {
+		return nil
+	}
+	normalized := probe.Normalized()
+	healthcheck := &compose.Healthcheck{
+		Interval:    normalized.Interval,
+		Timeout:     normalized.Timeout,
+		Retries:     *normalized.Retries,
+		StartPeriod: normalized.StartPeriod,
+	}
+	switch {
+	case normalized.HTTP != nil:
+		url := fmt.Sprintf("http://127.0.0.1:%d%s", normalized.HTTP.Port, normalized.HTTP.Path)
+		quotedURL := escapeRuntimeInterpolation(shellQuote(url))
+		healthcheck.Test = []string{
+			"CMD-SHELL",
+			"wget -qO- " + quotedURL + " >/dev/null 2>&1 || curl -fsS " + quotedURL + " >/dev/null",
+		}
+	case normalized.TCP != nil:
+		healthcheck.Test = []string{"CMD-SHELL", fmt.Sprintf("nc -z 127.0.0.1 %d", normalized.TCP.Port)}
+	case normalized.Cmd != nil:
+		healthcheck.Test = make([]string, 1, len(normalized.Cmd)+1)
+		healthcheck.Test[0] = "CMD"
+		for _, arg := range normalized.Cmd {
+			healthcheck.Test = append(healthcheck.Test, escapeRuntimeInterpolation(arg))
+		}
+	case normalized.File != "":
+		healthcheck.Test = []string{"CMD-SHELL", "test -s " + escapeRuntimeInterpolation(shellQuote(normalized.File))}
+	}
+	return healthcheck
+}
+
+func processReadinessProbe(probe *manifest.ReadyProbe) (*proccompose.Probe, error) {
+	if probe == nil {
+		return nil, nil
+	}
+	normalized := probe.Normalized()
+	initialDelay, err := durationSecondsCeil(normalized.StartPeriod)
+	if err != nil {
+		return nil, fmt.Errorf("start_period: %w", err)
+	}
+	period, err := durationSecondsCeil(normalized.Interval)
+	if err != nil {
+		return nil, fmt.Errorf("interval: %w", err)
+	}
+	timeout, err := durationSecondsCeil(normalized.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("timeout: %w", err)
+	}
+	readinessProbe := &proccompose.Probe{
+		InitialDelaySeconds: initialDelay,
+		PeriodSeconds:       period,
+		TimeoutSeconds:      timeout,
+		FailureThreshold:    *normalized.Retries,
+	}
+	switch {
+	case normalized.HTTP != nil:
+		readinessProbe.HTTPGet = &proccompose.HTTPGet{
+			Host:   "127.0.0.1",
+			Port:   strconv.Itoa(normalized.HTTP.Port),
+			Path:   escapeRuntimeInterpolation(normalized.HTTP.Path),
+			Scheme: "http",
+		}
+	case normalized.TCP != nil:
+		readinessProbe.Exec = &proccompose.ExecProbe{Command: fmt.Sprintf("nc -z 127.0.0.1 %d", normalized.TCP.Port)}
+	case normalized.Cmd != nil:
+		readinessProbe.Exec = &proccompose.ExecProbe{Command: escapeRuntimeInterpolation(shellCommand(normalized.Cmd))}
+	case normalized.File != "":
+		readinessProbe.Exec = &proccompose.ExecProbe{Command: "test -s " + escapeRuntimeInterpolation(shellQuote(normalized.File))}
+	}
+	return readinessProbe, nil
+}
+
+func durationSecondsCeil(value string) (int, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	seconds := duration / time.Second
+	if duration > 0 && duration%time.Second != 0 {
+		seconds++
+	}
+	return int(seconds), nil
+}
+
+func escapeRuntimeInterpolation(value string) string {
+	return strings.ReplaceAll(value, "$", "$$")
 }
 
 func resolveContainerMounts(mounts []string, resolver mountx.Resolver) ([]string, error) {

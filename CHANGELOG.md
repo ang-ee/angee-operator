@@ -8,6 +8,13 @@ latest tag.
 
 ### Added
 
+- **Service readiness probes.** Services can declare a `ready` block with an
+  HTTP, TCP, command, or non-empty-file probe plus timing controls. Angee emits
+  native Docker Compose healthchecks and process-compose readiness probes;
+  `after:` and `depends_on:` now wait for a probed service to become healthy
+  while preserving started-only and completed-job semantics elsewhere. This
+  replaces noisy per-container wait loops in stack templates.
+
 - **Stack-level workspace input defaults.** A manifest may declare
   `workspace_defaults`, keyed by workspace template ref (`workspaces/src`, or
   the bare `src`), with `inputs` the operator layers under every

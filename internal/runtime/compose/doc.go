@@ -20,7 +20,16 @@ type Service struct {
 	ExtraHosts  []string                     `yaml:"extra_hosts,omitempty" json:"extra_hosts,omitempty"`
 	Networks    []string                     `yaml:"networks,omitempty"`
 	WorkingDir  string                       `yaml:"working_dir,omitempty"`
+	Healthcheck *Healthcheck                 `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	DependsOn   map[string]ServiceDependency `yaml:"depends_on,omitempty"`
+}
+
+type Healthcheck struct {
+	Test        []string `yaml:"test" json:"test"`
+	Interval    string   `yaml:"interval" json:"interval"`
+	Timeout     string   `yaml:"timeout" json:"timeout"`
+	Retries     int      `yaml:"retries" json:"retries"`
+	StartPeriod string   `yaml:"start_period" json:"start_period"`
 }
 
 type ServiceDependency struct {

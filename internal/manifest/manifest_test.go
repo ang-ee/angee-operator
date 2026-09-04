@@ -57,6 +57,171 @@ func TestManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadFileReadyProbeKinds(t *testing.T) {
+	tests := map[string]string{
+		"http": `
+      http:
+        port: 8080
+`,
+		"tcp": `
+      tcp:
+        port: 5432
+`,
+		"cmd": `
+      cmd: ["sh", "-c", "test -s state/ready"]
+`,
+		"file": `
+      file: state/ready
+`,
+	}
+	for name, ready := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "angee.yaml")
+			data := `version: 1
+kind: stack
+name: ready
+services:
+  web:
+    runtime: container
+    image: example/web:latest
+    ready:` + ready
+			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			stack, err := LoadFile(path)
+			if err != nil {
+				t.Fatalf("LoadFile() error = %v", err)
+			}
+			probe := stack.Services["web"].Ready
+			if probe == nil {
+				t.Fatal("Ready = nil")
+			}
+			normalized := probe.Normalized()
+			if normalized.Interval != "5s" || normalized.Timeout != "3s" || normalized.Retries == nil || *normalized.Retries != 12 || normalized.StartPeriod != "0s" {
+				t.Fatalf("Normalized() timing = %+v, want 5s/3s/12/0s", normalized)
+			}
+			if normalized.HTTP != nil && normalized.HTTP.Path != "/" {
+				t.Fatalf("Normalized().HTTP.Path = %q, want /", normalized.HTTP.Path)
+			}
+		})
+	}
+}
+
+func TestReadyProbeValidation(t *testing.T) {
+	tests := map[string]struct {
+		probe *ReadyProbe
+		want  string
+	}{
+		"missing kind": {
+			probe: &ReadyProbe{},
+			want:  "exactly one",
+		},
+		"multiple kinds": {
+			probe: &ReadyProbe{HTTP: &ReadyHTTP{Port: 8080}, TCP: &ReadyTCP{Port: 8080}},
+			want:  "exactly one",
+		},
+		"http port below range": {
+			probe: &ReadyProbe{HTTP: &ReadyHTTP{Port: 0}},
+			want:  "ready.http.port",
+		},
+		"tcp port above range": {
+			probe: &ReadyProbe{TCP: &ReadyTCP{Port: 65536}},
+			want:  "ready.tcp.port",
+		},
+		"empty command": {
+			probe: &ReadyProbe{Cmd: []string{}},
+			want:  "ready.cmd",
+		},
+		"empty file": {
+			probe: &ReadyProbe{File: "   "},
+			want:  "ready.file",
+		},
+		"invalid interval": {
+			probe: &ReadyProbe{TCP: &ReadyTCP{Port: 1}, Interval: "often"},
+			want:  "ready.interval",
+		},
+		"invalid timeout": {
+			probe: &ReadyProbe{TCP: &ReadyTCP{Port: 1}, Timeout: "eventually"},
+			want:  "ready.timeout",
+		},
+		"invalid start period": {
+			probe: &ReadyProbe{TCP: &ReadyTCP{Port: 1}, StartPeriod: "later"},
+			want:  "ready.start_period",
+		},
+		"invalid retries": {
+			probe: &ReadyProbe{TCP: &ReadyTCP{Port: 1}, Retries: readyRetries(0)},
+			want:  "ready.retries",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stack := &Stack{
+				Version: VersionCurrent,
+				Kind:    KindStack,
+				Name:    "invalid-ready",
+				Services: map[string]Service{
+					"web": {Runtime: RuntimeContainer, Image: "example/web:latest", Ready: tc.probe},
+				},
+			}
+			err := stack.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), `service "web"`) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %q, want service name and %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFileReadyProbeRejectsZeroRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "angee.yaml")
+	data := `version: 1
+kind: stack
+name: ready
+services:
+  web:
+    runtime: container
+    image: example/web:latest
+    ready:
+      tcp:
+        port: 8080
+      retries: 0
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), `service "web": ready.retries`) {
+		t.Fatalf("LoadFile() error = %v, want named retries validation error", err)
+	}
+}
+
+func TestLoadFileReadyProbeRejectsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "angee.yaml")
+	data := `version: 1
+kind: stack
+name: ready
+services:
+  web:
+    runtime: container
+    image: example/web:latest
+    ready:
+      tcp:
+        port: 8080
+      unknown: true
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), "field unknown not found") {
+		t.Fatalf("LoadFile() error = %v, want strict unknown-field error", err)
+	}
+}
+
+func readyRetries(value int) *int {
+	return &value
+}
+
 func TestIngressRoutingRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "angee.yaml")
@@ -195,7 +360,11 @@ func TestValidateDoesNotMutate(t *testing.T) {
 			Type: "env-file",
 		},
 		Services: map[string]Service{
-			"web": {Runtime: RuntimeContainer, Image: "nginx:latest"},
+			"web": {
+				Runtime: RuntimeContainer,
+				Image:   "nginx:latest",
+				Ready:   &ReadyProbe{TCP: &ReadyTCP{Port: 8080}},
+			},
 		},
 	}
 	before, err := yaml.Marshal(stack)

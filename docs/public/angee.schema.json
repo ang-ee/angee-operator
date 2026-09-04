@@ -198,6 +198,104 @@
         "range"
       ]
     },
+    "ReadyHTTP": {
+      "properties": {
+        "port": {
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "default": "/"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port"
+      ]
+    },
+    "ReadyProbe": {
+      "oneOf": [
+        {
+          "required": [
+            "http"
+          ],
+          "title": "http"
+        },
+        {
+          "required": [
+            "tcp"
+          ],
+          "title": "tcp"
+        },
+        {
+          "required": [
+            "cmd"
+          ],
+          "title": "cmd"
+        },
+        {
+          "required": [
+            "file"
+          ],
+          "title": "file"
+        }
+      ],
+      "properties": {
+        "http": {
+          "$ref": "#/$defs/ReadyHTTP"
+        },
+        "tcp": {
+          "$ref": "#/$defs/ReadyTCP"
+        },
+        "cmd": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "minItems": 1
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interval": {
+          "type": "string",
+          "default": "5s"
+        },
+        "timeout": {
+          "type": "string",
+          "default": "3s"
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 12
+        },
+        "start_period": {
+          "type": "string",
+          "default": "0s"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "ReadyTCP": {
+      "properties": {
+        "port": {
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port"
+      ]
+    },
     "Route": {
       "properties": {
         "port": {
@@ -319,6 +417,9 @@
         },
         "route": {
           "$ref": "#/$defs/Route"
+        },
+        "ready": {
+          "$ref": "#/$defs/ReadyProbe"
         }
       },
       "additionalProperties": false,
