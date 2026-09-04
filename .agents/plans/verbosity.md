@@ -1,6 +1,6 @@
 # `-v` / `-vv` verbosity and hang diagnosis for `angee` and `angee-operator`
 
-**Status:** In progress · PRs #77, #78, #79, #80 merged; PR C open; templates draft PR angee-django#52 · **Created:** 2026-09-04 · **Source:** three read-only sweeps of
+**Status:** Done 2026-09-04 · operator PRs #77 to #82 merged (v0.12.0, v0.12.1); templates PR angee-django#52 merged; live check done on the OVH dev stack · **Created:** 2026-09-04 · **Source:** three read-only sweeps of
 `internal/` at v0.11.0 (`6061303`). File:line references are valid at that commit.
 
 ## 1. Problem
@@ -363,7 +363,7 @@ CHANGELOG entry under `## Unreleased`, PR with session link, squash-merge.
 
 ### Release
 
-- [~] R1 Final PR renames `## Unreleased` to `## v0.12.0 — <date>`; merge; tag
+- [x] R1 Final PR renames `## Unreleased` to `## v0.12.0 — <date>`; merge; tag
       the squash commit; push; watch the release run; `make install` locally.
 
 ### Templates repo (after R1; follow its own AGENTS.md)
@@ -373,7 +373,7 @@ CHANGELOG entry under `## Unreleased`, PR with session link, squash-merge.
       `caches/js-deps.done`), `frontend-build` (file `dist/index.html`); delete
       the seven wait loops; keep `after:`; only remove the sentinel when the
       lockfile changed.
-- [~] T2 Render both flavours in both runtime modes and diff against the
+- [x] T2 Render both flavours in both runtime modes and diff against the
       previous render; start the Docker-mode dev stack once and confirm no
       waiter output and that dependents start after frontend is healthy.
 - [x] T3 PR in the templates repo with a compatibility note (requires angee
