@@ -6,6 +6,28 @@ latest tag.
 
 ## Unreleased
 
+## v0.11.0 — 2026-09-04
+
+### Removed
+
+- **`angee dev` interactive control menu.** The keyboard menu layered over the
+  foreground log stream (added in v0.10.0) is gone: `angee dev` now only
+  streams logs, and keypresses are ignored. It was unreliable by construction.
+  The menu was drawn inline on a terminal that docker compose and
+  process-compose write to directly, so the service picker and its prompt were
+  trampled by live logs. The byte-at-a-time key reader had no escape-sequence
+  handling, so every arrow, Home/End, or function key opened and closed the
+  menu on its own and swallowed the next real keypress. And "restart" depended
+  on a synchronous status probe that silently degraded into "start" whenever
+  process-compose's API did not answer (the bug class fixed in v0.10.1), which
+  reported success for a container without restarting it. Ctrl-C still tears
+  the whole stack down; restart or stop one service with `angee restart <name>`
+  or `angee stop <name>` from another shell. Non-terminal stdin (pipes, CI,
+  the operator) already bypassed the menu, so that path is unchanged. The
+  cbreak/termios helpers under `internal/cli` go with it, as does the SIGQUIT
+  catch that only existed to restore the terminal: Ctrl-\ is back to Go's
+  default (goroutine dump and exit) rather than a graceful stack shutdown.
+
 ## v0.10.8 — 2026-09-03
 
 ### Fixed
