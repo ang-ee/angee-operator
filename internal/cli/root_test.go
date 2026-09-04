@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,8 +12,10 @@ import (
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/service"
+	"github.com/spf13/cobra"
 )
 
 func TestVersionFlag(t *testing.T) {
@@ -22,9 +25,74 @@ func TestVersionFlag(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	want := "angee version " + Version
-	if got := strings.TrimSpace(stdout.String()); got != want {
+	want := "angee version " + Version + "\n"
+	if got := stdout.String(); got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := "angee version " + Version + "\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestVersionCommandJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--json", "version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := `{"version":"` + Version + `"}` + "\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestVerboseFlagInstallsDebugLogger(t *testing.T) {
+	t.Setenv("ANGEE_VERBOSE", "0")
+	assertLoggerLevel(t, []string{"-vv", "logger-level-test"}, slog.LevelDebug)
+}
+
+func TestVerboseEnvInstallsInfoLogger(t *testing.T) {
+	t.Setenv("ANGEE_VERBOSE", "1")
+	assertLoggerLevel(t, []string{"logger-level-test"}, slog.LevelInfo)
+}
+
+func assertLoggerLevel(t *testing.T, args []string, level slog.Level) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	var enabled bool
+	var tooVerbose bool
+	cmd.AddCommand(&cobra.Command{
+		Use:    "logger-level-test",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			logger := logctx.From(cmd.Context())
+			enabled = logger.Enabled(cmd.Context(), level)
+			tooVerbose = logger.Enabled(cmd.Context(), level-1)
+			return nil
+		},
+	})
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !enabled {
+		t.Fatalf("logger is not enabled at %s", level)
+	}
+	if tooVerbose {
+		t.Fatalf("logger is unexpectedly enabled below %s", level)
 	}
 }
 

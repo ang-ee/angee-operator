@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/operator"
 	"github.com/ang-ee/angee-operator/internal/platformclient"
 	"github.com/ang-ee/angee-operator/internal/query"
@@ -24,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is the Angee CLI version printed by the version flag and command.
 var Version = "dev"
 
 func Execute() error {
@@ -40,6 +43,7 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	var root string
 	var operatorURL string
 	var jsonOutput bool
+	var verbosity int
 
 	cmd := &cobra.Command{
 		Use:           "angee",
@@ -51,10 +55,23 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd.SetIn(stdin)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
+	cmd.PersistentPreRunE = func(runCmd *cobra.Command, _ []string) error {
+		count := verbosity
+		if !cmd.PersistentFlags().Changed("verbose") {
+			if envCount, ok := logctx.CountFromEnv("ANGEE_VERBOSE"); ok {
+				count = envCount
+			}
+		}
+		logger := slog.New(logctx.NewCLIHandler(cmd.ErrOrStderr(), logctx.LevelFromCount(count)))
+		runCmd.SetContext(logctx.With(runCmd.Context(), logger))
+		return nil
+	}
 	cmd.PersistentFlags().StringVar(&root, "root", ".", "ANGEE_ROOT containing angee.yaml")
 	cmd.PersistentFlags().StringVar(&operatorURL, "operator", os.Getenv("ANGEE_OPERATOR_URL"), "operator URL for HTTP mode")
 	cmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "write JSON output")
+	cmd.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "increase verbosity (-v shows phases, -vv every command and request)")
 
+	cmd.AddCommand(versionCommand(stdout, &jsonOutput))
 	cmd.AddCommand(initCommand(stdout, stderr, &root, &operatorURL))
 	cmd.AddCommand(stackCommand(stdout, &root, &operatorURL))
 	cmd.AddCommand(statusCommand(stdout, &root, &operatorURL, &jsonOutput))
@@ -72,6 +89,23 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(internalCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(operatorCommand(stdout, stderr))
 	return cmd
+}
+
+func versionCommand(stdout io.Writer, jsonOutput *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the Angee CLI version",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if *jsonOutput {
+				return json.NewEncoder(stdout).Encode(struct {
+					Version string `json:"version"`
+				}{Version: Version})
+			}
+			_, err := fmt.Fprintf(stdout, "angee version %s\n", Version)
+			return err
+		},
+	}
 }
 
 func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Command {
