@@ -283,17 +283,17 @@ CHANGELOG entry under `## Unreleased`, PR with session link, squash-merge.
 
 ### PR A — verbosity facility, CLI flags, chokepoint tracing, narration
 
-- [ ] A1 `internal/logctx`: `With`/`From` (discard logger by default), level from
+- [x] A1 `internal/logctx`: `With`/`From` (discard logger by default), level from
       count (0 warn, 1 info, 2 debug) and `ANGEE_VERBOSE`, CLI text handler
       (no timestamps at info, elapsed + attrs at debug), `RedactURL`/`RedactArgs`
       (userinfo, `--token`, `X-Vault-Token`, env values), output cap 4 KiB,
       `Step(ctx, msg, attrs...) func(error)` with heartbeat (3 s first then every
       5 s at info; one 30 s hint at warn when quiet), injectable clock. Tests.
-- [ ] A2 `internal/cli/root.go`: persistent `--verbose/-v` count flag, env
+- [x] A2 `internal/cli/root.go`: persistent `--verbose/-v` count flag, env
       fallback, logger built in a persistent pre-run and stored in the command
       context; `angee version` subcommand (plain and `--json`) since `-v` no
       longer means version (closes #53). Tests in `root_test.go`.
-- [ ] A3 Debug tracing at the chokepoints: `git.Client.Run`; `runGitOpAt`,
+- [x] A3 Debug tracing at the chokepoints: `git.Client.Run`; `runGitOpAt`,
       `runGitCapture`, `runDiffAt`; compose `ExecRunner.Run`, `runLimited`,
       `runForeground`, `StreamLogs`; proccompose `ExecRunner.Run`, `runLimited`,
       `runForeground`, `goBinPath`, `installProcessCompose`, `StreamLogs`;
@@ -302,7 +302,7 @@ CHANGELOG entry under `## Unreleased`, PR with session link, squash-merge.
       `request`; `service` `openBaoReady`; `fslock.Lock` (info after 1 s waiting,
       hold duration at debug). One test per runner asserting the line and
       redaction with a buffer handler.
-- [ ] A4 Info narration with `Step`: `StackPrepare` phases, `materializeSource`
+- [x] A4 Info narration with `Step`: `StackPrepare` phases, `materializeSource`
       (refresh vs clone, per source), `materializeDeclaredWorkspaces`,
       `WorkspaceCreate` phases and source materialisation, `bootstrapOpenBao`
       (keep the existing stderr lines), `serviceRuntimeAction`, `JobRun`,
@@ -310,7 +310,7 @@ CHANGELOG entry under `## Unreleased`, PR with session link, squash-merge.
       (`sources.go:369`, `workspaces.go:1624`, `commits.go:73`) through the
       logger at warn with identical default-level text. Narration test for
       `StackPrepare` with fake runners.
-- [ ] A5 Docs: global flags in `docs/guide/commands.md` and `README.md`;
+- [x] A5 Docs: global flags in `docs/guide/commands.md` and `README.md`;
       CHANGELOG. Verify default output unchanged across the CLI test suite.
 - [ ] A6 Review, PR, CI, merge.
 

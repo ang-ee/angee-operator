@@ -26,10 +26,10 @@ angee version
 angee --json version
 ```
 
-If a command seems slow or stuck, rerun it with `-v`. Angee will name a phase
-once it has been active for a few seconds and continue printing heartbeats so
-you can distinguish slow work from a stalled command; use `-vv` to identify the
-specific subprocess or HTTP request.
+If a command seems slow or stuck, rerun it with `-v`. Angee names each phase as
+it starts and prints a heartbeat every few seconds while a phase is still
+running, so you can distinguish slow work from a stalled command; use `-vv` to
+identify the specific subprocess or HTTP request.
 
 Without `--root`, the CLI walks upward from the current directory, preferring
 `angee.yaml`, then `.angee/angee.yaml`. In dev checkouts that expose workspace

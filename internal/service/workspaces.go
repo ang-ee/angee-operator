@@ -1413,16 +1413,20 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		dest := filepath.Join(workspacePath, filepath.FromSlash(item.resolved.Subpath))
 		finish := logctx.Step(ctx, "materializing source "+item.sourceName)
 		materialized, err := p.materializeWorkspaceSource(ctx, item.sourceName, item.source, item.resolved, dest, sync)
-		finish(err)
 		if err != nil {
 			if item.optional {
+				// An optional source that cannot be materialized is skipped by
+				// design, so the phase completes normally rather than as a failure.
+				finish(nil)
 				continue
 			}
+			finish(err)
 			// Return the sources materialized so far alongside the error so the
 			// caller's rollback can undo them; this is the single cleanup
 			// site for a failed create.
 			return result, cleanup, err
 		}
+		finish(nil)
 		cleanup.entries = append(cleanup.entries, *materialized)
 		result[item.slot] = item.resolved
 	}

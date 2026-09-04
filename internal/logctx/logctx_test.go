@@ -370,13 +370,46 @@ func TestStepWarnHeartbeatAndFailure(t *testing.T) {
 		default:
 			t.Fatal("heartbeat goroutine did not stop before completion returned")
 		}
-		if got := output.String(); !strings.Contains(got, "warning: finished waiting for lock duration=30ms\n") {
-			t.Fatalf("failure output = %q", got)
+		if got := output.String(); strings.Contains(got, "finished") || strings.Contains(got, "failed") {
+			t.Fatalf("a failed step must not add a warning at the default level: %q", got)
 		}
 		if got := output.String(); strings.Contains(got, "secret-token") {
 			t.Fatalf("failure output contains raw error text: %q", got)
 		}
 	})
+}
+
+func TestStepFailureIsAnInfoBreadcrumb(t *testing.T) {
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+	complete := Step(With(context.Background(), logger), "compiling stack")
+	complete(errors.New("boom with secret-token"))
+	got := output.String()
+	if !strings.Contains(got, "angee: compiling stack\n") || !strings.Contains(got, "angee: compiling stack failed duration=") {
+		t.Fatalf("failure output = %q", got)
+	}
+	if strings.Contains(got, "secret-token") {
+		t.Fatalf("failure output contains raw error text: %q", got)
+	}
+}
+
+func TestRedactText(t *testing.T) {
+	in := "origin\thttps://alexis:secret@example.com/repo (fetch)\nssh://git@host/x and plain text user@example.com"
+	want := "origin\thttps://***@example.com/repo (fetch)\nssh://***@host/x and plain text user@example.com"
+	if got := RedactText(in); got != want {
+		t.Fatalf("RedactText = %q, want %q", got, want)
+	}
+}
+
+func TestTraceExecScrubsCapturedOutput(t *testing.T) {
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	done := TraceExec(With(context.Background(), logger), "git", []string{"remote", "-v"}, "")
+	done([]byte("origin https://alexis:secret@example.com/repo (fetch)\n"), nil)
+	got := output.String()
+	if strings.Contains(got, "secret") || !strings.Contains(got, "https://***@example.com/repo") {
+		t.Fatalf("captured output was not scrubbed: %q", got)
+	}
 }
 
 func TestStepContextCancellationStopsHeartbeat(t *testing.T) {

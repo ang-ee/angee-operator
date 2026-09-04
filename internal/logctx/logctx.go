@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -267,6 +268,15 @@ func RedactURL(rawURL string) string {
 	return redacted
 }
 
+var credentialURLPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@`)
+
+// RedactText masks the userinfo of every credential-bearing URL
+// (scheme://user:secret@host) found in free text such as captured subprocess
+// output, which may echo remotes verbatim.
+func RedactText(s string) string {
+	return credentialURLPattern.ReplaceAllString(s, "${1}***@")
+}
+
 // RedactArgs returns a copy of args with common secret flag values and URL
 // user information replaced by fixed placeholders.
 func RedactArgs(args []string) []string {
@@ -366,7 +376,7 @@ func TraceExec(ctx context.Context, name string, args []string, dir string, attr
 				}
 			}
 			if len(output) > 0 {
-				completionAttrs = append(completionAttrs, slog.String("output", Truncate(output, 4096)))
+				completionAttrs = append(completionAttrs, slog.String("output", Truncate([]byte(RedactText(string(output))), 4096)))
 			}
 			logger.LogAttrs(ctx, slog.LevelDebug, "exec finished", completionAttrs...)
 		})
@@ -408,8 +418,11 @@ func redactHTTPError(err error) error {
 	return &redacted
 }
 
-// Step logs the start, heartbeat, and completion of a potentially slow unit
-// of work. The returned completion function is safe to call more than once.
+// Step narrates a potentially slow unit of work: the start at Info, a
+// heartbeat while it runs (Info after a few seconds, or one Warn hint after 30 s
+// when only warnings are shown), and its completion at Debug, or at Info as
+// "<msg> failed" when the work returned an error. The returned completion
+// function is safe to call more than once.
 func Step(ctx context.Context, msg string, attrs ...slog.Attr) func(err error) {
 	complete, _ := startStep(ctx, msg, attrs...)
 	return complete
@@ -419,7 +432,7 @@ func startStep(ctx context.Context, msg string, attrs ...slog.Attr) (func(error)
 	logger := From(ctx)
 	started := time.Now()
 	stepAttrs := append([]slog.Attr(nil), attrs...)
-	logger.LogAttrs(ctx, slog.LevelDebug, msg, stepAttrs...)
+	logger.LogAttrs(ctx, slog.LevelInfo, msg, stepAttrs...)
 
 	stop := make(chan struct{})
 	stopped := make(chan struct{})
@@ -445,10 +458,15 @@ func startStep(ctx context.Context, msg string, attrs ...slog.Attr) (func(error)
 			completionAttrs = append(completionAttrs, stepAttrs...)
 			completionAttrs = append(completionAttrs, slog.Duration("duration", time.Since(started)))
 			level := slog.LevelDebug
+			message := "finished " + msg
 			if err != nil {
-				level = slog.LevelWarn
+				// A failed phase is an info breadcrumb, not a warning: the error
+				// itself reaches the user through the normal return path, and
+				// nested phases would otherwise stack several warnings per error.
+				level = slog.LevelInfo
+				message = msg + " failed"
 			}
-			logger.LogAttrs(ctx, level, "finished "+msg, completionAttrs...)
+			logger.LogAttrs(ctx, level, message, completionAttrs...)
 		})
 	}
 	return complete, stopped
