@@ -134,10 +134,13 @@ func TestBackendUpForegroundAttached(t *testing.T) {
 }
 
 func TestParsePS(t *testing.T) {
-	got := parsePS([]byte(`{"Service":"web","State":"running","Health":"healthy"}
+	got, err := parsePS([]byte(`{"Service":"web","State":"running","Health":"healthy"}
 {"Service":"db","State":"running","Health":"unhealthy"}
 {"Service":"worker","State":"exited"}
 `))
+	if err != nil {
+		t.Fatalf("parsePS() error = %v", err)
+	}
 	if len(got) != 3 {
 		t.Fatalf("parsePS() len = %d, want 3: %#v", len(got), got)
 	}
@@ -149,5 +152,15 @@ func TestParsePS(t *testing.T) {
 	}
 	if got[2].Name != "worker" || got[2].State != "exited" || got[2].Health != "" {
 		t.Fatalf("worker entry = %#v", got[2])
+	}
+}
+
+func TestParsePSSkipsNonJSONLines(t *testing.T) {
+	got, err := parsePS([]byte("WARN[0000] Found orphan containers\n{\"Service\":\"web\",\"State\":\"running\"}\nnot json\n"))
+	if err != nil {
+		t.Fatalf("parsePS() error = %v, want banners skipped", err)
+	}
+	if len(got) != 1 || got[0].Name != "web" || got[0].State != "running" {
+		t.Fatalf("parsePS() = %#v, want the single web record", got)
 	}
 }

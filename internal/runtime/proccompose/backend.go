@@ -182,12 +182,9 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 	args = append(args, "list", "-o", "json")
 	out, err := b.run(ctx, req.Root, "", args...)
 	if err != nil {
-		// Supervisor not running, port wrong, etc. Treat as
-		// "nothing observed running" — Platform falls back to the
-		// "declared" sentinel for services missing from this list.
-		return nil, nil
+		return nil, err
 	}
-	return parseList(out), nil
+	return parseList(out)
 }
 
 type processListEntry struct {
@@ -198,10 +195,10 @@ type processListEntry struct {
 	IsReady   string `json:"is_ready"`
 }
 
-func parseList(data []byte) []runtime.ServiceStatus {
-	entries, ok := decodeProcessList(data)
-	if !ok {
-		return nil
+func parseList(data []byte) ([]runtime.ServiceStatus, error) {
+	entries, err := decodeProcessList(data)
+	if err != nil {
+		return nil, err
 	}
 	statuses := make([]runtime.ServiceStatus, 0, len(entries))
 	for _, entry := range entries {
@@ -215,7 +212,7 @@ func parseList(data []byte) []runtime.ServiceStatus {
 			Health:  procHealth(entry),
 		})
 	}
-	return statuses
+	return statuses, nil
 }
 
 // decodeProcessList extracts the JSON array that `process-compose list -o json`
@@ -225,16 +222,22 @@ func parseList(data []byte) []runtime.ServiceStatus {
 // contain a '['. So the array does not necessarily begin at the first '[': try
 // each '[' as a candidate start and decode the first JSON value from there,
 // which also tolerates any trailing banner text after the array.
-func decodeProcessList(data []byte) ([]processListEntry, bool) {
+func decodeProcessList(data []byte) ([]processListEntry, error) {
 	trimmed := bytes.TrimSpace(data)
+	var lastErr error
 	for {
 		idx := bytes.IndexByte(trimmed, '[')
 		if idx < 0 {
-			return nil, false
+			if lastErr != nil {
+				return nil, fmt.Errorf("parse process-compose status: %w", lastErr)
+			}
+			return nil, errors.New("parse process-compose status: JSON array not found")
 		}
 		var entries []processListEntry
 		if err := json.NewDecoder(bytes.NewReader(trimmed[idx:])).Decode(&entries); err == nil {
-			return entries, true
+			return entries, nil
+		} else {
+			lastErr = err
 		}
 		trimmed = trimmed[idx+1:]
 	}

@@ -28,6 +28,17 @@ func TestNewServerRequiresTokenForNonLoopbackBind(t *testing.T) {
 	}
 }
 
+func TestNewServerConfiguresIdleTimeout(t *testing.T) {
+	server, err := NewServer(Config{Root: t.TempDir(), Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	defer server.Close()
+	if got, want := server.server.IdleTimeout, 120*time.Second; got != want {
+		t.Fatalf("IdleTimeout = %s, want %s", got, want)
+	}
+}
+
 func TestNewServerResolvesProjectRootToControlRoot(t *testing.T) {
 	projectRoot := t.TempDir()
 	controlRoot := filepath.Join(projectRoot, ".angee")

@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ang-ee/angee-operator/internal/git"
+	gitx "github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
@@ -49,7 +49,7 @@ func (p *Platform) resolveRemoteTemplate(ctx context.Context, ref, kind string) 
 		return "", "", err
 	}
 	repoDir := filepath.Join(cacheRoot, "repo")
-	if err := refreshTemplateRepo(ctx, repoURL, repoDir, branch); err != nil {
+	if err := p.refreshTemplateRepo(ctx, repoURL, repoDir, branch); err != nil {
 		return "", "", err
 	}
 	templatePath := filepath.Join(repoDir, filepath.FromSlash(subpath))
@@ -67,28 +67,31 @@ func (p *Platform) resolveRemoteTemplate(ctx context.Context, ref, kind string) 
 // clone, leaving the worktree detached at ref. A branch ref tracks its remote
 // (`origin/<ref>`) and the empty ref tracks the remote default branch, so a
 // moving ref never serves a stale cache; a tag or SHA detaches at it verbatim.
-func refreshTemplateRepo(ctx context.Context, repoURL, repoDir, ref string) (retErr error) {
-	finish := logctx.Step(ctx, "refreshing template registry", slog.String("url", logctx.RedactURL(repoURL)))
+func (p *Platform) refreshTemplateRepo(ctx context.Context, repoURL, repoDir, ref string) (retErr error) {
+	redactedURL := logctx.RedactURL(repoURL)
+	finish := logctx.Step(ctx, "refreshing template registry", slog.String("url", redactedURL))
 	defer func() { finish(retErr) }()
-	client := git.New()
-	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil {
-		if err := client.Fetch(ctx, repoDir); err != nil {
+	return gitx.RunNetworkOperation(ctx, "template registry refresh "+redactedURL, repoDir, func(timeoutCtx context.Context) error {
+		client := p.gitClient()
+		if _, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil {
+			if err := client.Fetch(timeoutCtx, repoDir); err != nil {
+				return err
+			}
+			target := ref
+			if target == "" {
+				_, _ = client.Run(timeoutCtx, repoDir, "remote", "set-head", "origin", "--auto")
+				target = "origin/HEAD"
+			} else if _, err := client.Run(timeoutCtx, repoDir, "rev-parse", "--verify", "refs/remotes/origin/"+ref); err == nil {
+				target = "origin/" + ref
+			}
+			_, err := client.Run(timeoutCtx, repoDir, "checkout", "--detach", target)
 			return err
 		}
-		target := ref
-		if target == "" {
-			_, _ = client.Run(ctx, repoDir, "remote", "set-head", "origin", "--auto")
-			target = "origin/HEAD"
-		} else if _, err := client.Run(ctx, repoDir, "rev-parse", "--verify", "refs/remotes/origin/"+ref); err == nil {
-			target = "origin/" + ref
+		if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
+			return err
 		}
-		_, err := client.Run(ctx, repoDir, "checkout", "--detach", target)
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
-		return err
-	}
-	return client.CloneRef(ctx, repoURL, repoDir, ref)
+		return client.CloneRef(timeoutCtx, repoURL, repoDir, ref)
+	})
 }
 
 // resolveRegistryTemplate resolves a name-shaped template ref from the
@@ -132,7 +135,7 @@ func (p *Platform) resolveRegistryTemplate(ctx context.Context, ref, kind string
 		return "", "", err
 	}
 	repoDir := filepath.Join(cacheRoot, "repo")
-	if err := refreshTemplateRepo(ctx, repoURL, repoDir, pin); err != nil {
+	if err := p.refreshTemplateRepo(ctx, repoURL, repoDir, pin); err != nil {
 		return "", "", err
 	}
 	for _, candidate := range candidates {

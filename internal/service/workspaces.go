@@ -424,7 +424,7 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.State = "ready"
 		return status
 	}
-	client := git.New()
+	client := p.gitClient()
 	currentRef, err := client.CurrentRef(ctx, path)
 	if err != nil {
 		status.State = "error"
@@ -573,7 +573,7 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 		}
 		return err
 	}
-	currentRef, err := git.New().CurrentRef(ctx, path)
+	currentRef, err := p.gitClient().CurrentRef(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -595,7 +595,7 @@ func workspaceGitBranchMismatchReason(currentRef string, wsSource manifest.Works
 }
 
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
-	client := git.New()
+	client := p.gitClient()
 	unpushed := []string{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
@@ -1133,7 +1133,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
 	}
-	client := git.New()
+	client := p.gitClient()
 	states := []api.SourceState{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
@@ -1202,7 +1202,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
 	}
-	client := git.New()
+	client := p.gitClient()
 	states := []api.SourceState{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
@@ -1302,7 +1302,8 @@ type workspaceSourceCleanupEntry struct {
 }
 
 type workspaceSourceCleanup struct {
-	entries []workspaceSourceCleanupEntry
+	entries   []workspaceSourceCleanupEntry
+	gitClient git.Client
 }
 
 func (c *workspaceSourceCleanup) Close() error {
@@ -1337,9 +1338,8 @@ func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 			prune[entry.cachePath] = struct{}{}
 		}
 	}
-	client := git.New()
 	for cachePath := range prune {
-		if err := client.WorktreePrune(ctx, cachePath); err != nil && result == nil {
+		if err := c.gitClient.WorktreePrune(ctx, cachePath); err != nil && result == nil {
 			result = err
 		}
 	}
@@ -1351,7 +1351,7 @@ func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 
 func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int, sync bool) (map[string]manifest.WorkspaceSource, *workspaceSourceCleanup, error) {
 	result := map[string]manifest.WorkspaceSource{}
-	cleanup := &workspaceSourceCleanup{}
+	cleanup := &workspaceSourceCleanup{gitClient: p.gitClient()}
 	items := []workspaceSourceMaterialization{}
 	for _, slot := range sortedKeys(metadata.Sources) {
 		spec := metadata.Sources[slot]
@@ -1453,7 +1453,7 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 	// Remove deepest paths first so a source rooted at the workspace does not
 	// erase nested destinations before their worktree registrations are pruned.
 	sort.Slice(materialized, func(i, j int) bool { return len(materialized[i].dest) > len(materialized[j].dest) })
-	client := git.New()
+	client := p.gitClient()
 	prune := map[string]struct{}{}
 	for _, item := range materialized {
 		if item.cachePath != "" {
@@ -1589,7 +1589,7 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			if err := p.materializeSource(ctx, sourceName, source, true); err != nil {
 				return nil, err
 			}
-			client := git.New()
+			client := p.gitClient()
 			ref := ws.Ref
 			if ref == "" {
 				ref = source.DefaultRef
@@ -1686,7 +1686,7 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		}
 		defer func() { _ = os.RemoveAll(stageRoot) }()
 		stage := filepath.Join(stageRoot, "source")
-		if err := git.New().CloneRef(ctx, source.Repo, stage, ref); err != nil {
+		if err := p.gitClient().CloneRef(ctx, source.Repo, stage, ref); err != nil {
 			return nil, err
 		}
 		if err := destGuard.ReplaceFrom(ctx, stage); err != nil {

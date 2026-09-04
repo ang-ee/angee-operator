@@ -10,6 +10,45 @@ import (
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
+func TestGitOpEnvDisablesPromptsAndPreservesSSHCommand(t *testing.T) {
+	t.Run("default SSH batch mode", func(t *testing.T) {
+		old, existed := os.LookupEnv("GIT_SSH_COMMAND")
+		if err := os.Unsetenv("GIT_SSH_COMMAND"); err != nil {
+			t.Fatalf("Unsetenv(GIT_SSH_COMMAND): %v", err)
+		}
+		t.Cleanup(func() {
+			if existed {
+				_ = os.Setenv("GIT_SSH_COMMAND", old)
+			} else {
+				_ = os.Unsetenv("GIT_SSH_COMMAND")
+			}
+		})
+		env := envMap(gitOpEnv())
+		if env["GIT_TERMINAL_PROMPT"] != "0" || env["GIT_SSH_COMMAND"] != "ssh -o BatchMode=yes" {
+			t.Fatalf("gitOpEnv() prompt settings = %#v", env)
+		}
+	})
+
+	t.Run("preset SSH command", func(t *testing.T) {
+		t.Setenv("GIT_SSH_COMMAND", "ssh-wrapper --flag")
+		env := envMap(gitOpEnv())
+		if env["GIT_TERMINAL_PROMPT"] != "0" || env["GIT_SSH_COMMAND"] != "ssh-wrapper --flag" {
+			t.Fatalf("gitOpEnv() prompt settings = %#v", env)
+		}
+	})
+}
+
+func envMap(env []string) map[string]string {
+	result := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			result[key] = value
+		}
+	}
+	return result
+}
+
 // gitMergeFixture builds a stack with one git source (`app`) and one
 // workspace (`feature-a`) whose worktree is on a branch divergent from
 // `main`. Returns (root, workspaceName, workspaceSourcePath).

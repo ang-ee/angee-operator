@@ -174,7 +174,7 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 	if err != nil {
 		return nil, err
 	}
-	return parsePS(out), nil
+	return parsePS(out)
 }
 
 func (b Backend) run(ctx context.Context, root string, args ...string) ([]byte, error) {
@@ -251,7 +251,7 @@ func (b Backend) baseArgs(root, envFile string) []string {
 	return args
 }
 
-func parsePS(data []byte) []runtime.ServiceStatus {
+func parsePS(data []byte) ([]runtime.ServiceStatus, error) {
 	var statuses []runtime.ServiceStatus
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
@@ -266,6 +266,9 @@ func parsePS(data []byte) []runtime.ServiceStatus {
 			Health  string `json:"Health"`
 		}
 		if err := json.Unmarshal([]byte(line), &one); err != nil {
+			// Status reads combined output, so docker's stderr notices (orphan
+			// containers, deprecations) land here; skip anything that is not a
+			// JSON record rather than turning a banner into an unknown state.
 			continue
 		}
 		name := one.Service
@@ -277,7 +280,10 @@ func parsePS(data []byte) []runtime.ServiceStatus {
 		}
 		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State, Health: one.Health})
 	}
-	return statuses
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read docker compose status: %w", err)
+	}
+	return statuses, nil
 }
 
 var ErrNoServices = errors.New("no container services selected")

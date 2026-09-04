@@ -1,6 +1,6 @@
 # `-v` / `-vv` verbosity and hang diagnosis for `angee` and `angee-operator`
 
-**Status:** Draft · **Created:** 2026-09-04 · **Source:** three read-only sweeps of
+**Status:** In progress · PRs #77, #78, #79, #80 merged; PR C open; templates draft PR angee-django#52 · **Created:** 2026-09-04 · **Source:** three read-only sweeps of
 `internal/` at v0.11.0 (`6061303`). File:line references are valid at that commit.
 
 ## 1. Problem
@@ -312,71 +312,71 @@ CHANGELOG entry under `## Unreleased`, PR with session link, squash-merge.
       `StackPrepare` with fake runners.
 - [x] A5 Docs: global flags in `docs/guide/commands.md` and `README.md`;
       CHANGELOG. Verify default output unchanged across the CLI test suite.
-- [ ] A6 Review, PR, CI, merge.
+- [x] A6 Review, PR, CI, merge.
 
 ### PR D — readiness in the manifest
 
-- [ ] D1 `internal/manifest`: `Ready` on `Service` (`http {port,path}`, `tcp
+- [x] D1 `internal/manifest`: `Ready` on `Service` (`http {port,path}`, `tcp
       {port}`, `cmd []string`, `file string`, `interval`, `timeout`, `retries`,
       `start_period`), validation (exactly one kind, durations parse, port in
       range). Tests.
-- [ ] D2 `internal/runtime/compose/doc.go`: `Healthcheck` (`test`, `interval`,
+- [x] D2 `internal/runtime/compose/doc.go`: `Healthcheck` (`test`, `interval`,
       `timeout`, `retries`, `start_period`). `internal/runtime/proccompose/doc.go`:
       `ReadinessProbe` (`http_get`, `exec`, `initial_delay_seconds`,
       `period_seconds`, `timeout_seconds`, `failure_threshold`).
-- [ ] D3 `Compile`: emit probes per runtime (`file` and `cmd` as `CMD-SHELL`
+- [x] D3 `Compile`: emit probes per runtime (`file` and `cmd` as `CMD-SHELL`
       inside the container; `http`/`tcp` via `wget`/`nc` with a documented image
       caveat; native `http_get`/`exec` for process-compose); `composeDependsOn`
       and `processDependsOn` switch to `service_healthy`/`process_healthy` when
       the dependency declares `ready`. Golden tests for both runtimes.
-- [ ] D4 `docs/guide/manifest.md`, `npm run gen:schema`, CHANGELOG.
-- [ ] D5 Review, PR, CI, merge.
+- [x] D4 `docs/guide/manifest.md`, `npm run gen:schema`, CHANGELOG.
+- [x] D5 Review, PR, CI, merge.
 
 ### PR B — operator logging
 
-- [ ] B1 `internal/operator/operator.go`: `-v/--verbose` count flag and
+- [x] B1 `internal/operator/operator.go`: `-v/--verbose` count flag and
       `ANGEE_VERBOSE`; logger construction; request middleware assigning a
       request id and logging method, path, actor, status, duration at info
       (streaming and WebSocket routes log start and end); logger placed in the
       request context so Platform narration carries the id.
-- [ ] B2 Migrate the `operator:` prints (`operator.go:121,303,307`,
+- [x] B2 Migrate the `operator:` prints (`operator.go:121,303,307`,
       `rest_secrets.go:85,93`, `rest_files.go:52,59`, `gql/events.go:277,282`)
       to the logger; adjust tests that assert stderr text.
-- [ ] B3 `docs/reference/operator-api.md` logging section; CHANGELOG.
-- [ ] B4 Review, PR, CI, merge.
+- [x] B3 `docs/reference/operator-api.md` logging section; CHANGELOG.
+- [x] B4 Review, PR, CI, merge.
 
 ### PR C — hang hardening
 
-- [ ] C1 git: `GIT_TERMINAL_PROMPT=0` always in the operator and in the CLI when
+- [x] C1 git: `GIT_TERMINAL_PROMPT=0` always in the operator and in the CLI when
       stdin is not a terminal; `GIT_SSH_COMMAND=ssh -o BatchMode=yes` under the
       same rule; a network timeout (default 120 s, `ANGEE_GIT_TIMEOUT`) on
       clone/fetch/pull/push and the template registry refresh, failing with the
       remote host named. Plumb an interactive flag through `service.New`.
-- [ ] C2 fslock: write holder pid and command into `run/operator.lock`; the
+- [x] C2 fslock: write holder pid and command into `run/operator.lock`; the
       1 s wait log names the holder; `ANGEE_LOCK_TIMEOUT` optional.
-- [ ] C3 Surface errors: `proccompose.Status` returns its error and Platform
+- [x] C3 Surface errors: `proccompose.Status` returns its error and Platform
       reports `unknown` with a warn naming the cause; `bootstrapOpenBao` returns
       an error on the 30 s timeout; `runtimeServiceStates` warns.
-- [ ] C4 Timeouts: `IdleTimeout` on the operator server; a client timeout for
+- [x] C4 Timeouts: `IdleTimeout` on the operator server; a client timeout for
       non-streaming remote calls (separate client for streams).
-- [ ] C5 Tests for each; CHANGELOG; review, PR, CI, merge.
+- [x] C5 Tests for each; CHANGELOG; review, PR, CI, merge.
 
 ### Release
 
-- [ ] R1 Final PR renames `## Unreleased` to `## v0.12.0 — <date>`; merge; tag
+- [~] R1 Final PR renames `## Unreleased` to `## v0.12.0 — <date>`; merge; tag
       the squash commit; push; watch the release run; `make install` locally.
 
 ### Templates repo (after R1; follow its own AGENTS.md)
 
-- [ ] T1 `stacks/_shared/stack-body.yaml.jinja`: `ready:` on `django` (cmd probe
+- [x] T1 `stacks/_shared/stack-body.yaml.jinja`: `ready:` on `django` (cmd probe
       on migrations or the health endpoint), `frontend` (file
       `caches/js-deps.done`), `frontend-build` (file `dist/index.html`); delete
       the seven wait loops; keep `after:`; only remove the sentinel when the
       lockfile changed.
-- [ ] T2 Render both flavours in both runtime modes and diff against the
+- [~] T2 Render both flavours in both runtime modes and diff against the
       previous render; start the Docker-mode dev stack once and confirm no
       waiter output and that dependents start after frontend is healthy.
-- [ ] T3 PR in the templates repo with a compatibility note (requires angee
+- [x] T3 PR in the templates repo with a compatibility note (requires angee
       v0.12.0).
 
 ### Deferred

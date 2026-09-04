@@ -11,10 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	gogit "github.com/go-git/go-git/v5"
@@ -22,7 +24,31 @@ import (
 )
 
 type Client struct {
-	Bin string
+	Bin            string
+	NonInteractive bool
+}
+
+const (
+	gitTimeoutEnv     = "ANGEE_GIT_TIMEOUT"
+	defaultGitTimeout = 2 * time.Minute
+	gitWaitDelay      = 100 * time.Millisecond
+)
+
+// TimeoutError reports a git network operation stopped by ANGEE_GIT_TIMEOUT.
+type TimeoutError struct {
+	Operation string
+	Dir       string
+	Timeout   time.Duration
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("%s in %s timed out after %s", e.Operation, e.Dir, e.Timeout)
+}
+
+// IsTimeout reports whether err is a git network timeout.
+func IsTimeout(err error) bool {
+	var timeoutErr *TimeoutError
+	return errors.As(err, &timeoutErr)
 }
 
 func New() Client {
@@ -38,8 +64,12 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 		bin = "git"
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.WaitDelay = gitWaitDelay
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if c.NonInteractive {
+		cmd.Env = NonInteractiveEnv(os.Environ())
 	}
 	trace := logctx.TraceExec(ctx, bin, args, dir)
 	out, err := cmd.CombinedOutput()
@@ -58,6 +88,100 @@ func (c Client) runText(ctx context.Context, dir string, args ...string) (string
 	return strings.TrimSpace(string(out)), nil
 }
 
+// NonInteractiveEnv returns env configured so git and SSH cannot prompt. An
+// existing GIT_SSH_COMMAND is preserved verbatim.
+func NonInteractiveEnv(env []string) []string {
+	env = setEnv(env, "GIT_TERMINAL_PROMPT", "0")
+	if !envContains(env, "GIT_SSH_COMMAND") {
+		env = append(env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	}
+	return env
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(env)+1)
+	set := false
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			if !set {
+				result = append(result, prefix+value)
+				set = true
+			}
+			continue
+		}
+		result = append(result, entry)
+	}
+	if !set {
+		result = append(result, prefix+value)
+	}
+	return result
+}
+
+func envContains(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func networkTimeout() (time.Duration, error) {
+	raw, ok := os.LookupEnv(gitTimeoutEnv)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return defaultGitTimeout, nil
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout < 0 {
+		return 0, fmt.Errorf("invalid %s %q: expected a non-negative Go duration", gitTimeoutEnv, raw)
+	}
+	return timeout, nil
+}
+
+// RunNetworkOperation runs fn under the ANGEE_GIT_TIMEOUT deadline and turns
+// expiry of that deadline into a descriptive TimeoutError. A caller deadline
+// or cancellation remains the caller's error.
+func RunNetworkOperation(ctx context.Context, operation, dir string, fn func(context.Context) error) error {
+	timedCtx, cancel, timeout, err := networkContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	err = fn(timedCtx)
+	return networkResult(ctx, timedCtx, operation, dir, timeout, err)
+}
+
+func (c Client) runNetwork(ctx context.Context, commandDir, reportDir, operation string, args ...string) ([]byte, error) {
+	var out []byte
+	err := RunNetworkOperation(ctx, operation, reportDir, func(timedCtx context.Context) error {
+		var err error
+		out, err = c.Run(timedCtx, commandDir, args...)
+		return err
+	})
+	return out, err
+}
+
+func networkContext(ctx context.Context) (context.Context, context.CancelFunc, time.Duration, error) {
+	timeout, err := networkTimeout()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if timeout == 0 {
+		return ctx, func() {}, 0, nil
+	}
+	timedCtx, cancel := context.WithTimeout(ctx, timeout)
+	return timedCtx, cancel, timeout, nil
+}
+
+func networkResult(parent, timedCtx context.Context, operation, dir string, timeout time.Duration, err error) error {
+	if timeout > 0 && timedCtx.Err() == context.DeadlineExceeded && parent.Err() == nil {
+		return &TimeoutError{Operation: operation, Dir: dir, Timeout: timeout}
+	}
+	return err
+}
+
 // open returns the go-git repository at dir. Discovers the repo via parent
 // walk so worktrees and bare-checked-out directories work.
 func openRepo(dir string) (*gogit.Repository, error) {
@@ -73,7 +197,9 @@ func openRepo(dir string) (*gogit.Repository, error) {
 func (c Client) Clone(ctx context.Context, repo, dest string, args ...string) error {
 	cmdArgs := append([]string{"clone"}, args...)
 	cmdArgs = append(cmdArgs, repo, dest)
-	_, err := c.Run(ctx, "", cmdArgs...)
+	operationArgs := append([]string{"git", "clone"}, args...)
+	operationArgs = append(operationArgs, logctx.RedactURL(repo))
+	_, err := c.runNetwork(ctx, "", dest, strings.Join(operationArgs, " "), cmdArgs...)
 	return err
 }
 
@@ -86,7 +212,7 @@ func (c Client) CloneRef(ctx context.Context, repo, dest, ref string) error {
 }
 
 func (c Client) Fetch(ctx context.Context, dir string) error {
-	_, err := c.Run(ctx, dir, "fetch", "--all", "--prune")
+	_, err := c.runNetwork(ctx, dir, dir, "git fetch --all --prune", "fetch", "--all", "--prune")
 	return err
 }
 
@@ -186,33 +312,44 @@ func canonicalWorktreePath(path string) (string, error) {
 }
 
 func (c Client) Pull(ctx context.Context, dir string) error {
-	_, err := c.Run(ctx, dir, "pull", "--ff-only")
+	_, err := c.runNetwork(ctx, dir, dir, "git pull --ff-only", "pull", "--ff-only")
 	return err
 }
 
 func (c Client) Push(ctx context.Context, dir string, ref string) error {
+	timedCtx, cancel, timeout, err := networkContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	args := []string{"push"}
 	if ref != "" {
-		remote, err := c.PushRemote(ctx, dir)
+		remote, err := c.pushRemote(timedCtx, dir)
 		if err != nil {
-			return err
+			return networkResult(ctx, timedCtx, "git push", dir, timeout, err)
 		}
 		args = append(args, remote, ref)
 	}
-	_, err := c.Run(ctx, dir, args...)
-	return err
+	_, err = c.Run(timedCtx, dir, args...)
+	return networkResult(ctx, timedCtx, "git "+strings.Join(args, " "), dir, timeout, err)
 }
 
 func (c Client) PushSetUpstream(ctx context.Context, dir string, ref string) error {
 	if ref == "" {
 		return c.Push(ctx, dir, ref)
 	}
-	remote, err := c.PushRemote(ctx, dir)
+	timedCtx, cancel, timeout, err := networkContext(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = c.Run(ctx, dir, "push", "-u", remote, ref)
-	return err
+	defer cancel()
+	remote, err := c.pushRemote(timedCtx, dir)
+	if err != nil {
+		return networkResult(ctx, timedCtx, "git push -u", dir, timeout, err)
+	}
+	args := []string{"push", "-u", remote, ref}
+	_, err = c.Run(timedCtx, dir, args...)
+	return networkResult(ctx, timedCtx, "git "+strings.Join(args, " "), dir, timeout, err)
 }
 
 // --- Read-only queries: go-git ---
@@ -376,6 +513,16 @@ func (c Client) Remotes(ctx context.Context, dir string) ([]string, error) {
 }
 
 func (c Client) PushRemote(ctx context.Context, dir string) (string, error) {
+	timedCtx, cancel, timeout, err := networkContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	remote, err := c.pushRemote(timedCtx, dir)
+	return remote, networkResult(ctx, timedCtx, "git resolve push remote", dir, timeout, err)
+}
+
+func (c Client) pushRemote(ctx context.Context, dir string) (string, error) {
 	branch, hasBranch, err := c.CurrentBranch(ctx, dir)
 	if err != nil {
 		return "", err

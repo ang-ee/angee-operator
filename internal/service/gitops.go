@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
-	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
@@ -162,7 +161,7 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	if _, err := os.Stat(path); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	if err := git.New().Fetch(ctx, path); err != nil {
+	if err := p.gitClient().Fetch(ctx, path); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
@@ -179,7 +178,7 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	client := git.New()
+	client := p.gitClient()
 	dirty, err := client.Dirty(ctx, path)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
@@ -204,7 +203,7 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	client := git.New()
+	client := p.gitClient()
 	dirty, err := client.Dirty(ctx, path)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err

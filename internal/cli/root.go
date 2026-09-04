@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/fslock"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/operator"
 	"github.com/ang-ee/angee-operator/internal/platformclient"
@@ -63,7 +64,8 @@ func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 			}
 		}
 		logger := slog.New(logctx.NewCLIHandler(cmd.ErrOrStderr(), logctx.LevelFromCount(count)))
-		runCmd.SetContext(logctx.With(runCmd.Context(), logger))
+		ctx := logctx.With(runCmd.Context(), logger)
+		runCmd.SetContext(fslock.WithCommand(ctx, runCmd.CommandPath()))
 		return nil
 	}
 	cmd.PersistentFlags().StringVar(&root, "root", ".", "ANGEE_ROOT containing angee.yaml")
@@ -216,7 +218,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				platform, err := service.New(controlRoot)
+				platform, err := newLocalPlatform(controlRoot)
 				if err != nil {
 					return err
 				}
@@ -889,7 +891,16 @@ func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (s
 		}
 		selected = resolved
 	}
-	return service.New(selected)
+	return newLocalPlatform(selected)
+}
+
+func newLocalPlatform(root string) (*service.Platform, error) {
+	return service.New(root, service.WithInteractive(stdinIsTerminal()))
+}
+
+func stdinIsTerminal() bool {
+	stat, err := os.Stdin.Stat()
+	return err == nil && stat.Mode()&os.ModeCharDevice != 0
 }
 
 // initPlatform selects the platform for stack-init commands. When an operator
@@ -912,7 +923,7 @@ func initPlatform(ctx context.Context, root, operatorURL *string, stderr io.Writ
 			return nil, err
 		}
 		_, _ = fmt.Fprintf(stderr, "angee: operator at %s is not reachable (%v); running init locally\n", *operatorURL, err)
-		return service.New(*root)
+		return newLocalPlatform(*root)
 	}
 	return client, nil
 }
@@ -1343,7 +1354,7 @@ func workspaceTarget(args []string, root, operatorURL *string, command string) (
 		return nil, "", err
 	}
 	if ok {
-		platform, err := service.New(currentRoot)
+		platform, err := newLocalPlatform(currentRoot)
 		return platform, name, err
 	}
 	return nil, "", fmt.Errorf("workspace %s requires a workspace name unless run from inside ANGEE_ROOT/workspaces/<name>", command)

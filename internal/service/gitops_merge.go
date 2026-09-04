@@ -9,8 +9,10 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
@@ -82,7 +84,15 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 			return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
 		}
 	}
-	return runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
+	// The push is a network operation like any other: bound it with
+	// ANGEE_GIT_TIMEOUT so a stalled remote fails instead of hanging.
+	var result api.GitOpResult
+	err = git.RunNetworkOperation(ctx, "git push --set-upstream "+remote+" "+branch, path, func(ctx context.Context) error {
+		var runErr error
+		result, runErr = runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
+		return runErr
+	})
+	return result, err
 }
 
 func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string, args ...string) (api.GitOpResult, error) {
@@ -93,9 +103,15 @@ func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string
 	return runGitOpAt(ctx, path, args...)
 }
 
+// gitOpWaitDelay bounds how long a cancelled git operation may linger in Wait.
+const gitOpWaitDelay = 100 * time.Millisecond
+
 func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpResult, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
+	// Bound the wait after cancellation so an ssh child holding the pipes
+	// cannot keep a cancelled operation blocked in Wait.
+	cmd.WaitDelay = gitOpWaitDelay
 	env := gitOpEnv()
 	cmd.Env = env
 	stdout := &bytes.Buffer{}
@@ -147,6 +163,7 @@ func runGitCapture(ctx context.Context, workdir string, args ...string) (string,
 	full := append([]string{"-c", "core.quotepath=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = workdir
+	cmd.WaitDelay = gitOpWaitDelay
 	env := gitOpEnv()
 	cmd.Env = env
 	trace := logctx.TraceExec(ctx, "git", full, workdir, slog.Any("env", logctx.EnvKeys(env)))
@@ -187,18 +204,19 @@ func parseConflictedPaths(lsFilesOutput string) []string {
 // `~/.ssh/config` and friends). Wiping these would break
 // `workspaceSourcePublish` against any non-`file://` remote.
 func gitOpEnv() []string {
-	inherit := []string{"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "LANG", "LC_ALL"}
+	inherit := []string{"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_SSH_COMMAND", "LANG", "LC_ALL"}
 	env := make([]string, 0, len(inherit)+5)
 	for _, key := range inherit {
 		if v, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+v)
 		}
 	}
-	return append(env,
+	env = append(env,
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_AUTHOR_NAME=angee",
 		"GIT_AUTHOR_EMAIL=angee@example.invalid",
 		"GIT_COMMITTER_NAME=angee",
 		"GIT_COMMITTER_EMAIL=angee@example.invalid",
 	)
+	return git.NonInteractiveEnv(env)
 }
