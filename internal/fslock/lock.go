@@ -151,12 +151,15 @@ func writeHolder(file *os.File, h holder) error {
 	if _, err := file.Seek(0, 0); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(file, "pid=%d cmd=%s since=%s\n", h.pid, h.cmd, h.since); err != nil {
-		return err
-	}
-	return file.Sync()
+	// No fsync: the record is only read back by same-host waiters from the
+	// page cache, so durability would add latency to every lock for nothing.
+	_, err := fmt.Fprintf(file, "pid=%d cmd=%s since=%s\n", h.pid, h.cmd, h.since)
+	return err
 }
 
+// readHolder returns the holder record another process wrote after locking.
+// On Windows the exclusive LockFileEx range makes this read fail, so the
+// diagnostics stay empty there and only the wait itself is reported.
 func readHolder(file *os.File) holder {
 	if file == nil {
 		return holder{}

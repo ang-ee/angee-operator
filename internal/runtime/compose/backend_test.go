@@ -155,12 +155,12 @@ func TestParsePS(t *testing.T) {
 	}
 }
 
-func TestParsePSReturnsMalformedJSONError(t *testing.T) {
-	got, err := parsePS([]byte("not json\n"))
-	if err == nil || !strings.Contains(err.Error(), "parse docker compose status") {
-		t.Fatalf("parsePS() error = %v, want parse error", err)
+func TestParsePSSkipsNonJSONLines(t *testing.T) {
+	got, err := parsePS([]byte("WARN[0000] Found orphan containers\n{\"Service\":\"web\",\"State\":\"running\"}\nnot json\n"))
+	if err != nil {
+		t.Fatalf("parsePS() error = %v, want banners skipped", err)
 	}
-	if got != nil {
-		t.Fatalf("parsePS() = %v, want nil", got)
+	if len(got) != 1 || got[0].Name != "web" || got[0].State != "running" {
+		t.Fatalf("parsePS() = %#v, want the single web record", got)
 	}
 }

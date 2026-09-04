@@ -102,6 +102,7 @@ func operatorTimeout() time.Duration {
 	}
 	timeout, err := time.ParseDuration(raw)
 	if err != nil || timeout < 0 {
+		logctx.From(context.Background()).Warn(fmt.Sprintf("invalid %s %q: expected a non-negative Go duration; using %s", operatorTimeoutEnv, raw, defaultOperatorTimeout))
 		return defaultOperatorTimeout
 	}
 	return timeout

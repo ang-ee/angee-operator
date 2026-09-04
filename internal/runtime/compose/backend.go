@@ -266,7 +266,10 @@ func parsePS(data []byte) ([]runtime.ServiceStatus, error) {
 			Health  string `json:"Health"`
 		}
 		if err := json.Unmarshal([]byte(line), &one); err != nil {
-			return nil, fmt.Errorf("parse docker compose status: %w", err)
+			// Status reads combined output, so docker's stderr notices (orphan
+			// containers, deprecations) land here; skip anything that is not a
+			// JSON record rather than turning a banner into an unknown state.
+			continue
 		}
 		name := one.Service
 		if name == "" {

@@ -363,14 +363,20 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			finish := logctx.Step(ctx, "refreshing source "+name, slog.String("remote", logctx.RedactURL(source.Repo)))
 			if err := client.Fetch(ctx, path); err != nil {
-				if !bestEffortRefresh || ctx.Err() != nil || git.IsTimeout(err) {
+				if !bestEffortRefresh || ctx.Err() != nil {
 					finish(err)
 					return err
 				}
 				// The git error can carry the remote URL (a token, for an
 				// HTTPS-with-credentials remote), so keep it out of the log and
 				// point at `source pull`, which surfaces the full error on demand.
-				logctx.From(ctx).Warn(fmt.Sprintf("could not refresh source %q; using the existing cache (update it with `angee source pull %s`)", name, name))
+				// A bounded timeout is still best-effort: the stall is over and the
+				// cache is usable, so say why and carry on.
+				cause := ""
+				if git.IsTimeout(err) {
+					cause = " (timed out; raise ANGEE_GIT_TIMEOUT for slow remotes)"
+				}
+				logctx.From(ctx).Warn(fmt.Sprintf("could not refresh source %q%s; using the existing cache (update it with `angee source pull %s`)", name, cause, name))
 				finish(nil)
 				return nil
 			}

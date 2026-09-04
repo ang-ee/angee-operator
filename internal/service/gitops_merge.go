@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
@@ -83,7 +84,15 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 			return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
 		}
 	}
-	return runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
+	// The push is a network operation like any other: bound it with
+	// ANGEE_GIT_TIMEOUT so a stalled remote fails instead of hanging.
+	var result api.GitOpResult
+	err = git.RunNetworkOperation(ctx, "git push --set-upstream "+remote+" "+branch, path, func(ctx context.Context) error {
+		var runErr error
+		result, runErr = runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
+		return runErr
+	})
+	return result, err
 }
 
 func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string, args ...string) (api.GitOpResult, error) {
@@ -94,9 +103,15 @@ func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string
 	return runGitOpAt(ctx, path, args...)
 }
 
+// gitOpWaitDelay bounds how long a cancelled git operation may linger in Wait.
+const gitOpWaitDelay = 100 * time.Millisecond
+
 func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpResult, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
+	// Bound the wait after cancellation so an ssh child holding the pipes
+	// cannot keep a cancelled operation blocked in Wait.
+	cmd.WaitDelay = gitOpWaitDelay
 	env := gitOpEnv()
 	cmd.Env = env
 	stdout := &bytes.Buffer{}
@@ -148,6 +163,7 @@ func runGitCapture(ctx context.Context, workdir string, args ...string) (string,
 	full := append([]string{"-c", "core.quotepath=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = workdir
+	cmd.WaitDelay = gitOpWaitDelay
 	env := gitOpEnv()
 	cmd.Env = env
 	trace := logctx.TraceExec(ctx, "git", full, workdir, slog.Any("env", logctx.EnvKeys(env)))
