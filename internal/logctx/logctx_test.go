@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -131,6 +132,29 @@ func TestCLIHandlerRendering(t *testing.T) {
 			t.Fatalf("output = %q, want %q", got, want)
 		}
 	})
+}
+
+func TestServerHandlerRenderingAndLevel(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewServerHandler(&output, slog.LevelInfo))
+	logger.Debug("hidden")
+	logger.Info("request", "method", http.MethodGet, "status", http.StatusNoContent)
+
+	got := output.String()
+	for _, want := range []string{
+		"time=",
+		"level=INFO",
+		"msg=request",
+		"method=GET",
+		"status=204",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("server output = %q, want %q", got, want)
+		}
+	}
+	if strings.Contains(got, "hidden") {
+		t.Fatalf("server output included a filtered debug record: %q", got)
+	}
 }
 
 func TestRedactURL(t *testing.T) {
