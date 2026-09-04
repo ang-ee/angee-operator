@@ -194,12 +194,24 @@ func TestBackendStatusParsesProcessListWithANSIBanner(t *testing.T) {
 	}
 }
 
-func TestBackendStatusSwallowsErrors(t *testing.T) {
-	runner := &stubListRunner{err: errors.New("supervisor offline")}
+func TestBackendStatusPropagatesErrors(t *testing.T) {
+	wantErr := errors.New("supervisor offline")
+	runner := &stubListRunner{err: wantErr}
 	backend := Backend{Runner: runner}
 	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: "/stack", ControlPort: 10005})
-	if err != nil {
-		t.Fatalf("Status() error = %v, want nil", err)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Status() error = %v, want %v", err, wantErr)
+	}
+	if got != nil {
+		t.Fatalf("statuses = %v, want nil", got)
+	}
+}
+
+func TestBackendStatusReturnsParseError(t *testing.T) {
+	backend := Backend{Runner: &stubListRunner{output: []byte("not json")}}
+	got, err := backend.Status(t.Context(), runtime.StatusRequest{Root: "/stack", ControlPort: 10005})
+	if err == nil || !strings.Contains(err.Error(), "parse process-compose status") {
+		t.Fatalf("Status() error = %v, want parse error", err)
 	}
 	if got != nil {
 		t.Fatalf("statuses = %v, want nil", got)

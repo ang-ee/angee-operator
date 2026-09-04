@@ -313,7 +313,7 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState
 	if err := p.materializeSource(ctx, name, source, false); err != nil {
 		return api.SourceState{}, err
 	}
-	if err := git.New().Pull(ctx, p.sourcePath(name, source)); err != nil {
+	if err := p.gitClient().Pull(ctx, p.sourcePath(name, source)); err != nil {
 		return api.SourceState{}, err
 	}
 	return p.sourceState(ctx, name, source)
@@ -332,14 +332,14 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (api.Source
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
 	}
 	path := p.sourcePath(name, source)
-	dirty, err := git.New().Dirty(ctx, path)
+	dirty, err := p.gitClient().Dirty(ctx, path)
 	if err != nil {
 		return api.SourceState{}, err
 	}
 	if dirty {
 		return api.SourceState{}, fmt.Errorf("source %q has uncommitted changes", name)
 	}
-	if err := git.New().Push(ctx, path, ref); err != nil {
+	if err := p.gitClient().Push(ctx, path, ref); err != nil {
 		return api.SourceState{}, err
 	}
 	return p.sourceState(ctx, name, source)
@@ -359,11 +359,11 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 	path := p.sourcePath(name, source)
 	switch source.Kind {
 	case "git":
-		client := git.New()
+		client := p.gitClient()
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 			finish := logctx.Step(ctx, "refreshing source "+name, slog.String("remote", logctx.RedactURL(source.Repo)))
 			if err := client.Fetch(ctx, path); err != nil {
-				if !bestEffortRefresh || ctx.Err() != nil {
+				if !bestEffortRefresh || ctx.Err() != nil || git.IsTimeout(err) {
 					finish(err)
 					return err
 				}
@@ -419,7 +419,7 @@ func (p *Platform) sourceState(ctx context.Context, name string, source manifest
 		state.State = "ready"
 		return state, nil
 	}
-	client := git.New()
+	client := p.gitClient()
 	ref, err := client.CurrentRef(ctx, path)
 	if err != nil {
 		return state, err

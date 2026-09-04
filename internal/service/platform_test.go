@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 type stubStatusBackend struct {
 	statuses []runtime.ServiceStatus
+	err      error
 }
 
 func (b stubStatusBackend) Build(context.Context, runtime.Target) error { return nil }
@@ -43,7 +45,7 @@ func (b stubStatusBackend) StreamLogs(context.Context, runtime.LogsRequest) (<-c
 	return ch, nil
 }
 func (b stubStatusBackend) Status(context.Context, runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
-	return b.statuses, nil
+	return b.statuses, b.err
 }
 
 func TestStackPrepareWritesSecretSafeGeneratedFiles(t *testing.T) {
@@ -269,6 +271,9 @@ func TestStackStatusMergesRuntimeStateAndHealth(t *testing.T) {
 	}
 	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
 		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docker-compose.yaml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(docker-compose.yaml): %v", err)
 	}
 	stub := stubStatusBackend{statuses: []runtime.ServiceStatus{
 		{Name: "web", Runtime: "container", State: "running", Health: "healthy"},
@@ -592,4 +597,101 @@ func compileReadinessStack(runtimeType manifest.Runtime, probe *manifest.ReadyPr
 	}
 	stack.Defaults()
 	return stack
+}
+
+func TestRuntimeServiceStatesTreatsConnectionRefusedAsStopped(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "demo",
+		Services: map[string]manifest.Service{
+			"web": {Runtime: manifest.RuntimeLocal, Command: []string{"true"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "process-compose.yaml"), []byte("version: 0.5\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(process-compose.yaml): %v", err)
+	}
+	platform, err := NewWithBackends(root, stubStatusBackend{}, stubStatusBackend{err: errors.New("dial tcp 127.0.0.1:10002: connect: connection refused")})
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelWarn)))
+	resp, err := platform.StackStatus(ctx)
+	if err != nil {
+		t.Fatalf("StackStatus: %v", err)
+	}
+	if got := resp.Services["web"].Status; got != "declared" {
+		t.Fatalf("web status = %q, want declared", got)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("logs = %q, want silent stopped supervisor", logs.String())
+	}
+}
+
+func TestRuntimeServiceStatesWarnsAndMarksFailuresUnknown(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "demo",
+		Services: map[string]manifest.Service{
+			"api": {Runtime: manifest.RuntimeContainer, Image: "nginx"},
+			"web": {Runtime: manifest.RuntimeLocal, Command: []string{"true"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	for _, name := range []string{"docker-compose.yaml", "process-compose.yaml"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("generated\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+	platform, err := NewWithBackends(
+		root,
+		stubStatusBackend{err: errors.New("docker daemon unreachable")},
+		stubStatusBackend{err: errors.New("invalid status JSON")},
+	)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelWarn)))
+	resp, err := platform.StackStatus(ctx)
+	if err != nil {
+		t.Fatalf("StackStatus: %v", err)
+	}
+	if got := resp.Services["api"].Status; got != "unknown" {
+		t.Fatalf("api status = %q, want unknown", got)
+	}
+	if got := resp.Services["web"].Status; got != "unknown" {
+		t.Fatalf("web status = %q, want unknown", got)
+	}
+	want := "warning: could not query docker compose status: docker daemon unreachable\n" +
+		"warning: could not query process-compose status: invalid status JSON\n"
+	if logs.String() != want {
+		t.Fatalf("logs = %q, want %q", logs.String(), want)
+	}
+}
+
+func TestPlatformInteractiveOptionConfiguresGit(t *testing.T) {
+	nonInteractive, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New(default): %v", err)
+	}
+	if !nonInteractive.gitClient().NonInteractive {
+		t.Fatal("default platform git client is interactive")
+	}
+	interactive, err := New(t.TempDir(), WithInteractive(true))
+	if err != nil {
+		t.Fatalf("New(interactive): %v", err)
+	}
+	if interactive.gitClient().NonInteractive {
+		t.Fatal("interactive platform git client is non-interactive")
+	}
 }

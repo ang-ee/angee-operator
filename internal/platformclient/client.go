@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -41,9 +42,15 @@ func listQueryValues(q query.Args) url.Values {
 
 // RemoteClient implements service.API against a remote operator over HTTP.
 type RemoteClient struct {
-	baseURL string
-	client  *http.Client
+	baseURL      string
+	client       *http.Client
+	streamClient *http.Client
 }
+
+const (
+	operatorTimeoutEnv     = "ANGEE_OPERATOR_TIMEOUT"
+	defaultOperatorTimeout = 30 * time.Minute
+)
 
 // RemoteClient is the over-the-wire implementation of the platform contract.
 var _ service.API = (*RemoteClient)(nil)
@@ -80,7 +87,51 @@ type RemoteInvalidInput struct {
 
 // New constructs a RemoteClient for the operator at baseURL.
 func New(baseURL string) *RemoteClient {
-	return &RemoteClient{baseURL: strings.TrimRight(baseURL, "/"), client: http.DefaultClient}
+	timeout := operatorTimeout()
+	return &RemoteClient{
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		client:       &http.Client{Timeout: timeout},
+		streamClient: &http.Client{},
+	}
+}
+
+func operatorTimeout() time.Duration {
+	raw, ok := os.LookupEnv(operatorTimeoutEnv)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return defaultOperatorTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout < 0 {
+		return defaultOperatorTimeout
+	}
+	return timeout
+}
+
+func (p *RemoteClient) requestClient() *http.Client {
+	if p.client != nil {
+		return p.client
+	}
+	return http.DefaultClient
+}
+
+func (p *RemoteClient) streamingHTTPClient() *http.Client {
+	if p.streamClient != nil {
+		return p.streamClient
+	}
+	if p.client == nil {
+		return http.DefaultClient
+	}
+	client := *p.client
+	client.Timeout = 0
+	return &client
+}
+
+func (p *RemoteClient) requestError(ctx context.Context, method, path string, err error) error {
+	timeout := p.requestClient().Timeout
+	if timeout > 0 && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("operator request %s %s timed out after %s (%s)", method, path, timeout, operatorTimeoutEnv)
+	}
+	return err
 }
 
 // Ping reports whether the operator is reachable by issuing a short
@@ -99,7 +150,7 @@ func (p *RemoteClient) Ping(ctx context.Context) error {
 		return err
 	}
 	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
-	resp, err := p.client.Do(req)
+	resp, err := p.streamingHTTPClient().Do(req)
 	if err != nil {
 		trace(0, err)
 		return err
@@ -644,14 +695,16 @@ func (p *RemoteClient) doJSON(ctx context.Context, method, path string, query ur
 		req.Header.Set("Content-Type", "application/json")
 	}
 	trace := logctx.TraceHTTP(ctx, method, endpoint)
-	resp, err := p.client.Do(req)
+	resp, err := p.requestClient().Do(req)
 	if err != nil {
+		err = p.requestError(ctx, method, path, err)
 		trace(0, err)
 		return err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		err = p.requestError(ctx, method, path, err)
 		trace(resp.StatusCode, err)
 		return err
 	}
@@ -683,14 +736,16 @@ func (p *RemoteClient) doBytes(ctx context.Context, method, path string, query u
 		req.Header.Set("Content-Type", "application/json")
 	}
 	trace := logctx.TraceHTTP(ctx, method, endpoint)
-	resp, err := p.client.Do(req)
+	resp, err := p.requestClient().Do(req)
 	if err != nil {
+		err = p.requestError(ctx, method, path, err)
 		trace(0, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		err = p.requestError(ctx, method, path, err)
 		trace(resp.StatusCode, err)
 		return nil, err
 	}
@@ -710,7 +765,7 @@ func (p *RemoteClient) stream(ctx context.Context, path string, query url.Values
 		return nil, err
 	}
 	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
-	resp, err := p.client.Do(req)
+	resp, err := p.streamingHTTPClient().Do(req)
 	if err != nil {
 		trace(0, err)
 		return nil, err
@@ -758,7 +813,7 @@ func (p *RemoteClient) streamTo(ctx context.Context, path string, query url.Valu
 		return err
 	}
 	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
-	resp, err := p.client.Do(req)
+	resp, err := p.streamingHTTPClient().Do(req)
 	if err != nil {
 		trace(0, err)
 		return err

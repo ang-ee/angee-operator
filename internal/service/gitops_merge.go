@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
@@ -187,18 +188,19 @@ func parseConflictedPaths(lsFilesOutput string) []string {
 // `~/.ssh/config` and friends). Wiping these would break
 // `workspaceSourcePublish` against any non-`file://` remote.
 func gitOpEnv() []string {
-	inherit := []string{"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "LANG", "LC_ALL"}
+	inherit := []string{"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_SSH_COMMAND", "LANG", "LC_ALL"}
 	env := make([]string, 0, len(inherit)+5)
 	for _, key := range inherit {
 		if v, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+v)
 		}
 	}
-	return append(env,
+	env = append(env,
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_AUTHOR_NAME=angee",
 		"GIT_AUTHOR_EMAIL=angee@example.invalid",
 		"GIT_COMMITTER_NAME=angee",
 		"GIT_COMMITTER_EMAIL=angee@example.invalid",
 	)
+	return git.NonInteractiveEnv(env)
 }

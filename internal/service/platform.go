@@ -16,6 +16,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/fslock"
+	gitx "github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
@@ -34,6 +35,7 @@ type Platform struct {
 	procBackend     runtime.Backend
 	portUnavailable func(int) bool
 	jobOutput       *jobOutputSink
+	interactive     bool
 }
 
 // Option configures a Platform.
@@ -45,6 +47,14 @@ type Option func(*Platform)
 func WithJobOutput(writer io.Writer) Option {
 	return func(platform *Platform) {
 		platform.jobOutput = newJobOutputSink(writer)
+	}
+}
+
+// WithInteractive controls whether git may use interactive credential and SSH
+// prompts. Platforms are non-interactive by default.
+func WithInteractive(interactive bool) Option {
+	return func(platform *Platform) {
+		platform.interactive = interactive
 	}
 }
 
@@ -89,6 +99,12 @@ func NewWithBackends(root string, composeBackend, procBackend runtime.Backend) (
 
 func (p *Platform) Root() string {
 	return p.root
+}
+
+func (p *Platform) gitClient() gitx.Client {
+	client := gitx.New()
+	client.NonInteractive = !p.interactive
+	return client
 }
 
 func (p *Platform) LoadStack() (*manifest.Stack, error) {
@@ -499,27 +515,52 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 	return resp, nil
 }
 
-// runtimeServiceStates returns the observed runtime state of each
-// service keyed by manifest name, merged across the container and
-// local backends. Errors are intentionally swallowed: the common
-// failure modes (compose file not yet rendered, docker daemon
-// unreachable, process-compose supervisor offline) all legitimately
-// translate to "not observed running", and StackStatus falls back to
-// the "declared" sentinel for services missing from this map.
+// runtimeServiceStates returns the observed runtime state of each service keyed
+// by manifest name, merged across the container and local backends. A missing
+// process-compose supervisor is the normal stopped-stack state and remains
+// silent; other query failures are warned and represented as unknown.
 func (p *Platform) runtimeServiceStates(ctx context.Context, stack *manifest.Stack) map[string]runtime.ServiceStatus {
 	states := map[string]runtime.ServiceStatus{}
-	if statuses, err := p.composeBackend.Status(ctx, runtime.StatusRequest{Root: p.root}); err == nil {
-		for _, s := range statuses {
-			states[s.Name] = s
+	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) {
+		if statuses, err := p.composeBackend.Status(ctx, runtime.StatusRequest{Root: p.root}); err == nil {
+			for _, s := range statuses {
+				states[s.Name] = s
+			}
+		} else {
+			logctx.From(ctx).Warn("could not query docker compose status: " + err.Error())
+			markRuntimeUnknown(states, stack, manifest.RuntimeContainer)
 		}
 	}
-	procReq := runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}
-	if statuses, err := p.procBackend.Status(ctx, procReq); err == nil {
-		for _, s := range statuses {
-			states[s.Name] = s
+	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) {
+		procReq := runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}
+		if statuses, err := p.procBackend.Status(ctx, procReq); err == nil {
+			for _, s := range statuses {
+				states[s.Name] = s
+			}
+		} else if !processComposeNotRunning(err) {
+			logctx.From(ctx).Warn("could not query process-compose status: " + err.Error())
+			markRuntimeUnknown(states, stack, manifest.RuntimeLocal)
 		}
 	}
 	return states
+}
+
+func statusArtifactExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil || !errors.Is(err, os.ErrNotExist)
+}
+
+func processComposeNotRunning(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "connection refused") || strings.Contains(message, "no listener")
+}
+
+func markRuntimeUnknown(states map[string]runtime.ServiceStatus, stack *manifest.Stack, target manifest.Runtime) {
+	for name, service := range stack.Services {
+		if service.Runtime == target {
+			states[name] = runtime.ServiceStatus{Name: name, Runtime: string(target), State: "unknown"}
+		}
+	}
 }
 
 func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]string) (*CompiledStack, error) {

@@ -134,10 +134,13 @@ func TestBackendUpForegroundAttached(t *testing.T) {
 }
 
 func TestParsePS(t *testing.T) {
-	got := parsePS([]byte(`{"Service":"web","State":"running","Health":"healthy"}
+	got, err := parsePS([]byte(`{"Service":"web","State":"running","Health":"healthy"}
 {"Service":"db","State":"running","Health":"unhealthy"}
 {"Service":"worker","State":"exited"}
 `))
+	if err != nil {
+		t.Fatalf("parsePS() error = %v", err)
+	}
 	if len(got) != 3 {
 		t.Fatalf("parsePS() len = %d, want 3: %#v", len(got), got)
 	}
@@ -149,5 +152,15 @@ func TestParsePS(t *testing.T) {
 	}
 	if got[2].Name != "worker" || got[2].State != "exited" || got[2].Health != "" {
 		t.Fatalf("worker entry = %#v", got[2])
+	}
+}
+
+func TestParsePSReturnsMalformedJSONError(t *testing.T) {
+	got, err := parsePS([]byte("not json\n"))
+	if err == nil || !strings.Contains(err.Error(), "parse docker compose status") {
+		t.Fatalf("parsePS() error = %v, want parse error", err)
+	}
+	if got != nil {
+		t.Fatalf("parsePS() = %v, want nil", got)
 	}
 }

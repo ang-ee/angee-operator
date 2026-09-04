@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,53 @@ type notifyReadCloser struct {
 	io.Reader
 	closed chan struct{}
 	once   sync.Once
+}
+
+type pipeListener struct {
+	connections chan net.Conn
+	closed      chan struct{}
+	once        sync.Once
+}
+
+type pipeAddr struct{}
+
+func (pipeAddr) Network() string { return "pipe" }
+func (pipeAddr) String() string  { return "pipe" }
+
+func newPipeListener() *pipeListener {
+	return &pipeListener{connections: make(chan net.Conn), closed: make(chan struct{})}
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case connection := <-l.connections:
+		return connection, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *pipeListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr { return pipeAddr{} }
+
+func (l *pipeListener) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	client, server := net.Pipe()
+	select {
+	case l.connections <- server:
+		return client, nil
+	case <-ctx.Done():
+		_ = client.Close()
+		_ = server.Close()
+		return nil, ctx.Err()
+	case <-l.closed:
+		_ = client.Close()
+		_ = server.Close()
+		return nil, net.ErrClosed
+	}
 }
 
 func (r *notifyReadCloser) Close() error {
@@ -75,6 +123,37 @@ func TestDoJSONTracesRedactedURL(t *testing.T) {
 	}
 	if strings.Contains(got, "user") || strings.Contains(got, "password") {
 		t.Fatalf("trace output leaked URL userinfo: %q", got)
+	}
+}
+
+func TestNonStreamingRequestTimeout(t *testing.T) {
+	t.Setenv("ANGEE_OPERATOR_TIMEOUT", "20ms")
+	listener := newPipeListener()
+	server := &httptest.Server{
+		Listener: listener,
+		Config: &http.Server{Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		})},
+	}
+	server.Start()
+	defer server.Close()
+
+	client := New(server.URL)
+	client.client.Transport = &http.Transport{DialContext: listener.DialContext}
+	if client.client.Timeout != 20*time.Millisecond {
+		t.Fatalf("request client timeout = %s, want 20ms", client.client.Timeout)
+	}
+	if client.streamClient.Timeout != 0 {
+		t.Fatalf("stream client timeout = %s, want disabled", client.streamClient.Timeout)
+	}
+	started := time.Now()
+	err := client.doJSON(t.Context(), http.MethodGet, "/stall", nil, nil, nil)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("doJSON() took %s, want bounded failure", elapsed)
+	}
+	want := "operator request GET /stall timed out after 20ms (ANGEE_OPERATOR_TIMEOUT)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("doJSON() error = %v, want %q", err, want)
 	}
 }
 

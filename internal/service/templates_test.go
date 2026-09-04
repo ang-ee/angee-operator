@@ -4,8 +4,42 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestRefreshTemplateRepoTimeoutCoversRemoteHeadDiscovery(t *testing.T) {
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nif [ \"$1\" = remote ]; then sleep 5 & wait; fi\nexit 0\n"
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake git) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANGEE_GIT_TIMEOUT", "20ms")
+
+	repoDir := filepath.Join(t.TempDir(), "registry")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+	platform, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	started := time.Now()
+	err = platform.refreshTemplateRepo(t.Context(), "https://user:secret@example.com/templates.git", repoDir, "")
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("refreshTemplateRepo() took %s, want bounded failure", elapsed)
+	}
+	want := "template registry refresh https://***@example.com/templates.git in " + repoDir + " timed out after 20ms"
+	if err == nil || err.Error() != want {
+		t.Fatalf("refreshTemplateRepo() error = %v, want %q", err, want)
+	}
+	if strings.Contains(err.Error(), "user") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("refreshTemplateRepo() error leaked credentials: %v", err)
+	}
+}
 
 func TestParseGitHubTemplateRefWithSubpath(t *testing.T) {
 	repo, branch, subpath, err := parseGitHubTemplateRef("https://github.com/fyltr/django-angee/examples/angee-notes/.templates/stack/staging")

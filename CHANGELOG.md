@@ -43,6 +43,27 @@ latest tag.
 
 - **`-v` now means verbose.** It no longer aliases the version flag; use
   `--version` or `angee version` to print the CLI version.
+- **Git network work is bounded and non-interactive when no terminal is
+  available.** Operator and piped/CI git commands disable terminal credential
+  prompts and use SSH batch mode unless `GIT_SSH_COMMAND` is already set.
+  Clone, fetch, pull, and push operations now time out after two minutes by
+  default (`ANGEE_GIT_TIMEOUT`; `0` disables the deadline).
+- **Long waits now expose ownership and deadlines.** `run/operator.lock`
+  records its holder and can be bounded with `ANGEE_LOCK_TIMEOUT` (unbounded by
+  default). Non-streaming remote-operator requests time out after 30 minutes by
+  default (`ANGEE_OPERATOR_TIMEOUT`; `0` disables), while streams remain
+  unbounded. Operator keep-alive connections have a 120-second idle timeout.
+
+### Fixed
+
+- **Runtime status failures no longer masquerade as stopped services.** An
+  absent process-compose supervisor remains the silent `declared` state, but
+  parse, HTTP, timeout, and Docker daemon failures now warn with their cause
+  and report affected services as `unknown`.
+- **OpenBao bootstrap now fails at the readiness deadline.** If OpenBao does
+  not accept requests within 30 seconds, bootstrap returns the readiness error
+  (including the last probe failure when available) instead of continuing and
+  failing later with an unrelated secret error.
 
 ## v0.11.0 — 2026-09-04
 

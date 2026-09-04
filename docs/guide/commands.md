@@ -36,6 +36,15 @@ secret values and credential-bearing URLs are masked before anything is
 written, and control characters are escaped, but review the output before
 sharing it, since a tool may print other data you consider sensitive.
 
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `ANGEE_VERBOSE` | `0` | Default diagnostic verbosity: `0` is warnings only, `1` names phases, and `2` traces commands and requests. |
+| `ANGEE_GIT_TIMEOUT` | `2m` | Deadline for network git clone, fetch, pull, and push operations. Accepts a Go duration; `0` disables the deadline. |
+| `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
+| `ANGEE_OPERATOR_TIMEOUT` | `30m` | Deadline for non-streaming requests to a remote operator. Accepts a Go duration; `0` disables the deadline. Streaming requests are not given this timeout. |
+
 Without `--root`, the CLI walks upward from the current directory, preferring
 `angee.yaml`, then `.angee/angee.yaml`. In dev checkouts that expose workspace
 templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses

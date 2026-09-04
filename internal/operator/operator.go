@@ -248,6 +248,7 @@ func NewServer(config Config) (*Server, error) {
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),
 		Handler:           s.requestLogging(mux),
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	return s, nil
 }

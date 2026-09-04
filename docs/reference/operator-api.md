@@ -12,6 +12,11 @@ Non-loopback binds require `--token`. Protected endpoints use:
 Authorization: Bearer <token>
 ```
 
+Keep-alive connections are closed after 120 seconds of idle time; streaming
+responses remain unbounded while active. Git commands started by the operator
+are non-interactive, so missing credentials or SSH host trust fail instead of
+opening a prompt.
+
 Surface parity between `service.Platform`, CLI, REST, and GraphQL is tracked in
 [Surface parity](/operator/surfaces).
 

@@ -9,9 +9,110 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
+
+func TestClientRunNonInteractiveEnvironment(t *testing.T) {
+	readEnv := func(t *testing.T, client Client) string {
+		t.Helper()
+		out, err := client.Run(t.Context(), "", "-c", `printf '%s|%s' "${GIT_TERMINAL_PROMPT-unset}" "${GIT_SSH_COMMAND-unset}"`)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		return string(out)
+	}
+
+	t.Run("interactive preserves environment", func(t *testing.T) {
+		t.Setenv("GIT_TERMINAL_PROMPT", "ask")
+		t.Setenv("GIT_SSH_COMMAND", "custom-ssh")
+		if got := readEnv(t, Client{Bin: "sh"}); got != "ask|custom-ssh" {
+			t.Fatalf("environment = %q, want inherited values", got)
+		}
+	})
+
+	t.Run("non-interactive adds defaults", func(t *testing.T) {
+		unsetEnv(t, "GIT_TERMINAL_PROMPT")
+		unsetEnv(t, "GIT_SSH_COMMAND")
+		if got := readEnv(t, Client{Bin: "sh", NonInteractive: true}); got != "0|ssh -o BatchMode=yes" {
+			t.Fatalf("environment = %q, want non-interactive defaults", got)
+		}
+	})
+
+	t.Run("non-interactive preserves ssh command", func(t *testing.T) {
+		t.Setenv("GIT_TERMINAL_PROMPT", "ask")
+		t.Setenv("GIT_SSH_COMMAND", "ssh-wrapper --flag")
+		if got := readEnv(t, Client{Bin: "sh", NonInteractive: true}); got != "0|ssh-wrapper --flag" {
+			t.Fatalf("environment = %q, want prompt disabled and SSH command preserved", got)
+		}
+	})
+}
+
+func TestNetworkOperationTimeout(t *testing.T) {
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nsleep 5 &\nwait\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake git) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANGEE_GIT_TIMEOUT", "20ms")
+
+	dir := t.TempDir()
+	started := time.Now()
+	err := New().Fetch(t.Context(), dir)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Fetch() took %s, want bounded failure", elapsed)
+	}
+	want := "git fetch --all --prune in " + dir + " timed out after 20ms"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Fetch() error = %v, want %q", err, want)
+	}
+	if !IsTimeout(err) {
+		t.Fatalf("IsTimeout(%v) = false", err)
+	}
+
+	err = New().Push(t.Context(), dir, "main")
+	want = "git push in " + dir + " timed out after 20ms"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Push() error = %v, want %q", err, want)
+	}
+}
+
+func TestCloneTimeoutRedactsRemoteURL(t *testing.T) {
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nsleep 5 &\nwait\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake git) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANGEE_GIT_TIMEOUT", "20ms")
+
+	dest := filepath.Join(t.TempDir(), "repo")
+	err := New().Clone(t.Context(), "https://user:secret@example.com/repo.git", dest)
+	want := "git clone https://***@example.com/repo.git in " + dest + " timed out after 20ms"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Clone() error = %v, want %q", err, want)
+	}
+	if strings.Contains(err.Error(), "user") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("Clone() error leaked credentials: %v", err)
+	}
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, existed := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("Unsetenv(%s) error = %v", key, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(key, old)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+}
 
 func TestClientRunTracesCommandWithRedactedArgs(t *testing.T) {
 	var logs bytes.Buffer
