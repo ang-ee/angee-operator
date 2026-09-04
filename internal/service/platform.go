@@ -612,7 +612,7 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			if workdir != "" && !filepath.IsAbs(workdir) {
 				workdir = filepath.Join(root, workdir)
 			}
-			readinessProbe, err := processReadinessProbe(service.Ready)
+			readinessProbe, err := processReadinessProbe(service.Ready, workdir)
 			if err != nil {
 				return nil, fmt.Errorf("service %s ready: %w", name, err)
 			}
@@ -764,7 +764,10 @@ func composeHealthcheck(probe *manifest.ReadyProbe) *compose.Healthcheck {
 	return healthcheck
 }
 
-func processReadinessProbe(probe *manifest.ReadyProbe) (*proccompose.Probe, error) {
+// processReadinessProbe renders a manifest readiness probe for process-compose.
+// workdir is the resolved service working directory; exec probes run there so
+// relative file and cmd probes resolve like the service command does.
+func processReadinessProbe(probe *manifest.ReadyProbe, workdir string) (*proccompose.Probe, error) {
 	if probe == nil {
 		return nil, nil
 	}
@@ -801,6 +804,9 @@ func processReadinessProbe(probe *manifest.ReadyProbe) (*proccompose.Probe, erro
 		readinessProbe.Exec = &proccompose.ExecProbe{Command: escapeRuntimeInterpolation(shellCommand(normalized.Cmd))}
 	case normalized.File != "":
 		readinessProbe.Exec = &proccompose.ExecProbe{Command: "test -s " + escapeRuntimeInterpolation(shellQuote(normalized.File))}
+	}
+	if readinessProbe.Exec != nil && workdir != "" {
+		readinessProbe.Exec.WorkingDir = workdir
 	}
 	return readinessProbe, nil
 }

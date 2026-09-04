@@ -274,6 +274,8 @@ func (p ReadyProbe) Normalized() ReadyProbe {
 		httpProbe := *normalized.HTTP
 		if httpProbe.Path == "" {
 			httpProbe.Path = "/"
+		} else if !strings.HasPrefix(httpProbe.Path, "/") {
+			httpProbe.Path = "/" + httpProbe.Path
 		}
 		normalized.HTTP = &httpProbe
 	}
@@ -514,9 +516,6 @@ func hasCaddyMeta(s string) bool { return strings.ContainsAny(s, " \t\r\n{}#\"`"
 
 func (s *Stack) ValidateExtended() error {
 	for name, service := range s.Services {
-		if err := validateReadyProbe(name, service.Ready); err != nil {
-			return err
-		}
 		if service.Route != nil && service.Runtime == RuntimeLocal {
 			return fmt.Errorf("service %q: route requires runtime: container", name)
 		}

@@ -33,6 +33,10 @@ type HTTPGet struct {
 
 type ExecProbe struct {
 	Command string `yaml:"command" json:"command"`
+	// WorkingDir is the probe's own cwd: process-compose runs exec probes in
+	// its daemon directory, not the process's working_dir, so relative
+	// file and cmd probes must carry the service workdir explicitly.
+	WorkingDir string `yaml:"working_dir,omitempty" json:"working_dir,omitempty"`
 }
 
 type ProcessDependency struct {

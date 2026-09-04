@@ -431,3 +431,13 @@ func TestWorkspaceDefaultsRoundTrip(t *testing.T) {
 		t.Fatalf("bare manifest must not emit workspace_defaults:\n%s", data)
 	}
 }
+
+func TestReadyProbeNormalizedHTTPPathGetsLeadingSlash(t *testing.T) {
+	probe := ReadyProbe{HTTP: &ReadyHTTP{Port: 8080, Path: "healthz"}}
+	if got := probe.Normalized().HTTP.Path; got != "/healthz" {
+		t.Fatalf("normalized path = %q, want /healthz", got)
+	}
+	if probe.HTTP.Path != "healthz" {
+		t.Fatal("Normalized must not mutate the probe")
+	}
+}

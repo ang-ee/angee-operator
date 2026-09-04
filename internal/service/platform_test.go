@@ -419,6 +419,28 @@ func TestCompileLocalReadinessProbes(t *testing.T) {
 	}
 }
 
+func TestCompileLocalReadinessProbeRunsInServiceWorkdir(t *testing.T) {
+	stack := compileReadinessStack(manifest.RuntimeLocal, &manifest.ReadyProbe{File: "dist/index.html"})
+	ready := stack.Services["ready"]
+	ready.Workdir = "app"
+	stack.Services["ready"] = ready
+	root := t.TempDir()
+	compiled, err := Compile(stack, root, nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	probe := compiled.ProcessCompose.Processes["ready"].ReadinessProbe
+	if probe == nil || probe.Exec == nil {
+		t.Fatalf("ReadinessProbe = %#v, want an exec probe", probe)
+	}
+	if want := filepath.Join(root, "app"); probe.Exec.WorkingDir != want {
+		t.Fatalf("exec probe working_dir = %q, want the service workdir %q", probe.Exec.WorkingDir, want)
+	}
+	if got := compiled.ProcessCompose.Processes["ready"].WorkingDir; got != probe.Exec.WorkingDir {
+		t.Fatalf("probe working_dir %q differs from process working_dir %q", probe.Exec.WorkingDir, got)
+	}
+}
+
 func TestReadinessDependencyConditions(t *testing.T) {
 	stack := &manifest.Stack{
 		Services: map[string]manifest.Service{

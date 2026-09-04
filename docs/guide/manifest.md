@@ -267,7 +267,9 @@ services:
 accepts a connection, `cmd` when the command exits with status 0, and `file`
 when the path exists and is non-empty. Commands run inside the container or in
 the local process's workdir. Relative file paths also resolve against that
-workdir. Timing values use Go duration syntax, such as `500ms`, `5s`, or `1m`.
+workdir. Timing values use Go duration syntax, such as `500ms`, `5s`, or `1m`;
+local services round them up to whole seconds because process-compose probes
+count in seconds.
 
 Container `http` probes require `wget` or `curl` in the image, and container
 `tcp` probes require `nc`. Container `file` and `cmd` probes are always safe
