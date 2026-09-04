@@ -5,12 +5,32 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
+
+func TestExecRunnerTracesCommandAndEnvironmentKeys(t *testing.T) {
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))
+	_, err := (ExecRunner{}).Run(ctx, "", []string{"API_TOKEN=env-secret"}, "sh", "-c", "exit 0", "--token", "secret")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "exec sh -c exit 0 --token ***") ||
+		!strings.Contains(got, "env=[API_TOKEN]") ||
+		!strings.Contains(got, "exec finished duration=") {
+		t.Fatalf("trace output = %q", got)
+	}
+	if strings.Contains(got, "secret") {
+		t.Fatalf("trace output leaked secret data: %q", got)
+	}
+}
 
 type recordingRunner struct {
 	name string

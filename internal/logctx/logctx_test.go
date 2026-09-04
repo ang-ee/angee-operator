@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -157,6 +159,9 @@ func TestRedactArgs(t *testing.T) {
 		"--token", "secret-token",
 		"--password=hunter2",
 		"--jwt-secret", "signed",
+		"-e", "API_TOKEN=env-secret",
+		"--env=OTHER_SECRET=other-secret",
+		"-e", "--token", "secret-after-non-env-e",
 		"ssh://git:credential@example.com/repo",
 		"--other=value",
 	}
@@ -165,6 +170,9 @@ func TestRedactArgs(t *testing.T) {
 		"--token", "***",
 		"--password=***",
 		"--jwt-secret", "***",
+		"-e", "API_TOKEN=***",
+		"--env=OTHER_SECRET=***",
+		"-e", "--token", "***",
 		"ssh://***@example.com/repo",
 		"--other=value",
 	}
@@ -174,6 +182,81 @@ func TestRedactArgs(t *testing.T) {
 	}
 	if args[2] != "secret-token" || args[3] != "--password=hunter2" {
 		t.Fatalf("RedactArgs mutated input: %#v", args)
+	}
+}
+
+func TestTraceExecLogsRedactedCommandAndCompletion(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	ctx := With(t.Context(), logger)
+	complete := TraceExec(ctx, "deploy", []string{
+		"--token", "secret-token",
+		"--env", "API_TOKEN=env-secret",
+		"https://alexis:password@example.com/repo",
+	}, "/tmp/work", slog.String("component", "test"))
+	exitErr := exec.Command("sh", "-c", "exit 7").Run()
+	complete([]byte(strings.Repeat("x", 4100)), exitErr)
+	before := output.String()
+	complete([]byte("ignored"), errors.New("ignored"))
+
+	got := output.String()
+	for _, want := range []string{
+		"exec deploy --token *** --env API_TOKEN=*** https://***@example.com/repo dir=/tmp/work component=test",
+		"exec finished duration=",
+		"exit_code=7",
+		"(4 bytes truncated)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trace output = %q, want %q", got, want)
+		}
+	}
+	for _, secret := range []string{"secret-token", "env-secret", "alexis", "password"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("trace output leaked %q: %q", secret, got)
+		}
+	}
+	if got != before {
+		t.Fatalf("second completion changed output: before %q, after %q", before, got)
+	}
+}
+
+func TestTraceHTTPLogsRedactedURLAndCompletion(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	ctx := With(t.Context(), logger)
+	complete := TraceHTTP(ctx, "get", "https://alexis:secret@example.com/v1/status")
+	complete(0, &url.Error{
+		Op:  "Get",
+		URL: "https://transport-user:transport-password@example.com/v1/status",
+		Err: errors.New("request failed"),
+	})
+	before := output.String()
+	complete(500, errors.New("ignored"))
+
+	got := output.String()
+	if !strings.Contains(got, "http GET https://***@example.com/v1/status") ||
+		!strings.Contains(got, "http finished status=0 duration=") ||
+		!strings.Contains(got, "https://***@example.com/v1/status") {
+		t.Fatalf("trace output = %q", got)
+	}
+	for _, secret := range []string{"alexis", "secret", "transport-user", "transport-password"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("trace output leaked URL userinfo %q: %q", secret, got)
+		}
+	}
+	if got != before {
+		t.Fatalf("second completion changed output: before %q, after %q", before, got)
+	}
+}
+
+func TestTraceHelpersDoNothingWhenDebugDisabled(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+	ctx := With(t.Context(), logger)
+	TraceExec(ctx, "tool", []string{"--token", "secret"}, "")(nil, nil)
+	TraceHTTP(ctx, "GET", "https://user:secret@example.com")(200, nil)
+	if output.Len() != 0 {
+		t.Fatalf("output = %q, want none", output.String())
 	}
 }
 

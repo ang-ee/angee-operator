@@ -1,10 +1,15 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
 func collect(t *testing.T, ch <-chan string, want int) []string {
@@ -64,6 +69,28 @@ func TestStreamCommandStreamsLinesThenCloses(t *testing.T) {
 	got := collect(t, ch, 3)
 	if len(got) != 3 || got[0] != "a\n" || got[2] != "c\n" {
 		t.Fatalf("got %q, want a/b/c", got)
+	}
+}
+
+func TestStreamCommandTracesCommandWithRedactedArgs(t *testing.T) {
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))
+	cmd := exec.CommandContext(ctx, "sh", "-c", "printf 'ok\\n'", "--token", "secret", "https://user:password@example.com/repo")
+	ch, err := StreamCommand(ctx, cmd)
+	if err != nil {
+		t.Fatalf("StreamCommand() error = %v", err)
+	}
+	if got := collect(t, ch, 1); len(got) != 1 || got[0] != "ok\n" {
+		t.Fatalf("streamed output = %q, want ok", got)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "exec sh -c") ||
+		!strings.Contains(got, "--token *** https://***@example.com/repo") ||
+		!strings.Contains(got, "exec finished duration=") {
+		t.Fatalf("trace output = %q", got)
+	}
+	if strings.Contains(got, "secret") || strings.Contains(got, "password") || strings.Contains(got, "user") {
+		t.Fatalf("trace output leaked secret data: %q", got)
 	}
 }
 

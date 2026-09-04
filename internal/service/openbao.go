@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
@@ -69,7 +70,8 @@ func openBaoReady(ctx context.Context, address string, token string) bool {
 	if address == "" {
 		return false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(address, "/")+"/v1/sys/health", nil)
+	endpoint := strings.TrimRight(address, "/") + "/v1/sys/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return false
 	}
@@ -77,10 +79,13 @@ func openBaoReady(ctx context.Context, address string, token string) bool {
 		req.Header.Set("X-Vault-Token", token)
 	}
 	client := &http.Client{Timeout: time.Second}
+	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
 	resp, err := client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return false
 	}
 	defer resp.Body.Close()
+	trace(resp.StatusCode, nil)
 	return resp.StatusCode >= 200 && resp.StatusCode < 500
 }

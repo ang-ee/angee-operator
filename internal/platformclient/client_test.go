@@ -1,16 +1,119 @@
 package platformclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+type notifyReadCloser struct {
+	io.Reader
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (r *notifyReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestDoJSONTracesRedactedURL(t *testing.T) {
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))
+	client := &RemoteClient{
+		baseURL: "https://user:password@example.invalid",
+		client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		})},
+	}
+	if err := client.doJSON(ctx, http.MethodGet, "/trace", nil, nil, nil); err != nil {
+		t.Fatalf("doJSON() error = %v", err)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "http GET https://***@example.invalid/trace") ||
+		!strings.Contains(got, "http finished status=204 duration=") {
+		t.Fatalf("trace output = %q", got)
+	}
+	if strings.Contains(got, "user") || strings.Contains(got, "password") {
+		t.Fatalf("trace output leaked URL userinfo: %q", got)
+	}
+}
+
+func TestStreamTraceCompletesWhenConsumerCancels(t *testing.T) {
+	var logs synchronizedBuffer
+	baseCtx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))
+	ctx, cancel := context.WithCancel(baseCtx)
+	bodyClosed := make(chan struct{})
+	client := &RemoteClient{
+		baseURL: "https://example.invalid",
+		client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: &notifyReadCloser{
+					Reader: strings.NewReader("unconsumed line\n"),
+					closed: bodyClosed,
+				},
+			}, nil
+		})},
+	}
+	ch, err := client.stream(ctx, "/stream", nil)
+	if err != nil {
+		t.Fatalf("stream() error = %v", err)
+	}
+	cancel()
+	select {
+	case <-bodyClosed:
+	case <-time.After(time.Second):
+		t.Fatal("stream body was not closed after consumer cancellation")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatal("stream returned an unexpected line after cancellation")
+	}
+	got := logs.String()
+	if !strings.Contains(got, "http finished status=200 duration=") || !strings.Contains(got, "context canceled") {
+		t.Fatalf("trace output = %q, want canceled completion", got)
+	}
+}
 
 func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {
 	body, err := json.Marshal(api.ErrorResponse{

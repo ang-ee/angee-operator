@@ -5,11 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
 	"github.com/ang-ee/angee-operator/internal/query"
@@ -108,7 +110,9 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 		cmd := exec.CommandContext(ctx, "docker", args...)
 		cmd.Dir = p.root
 		p.jobOutput.status(name, "running")
+		trace := logctx.TraceExec(ctx, "docker", args, p.root)
 		out, err := runCommand(cmd, p.jobOutput)
+		trace(out, err)
 		if err != nil {
 			p.jobOutput.status(name, "failed")
 			return out, fmt.Errorf("job container command failed: %w: %s", err, out)
@@ -126,10 +130,15 @@ func runLocalCommand(ctx context.Context, workdir string, command []string, env 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Dir = workdir
 	cmd.Env = os.Environ()
+	addedEnv := make([]string, 0, len(env))
 	for key, value := range env {
-		cmd.Env = append(cmd.Env, key+"="+value)
+		entry := key + "=" + value
+		cmd.Env = append(cmd.Env, entry)
+		addedEnv = append(addedEnv, entry)
 	}
+	trace := logctx.TraceExec(ctx, command[0], command[1:], workdir, slog.Any("env", logctx.EnvKeys(addedEnv)))
 	out, err := runCommand(cmd, sink)
+	trace(out, err)
 	if err != nil {
 		return out, fmt.Errorf("job command failed: %w: %s", err, out)
 	}

@@ -3,9 +3,12 @@ package runtime
 import (
 	"bufio"
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
 // maxLogLine bounds a single scanned log line so a pathologically long line
@@ -28,14 +31,22 @@ const maxLogLine = 1024 * 1024
 // unblocks at once even if a grandchild inherited the fd and outlived the
 // parent. That makes teardown prompt and leak-free regardless of the child's
 // process tree.
-func StreamCommand(ctx context.Context, cmd *exec.Cmd) (<-chan string, error) {
+func StreamCommand(ctx context.Context, cmd *exec.Cmd, attrs ...slog.Attr) (<-chan string, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	cmd.Stdout = pw
 	cmd.Stderr = pw
+	name := cmd.Path
+	args := cmd.Args
+	if len(cmd.Args) > 0 {
+		name = cmd.Args[0]
+		args = cmd.Args[1:]
+	}
+	trace := logctx.TraceExec(ctx, name, args, cmd.Dir, attrs...)
 	if err := cmd.Start(); err != nil {
+		trace(nil, err)
 		_ = pw.Close()
 		_ = pr.Close()
 		return nil, err
@@ -66,11 +77,11 @@ func StreamCommand(ctx context.Context, cmd *exec.Cmd) (<-chan string, error) {
 			select {
 			case ch <- scanner.Text() + "\n":
 			case <-ctx.Done():
-				_ = cmd.Wait()
+				trace(nil, cmd.Wait())
 				return
 			}
 		}
-		_ = cmd.Wait()
+		trace(nil, cmd.Wait())
 	}()
 	return ch, nil
 }

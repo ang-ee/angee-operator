@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +24,10 @@ import (
 type loggerKey struct{}
 
 var discardLogger = slog.New(slog.DiscardHandler)
+
+func discardExecTrace([]byte, error) {}
+
+func discardHTTPTrace(int, error) {}
 
 var (
 	stepFirstInfoDelay = 3 * time.Second
@@ -267,6 +273,21 @@ func RedactArgs(args []string) []string {
 	redacted := append([]string(nil), args...)
 	for i := 0; i < len(redacted); i++ {
 		redacted[i] = RedactURL(redacted[i])
+		if redacted[i] == "-e" || redacted[i] == "--env" {
+			if i+1 < len(redacted) && strings.Contains(redacted[i+1], "=") {
+				redacted[i+1] = redactEnvEntry(redacted[i+1])
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(redacted[i], "--env=") {
+			redacted[i] = "--env=" + redactEnvEntry(strings.TrimPrefix(redacted[i], "--env="))
+			continue
+		}
+		if strings.HasPrefix(redacted[i], "-e=") {
+			redacted[i] = "-e=" + redactEnvEntry(strings.TrimPrefix(redacted[i], "-e="))
+			continue
+		}
 		for _, flag := range []string{"--token", "--password", "--jwt-secret"} {
 			if redacted[i] == flag {
 				if i+1 < len(redacted) {
@@ -282,6 +303,14 @@ func RedactArgs(args []string) []string {
 		}
 	}
 	return redacted
+}
+
+func redactEnvEntry(entry string) string {
+	key, _, ok := strings.Cut(entry, "=")
+	if !ok {
+		return entry
+	}
+	return key + "=***"
 }
 
 // EnvKeys returns the keys from KEY=value environment entries, preserving
@@ -305,6 +334,78 @@ func Truncate(output []byte, maxBytes int) string {
 		return string(output)
 	}
 	return fmt.Sprintf("%s … (%d bytes truncated)", output[:maxBytes], len(output)-maxBytes)
+}
+
+// TraceExec logs the start and completion of an external process at Debug.
+// The returned completion function is safe to call more than once.
+func TraceExec(ctx context.Context, name string, args []string, dir string, attrs ...slog.Attr) func(output []byte, err error) {
+	logger := From(ctx)
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return discardExecTrace
+	}
+
+	started := time.Now()
+	startAttrs := make([]slog.Attr, 0, len(attrs)+1)
+	if dir != "" {
+		startAttrs = append(startAttrs, slog.String("dir", dir))
+	}
+	startAttrs = append(startAttrs, attrs...)
+	msg := strings.TrimSpace("exec " + name + " " + strings.Join(RedactArgs(args), " "))
+	logger.LogAttrs(ctx, slog.LevelDebug, msg, startAttrs...)
+
+	var once sync.Once
+	return func(output []byte, err error) {
+		once.Do(func() {
+			completionAttrs := []slog.Attr{slog.Duration("duration", time.Since(started))}
+			if err != nil {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
+					completionAttrs = append(completionAttrs, slog.Int("exit_code", exitErr.ExitCode()))
+				} else {
+					completionAttrs = append(completionAttrs, slog.Any("err", err))
+				}
+			}
+			if len(output) > 0 {
+				completionAttrs = append(completionAttrs, slog.String("output", Truncate(output, 4096)))
+			}
+			logger.LogAttrs(ctx, slog.LevelDebug, "exec finished", completionAttrs...)
+		})
+	}
+}
+
+// TraceHTTP logs the start and completion of an HTTP request at Debug. The
+// returned completion function is safe to call more than once.
+func TraceHTTP(ctx context.Context, method, rawURL string) func(status int, err error) {
+	logger := From(ctx)
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return discardHTTPTrace
+	}
+
+	started := time.Now()
+	logger.LogAttrs(ctx, slog.LevelDebug, "http "+strings.ToUpper(method)+" "+RedactURL(rawURL))
+	var once sync.Once
+	return func(status int, err error) {
+		once.Do(func() {
+			attrs := []slog.Attr{
+				slog.Int("status", status),
+				slog.Duration("duration", time.Since(started)),
+			}
+			if err != nil {
+				attrs = append(attrs, slog.Any("err", redactHTTPError(err)))
+			}
+			logger.LogAttrs(ctx, slog.LevelDebug, "http finished", attrs...)
+		})
+	}
+}
+
+func redactHTTPError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr == nil {
+		return err
+	}
+	redacted := *urlErr
+	redacted.URL = RedactURL(redacted.URL)
+	return &redacted
 }
 
 // Step logs the start, heartbeat, and completion of a potentially slow unit

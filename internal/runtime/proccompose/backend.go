@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
@@ -29,7 +31,9 @@ func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
+	trace := logctx.TraceExec(ctx, name, args, dir, slog.Any("env", logctx.EnvKeys(env)))
 	out, err := cmd.CombinedOutput()
+	trace(out, err)
 	if err != nil {
 		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -166,7 +170,7 @@ func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-cha
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = req.Root
 	cmd.Env = append(os.Environ(), env...)
-	ch, err := runtime.StreamCommand(ctx, cmd)
+	ch, err := runtime.StreamCommand(ctx, cmd, slog.Any("env", logctx.EnvKeys(env)))
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
@@ -288,8 +292,11 @@ func (b Backend) runLimited(ctx context.Context, root string, envFile string, ma
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = buf
 	cmd.Stderr = buf
-	if err := cmd.Run(); err != nil {
-		return buf.Bytes(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(buf.Bytes())))
+	trace := logctx.TraceExec(ctx, name, args, root, slog.Any("env", logctx.EnvKeys(env)))
+	runErr := cmd.Run()
+	trace(buf.Bytes(), runErr)
+	if runErr != nil {
+		return buf.Bytes(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), runErr, strings.TrimSpace(string(buf.Bytes())))
 	}
 	return buf.Bytes(), nil
 }
@@ -315,11 +322,14 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 		return cmd.Process.Signal(os.Interrupt)
 	}
 	cmd.WaitDelay = runtime.GracefulWaitDelay
-	if err := cmd.Run(); err != nil {
+	trace := logctx.TraceExec(ctx, name, args, root, slog.Any("env", logctx.EnvKeys(env)))
+	runErr := cmd.Run()
+	trace(nil, runErr)
+	if runErr != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), runErr)
 	}
 	return nil
 }
@@ -379,7 +389,10 @@ func (b Backend) goBinPath(ctx context.Context) (string, error) {
 	if b.GoBinPath != nil {
 		return b.GoBinPath(ctx)
 	}
-	out, err := exec.CommandContext(ctx, "go", "env", "GOPATH").Output()
+	args := []string{"env", "GOPATH"}
+	trace := logctx.TraceExec(ctx, "go", args, "")
+	out, err := exec.CommandContext(ctx, "go", args...).Output()
+	trace(out, err)
 	if err != nil {
 		return "", err
 	}
@@ -395,10 +408,14 @@ func (b Backend) installProcessCompose() func(context.Context, io.Writer, io.Wri
 		return b.InstallProcessCompose
 	}
 	return func(ctx context.Context, stdout io.Writer, stderr io.Writer) error {
-		cmd := exec.CommandContext(ctx, "go", "install", processComposeInstallPackage)
+		args := []string{"install", processComposeInstallPackage}
+		cmd := exec.CommandContext(ctx, "go", args...)
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
-		return cmd.Run()
+		trace := logctx.TraceExec(ctx, "go", args, "")
+		err := cmd.Run()
+		trace(nil, err)
+		return err
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
 
@@ -60,8 +61,11 @@ func runDiffAt(ctx context.Context, workdir, ref string) ([]api.DiffFile, error)
 	stderr := &bytes.Buffer{}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git %s in %s: %w (%s)", strings.Join(args, " "), workdir, err, strings.TrimSpace(stderr.String()))
+	trace := logctx.TraceExec(ctx, "git", args, workdir)
+	runErr := cmd.Run()
+	trace(combineCapturedOutput(stdout.Bytes(), stderr.Bytes()), runErr)
+	if runErr != nil {
+		return nil, fmt.Errorf("git %s in %s: %w (%s)", strings.Join(args, " "), workdir, runErr, strings.TrimSpace(stderr.String()))
 	}
 	files, _, err := gitdiff.Parse(stdout)
 	if err != nil {

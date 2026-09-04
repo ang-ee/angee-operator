@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -40,7 +41,9 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	trace := logctx.TraceExec(ctx, bin, args, dir)
 	out, err := cmd.CombinedOutput()
+	trace(out, err)
 	if err != nil {
 		return out, fmt.Errorf("git %v: %w: %s", args, err, out)
 	}

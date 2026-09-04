@@ -1,13 +1,35 @@
 package git
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
+
+func TestClientRunTracesCommandWithRedactedArgs(t *testing.T) {
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))
+	client := Client{Bin: "sh"}
+	_, err := client.Run(ctx, "", "-c", "exit 0", "--token", "secret", "https://user:password@example.com/repo")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "exec sh -c exit 0 --token *** https://***@example.com/repo") ||
+		!strings.Contains(got, "exec finished duration=") {
+		t.Fatalf("trace output = %q", got)
+	}
+	if strings.Contains(got, "secret") || strings.Contains(got, "password") || strings.Contains(got, "user") {
+		t.Fatalf("trace output leaked secret data: %q", got)
+	}
+}
 
 func TestPushRemoteResolution(t *testing.T) {
 	isolateGitConfig(t)
