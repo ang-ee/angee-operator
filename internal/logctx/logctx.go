@@ -99,6 +99,13 @@ func NewCLIHandler(w io.Writer, level slog.Level) slog.Handler {
 	}
 }
 
+// NewServerHandler returns the standard structured text handler used by
+// long-running daemons. Unlike the terminal-oriented CLI handler, it retains
+// slog's timestamp, level, message, and key=value attributes on every line.
+func NewServerHandler(w io.Writer, level slog.Level) slog.Handler {
+	return slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
+}
+
 type cliHandlerState struct {
 	mu      sync.Mutex
 	writer  io.Writer

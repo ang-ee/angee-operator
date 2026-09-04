@@ -1,12 +1,16 @@
 package gql
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
@@ -16,7 +20,7 @@ func TestEventHubSubscribeAfterStopReturnsClosedChan(t *testing.T) {
 	// EventHub.Stop is documented to leave subsequent subscribes with a
 	// pre-closed channel rather than spawning an orphan broker against a
 	// cancelled root context.
-	h := NewEventHub(nil)
+	h := NewEventHub(nil, nil)
 	h.Stop()
 
 	ch := h.SubscribeWorkspaceStatus(context.Background(), "anything")
@@ -33,7 +37,7 @@ func TestEventHubSubscribeAfterStopReturnsClosedChan(t *testing.T) {
 func TestEventHubStartIsIdempotent(t *testing.T) {
 	// Concurrent Start calls must not race a second pollTopology goroutine
 	// into the wait group.
-	h := NewEventHub(nil)
+	h := NewEventHub(nil, nil)
 	h.SetPollInterval(50 * time.Millisecond)
 	defer h.Stop()
 
@@ -54,25 +58,40 @@ func TestEventHubStartIsIdempotent(t *testing.T) {
 }
 
 func TestReportPollErrorTransitions(t *testing.T) {
-	last := reportPollError("topology", nil, "")
+	var output bytes.Buffer
+	logger := slog.New(logctx.NewServerHandler(&output, slog.LevelDebug))
+	last := reportPollError(t.Context(), logger, "topology", nil, "")
 	if last != "" {
 		t.Fatalf("nil-after-nil returned %q, want empty", last)
 	}
-	last = reportPollError("topology", errFake("boom"), "")
+	last = reportPollError(t.Context(), logger, "topology", errFake("boom"), "")
 	if last != "boom" {
 		t.Fatalf("first error returned %q, want boom", last)
 	}
-	last = reportPollError("topology", errFake("boom"), "boom")
+	last = reportPollError(t.Context(), logger, "topology", errFake("boom"), "boom")
 	if last != "boom" {
 		t.Fatalf("repeat error returned %q, want boom (no re-log)", last)
 	}
-	last = reportPollError("topology", errFake("other"), "boom")
+	last = reportPollError(t.Context(), logger, "topology", errFake("other"), "boom")
 	if last != "other" {
 		t.Fatalf("distinct error returned %q, want other", last)
 	}
-	last = reportPollError("topology", nil, "other")
+	last = reportPollError(t.Context(), logger, "topology", nil, "other")
 	if last != "" {
 		t.Fatalf("recovery returned %q, want empty", last)
+	}
+	got := output.String()
+	if count := strings.Count(got, "msg=\"poll failed\""); count != 2 {
+		t.Fatalf("poll failure count = %d, want 2: %q", count, got)
+	}
+	for _, want := range []string{
+		"level=WARN msg=\"poll failed\" poll=topology err=boom",
+		"level=WARN msg=\"poll failed\" poll=topology err=other",
+		"level=INFO msg=\"poll recovered\" poll=topology",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("poll output = %q, want %q", got, want)
+		}
 	}
 }
 
@@ -148,7 +167,7 @@ func recvSnapshot(t *testing.T, ch <-chan *model.StackSnapshot) *model.StackSnap
 
 func TestEventHubPublishesSnapshotOnChange(t *testing.T) {
 	p := &snapshotPlatform{jobs: []api.JobState{{Name: "seed", Runtime: "container"}}}
-	h := NewEventHub(p)
+	h := NewEventHub(p, nil)
 	h.SetPollInterval(20 * time.Millisecond)
 	defer h.Stop()
 
@@ -185,7 +204,7 @@ func TestEventHubSnapshotGuardSkipsReadsWithoutSubscribers(t *testing.T) {
 	// the hasSubscribers guard holds, matching pollTopology. Several ticks pass
 	// with no subscribe, and JobList must never have been called.
 	p := &snapshotPlatform{}
-	h := NewEventHub(p)
+	h := NewEventHub(p, nil)
 	h.SetPollInterval(20 * time.Millisecond)
 	h.Start()
 	time.Sleep(120 * time.Millisecond)

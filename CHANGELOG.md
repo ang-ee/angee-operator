@@ -23,6 +23,12 @@ latest tag.
 - **Verbose command diagnostics.** The global `--verbose`/`-v` flag names
   each phase as it starts and heartbeats slow steps; repeating it as `-vv` traces
   every subprocess and HTTP call with durations and redacted attributes.
+- **Operator request logging.** The daemon now emits structured server logs at
+  `INFO` by default, including one completion line per request with an
+  eight-character request ID, status, and duration. `-v` (or `ANGEE_VERBOSE=1`)
+  enables request starts, resolved authentication scopes, and Platform debug
+  narration carrying the same request ID; health-check records stay at
+  `DEBUG`.
 - **`angee version`.** The new command prints the CLI version in plain text or
   JSON with `--json` (closes #53).
 

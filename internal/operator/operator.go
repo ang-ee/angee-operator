@@ -1,13 +1,17 @@
 package operator
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
@@ -36,6 +41,7 @@ type Config struct {
 	JWTSecret      string
 	AllowedOrigins []string
 	LogBackend     string
+	Logger         *slog.Logger
 	jobOutput      io.Writer
 }
 
@@ -52,6 +58,7 @@ type Server struct {
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	config := Config{Root: ".", Bind: "127.0.0.1", Port: 9000, jobOutput: stdout}
+	var verbosity int
 	cmd := &cobra.Command{
 		Use:           "operator",
 		Short:         "Run the Angee operator",
@@ -59,6 +66,13 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			count := verbosity
+			if !cmd.Flags().Changed("verbose") {
+				if envCount, ok := logctx.CountFromEnv("ANGEE_VERBOSE"); ok {
+					count = envCount
+				}
+			}
+			config.Logger = slog.New(logctx.NewServerHandler(stderr, serverLevelFromCount(count)))
 			server, err := NewServer(config)
 			if err != nil {
 				return err
@@ -78,7 +92,15 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	cmd.Flags().StringVar(&config.JWTSecret, "jwt-secret", config.JWTSecret, "explicit HS256 signing key for mintConnectionToken (default: env ANGEE_OPERATOR_JWT_SECRET, then HKDF-from-bearer, then per-process random)")
 	cmd.Flags().StringArrayVar(&config.AllowedOrigins, "allowed-origin", config.AllowedOrigins, "additional allowed WebSocket Origin (repeatable); loopback origins are always allowed")
 	cmd.Flags().StringVar(&config.LogBackend, "log-backend", config.LogBackend, "per-service log streaming backend (default: ephemeral live-proxy)")
+	cmd.Flags().CountVarP(&verbosity, "verbose", "v", "increase verbosity (-v enables debug logging)")
 	return cmd.ExecuteContext(ctx)
+}
+
+func serverLevelFromCount(count int) slog.Level {
+	if count > 0 {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
 }
 
 func NewServer(config Config) (*Server, error) {
@@ -87,6 +109,9 @@ func NewServer(config Config) (*Server, error) {
 	}
 	if config.Port == 0 {
 		config.Port = 9000
+	}
+	if config.Logger == nil {
+		config.Logger = logctx.From(context.Background())
 	}
 	if !isLoopback(config.Bind) && config.Token == "" {
 		return nil, errors.New("non-loopback operator binds require --token")
@@ -111,14 +136,14 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	eventHub := opgql.NewEventHub(platform)
+	eventHub := opgql.NewEventHub(platform, config.Logger)
 	// Select the per-service log backend; defaults to the ephemeral live-proxy.
 	logStreamer, err := newLogStreamer(config.LogBackend, platform)
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter, logStreamer: logStreamer}
-	fmt.Fprintf(os.Stderr, "operator: jwt signing key fingerprint=%s\n", minter.Fingerprint())
+	config.Logger.Info("jwt signing key", "fingerprint", minter.Fingerprint())
 	graphqlHandler, graphqlWSHandler, err := newGraphQLHandler(s)
 	if err != nil {
 		return nil, err
@@ -221,7 +246,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
 		Addr:              net.JoinHostPort(config.Bind, strconv.Itoa(config.Port)),
-		Handler:           mux,
+		Handler:           s.requestLogging(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return s, nil
@@ -300,11 +325,142 @@ func (s *Server) tearDownStack() {
 	if s.platform == nil {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "operator: tearing down stack on SIGINT")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	logger := s.logger()
+	logger.Info("tearing down stack", "signal", "SIGINT")
+	baseCtx := logctx.With(context.Background(), logger)
+	ctx, cancel := context.WithTimeout(baseCtx, 60*time.Second)
 	defer cancel()
 	if err := s.platform.StackDown(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "operator:", err)
+		logger.ErrorContext(ctx, "stack teardown failed", "err", err)
+	}
+}
+
+func (s *Server) logger() *slog.Logger {
+	if s != nil && s.config.Logger != nil {
+		return s.config.Logger
+	}
+	return logctx.From(context.Background())
+}
+
+func (s *Server) requestLogging(next http.Handler) http.Handler {
+	logger := s.logger()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		requestLogger := logger.With("req", newRequestID())
+		ctx := logctx.With(r.Context(), requestLogger)
+		r = r.WithContext(ctx)
+		requestLogger.LogAttrs(ctx, slog.LevelDebug, "request started",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.String("remote", r.RemoteAddr),
+		)
+
+		wrapped, status := wrapStatusResponseWriter(w)
+		next.ServeHTTP(wrapped, r)
+
+		level := slog.LevelInfo
+		if r.URL.Path == "/healthz" {
+			level = slog.LevelDebug
+		}
+		requestLogger.LogAttrs(ctx, level, "request",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", status.statusCode()),
+			slog.Duration("duration", time.Since(started)),
+			slog.String("remote", r.RemoteAddr),
+		)
+	})
+}
+
+func newRequestID() string {
+	var id [4]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "00000000"
+	}
+	return hex.EncodeToString(id[:])
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *statusResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *statusResponseWriter) statusCode() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+func (w *statusResponseWriter) flush() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	w.ResponseWriter.(http.Flusher).Flush()
+}
+
+func (w *statusResponseWriter) hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := w.ResponseWriter.(http.Hijacker).Hijack()
+	if err == nil && w.status == 0 {
+		w.status = http.StatusSwitchingProtocols
+	}
+	return conn, rw, err
+}
+
+type flusherStatusResponseWriter struct{ *statusResponseWriter }
+
+func (w *flusherStatusResponseWriter) Flush() {
+	w.flush()
+}
+
+type hijackerStatusResponseWriter struct{ *statusResponseWriter }
+
+func (w *hijackerStatusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijack()
+}
+
+type flusherHijackerStatusResponseWriter struct{ *statusResponseWriter }
+
+func (w *flusherHijackerStatusResponseWriter) Flush() {
+	w.flush()
+}
+
+func (w *flusherHijackerStatusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.hijack()
+}
+
+func wrapStatusResponseWriter(w http.ResponseWriter) (http.ResponseWriter, *statusResponseWriter) {
+	status := &statusResponseWriter{ResponseWriter: w}
+	_, flushes := w.(http.Flusher)
+	_, hijacks := w.(http.Hijacker)
+	switch {
+	case flushes && hijacks:
+		return &flusherHijackerStatusResponseWriter{status}, status
+	case flushes:
+		return &flusherStatusResponseWriter{status}, status
+	case hijacks:
+		return &hijackerStatusResponseWriter{status}, status
+	default:
+		return status, status
 	}
 }
 
@@ -809,7 +965,11 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			return
 		}
 		if claims != nil {
-			r = r.WithContext(withActorScope(r.Context(), *claims))
+			ctx := withActorScope(r.Context(), *claims)
+			logctx.From(ctx).DebugContext(ctx, "authenticated", "actor", claims.Subject, "scope", claims.Scope)
+			r = r.WithContext(ctx)
+		} else {
+			logctx.From(r.Context()).DebugContext(r.Context(), "authenticated", "scope", "admin")
 		}
 		next.ServeHTTP(w, r)
 	})

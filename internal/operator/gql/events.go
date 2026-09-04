@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
@@ -36,6 +37,7 @@ const (
 type EventHub struct {
 	platform     service.API
 	pollInterval time.Duration
+	logger       *slog.Logger
 
 	topology *broker[*api.GitOpsTopologyResponse]
 	snapshot *broker[*model.StackSnapshot]
@@ -50,12 +52,17 @@ type EventHub struct {
 	wg        sync.WaitGroup
 }
 
-// NewEventHub constructs a hub bound to the given platform. The caller must
-// invoke Start before the first subscriber connects and Stop on shutdown.
-func NewEventHub(p service.API) *EventHub {
+// NewEventHub constructs a hub bound to the given platform and server logger.
+// The caller must invoke Start before the first subscriber connects and Stop
+// on shutdown.
+func NewEventHub(p service.API, logger *slog.Logger) *EventHub {
+	if logger == nil {
+		logger = logctx.From(context.Background())
+	}
 	return &EventHub{
 		platform:         p,
 		pollInterval:     defaultEventPollInterval,
+		logger:           logger,
 		topology:         newBroker[*api.GitOpsTopologyResponse](),
 		snapshot:         newBroker[*model.StackSnapshot](),
 		workspaceBrokers: make(map[string]*broker[*api.WorkspaceStatusResponse]),
@@ -76,7 +83,8 @@ func (h *EventHub) SetPollInterval(d time.Duration) {
 // calls are no-ops, even across goroutines.
 func (h *EventHub) Start() {
 	h.startOnce.Do(func() {
-		ctx, cancel := context.WithCancel(context.Background())
+		baseCtx := logctx.With(context.Background(), h.logger)
+		ctx, cancel := context.WithCancel(baseCtx)
 		h.rootCtx = ctx
 		h.cancel = cancel
 		h.wg.Add(2)
@@ -133,7 +141,7 @@ func (h *EventHub) pollTopology(ctx context.Context) {
 			continue
 		}
 		topo, err := h.platform.GitOpsTopology(ctx)
-		lastErr = reportPollError("topology", err, lastErr)
+		lastErr = reportPollError(ctx, h.logger, "topology", err, lastErr)
 		if err != nil {
 			continue
 		}
@@ -169,7 +177,7 @@ func (h *EventHub) pollSnapshot(ctx context.Context) {
 			continue
 		}
 		snap, err := h.buildSnapshot(ctx)
-		lastErr = reportPollError("snapshot", err, lastErr)
+		lastErr = reportPollError(ctx, h.logger, "snapshot", err, lastErr)
 		if err != nil {
 			continue
 		}
@@ -254,7 +262,7 @@ func (h *EventHub) pollWorkspaceStatus(ctx context.Context, name string, b *brok
 			continue
 		}
 		status, err := h.platform.WorkspaceStatus(ctx, name)
-		lastErr = reportPollError(prefix, err, lastErr)
+		lastErr = reportPollError(ctx, h.logger, prefix, err, lastErr)
 		if err != nil {
 			continue
 		}
@@ -271,15 +279,15 @@ func (h *EventHub) pollWorkspaceStatus(ctx context.Context, name string, b *brok
 // (and a recovery line when it clears), so a misconfigured stack doesn't
 // silently drop events. Returns the updated lastErr to thread through the
 // caller's loop.
-func reportPollError(prefix string, err error, lastErr string) string {
+func reportPollError(ctx context.Context, logger *slog.Logger, prefix string, err error, lastErr string) string {
 	if err == nil {
 		if lastErr != "" {
-			fmt.Fprintf(os.Stderr, "operator: %s poll recovered\n", prefix)
+			logger.InfoContext(ctx, "poll recovered", "poll", prefix)
 		}
 		return ""
 	}
 	if msg := err.Error(); msg != lastErr {
-		fmt.Fprintf(os.Stderr, "operator: %s poll failed: %v\n", prefix, err)
+		logger.WarnContext(ctx, "poll failed", "poll", prefix, "err", err)
 		return msg
 	}
 	return lastErr

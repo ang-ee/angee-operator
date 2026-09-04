@@ -15,6 +15,34 @@ Authorization: Bearer <token>
 Surface parity between `service.Platform`, CLI, REST, and GraphQL is tracked in
 [Surface parity](/operator/surfaces).
 
+## Logging and verbosity
+
+The operator writes structured `slog` text records to stderr. Its default
+verbosity (count `0`) is `INFO`, so completed API requests and server lifecycle
+events are visible without flags. Pass `--verbose` / `-v` one or more times to
+enable `DEBUG`; additional repetitions such as `-vv` stay at `DEBUG`.
+`ANGEE_VERBOSE=0|1|2` provides the count when the flag is absent, and an
+explicit flag value takes precedence over the environment.
+
+Every request receives an eight-character hexadecimal request ID. A completed
+request is one line in this form (timestamps and durations vary):
+
+```text
+time=2026-09-04T12:34:56.789Z level=INFO msg=request req=7f3a2c19 method=POST path=/stack/prepare status=200 duration=812.4ms remote=127.0.0.1:54321
+```
+
+The request-scoped logger is stored in the request context, so logs emitted by
+`service.Platform` during the call carry the same `req` value. At `DEBUG`, an
+additional `request started` record makes long-running streams and WebSocket
+connections visible before their completion line, and successful bearer
+authentication records the resolved actor or admin scope. `/healthz`
+completion records are `DEBUG` only so polling does not fill normal logs.
+
+Request records include only the HTTP method and URL path. The operator never
+logs URL query strings (which can contain connection tokens), `Authorization`
+headers, or request bodies. Secret audit records contain secret names but never
+secret values.
+
 ## REST
 
 Health:
