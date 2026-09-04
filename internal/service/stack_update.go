@@ -347,6 +347,10 @@ func mergeStackFromTemplate(ours, theirs *manifest.Stack, authoritativePorts boo
 		merged.Template = theirs.Template
 	}
 	merged.Sources = overlayMap(ours.Sources, theirs.Sources)
+	// workspace_defaults is template-origin (the dev stack renders it from its
+	// work_state_source answer); workspaces themselves stay ours — they are
+	// operator-written records of what was cut.
+	merged.WorkspaceDefaults = overlayMap(ours.WorkspaceDefaults, theirs.WorkspaceDefaults)
 	merged.Secrets = overlayMap(ours.Secrets, theirs.Secrets)
 	merged.Volumes = overlayMap(ours.Volumes, theirs.Volumes)
 	merged.Persist = overlayMap(ours.Persist, theirs.Persist)
@@ -402,6 +406,7 @@ func overlayMap[V any](ours, theirs map[string]V) map[string]V {
 func summarizeStackChanges(ours, merged *manifest.Stack) []string {
 	var changes []string
 	reportKeyChanges(&changes, "sources", ours.Sources, merged.Sources)
+	reportKeyChanges(&changes, "workspace_defaults", ours.WorkspaceDefaults, merged.WorkspaceDefaults)
 	reportKeyChanges(&changes, "secrets", ours.Secrets, merged.Secrets)
 	reportKeyChanges(&changes, "volumes", ours.Volumes, merged.Volumes)
 	reportKeyChanges(&changes, "persist", ours.Persist, merged.Persist)

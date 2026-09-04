@@ -270,6 +270,26 @@ workspaces:
 
 TTL values are stored and surfaced by status commands.
 
+### Workspace defaults
+
+`workspace_defaults` carries stack-level input defaults for every workspace
+cut from one template. The map is keyed by template ref the way
+`angee workspace create --template` resolves it (`workspaces/src`; the bare
+name `src` is accepted). Inputs layer lowest to highest: the template's
+`_angee.inputs` defaults, the stack's `workspace_defaults`, a declared
+workspace's `inputs`, then the request's `--input` values. An explicit empty
+`--input key=` still wins over a stack default.
+
+```yaml
+workspace_defaults:
+  workspaces/src:
+    inputs:
+      work_state_source: work-angee
+```
+
+`angee workspace preflight --template src` reports the effective inputs and
+lists the stack's contribution under `stack_defaults`.
+
 ## Substitutions
 
 Supported namespaces include:

@@ -67,7 +67,10 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := manifest.Ensure(stack, metadata.Ensure); err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	inputs := workspaceInputs(metadata, req.Inputs)
+	// The stack's workspace_defaults for this template sit under the request's
+	// explicit inputs (and, below, under a declaration's inputs).
+	defaults := stackWorkspaceDefaults(stack, templateRef)
+	inputs := workspaceInputs(metadata, mergeStringMaps(defaults, req.Inputs))
 	name, err := p.workspaceName(metadata, req.Name, inputs)
 	if err != nil {
 		return api.WorkspaceRef{}, err
@@ -79,14 +82,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		// Declared but never materialized (a rendered manifest carries the
 		// declaration; `angee dev` owns the cut): adopt the declaration's
 		// inputs as defaults under the request's explicit inputs.
-		merged := map[string]string{}
-		for key, value := range declared.Inputs {
-			merged[key] = value
-		}
-		for key, value := range req.Inputs {
-			merged[key] = value
-		}
-		inputs = workspaceInputs(metadata, merged)
+		inputs = workspaceInputs(metadata, mergeStringMaps(defaults, declared.Inputs, req.Inputs))
 	}
 	allocations, err := p.allocateWorkspacePorts(stack, name)
 	if err != nil {
@@ -1982,6 +1978,52 @@ func workspaceInputs(metadata copierx.Metadata, provided map[string]string) map[
 		inputs[key] = value
 	}
 	return inputs
+}
+
+// stackWorkspaceDefaults returns the stack's `workspace_defaults` inputs for
+// templateRef, the ref resolveTemplate reports (e.g. "workspaces/src"). Keys
+// match the way `--template` does: a bare name means workspaces/<name>. Keys
+// that normalize to the same ref layer in sorted order. Nil when the stack
+// declares nothing for the template.
+func stackWorkspaceDefaults(stack *manifest.Stack, templateRef string) map[string]string {
+	if stack == nil || templateRef == "" {
+		return nil
+	}
+	want := normalizeWorkspaceTemplateRef(templateRef)
+	var inputs map[string]string
+	for _, key := range sortedKeys(stack.WorkspaceDefaults) {
+		if normalizeWorkspaceTemplateRef(key) != want {
+			continue
+		}
+		inputs = mergeStringMaps(inputs, stack.WorkspaceDefaults[key].Inputs)
+	}
+	return inputs
+}
+
+// normalizeWorkspaceTemplateRef mirrors resolveTemplate's local-ref rule: a
+// bare name resolves under the workspaces family. Every other form (a family
+// path, an absolute path, a registry or remote ref) compares verbatim.
+func normalizeWorkspaceTemplateRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref != "" && !strings.Contains(ref, "/") {
+		return "workspaces/" + ref
+	}
+	return ref
+}
+
+// mergeStringMaps layers maps left to right (later keys win). Nil layers are
+// skipped; the result is nil when every layer is empty.
+func mergeStringMaps(layers ...map[string]string) map[string]string {
+	var out map[string]string
+	for _, layer := range layers {
+		for key, value := range layer {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func (p *Platform) workspaceName(metadata copierx.Metadata, explicit string, inputs map[string]string) (string, error) {

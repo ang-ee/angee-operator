@@ -213,3 +213,52 @@ func TestValidateDoesNotMutate(t *testing.T) {
 		t.Fatalf("Validate() mutated stack\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
+
+func TestWorkspaceDefaultsRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "angee.yaml")
+
+	stack := &Stack{
+		Version: VersionCurrent,
+		Kind:    KindStack,
+		Name:    "host",
+		WorkspaceDefaults: map[string]WorkspaceDefaults{
+			"workspaces/src": {Inputs: map[string]string{"work_state_source": "work-angee"}},
+		},
+	}
+	if err := SaveFile(path, stack); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "workspace_defaults:\n    workspaces/src:\n        inputs:\n            work_state_source: work-angee\n") {
+		t.Fatalf("workspace_defaults not serialized as expected:\n%s", data)
+	}
+	loaded, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if got := loaded.WorkspaceDefaults["workspaces/src"].Inputs["work_state_source"]; got != "work-angee" {
+		t.Fatalf("WorkspaceDefaults[workspaces/src].Inputs[work_state_source] = %q, want work-angee", got)
+	}
+
+	// A manifest without the block loads with an initialized, empty map and
+	// never re-emits the key.
+	bare := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "bare"}
+	if err := SaveFile(path, bare); err != nil {
+		t.Fatalf("SaveFile(bare) error = %v", err)
+	}
+	loaded, err = LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile(bare) error = %v", err)
+	}
+	if loaded.WorkspaceDefaults == nil || len(loaded.WorkspaceDefaults) != 0 {
+		t.Fatalf("WorkspaceDefaults = %#v, want initialized empty map", loaded.WorkspaceDefaults)
+	}
+	data, _ = os.ReadFile(path)
+	if strings.Contains(string(data), "workspace_defaults") {
+		t.Fatalf("bare manifest must not emit workspace_defaults:\n%s", data)
+	}
+}

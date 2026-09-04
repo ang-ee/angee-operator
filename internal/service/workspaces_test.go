@@ -1609,3 +1609,101 @@ note:
 		t.Fatal("second run must be a no-op")
 	}
 }
+
+func TestWorkspaceCreateAppliesStackWorkspaceDefaults(t *testing.T) {
+	// A stack's workspace_defaults seed inputs for every workspace cut from a
+	// template. They sit above the template's own defaults and beneath both a
+	// declared workspace's inputs and the request's explicit --input values,
+	// and an explicit empty value still wins over the stack default.
+	ctx := context.Background()
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root): %v", err)
+	}
+	templateRoot := filepath.Join(base, ".templates", "workspaces", "srclike")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(template): %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: srclike
+  inputs:
+    note:
+      type: str
+      default: unset
+note:
+  type: str
+  default: unset
+`
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "NOTE.md.jinja"), []byte("note {{ note }}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(NOTE.md.jinja): %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "host",
+		WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{
+			// Bare key: matches the family ref the same way `--template srclike` does.
+			"srclike": {Inputs: map[string]string{"note": "stack-default"}},
+			// Another template's defaults never leak.
+			"workspaces/other": {Inputs: map[string]string{"note": "other"}},
+		},
+		Workspaces: map[string]manifest.Workspace{
+			"declared": {Template: "workspaces/srclike", Inputs: map[string]string{"note": "declared"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(host): %v", err)
+	}
+
+	platform, _ := New(root)
+	t.Chdir(base) // template resolves via cwd candidates (.templates/…)
+
+	cases := []struct {
+		name     string
+		template string
+		inputs   map[string]string
+		want     string
+	}{
+		{name: "defaulted", template: "srclike", want: "stack-default"},
+		{name: "family-ref", template: "workspaces/srclike", want: "stack-default"},
+		{name: "explicit", template: "srclike", inputs: map[string]string{"note": "explicit"}, want: "explicit"},
+		{name: "cleared", template: "srclike", inputs: map[string]string{"note": ""}, want: ""},
+		{name: "declared", template: "srclike", want: "declared"},
+	}
+	for _, tc := range cases {
+		if _, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: tc.template, Name: tc.name, Inputs: tc.inputs}); err != nil {
+			t.Fatalf("WorkspaceCreate(%s): %v", tc.name, err)
+		}
+		note, err := os.ReadFile(filepath.Join(root, "workspaces", tc.name, "NOTE.md"))
+		if err != nil {
+			t.Fatalf("ReadFile(NOTE.md) for %s: %v", tc.name, err)
+		}
+		if got, want := string(note), "note "+tc.want+"\n"; got != want {
+			t.Fatalf("%s: NOTE.md = %q, want %q", tc.name, got, want)
+		}
+	}
+
+	// The effective inputs are what the manifest records, so a later
+	// `workspace update` keeps rendering against the same values.
+	reloaded, err := manifest.LoadFile(manifest.Path(root))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	for _, tc := range cases {
+		if got := reloaded.Workspaces[tc.name].Inputs["note"]; got != tc.want {
+			t.Fatalf("%s: recorded inputs.note = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if len(reloaded.WorkspaceDefaults) != 2 {
+		t.Fatalf("workspace_defaults must survive a create untouched, got %#v", reloaded.WorkspaceDefaults)
+	}
+}

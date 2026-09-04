@@ -453,6 +453,12 @@
           },
           "type": "object"
         },
+        "workspace_defaults": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkspaceDefaults"
+          },
+          "type": "object"
+        },
         "workspaces": {
           "additionalProperties": {
             "$ref": "#/$defs/Workspace"
@@ -552,6 +558,18 @@
       "required": [
         "template"
       ]
+    },
+    "WorkspaceDefaults": {
+      "properties": {
+        "inputs": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "WorkspaceResolved": {
       "properties": {

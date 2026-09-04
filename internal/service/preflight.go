@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,7 +46,17 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 		defs[name] = def
 	}
 
-	effective := workspaceInputs(metadata, req.Inputs)
+	// The host stack's workspace_defaults for this template sit under the
+	// request's inputs, exactly as WorkspaceCreate layers them. A missing
+	// manifest is fine (a workspace can be cut with no host stack).
+	var stackDefaults map[string]string
+	if stack, err := p.LoadStack(); err == nil {
+		stackDefaults = stackWorkspaceDefaults(stack, templateRef)
+	} else if !os.IsNotExist(err) {
+		return api.WorkspaceCreatePreflightResponse{}, err
+	}
+	provided := mergeStringMaps(stackDefaults, req.Inputs)
+	effective := workspaceInputs(metadata, provided)
 	missing := []string{}
 	invalid := []api.PreflightFailure{}
 
@@ -60,7 +71,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 	}
 	sort.Strings(missing)
 
-	for name, value := range req.Inputs {
+	for name, value := range provided {
 		def, declared := defs[name]
 		if !declared {
 			continue
@@ -79,6 +90,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 		Template:         req.Template,
 		ResolvedTemplate: templateRef,
 		EffectiveInputs:  effective,
+		StackDefaults:    stackDefaults,
 		MissingRequired:  missing,
 		InvalidInputs:    invalid,
 	}, nil

@@ -6,6 +6,21 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **Stack-level workspace input defaults.** A manifest may declare
+  `workspace_defaults`, keyed by workspace template ref (`workspaces/src`, or
+  the bare `src`), with `inputs` the operator layers under every
+  `angee workspace create --template <ref>` for that template. The layering,
+  lowest to highest: the template's `_angee.inputs` defaults, the stack's
+  `workspace_defaults`, a declared workspace's `inputs`, then the request's
+  `--input` values (an explicit empty value still wins). `angee workspace
+  preflight` folds them into `effective_inputs` and reports the stack's share
+  as `stack_defaults`. The framework-dev stack template renders the block from
+  its `work_state_source` answer so every src-template workspace binds the
+  private work-state slot (`.work/`) without repeating
+  `--input work_state_source=...` on each create.
+
 ## v0.11.0 — 2026-09-04
 
 ### Removed
