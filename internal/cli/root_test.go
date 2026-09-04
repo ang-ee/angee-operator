@@ -51,7 +51,7 @@ func TestVersionCommandJSON(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	want := `{"version":"` + Version + `"}` + "\n"
+	want := "{\n  \"version\": \"" + Version + "\"\n}\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}

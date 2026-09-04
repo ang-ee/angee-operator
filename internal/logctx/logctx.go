@@ -252,8 +252,13 @@ func RedactURL(rawURL string) string {
 	if err != nil || parsed.User == nil {
 		return rawURL
 	}
-	parsed.User = url.User("***")
-	return parsed.String()
+	parsed.User = nil
+	redacted := parsed.String()
+	prefix := parsed.Scheme + "://"
+	if parsed.Scheme != "" && strings.HasPrefix(redacted, prefix) {
+		return prefix + "***@" + strings.TrimPrefix(redacted, prefix)
+	}
+	return redacted
 }
 
 // RedactArgs returns a copy of args with common secret flag values and URL
@@ -324,7 +329,7 @@ func startStep(ctx context.Context, msg string, attrs ...slog.Attr) (func(error)
 	go func() {
 		defer close(stopped)
 		if infoEnabled {
-			runInfoHeartbeat(ctx, logger, msg, stepAttrs, stop, firstInfoDelay, infoInterval)
+			runInfoHeartbeat(ctx, logger, msg, stepAttrs, stop, started, firstInfoDelay, infoInterval)
 			return
 		}
 		runWarnHeartbeat(ctx, logger, msg, stepAttrs, stop, warnDelay)
@@ -349,10 +354,9 @@ func startStep(ctx context.Context, msg string, attrs ...slog.Attr) (func(error)
 	return complete, stopped
 }
 
-func runInfoHeartbeat(ctx context.Context, logger *slog.Logger, msg string, attrs []slog.Attr, stop <-chan struct{}, firstDelay, interval time.Duration) {
+func runInfoHeartbeat(ctx context.Context, logger *slog.Logger, msg string, attrs []slog.Attr, stop <-chan struct{}, started time.Time, firstDelay, interval time.Duration) {
 	timer := time.NewTimer(firstDelay)
 	defer timer.Stop()
-	running := firstDelay
 	for {
 		select {
 		case <-ctx.Done():
@@ -360,11 +364,20 @@ func runInfoHeartbeat(ctx context.Context, logger *slog.Logger, msg string, attr
 		case <-stop:
 			return
 		case <-timer.C:
-			logger.LogAttrs(ctx, slog.LevelInfo, fmt.Sprintf("still %s (%s)", msg, running), attrs...)
-			running += interval
+			logger.LogAttrs(ctx, slog.LevelInfo, fmt.Sprintf("still %s (%s)", msg, elapsedLabel(started)), attrs...)
 			timer.Reset(interval)
 		}
 	}
+}
+
+// elapsedLabel renders measured wall-clock time since started, rounded to
+// whole seconds once past one second so heartbeats read as "3s", not "3.002s".
+func elapsedLabel(started time.Time) time.Duration {
+	elapsed := time.Since(started)
+	if elapsed >= time.Second {
+		return elapsed.Round(time.Second)
+	}
+	return elapsed.Round(time.Millisecond)
 }
 
 func runWarnHeartbeat(ctx context.Context, logger *slog.Logger, msg string, attrs []slog.Attr, stop <-chan struct{}, delay time.Duration) {

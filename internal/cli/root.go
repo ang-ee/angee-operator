@@ -98,7 +98,7 @@ func versionCommand(stdout io.Writer, jsonOutput *bool) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if *jsonOutput {
-				return json.NewEncoder(stdout).Encode(struct {
+				return writeJSON(stdout, struct {
 					Version string `json:"version"`
 				}{Version: Version})
 			}

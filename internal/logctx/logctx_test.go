@@ -137,8 +137,8 @@ func TestRedactURL(t *testing.T) {
 		in   string
 		want string
 	}{
-		{name: "username and password", in: "https://alexis:secret@example.com/repo?q=1", want: "https://%2A%2A%2A@example.com/repo?q=1"},
-		{name: "username", in: "ssh://git@example.com/repo", want: "ssh://%2A%2A%2A@example.com/repo"},
+		{name: "username and password", in: "https://alexis:secret@example.com/repo?q=1", want: "https://***@example.com/repo?q=1"},
+		{name: "username", in: "ssh://git@example.com/repo", want: "ssh://***@example.com/repo"},
 		{name: "no userinfo", in: "https://example.com/repo", want: "https://example.com/repo"},
 		{name: "invalid", in: "://%", want: "://%"},
 	}
@@ -165,7 +165,7 @@ func TestRedactArgs(t *testing.T) {
 		"--token", "***",
 		"--password=***",
 		"--jwt-secret", "***",
-		"ssh://%2A%2A%2A@example.com/repo",
+		"ssh://***@example.com/repo",
 		"--other=value",
 	}
 	got := RedactArgs(args)
