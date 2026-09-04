@@ -14,6 +14,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/fslock"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
 	"github.com/ang-ee/angee-operator/internal/runtime"
@@ -96,14 +97,21 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 	lock := fslock.RootLock(p.root)
 	var compiled *CompiledStack
 	err := lock.With(ctx, func() error {
+		finishLoading := logctx.Step(ctx, "loading stack")
 		stack, err := p.LoadStack()
+		finishLoading(err)
 		if err != nil {
 			return err
 		}
-		if err := p.materializeStackResources(ctx, stack); err != nil {
+		finishSources := logctx.Step(ctx, "materializing sources")
+		err = p.materializeStackResources(ctx, stack)
+		finishSources(err)
+		if err != nil {
 			return err
 		}
+		finishWorkspaces := logctx.Step(ctx, "materializing declared workspaces")
 		cut, err := p.materializeDeclaredWorkspaces(ctx, stack)
+		finishWorkspaces(err)
 		if err != nil {
 			return err
 		}
@@ -114,15 +122,20 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 				return err
 			}
 		}
+		finishCompiling := logctx.Step(ctx, "compiling stack")
 		compiledStack, resolvedSecrets, err := p.compileStackArtifacts(ctx, stack)
+		finishCompiling(err)
 		if err != nil {
 			return err
 		}
-		if err := p.writeRuntimeEnv(stack, resolvedSecrets); err != nil {
-			return err
-		}
 		compiled = compiledStack
-		return p.writeCompiled(compiled)
+		finishWriting := logctx.Step(ctx, "writing runtime files")
+		writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
+		if writeErr == nil {
+			writeErr = p.writeCompiled(compiled)
+		}
+		finishWriting(writeErr)
+		return writeErr
 	})
 	return compiled, err
 }
@@ -163,11 +176,14 @@ func (p *Platform) materializeDeclaredWorkspaces(ctx context.Context, stack *man
 		} else if !os.IsNotExist(err) {
 			return cut, err
 		}
-		if _, err := p.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
+		finish := logctx.Step(ctx, "materializing workspace "+name)
+		_, err := p.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
 			Template: workspace.Template,
 			Name:     name,
 			Inputs:   workspace.Inputs,
-		}); err != nil {
+		})
+		finish(err)
+		if err != nil {
 			return cut, fmt.Errorf("materialize declared workspace %q: %w", name, err)
 		}
 		cut = true

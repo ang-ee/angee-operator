@@ -39,30 +39,39 @@ func (p *Platform) bootstrapOpenBao(ctx context.Context, stack *manifest.Stack, 
 		return err
 	}
 	target := runtime.Target{Root: p.root, Services: []string{"openbao"}}
+	finishStarting := logctx.Step(ctx, "starting OpenBao")
+	var startErr error
 	if stdout != nil || stderr != nil {
-		if err := p.composeBackend.UpForeground(ctx, target, stdout, stderr); err != nil {
-			return err
-		}
-	} else if err := p.composeBackend.Up(ctx, target); err != nil {
-		return err
+		startErr = p.composeBackend.UpForeground(ctx, target, stdout, stderr)
+	} else {
+		startErr = p.composeBackend.Up(ctx, target)
+	}
+	finishStarting(startErr)
+	if startErr != nil {
+		return startErr
 	}
 	if stderr != nil {
 		_, _ = fmt.Fprintln(stderr, "Waiting for OpenBao to accept secret requests...")
 	}
+	finishWaiting := logctx.Step(ctx, "waiting for OpenBao")
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if openBaoReady(ctx, stack.SecretsBackend.Address, stack.SecretsBackend.Token) {
 			if stderr != nil {
 				_, _ = fmt.Fprintln(stderr, "OpenBao is ready; resolving stack secrets...")
 			}
+			finishWaiting(nil)
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			err := ctx.Err()
+			finishWaiting(err)
+			return err
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	finishWaiting(nil)
 	return nil
 }
 

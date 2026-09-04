@@ -23,7 +23,7 @@ import (
 
 type loggerKey struct{}
 
-var discardLogger = slog.New(slog.DiscardHandler)
+var defaultLogger = slog.New(NewCLIHandler(os.Stderr, slog.LevelWarn))
 
 func discardExecTrace([]byte, error) {}
 
@@ -35,22 +35,22 @@ var (
 	stepWarnDelay      = 30 * time.Second
 )
 
-// With returns a child context carrying logger. A nil logger is replaced by a
-// discard logger so callers of From never need to check for nil.
+// With returns a child context carrying logger. A nil logger is replaced by the
+// package default logger so callers of From never need to check for nil.
 func With(ctx context.Context, logger *slog.Logger) context.Context {
 	if logger == nil {
-		logger = discardLogger
+		logger = defaultLogger
 	}
 	return context.WithValue(ctx, loggerKey{}, logger)
 }
 
-// From returns the logger stored in ctx, or a discard logger when ctx does not
-// carry one.
+// From returns the logger stored in ctx, or the package default logger, which
+// writes warnings and errors to stderr, when ctx does not carry one.
 func From(ctx context.Context) *slog.Logger {
 	if logger, ok := ctx.Value(loggerKey{}).(*slog.Logger); ok && logger != nil {
 		return logger
 	}
-	return discardLogger
+	return defaultLogger
 }
 
 // LevelFromCount maps a verbosity count to the corresponding logging level.
@@ -447,7 +447,6 @@ func startStep(ctx context.Context, msg string, attrs ...slog.Attr) (func(error)
 			level := slog.LevelDebug
 			if err != nil {
 				level = slog.LevelWarn
-				completionAttrs = append(completionAttrs, slog.Any("err", err))
 			}
 			logger.LogAttrs(ctx, level, "finished "+msg, completionAttrs...)
 		})

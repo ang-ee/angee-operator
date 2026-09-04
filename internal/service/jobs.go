@@ -92,7 +92,9 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 			workdir = filepath.Join(p.root, workdir)
 		}
 		p.jobOutput.status(name, "running")
+		finish := logctx.Step(ctx, "running job "+name)
 		out, err := runLocalCommand(ctx, workdir, command, env, p.jobOutput)
+		finish(err)
 		if err != nil {
 			p.jobOutput.status(name, "failed")
 		} else {
@@ -110,9 +112,11 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 		cmd := exec.CommandContext(ctx, "docker", args...)
 		cmd.Dir = p.root
 		p.jobOutput.status(name, "running")
+		finish := logctx.Step(ctx, "running job "+name)
 		trace := logctx.TraceExec(ctx, "docker", args, p.root)
 		out, err := runCommand(cmd, p.jobOutput)
 		trace(out, err)
+		finish(err)
 		if err != nil {
 			p.jobOutput.status(name, "failed")
 			return out, fmt.Errorf("job container command failed: %w: %s", err, out)

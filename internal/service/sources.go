@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
@@ -359,21 +361,30 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 	case "git":
 		client := git.New()
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+			finish := logctx.Step(ctx, "refreshing source "+name, slog.String("remote", logctx.RedactURL(source.Repo)))
 			if err := client.Fetch(ctx, path); err != nil {
 				if !bestEffortRefresh || ctx.Err() != nil {
+					finish(err)
 					return err
 				}
 				// The git error can carry the remote URL (a token, for an
 				// HTTPS-with-credentials remote), so keep it out of the log and
 				// point at `source pull`, which surfaces the full error on demand.
-				fmt.Fprintf(os.Stderr, "warning: could not refresh source %q; using the existing cache (update it with `angee source pull %s`)\n", name, name)
+				logctx.From(ctx).Warn(fmt.Sprintf("could not refresh source %q; using the existing cache (update it with `angee source pull %s`)", name, name))
+				finish(nil)
+				return nil
 			}
+			finish(nil)
 			return nil
 		}
+		finish := logctx.Step(ctx, "cloning source "+name, slog.String("remote", logctx.RedactURL(source.Repo)))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			finish(err)
 			return err
 		}
-		return client.CloneRef(ctx, source.Repo, path, source.DefaultRef)
+		err := client.CloneRef(ctx, source.Repo, path, source.DefaultRef)
+		finish(err)
+		return err
 	case "local":
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {

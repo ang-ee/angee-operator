@@ -8,7 +8,28 @@ Global flags:
 --root string       ANGEE_ROOT containing angee.yaml (default: auto-discover)
 --operator string   operator URL for HTTP mode
 --json              write JSON output
+--verbose, -v       increase diagnostic verbosity (repeat as -vv)
+--version           print the Angee CLI version
 ```
+
+`-v` reports active phases and emits periodic heartbeats for slow steps. `-vv`
+also traces every subprocess and HTTP call, including its duration. Set
+`ANGEE_VERBOSE=0`, `1`, or `2` for the corresponding default, where `0` is the
+normal warning-only output, `1` is `-v`, and `2` is `-vv`; an explicitly passed
+`--verbose` flag wins over the environment variable.
+
+`-v` no longer prints the version. Use `angee version` or `angee --version`
+instead. The version command supports the global JSON mode:
+
+```sh
+angee version
+angee --json version
+```
+
+If a command seems slow or stuck, rerun it with `-v`. Angee will name a phase
+once it has been active for a few seconds and continue printing heartbeats so
+you can distinguish slow work from a stalled command; use `-vv` to identify the
+specific subprocess or HTTP request.
 
 Without `--root`, the CLI walks upward from the current directory, preferring
 `angee.yaml`, then `.angee/angee.yaml`. In dev checkouts that expose workspace

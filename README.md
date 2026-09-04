@@ -104,7 +104,13 @@ the local template search paths first, then from the template registry
 
 ## Core Commands
 
+Global `-v`/`--verbose` shows phase diagnostics; repeat it as `-vv` to trace
+subprocesses and HTTP calls. Use `angee version` or `angee --version` for the
+version.
+
 ```sh
+angee version [--json]
+
 # Stack
 angee doctor
 angee stack init <template> [path] [--input key=value ...]

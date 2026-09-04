@@ -20,6 +20,16 @@ latest tag.
   its `work_state_source` answer so every src-template workspace binds the
   private work-state slot (`.work/`) without repeating
   `--input work_state_source=...` on each create.
+- **Verbose command diagnostics.** The global `--verbose`/`-v` flag reports
+  long-running phases and slow-step heartbeats; repeating it as `-vv` traces
+  every subprocess and HTTP call with durations and redacted attributes.
+- **`angee version`.** The new command prints the CLI version in plain text or
+  JSON with `--json` (closes #53).
+
+### Changed
+
+- **`-v` now means verbose.** It no longer aliases the version flag; use
+  `--version` or `angee version` to print the CLI version.
 
 ## v0.11.0 — 2026-09-04
 

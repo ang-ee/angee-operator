@@ -294,13 +294,16 @@ func TestFromWithoutLogger(t *testing.T) {
 	if logger == nil {
 		t.Fatal("From returned nil")
 	}
-	if logger.Enabled(context.Background(), slog.LevelError) {
-		t.Fatal("default logger unexpectedly enabled")
+	if !logger.Enabled(context.Background(), slog.LevelWarn) || !logger.Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("default logger does not enable warnings and errors")
+	}
+	if logger.Enabled(context.Background(), slog.LevelInfo) {
+		t.Fatal("default logger unexpectedly enables info output")
 	}
 
 	ctx := With(context.Background(), nil)
-	if got := From(ctx); got == nil || got.Enabled(ctx, slog.LevelError) {
-		t.Fatal("With(nil) did not install a discard logger")
+	if got := From(ctx); got != logger {
+		t.Fatal("With(nil) did not install the package default logger")
 	}
 }
 
@@ -361,14 +364,17 @@ func TestStepWarnHeartbeatAndFailure(t *testing.T) {
 			t.Fatalf("heartbeat output = %q, want %q", got, want)
 		}
 
-		complete(errors.New("lock unavailable"))
+		complete(errors.New("lock unavailable with secret-token"))
 		select {
 		case <-stopped:
 		default:
 			t.Fatal("heartbeat goroutine did not stop before completion returned")
 		}
-		if got := output.String(); !strings.Contains(got, "warning: finished waiting for lock duration=30ms err=\"lock unavailable\"\n") {
+		if got := output.String(); !strings.Contains(got, "warning: finished waiting for lock duration=30ms\n") {
 			t.Fatalf("failure output = %q", got)
+		}
+		if got := output.String(); strings.Contains(got, "secret-token") {
+			t.Fatalf("failure output contains raw error text: %q", got)
 		}
 	})
 }

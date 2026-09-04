@@ -15,6 +15,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
 	"github.com/ang-ee/angee-operator/internal/ports"
@@ -84,7 +85,9 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		// inputs as defaults under the request's explicit inputs.
 		inputs = workspaceInputs(metadata, mergeStringMaps(defaults, declared.Inputs, req.Inputs))
 	}
+	finishAllocating := logctx.Step(ctx, "allocating ports")
 	allocations, err := p.allocateWorkspacePorts(stack, name)
+	finishAllocating(err)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -145,16 +148,21 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		retErr = joinRollbackErrors(retErr, func() error { return sourceCleanup.Rollback(cleanupCtx) })
 		cancel()
 	}()
+	finishSources := logctx.Step(ctx, "materializing workspace sources")
 	workspaceSources, sourceCleanup, err = p.materializeWorkspaceSources(ctx, stack, name, workspacePath, metadata, inputs, allocations, req.Sync)
+	finishSources(err)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
+	finishRendering := logctx.Step(ctx, "rendering template")
 	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, inputs, name, allocations, workspaceSources, stack.Sources, statePath)
 	if err != nil {
+		finishRendering(err)
 		return api.WorkspaceRef{}, err
 	}
 	defer func() { _ = renderPlan.Close() }()
 	prepared, err := copierx.PrepareReconcile(ctx, renderPlan.Plan, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
+	finishRendering(err)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -162,7 +170,9 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := parentTx.VerifyPreparedRoot(p.root, prepared); err != nil {
 		return api.WorkspaceRef{}, fmt.Errorf("verify stack root transaction: %w", err)
 	}
+	finishApplying := logctx.Step(ctx, "applying rendered files")
 	rollbackTemplateFiles, err = prepared.ApplyFiles(ctx)
+	finishApplying(err)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -233,12 +243,17 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyTemplateDocuments, verifyPersistPaths); err != nil {
 		return api.WorkspaceRef{}, err
 	}
+	finishSaving := logctx.Step(ctx, "saving stack")
 	if err := parentTx.Save(stack); err != nil {
+		finishSaving(err)
 		return api.WorkspaceRef{}, err
 	}
 	if err := prepared.SaveState(ctx); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, parentTx.Rollback)
+		err = joinRollbackErrors(err, parentTx.Rollback)
+		finishSaving(err)
+		return api.WorkspaceRef{}, err
 	}
+	finishSaving(nil)
 	committed = true
 	return workspaceRef(name, workspacePath, workspace), nil
 }
@@ -1396,7 +1411,9 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	}
 	for _, item := range orderedItems {
 		dest := filepath.Join(workspacePath, filepath.FromSlash(item.resolved.Subpath))
+		finish := logctx.Step(ctx, "materializing source "+item.sourceName)
 		materialized, err := p.materializeWorkspaceSource(ctx, item.sourceName, item.source, item.resolved, dest, sync)
+		finish(err)
 		if err != nil {
 			if item.optional {
 				continue
@@ -1617,7 +1634,7 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			}()
 			useExisting := ws.Branch != "" && client.RefExists(ctx, cachePath, "refs/heads/"+ws.Branch)
 			if useExisting {
-				fmt.Fprintf(os.Stderr, "warning: branch %q already exists in %s; checking it out into worktree without creating a new branch\n", ws.Branch, cachePath)
+				logctx.From(ctx).Warn(fmt.Sprintf("branch %q already exists in %s; checking it out into worktree without creating a new branch", ws.Branch, cachePath))
 			}
 			addWorktree := func() error {
 				if useExisting {
@@ -2051,7 +2068,9 @@ func (p *Platform) workspaceName(metadata copierx.Metadata, explicit string, inp
 	return name, nil
 }
 
-func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (string, string, error) {
+func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (path, activeRef string, retErr error) {
+	finish := logctx.Step(ctx, "resolving template "+logctx.RedactURL(ref))
+	defer func() { finish(retErr) }()
 	if ref == "" {
 		return "", "", fmt.Errorf("template reference is empty")
 	}

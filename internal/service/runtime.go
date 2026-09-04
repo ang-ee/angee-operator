@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 	"golang.org/x/sync/errgroup"
@@ -367,7 +369,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	return out, nil
 }
 
-func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, names []string) error {
+func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, names []string) (retErr error) {
 	if len(names) == 0 {
 		return fmt.Errorf("at least one service name is required")
 	}
@@ -389,6 +391,8 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 	}
 	containerTarget := runtime.Target{Root: p.root, Services: container, EnvFile: p.runtimeEnvFile(stack)}
 	localTarget := runtime.Target{Root: p.root, Services: local, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
+	finish := logctx.Step(ctx, action+" services", slog.Any("services", names))
+	defer func() { finish(retErr) }()
 	switch action {
 	case "up":
 		if len(container) > 0 {
