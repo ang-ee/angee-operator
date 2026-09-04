@@ -243,7 +243,7 @@ tree — typically `docker/Dockerfile` and friends — are reconciled into
 | `workspace_name` | `--workspace` flag. |
 | `workspace_path` | Absolute path to the workspace dir. |
 | `alloc_<pool>` | Allocated port for each pool declared in `ensure`. |
-| Caller inputs | Every key from `--input k=v` plus template `_angee.inputs` defaults. |
+| Caller inputs | Every key from `--input k=v`, over the stack's `workspace_defaults` for the template, over the template's `_angee.inputs` defaults. |
 
 Secret markers (`${secret.foo}`) in the rendered output are resolved
 at compose-render time, not at service-create time.

@@ -264,12 +264,16 @@ type PreflightFailure struct {
 }
 
 type WorkspaceCreatePreflightResponse struct {
-	OK               bool               `json:"ok"`
-	Template         string             `json:"template"`
-	ResolvedTemplate string             `json:"resolved_template"`
-	EffectiveInputs  map[string]string  `json:"effective_inputs"`
-	MissingRequired  []string           `json:"missing_required,omitempty"`
-	InvalidInputs    []PreflightFailure `json:"invalid_inputs,omitempty"`
+	OK               bool              `json:"ok"`
+	Template         string            `json:"template"`
+	ResolvedTemplate string            `json:"resolved_template"`
+	EffectiveInputs  map[string]string `json:"effective_inputs"`
+	// StackDefaults are the host stack's workspace_defaults inputs for the
+	// resolved template, already folded into EffectiveInputs beneath the
+	// request's own inputs.
+	StackDefaults   map[string]string  `json:"stack_defaults,omitempty"`
+	MissingRequired []string           `json:"missing_required,omitempty"`
+	InvalidInputs   []PreflightFailure `json:"invalid_inputs,omitempty"`
 }
 
 type TemplateInputDescriptor struct {

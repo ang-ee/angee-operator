@@ -30,22 +30,23 @@ const (
 )
 
 type Stack struct {
-	Version        int                    `yaml:"version" json:"version" validate:"oneof=1" jsonschema:"required,enum=1"`
-	Kind           string                 `yaml:"kind" json:"kind" validate:"required,oneof=stack" jsonschema:"required,enum=stack"`
-	Name           string                 `yaml:"name" json:"name"`
-	Template       *Template              `yaml:"template,omitempty" json:"template,omitempty"`
-	Operator       Operator               `yaml:"operator,omitempty" json:"operator,omitempty"`
-	SecretsBackend SecretsBackend         `yaml:"secrets_backend,omitempty" json:"secrets_backend,omitempty"`
-	Ingress        Ingress                `yaml:"ingress,omitempty" json:"ingress,omitempty"`
-	Secrets        map[string]Secret      `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Ports          map[string]Port        `yaml:"ports,omitempty" json:"ports,omitempty"`
-	Volumes        map[string]Volume      `yaml:"volumes,omitempty" json:"volumes,omitempty"`
-	Persist        map[string]PersistPath `yaml:"persist,omitempty" json:"persist,omitempty"`
-	Sources        map[string]Source      `yaml:"sources,omitempty" json:"sources,omitempty"`
-	Workspaces     map[string]Workspace   `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
-	Services       map[string]Service     `yaml:"services,omitempty" json:"services,omitempty"`
-	Jobs           map[string]Job         `yaml:"jobs,omitempty" json:"jobs,omitempty"`
-	PortLeases     map[string][]PortLease `yaml:"port_leases,omitempty" json:"port_leases,omitempty"`
+	Version           int                          `yaml:"version" json:"version" validate:"oneof=1" jsonschema:"required,enum=1"`
+	Kind              string                       `yaml:"kind" json:"kind" validate:"required,oneof=stack" jsonschema:"required,enum=stack"`
+	Name              string                       `yaml:"name" json:"name"`
+	Template          *Template                    `yaml:"template,omitempty" json:"template,omitempty"`
+	Operator          Operator                     `yaml:"operator,omitempty" json:"operator,omitempty"`
+	SecretsBackend    SecretsBackend               `yaml:"secrets_backend,omitempty" json:"secrets_backend,omitempty"`
+	Ingress           Ingress                      `yaml:"ingress,omitempty" json:"ingress,omitempty"`
+	Secrets           map[string]Secret            `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Ports             map[string]Port              `yaml:"ports,omitempty" json:"ports,omitempty"`
+	Volumes           map[string]Volume            `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	Persist           map[string]PersistPath       `yaml:"persist,omitempty" json:"persist,omitempty"`
+	Sources           map[string]Source            `yaml:"sources,omitempty" json:"sources,omitempty"`
+	WorkspaceDefaults map[string]WorkspaceDefaults `yaml:"workspace_defaults,omitempty" json:"workspace_defaults,omitempty"`
+	Workspaces        map[string]Workspace         `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
+	Services          map[string]Service           `yaml:"services,omitempty" json:"services,omitempty"`
+	Jobs              map[string]Job               `yaml:"jobs,omitempty" json:"jobs,omitempty"`
+	PortLeases        map[string][]PortLease       `yaml:"port_leases,omitempty" json:"port_leases,omitempty"`
 }
 
 type Template struct {
@@ -172,6 +173,16 @@ type SourceAuth struct {
 type SourceGit struct {
 	UserName  string `yaml:"user_name,omitempty" json:"user_name,omitempty"`
 	UserEmail string `yaml:"user_email,omitempty" json:"user_email,omitempty"`
+}
+
+// WorkspaceDefaults carries the stack's input defaults for every workspace cut
+// from one template. The map is keyed by template ref the way
+// `angee workspace create --template` resolves it (`workspaces/src`; the bare
+// name `src` is accepted). Inputs layer lowest to highest: the template's
+// `_angee.inputs` defaults, these defaults, a declared workspace's `inputs`,
+// then the request's `--input` values.
+type WorkspaceDefaults struct {
+	Inputs map[string]string `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 }
 
 type Workspace struct {
@@ -568,6 +579,9 @@ func (s *Stack) initMaps() {
 	}
 	if s.Sources == nil {
 		s.Sources = map[string]Source{}
+	}
+	if s.WorkspaceDefaults == nil {
+		s.WorkspaceDefaults = map[string]WorkspaceDefaults{}
 	}
 	if s.Workspaces == nil {
 		s.Workspaces = map[string]Workspace{}

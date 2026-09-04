@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
 func TestWorkspaceCreatePreflightFlagsMissingRequired(t *testing.T) {
@@ -115,5 +116,58 @@ _templates_suffix: .jinja
 ` + copierYAML
 	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(full), 0o644); err != nil {
 		t.Fatalf("WriteFile(copier.yml) error = %v", err)
+	}
+}
+
+func TestWorkspaceCreatePreflightAppliesStackWorkspaceDefaults(t *testing.T) {
+	root := t.TempDir()
+	writePreflightTemplate(t, root, `_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    topic:
+      required: true
+    work_state_source:
+      type: str
+      default: ""
+`)
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "host",
+		WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{
+			"dev-pr": {Inputs: map[string]string{"topic": "from-stack", "work_state_source": "work-angee"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	p, _ := New(root)
+
+	// The stack default satisfies the required input on its own.
+	resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{Template: "workspaces/dev-pr"})
+	if err != nil {
+		t.Fatalf("WorkspaceCreatePreflight() error = %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("OK = false, want true (missing=%v, invalid=%v)", resp.MissingRequired, resp.InvalidInputs)
+	}
+	if resp.EffectiveInputs["topic"] != "from-stack" || resp.EffectiveInputs["work_state_source"] != "work-angee" {
+		t.Fatalf("EffectiveInputs = %v, want the stack defaults applied", resp.EffectiveInputs)
+	}
+	if resp.StackDefaults["work_state_source"] != "work-angee" {
+		t.Fatalf("StackDefaults = %v, want the stack's inputs reported", resp.StackDefaults)
+	}
+
+	// An explicit input, even an empty one, wins over the stack default.
+	resp, err = p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{
+		Template: "dev-pr",
+		Inputs:   map[string]string{"topic": "mine", "work_state_source": ""},
+	})
+	if err != nil {
+		t.Fatalf("WorkspaceCreatePreflight() error = %v", err)
+	}
+	if resp.EffectiveInputs["topic"] != "mine" || resp.EffectiveInputs["work_state_source"] != "" {
+		t.Fatalf("EffectiveInputs = %v, want explicit inputs to win", resp.EffectiveInputs)
 	}
 }

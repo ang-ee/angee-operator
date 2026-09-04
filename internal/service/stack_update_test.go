@@ -28,6 +28,10 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 		},
 		Operator:   manifest.Operator{Domain: "op.local", PortPool: map[string]manifest.PortPool{"web": {Range: "8000-8099"}}},
 		Workspaces: map[string]manifest.Workspace{"ws1": {Template: "workspaces/dev"}},
+		WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{
+			"workspaces/src":   {Inputs: map[string]string{"work_state_source": "old-work"}}, // refreshed by theirs
+			"workspaces/extra": {Inputs: map[string]string{"note": "user"}},                  // user-added, preserved
+		},
 		PortLeases: map[string][]manifest.PortLease{"web": {{Port: 8005, Owner: "service/web/web"}}},
 	}
 	theirs := &manifest.Stack{
@@ -42,6 +46,9 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 		},
 		Operator: manifest.Operator{Domain: "TEMPLATE-SHOULD-NOT-WIN"},
 		Template: &manifest.Template{Active: "stacks/dev", AnswersFile: ".copier-answers.yml"},
+		WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{
+			"workspaces/src": {Inputs: map[string]string{"work_state_source": "work-angee"}},
+		},
 	}
 
 	merged := mergeStackFromTemplate(ours, theirs, false)
@@ -66,6 +73,12 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 	}
 	if _, ok := merged.Workspaces["ws1"]; !ok {
 		t.Fatal("workspace lost")
+	}
+	if got := merged.WorkspaceDefaults["workspaces/src"].Inputs["work_state_source"]; got != "work-angee" {
+		t.Fatalf("workspace_defaults/workspaces/src not refreshed from template: %q", got)
+	}
+	if _, ok := merged.WorkspaceDefaults["workspaces/extra"]; !ok {
+		t.Fatal("user-added workspace_defaults entry was dropped")
 	}
 	if len(merged.PortLeases["web"]) == 0 {
 		t.Fatal("port lease lost")
@@ -94,12 +107,16 @@ func TestSummarizeStackChangesReportsAddedAndModified(t *testing.T) {
 			"frontend": {Image: "vite:1.0"},  // added
 		},
 		Jobs: map[string]manifest.Job{"deps": {}}, // added
+		WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{ // added
+			"workspaces/src": {Inputs: map[string]string{"work_state_source": "work-angee"}},
+		},
 	}
 	changes := summarizeStackChanges(ours, merged)
 	want := map[string]bool{
-		"~ services/web":      true,
-		"+ services/frontend": true,
-		"+ jobs/deps":         true,
+		"~ services/web":                      true,
+		"+ services/frontend":                 true,
+		"+ jobs/deps":                         true,
+		"+ workspace_defaults/workspaces/src": true,
 	}
 	if len(changes) != len(want) {
 		t.Fatalf("changes = %v, want keys %v", changes, want)
