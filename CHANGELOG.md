@@ -6,6 +6,15 @@ latest tag.
 
 ## Unreleased
 
+## v0.12.1 — 2026-09-04
+
+### Fixed
+
+- **Container images report their release version.** The operator and CLI
+  images stamped only the CLI's version variable, so `angee-operator --version`
+  inside the published image (and the operator's startup log) said `dev`. Both
+  Dockerfiles now set `internal/operator.Version` as well, matching `make build`.
+
 ## v0.12.0 — 2026-09-04
 
 ### Added
