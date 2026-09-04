@@ -222,6 +222,64 @@ services:
 Container services require `image` or `build`. Local services require
 `command` and must not set `image`.
 
+### Readiness probes
+
+A service can declare when it is ready to accept work. Set exactly one probe
+kind under `ready`:
+
+```yaml
+services:
+  api:
+    runtime: container
+    image: example/api:latest
+    ready:
+      http:
+        port: 8080
+        path: /healthz       # default: /
+      interval: 5s          # default: 5s
+      timeout: 3s           # default: 3s
+      retries: 12           # default: 12, minimum: 1
+      start_period: 0s      # default: 0s
+
+  database:
+    runtime: container
+    image: postgres:18
+    ready:
+      tcp:
+        port: 5432
+
+  worker:
+    runtime: local
+    command: ["python", "worker.py"]
+    workdir: source://app
+    ready:
+      cmd: ["python", "manage.py", "check"]
+
+  assets:
+    runtime: local
+    command: ["npm", "run", "watch"]
+    workdir: source://app
+    ready:
+      file: dist/index.html
+```
+
+`http` succeeds when the endpoint responds successfully, `tcp` when the port
+accepts a connection, `cmd` when the command exits with status 0, and `file`
+when the path exists and is non-empty. Commands run inside the container or in
+the local process's workdir. Relative file paths also resolve against that
+workdir. Timing values use Go duration syntax, such as `500ms`, `5s`, or `1m`;
+local services round them up to whole seconds because process-compose probes
+count in seconds.
+
+Container `http` probes require `wget` or `curl` in the image, and container
+`tcp` probes require `nc`. Container `file` and `cmd` probes are always safe
+from this image-utility caveat and are the preferred choice for minimal images.
+
+When `after:` or `depends_on:` targets a service with `ready`, Angee waits for
+the target to become healthy. A target without `ready` keeps the existing
+started-only behavior. Dependencies on jobs still wait for successful job
+completion. This applies to both Docker Compose and process-compose runtimes.
+
 ## Jobs
 
 ```yaml

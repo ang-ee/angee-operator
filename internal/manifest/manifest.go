@@ -235,6 +235,7 @@ type Service struct {
 	After     []string          `yaml:"after,omitempty" json:"after,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	Route     *Route            `yaml:"route,omitempty" json:"route,omitempty"`
+	Ready     *ReadyProbe       `yaml:"ready,omitempty" json:"ready,omitempty"`
 }
 
 type Route struct {
@@ -242,6 +243,56 @@ type Route struct {
 	Host string `yaml:"host,omitempty" json:"host,omitempty"`
 	Path string `yaml:"path,omitempty" json:"path,omitempty"`
 	Auth string `yaml:"auth,omitempty" json:"auth,omitempty" validate:"omitempty,oneof=forward none" jsonschema:"enum=forward,enum=none"`
+}
+
+type ReadyProbe struct {
+	HTTP        *ReadyHTTP `yaml:"http,omitempty" json:"http,omitempty" jsonschema:"oneof_required=http"`
+	TCP         *ReadyTCP  `yaml:"tcp,omitempty" json:"tcp,omitempty" jsonschema:"oneof_required=tcp"`
+	Cmd         []string   `yaml:"cmd,omitempty" json:"cmd,omitempty" jsonschema:"oneof_required=cmd,minItems=1"`
+	File        string     `yaml:"file,omitempty" json:"file,omitempty" jsonschema:"oneof_required=file,minLength=1"`
+	Interval    string     `yaml:"interval,omitempty" json:"interval,omitempty" jsonschema:"default=5s"`
+	Timeout     string     `yaml:"timeout,omitempty" json:"timeout,omitempty" jsonschema:"default=3s"`
+	Retries     *int       `yaml:"retries,omitempty" json:"retries,omitempty" validate:"omitempty,gte=1" jsonschema:"minimum=1,default=12"`
+	StartPeriod string     `yaml:"start_period,omitempty" json:"start_period,omitempty" jsonschema:"default=0s"`
+}
+
+type ReadyHTTP struct {
+	Port int    `yaml:"port" json:"port" validate:"required,gte=1,lte=65535" jsonschema:"required,minimum=1,maximum=65535"`
+	Path string `yaml:"path,omitempty" json:"path,omitempty" jsonschema:"default=/"`
+}
+
+type ReadyTCP struct {
+	Port int `yaml:"port" json:"port" validate:"required,gte=1,lte=65535" jsonschema:"required,minimum=1,maximum=65535"`
+}
+
+// Normalized returns a copy of the readiness probe with documented defaults
+// applied. It never mutates the manifest, so omitted defaults stay omitted
+// when an existing manifest is saved again.
+func (p ReadyProbe) Normalized() ReadyProbe {
+	normalized := p
+	if normalized.HTTP != nil {
+		httpProbe := *normalized.HTTP
+		if httpProbe.Path == "" {
+			httpProbe.Path = "/"
+		} else if !strings.HasPrefix(httpProbe.Path, "/") {
+			httpProbe.Path = "/" + httpProbe.Path
+		}
+		normalized.HTTP = &httpProbe
+	}
+	if normalized.Interval == "" {
+		normalized.Interval = "5s"
+	}
+	if normalized.Timeout == "" {
+		normalized.Timeout = "3s"
+	}
+	if normalized.Retries == nil {
+		defaultRetries := 12
+		normalized.Retries = &defaultRetries
+	}
+	if normalized.StartPeriod == "" {
+		normalized.StartPeriod = "0s"
+	}
+	return normalized
 }
 
 // PathPrefix returns the normalized public prefix for path routing: a single
@@ -442,6 +493,9 @@ func (s *Stack) Validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("manifest name is required")
 	}
+	if err := s.validateReadiness(); err != nil {
+		return err
+	}
 	if err := validateStruct(s); err != nil {
 		return err
 	}
@@ -539,6 +593,70 @@ func (s *Stack) ValidateExtended() error {
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Stack) validateReadiness() error {
+	for name, service := range s.Services {
+		if err := validateReadyProbe(name, service.Ready); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateReadyProbe(serviceName string, probe *ReadyProbe) error {
+	if probe == nil {
+		return nil
+	}
+
+	kinds := 0
+	if probe.HTTP != nil {
+		kinds++
+	}
+	if probe.TCP != nil {
+		kinds++
+	}
+	if probe.Cmd != nil {
+		kinds++
+	}
+	if probe.File != "" {
+		kinds++
+	}
+	if kinds != 1 {
+		return fmt.Errorf("service %q: ready must set exactly one of http, tcp, cmd, or file", serviceName)
+	}
+
+	if probe.HTTP != nil && (probe.HTTP.Port < 1 || probe.HTTP.Port > 65535) {
+		return fmt.Errorf("service %q: ready.http.port must be between 1 and 65535", serviceName)
+	}
+	if probe.TCP != nil && (probe.TCP.Port < 1 || probe.TCP.Port > 65535) {
+		return fmt.Errorf("service %q: ready.tcp.port must be between 1 and 65535", serviceName)
+	}
+	if probe.Cmd != nil && len(probe.Cmd) == 0 {
+		return fmt.Errorf("service %q: ready.cmd must contain at least one argument", serviceName)
+	}
+	if probe.File != "" && strings.TrimSpace(probe.File) == "" {
+		return fmt.Errorf("service %q: ready.file must not be empty", serviceName)
+	}
+
+	normalized := probe.Normalized()
+	durations := []struct {
+		name  string
+		value string
+	}{
+		{name: "interval", value: normalized.Interval},
+		{name: "timeout", value: normalized.Timeout},
+		{name: "start_period", value: normalized.StartPeriod},
+	}
+	for _, duration := range durations {
+		if _, err := time.ParseDuration(duration.value); err != nil {
+			return fmt.Errorf("service %q: ready.%s must be a valid duration: %w", serviceName, duration.name, err)
+		}
+	}
+	if normalized.Retries == nil || *normalized.Retries < 1 {
+		return fmt.Errorf("service %q: ready.retries must be at least 1", serviceName)
 	}
 	return nil
 }
