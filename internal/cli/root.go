@@ -27,11 +27,7 @@ import (
 var Version = "dev"
 
 func Execute() error {
-	// SIGQUIT (Ctrl-\) is caught alongside SIGINT/SIGTERM so `angee dev`'s
-	// interactive control loop — which puts the terminal in cbreak mode — gets
-	// to run its deferred restore instead of the process dying on the default
-	// SIGQUIT action and leaving the shell with echo/canonical input off.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return NewRootWithIO(os.Stdin, os.Stdout, os.Stderr).ExecuteContext(ctx)
 }
@@ -347,9 +343,9 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 		Short: "Run the local development stack",
 		Long: "Run the local development stack, streaming logs from every service\n" +
 			"regardless of runtime (container and local) into one foreground stream.\n\n" +
-			"When attached to a terminal, press any key for an interactive control\n" +
-			"menu: R restarts a chosen service (or the whole stack), Q stops one\n" +
-			"service or quits everything. Restarting a stopped service starts it.\n\n" +
+			"Press Ctrl-C to stop the whole stack. To restart or stop a single service\n" +
+			"while it runs, use `angee restart <name>` or `angee stop <name>` from\n" +
+			"another shell.\n\n" +
 			"Examples:\n" +
 			"  angee dev            # bring everything up and stream all logs\n" +
 			"  angee dev --build    # rebuild container images first, then stream\n" +
@@ -367,7 +363,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 				_, err := fmt.Fprintln(stdout, "dev stack started in background")
 				return err
 			}
-			return runDevForeground(cmd, platform, devBuild, stdout)
+			return platform.StackDevForeground(cmd.Context(), devBuild, stdout, cmd.ErrOrStderr())
 		},
 	}
 	devCmd.Flags().BoolVar(&devBuild, "build", false, "build container images before starting")

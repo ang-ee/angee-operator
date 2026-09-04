@@ -70,10 +70,6 @@ linters:
         - G704
         # G705: XSS via taint — we write child stdout to a terminal, not HTML.
         - G705
-        # G115: the only int(x) narrowings here are int(file.Fd()) for terminal
-        # control; terminal descriptors are small non-negative ints, so the
-        # uintptr->int conversion cannot overflow.
-        - G115
 
   exclusions:
     rules:
