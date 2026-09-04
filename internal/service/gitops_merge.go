@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
 // WorkspaceSourceMerge merges `ref` into the workspace source slot's
@@ -94,12 +96,15 @@ func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string
 func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpResult, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
-	cmd.Env = gitOpEnv()
+	env := gitOpEnv()
+	cmd.Env = env
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	trace := logctx.TraceExec(ctx, "git", args, workdir, slog.Any("env", logctx.EnvKeys(env)))
 	runErr := cmd.Run()
+	trace(combineCapturedOutput(stdout.Bytes(), stderr.Bytes()), runErr)
 	combined := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
 
 	result := api.GitOpResult{
@@ -125,6 +130,16 @@ func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpR
 	return result, fmt.Errorf("git %s in %s: %w", strings.Join(args, " "), workdir, runErr)
 }
 
+func combineCapturedOutput(stdout, stderr []byte) []byte {
+	if len(stdout) == 0 {
+		return stderr
+	}
+	if len(stderr) == 0 {
+		return stdout
+	}
+	return append(append([]byte(nil), stdout...), stderr...)
+}
+
 func runGitCapture(ctx context.Context, workdir string, args ...string) (string, error) {
 	// Force core.quotepath=false so non-ASCII paths come back as raw UTF-8
 	// rather than `\NNN`-escaped strings. Callers parse the output (e.g.
@@ -132,8 +147,11 @@ func runGitCapture(ctx context.Context, workdir string, args ...string) (string,
 	full := append([]string{"-c", "core.quotepath=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = workdir
-	cmd.Env = gitOpEnv()
+	env := gitOpEnv()
+	cmd.Env = env
+	trace := logctx.TraceExec(ctx, "git", full, workdir, slog.Any("env", logctx.EnvKeys(env)))
 	out, err := cmd.Output()
+	trace(out, err)
 	return string(out), err
 }
 

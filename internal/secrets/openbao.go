@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
 type OpenBaoConfig struct {
@@ -36,6 +38,8 @@ func NewOpenBaoBackend(config OpenBaoConfig) *OpenBaoBackend {
 	if config.Path == "" {
 		config.Path = "angee"
 	}
+	// The vault token must never appear in diagnostics, whatever prints it.
+	logctx.RegisterSecrets(config.Token)
 	return &OpenBaoBackend{config: config, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
@@ -90,7 +94,8 @@ func (b *OpenBaoBackend) request(ctx context.Context, method, path string, body 
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(b.config.Address, "/")+path, reader)
+	endpoint := strings.TrimRight(b.config.Address, "/") + path
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		return 0, err
 	}
@@ -100,21 +105,28 @@ func (b *OpenBaoBackend) request(ctx context.Context, method, path string, body 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	trace := logctx.TraceHTTP(ctx, method, endpoint)
 	resp, err := b.client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
+		trace(resp.StatusCode, nil)
 		return resp.StatusCode, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, fmt.Errorf("openbao request failed with status %d", resp.StatusCode)
+		err := fmt.Errorf("openbao request failed with status %d", resp.StatusCode)
+		trace(resp.StatusCode, err)
+		return resp.StatusCode, err
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			trace(resp.StatusCode, err)
 			return resp.StatusCode, err
 		}
 	}
+	trace(resp.StatusCode, nil)
 	return resp.StatusCode, nil
 }

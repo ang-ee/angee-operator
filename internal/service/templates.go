@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
 // The default template registry: the repository that bare and kind-qualified
@@ -65,7 +67,9 @@ func (p *Platform) resolveRemoteTemplate(ctx context.Context, ref, kind string) 
 // clone, leaving the worktree detached at ref. A branch ref tracks its remote
 // (`origin/<ref>`) and the empty ref tracks the remote default branch, so a
 // moving ref never serves a stale cache; a tag or SHA detaches at it verbatim.
-func refreshTemplateRepo(ctx context.Context, repoURL, repoDir, ref string) error {
+func refreshTemplateRepo(ctx context.Context, repoURL, repoDir, ref string) (retErr error) {
+	finish := logctx.Step(ctx, "refreshing template registry", slog.String("url", logctx.RedactURL(repoURL)))
+	defer func() { finish(retErr) }()
 	client := git.New()
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil {
 		if err := client.Fetch(ctx, repoDir); err != nil {

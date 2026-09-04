@@ -1,0 +1,489 @@
+package logctx
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"net/url"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+)
+
+func TestLevelFromCount(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+		want  slog.Level
+	}{
+		{name: "negative", count: -1, want: slog.LevelWarn},
+		{name: "default", count: 0, want: slog.LevelWarn},
+		{name: "verbose", count: 1, want: slog.LevelInfo},
+		{name: "very verbose", count: 2, want: slog.LevelDebug},
+		{name: "clamped", count: 8, want: slog.LevelDebug},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := LevelFromCount(test.count); got != test.want {
+				t.Fatalf("LevelFromCount(%d) = %v, want %v", test.count, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCountFromEnv(t *testing.T) {
+	const missingName = "ANGEE_LOGCTX_TEST_MISSING"
+	original, existed := os.LookupEnv(missingName)
+	if err := os.Unsetenv(missingName); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(missingName, original)
+		} else {
+			_ = os.Unsetenv(missingName)
+		}
+	})
+	if got, ok := CountFromEnv(missingName); got != 0 || ok {
+		t.Fatalf("CountFromEnv(unset) = (%d, %t), want (0, false)", got, ok)
+	}
+
+	const name = "ANGEE_LOGCTX_TEST_VERBOSE"
+	tests := []struct {
+		value string
+		want  int
+		ok    bool
+	}{
+		{value: "", want: 0, ok: true},
+		{value: "0", want: 0, ok: true},
+		{value: "1", want: 1, ok: true},
+		{value: "2", want: 2, ok: true},
+		{value: "9", want: 2, ok: true},
+		{value: "-1", want: 0, ok: false},
+		{value: "debug", want: 0, ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			t.Setenv(name, test.value)
+			got, ok := CountFromEnv(name)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("CountFromEnv(%q) = (%d, %t), want (%d, %t)", test.value, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestCLIHandlerRendering(t *testing.T) {
+	t.Run("warn", func(t *testing.T) {
+		var output bytes.Buffer
+		logger := slog.New(NewCLIHandler(&output, slog.LevelWarn))
+		logger.Info("hidden")
+		logger.Warn("source refresh failed", "source", "django")
+		logger.Error("operation failed", "attempt", 2)
+
+		want := "warning: source refresh failed source=django\n" +
+			"error: operation failed attempt=2\n"
+		if got := output.String(); got != want {
+			t.Fatalf("output = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("info", func(t *testing.T) {
+		var output bytes.Buffer
+		logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+		logger.Debug("hidden")
+		logger.Info("refreshing source", "source", "django")
+
+		if got, want := output.String(), "angee: refreshing source source=django\n"; got != want {
+			t.Fatalf("output = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("debug elapsed prefix", func(t *testing.T) {
+		var output bytes.Buffer
+		logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+		logger.Debug("running command", "argv", "git fetch")
+		logger.Warn("slow command")
+
+		pattern := `(?m)^\[\+\d+\.\d{3}s\] angee: running command argv="git fetch"\n` +
+			`\[\+\d+\.\d{3}s\] warning: slow command\n$`
+		if !regexp.MustCompile(pattern).MatchString(output.String()) {
+			t.Fatalf("output = %q, want elapsed debug prefixes", output.String())
+		}
+	})
+
+	t.Run("structured attrs", func(t *testing.T) {
+		var output bytes.Buffer
+		handler := NewCLIHandler(&output, slog.LevelInfo).
+			WithAttrs([]slog.Attr{slog.String("component", "operator api")}).
+			WithGroup("request")
+		logger := slog.New(handler)
+		logger.Info("handled", slog.Int("status", 200), slog.Group("timing", slog.Duration("duration", time.Second)))
+
+		want := "angee: handled component=\"operator api\" request.status=200 request.timing.duration=1s\n"
+		if got := output.String(); got != want {
+			t.Fatalf("output = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestRedactURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "username and password", in: "https://alexis:secret@example.com/repo?q=1", want: "https://***@example.com/repo?q=1"},
+		{name: "username", in: "ssh://git@example.com/repo", want: "ssh://***@example.com/repo"},
+		{name: "no userinfo", in: "https://example.com/repo", want: "https://example.com/repo"},
+		{name: "invalid", in: "://%", want: "://%"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := RedactURL(test.in); got != test.want {
+				t.Fatalf("RedactURL(%q) = %q, want %q", test.in, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRedactArgs(t *testing.T) {
+	args := []string{
+		"deploy",
+		"--token", "secret-token",
+		"--password=hunter2",
+		"--jwt-secret", "signed",
+		"-e", "API_TOKEN=env-secret",
+		"--env=OTHER_SECRET=other-secret",
+		"-e", "--token", "secret-after-non-env-e",
+		"ssh://git:credential@example.com/repo",
+		"--other=value",
+	}
+	want := []string{
+		"deploy",
+		"--token", "***",
+		"--password=***",
+		"--jwt-secret", "***",
+		"-e", "API_TOKEN=***",
+		"--env=OTHER_SECRET=***",
+		"-e", "--token", "***",
+		"ssh://***@example.com/repo",
+		"--other=value",
+	}
+	got := RedactArgs(args)
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("RedactArgs() = %#v, want %#v", got, want)
+	}
+	if args[2] != "secret-token" || args[3] != "--password=hunter2" {
+		t.Fatalf("RedactArgs mutated input: %#v", args)
+	}
+}
+
+func TestTraceExecLogsRedactedCommandAndCompletion(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	ctx := With(t.Context(), logger)
+	complete := TraceExec(ctx, "deploy", []string{
+		"--token", "secret-token",
+		"--env", "API_TOKEN=env-secret",
+		"https://alexis:password@example.com/repo",
+	}, "/tmp/work", slog.String("component", "test"))
+	exitErr := exec.Command("sh", "-c", "exit 7").Run()
+	complete([]byte(strings.Repeat("x", 4100)), exitErr)
+	before := output.String()
+	complete([]byte("ignored"), errors.New("ignored"))
+
+	got := output.String()
+	for _, want := range []string{
+		"exec deploy --token *** --env API_TOKEN=*** https://***@example.com/repo dir=/tmp/work component=test",
+		"exec finished duration=",
+		"exit_code=7",
+		"(4 bytes truncated)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trace output = %q, want %q", got, want)
+		}
+	}
+	for _, secret := range []string{"secret-token", "env-secret", "alexis", "password"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("trace output leaked %q: %q", secret, got)
+		}
+	}
+	if got != before {
+		t.Fatalf("second completion changed output: before %q, after %q", before, got)
+	}
+}
+
+func TestTraceHTTPLogsRedactedURLAndCompletion(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	ctx := With(t.Context(), logger)
+	complete := TraceHTTP(ctx, "get", "https://alexis:secret@example.com/v1/status")
+	complete(0, &url.Error{
+		Op:  "Get",
+		URL: "https://transport-user:transport-password@example.com/v1/status",
+		Err: errors.New("request failed"),
+	})
+	before := output.String()
+	complete(500, errors.New("ignored"))
+
+	got := output.String()
+	if !strings.Contains(got, "http GET https://***@example.com/v1/status") ||
+		!strings.Contains(got, "http finished status=0 duration=") ||
+		!strings.Contains(got, "https://***@example.com/v1/status") {
+		t.Fatalf("trace output = %q", got)
+	}
+	for _, secret := range []string{"alexis", "secret", "transport-user", "transport-password"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("trace output leaked URL userinfo %q: %q", secret, got)
+		}
+	}
+	if got != before {
+		t.Fatalf("second completion changed output: before %q, after %q", before, got)
+	}
+}
+
+func TestTraceHelpersDoNothingWhenDebugDisabled(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+	ctx := With(t.Context(), logger)
+	TraceExec(ctx, "tool", []string{"--token", "secret"}, "")(nil, nil)
+	TraceHTTP(ctx, "GET", "https://user:secret@example.com")(200, nil)
+	if output.Len() != 0 {
+		t.Fatalf("output = %q, want none", output.String())
+	}
+}
+
+func TestEnvKeys(t *testing.T) {
+	got := EnvKeys([]string{"PATH=/bin", "TOKEN=secret=value", "EMPTY=", "INVALID", "=missing"})
+	want := []string{"PATH", "TOKEN", "EMPTY"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("EnvKeys() = %#v, want %#v", got, want)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []byte
+		max  int
+		want string
+	}{
+		{name: "under limit", in: []byte("hello"), max: 5, want: "hello"},
+		{name: "truncated", in: []byte("abcdefgh"), max: 5, want: "abcde … (3 bytes truncated)"},
+		{name: "zero", in: []byte("abc"), max: 0, want: " … (3 bytes truncated)"},
+		{name: "negative", in: []byte("abc"), max: -1, want: " … (3 bytes truncated)"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Truncate(test.in, test.max); got != test.want {
+				t.Fatalf("Truncate() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFromWithoutLogger(t *testing.T) {
+	logger := From(context.Background())
+	if logger == nil {
+		t.Fatal("From returned nil")
+	}
+	if !logger.Enabled(context.Background(), slog.LevelWarn) || !logger.Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("default logger does not enable warnings and errors")
+	}
+	if logger.Enabled(context.Background(), slog.LevelInfo) {
+		t.Fatal("default logger unexpectedly enables info output")
+	}
+
+	ctx := With(context.Background(), nil)
+	if got := From(ctx); got != logger {
+		t.Fatal("With(nil) did not install the package default logger")
+	}
+}
+
+func TestStepInfoHeartbeatAndCompletion(t *testing.T) {
+	withStepTimings(t, 10*time.Millisecond, 15*time.Millisecond, 40*time.Millisecond)
+	synctest.Test(t, func(t *testing.T) {
+		var output synchronizedBuffer
+		logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+		ctx := With(t.Context(), logger)
+		complete, stopped := startStep(ctx, "refreshing source", slog.String("source", "django"))
+
+		synctest.Wait()
+		if got := output.String(); !strings.Contains(got, "angee: refreshing source source=django") {
+			t.Fatalf("start output = %q", got)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
+		if got := output.String(); !strings.Contains(got, "angee: still refreshing source (10ms) source=django") {
+			t.Fatalf("first heartbeat output = %q", got)
+		}
+
+		time.Sleep(15 * time.Millisecond)
+		synctest.Wait()
+		if got := output.String(); !strings.Contains(got, "angee: still refreshing source (25ms) source=django") {
+			t.Fatalf("second heartbeat output = %q", got)
+		}
+
+		complete(nil)
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("heartbeat goroutine did not stop before completion returned")
+		}
+		if got := output.String(); !strings.Contains(got, "angee: finished refreshing source source=django duration=25ms") {
+			t.Fatalf("completion output = %q", got)
+		}
+
+		before := output.String()
+		complete(errors.New("ignored"))
+		if got := output.String(); got != before {
+			t.Fatalf("second completion logged output: before %q, after %q", before, got)
+		}
+	})
+}
+
+func TestStepWarnHeartbeatAndFailure(t *testing.T) {
+	withStepTimings(t, 10*time.Millisecond, 15*time.Millisecond, 30*time.Millisecond)
+	synctest.Test(t, func(t *testing.T) {
+		var output synchronizedBuffer
+		logger := slog.New(NewCLIHandler(&output, slog.LevelWarn))
+		ctx := With(t.Context(), logger)
+		complete, stopped := startStep(ctx, "waiting for lock")
+
+		time.Sleep(30 * time.Millisecond)
+		synctest.Wait()
+		if got, want := output.String(), "warning: still waiting for lock after 30ms\n"; got != want {
+			t.Fatalf("heartbeat output = %q, want %q", got, want)
+		}
+
+		complete(errors.New("lock unavailable with secret-token"))
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("heartbeat goroutine did not stop before completion returned")
+		}
+		if got := output.String(); strings.Contains(got, "finished") || strings.Contains(got, "failed") {
+			t.Fatalf("a failed step must not add a warning at the default level: %q", got)
+		}
+		if got := output.String(); strings.Contains(got, "secret-token") {
+			t.Fatalf("failure output contains raw error text: %q", got)
+		}
+	})
+}
+
+func TestStepFailureIsAnInfoBreadcrumb(t *testing.T) {
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+	complete := Step(With(context.Background(), logger), "compiling stack")
+	complete(errors.New("boom with secret-token"))
+	got := output.String()
+	if !strings.Contains(got, "angee: compiling stack\n") || !strings.Contains(got, "angee: compiling stack failed duration=") {
+		t.Fatalf("failure output = %q", got)
+	}
+	if strings.Contains(got, "secret-token") {
+		t.Fatalf("failure output contains raw error text: %q", got)
+	}
+}
+
+func TestSanitizeTextEscapesControlCharacters(t *testing.T) {
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+	logger.Info("exec sh -c line one\nwarning: forged line two\x1b[0m")
+	got := output.String()
+	if strings.Count(got, "\n") != 1 || !strings.Contains(got, `line one\nwarning: forged line two\x1b[0m`) {
+		t.Fatalf("message was not sanitized: %q", got)
+	}
+}
+
+func TestRegisterSecretsMasksLoggedText(t *testing.T) {
+	RegisterSecrets("s3cr3t-value-for-test", "ab")
+	if got := RedactText("token=s3cr3t-value-for-test rest ab"); got != "token=*** rest ab" {
+		t.Fatalf("RedactText = %q", got)
+	}
+	if got := RedactArgs([]string{"-e", "PASSWORD=s3cr3t-value-for-test", "s3cr3t-value-for-test"}); got[2] != "***" {
+		t.Fatalf("RedactArgs = %q", got)
+	}
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	done := TraceExec(With(context.Background(), logger), "sh", []string{"-c", "echo"}, "")
+	done([]byte("printed s3cr3t-value-for-test\n"), nil)
+	if got := output.String(); strings.Contains(got, "s3cr3t-value-for-test") {
+		t.Fatalf("captured output leaked a registered secret: %q", got)
+	}
+}
+
+func TestRedactText(t *testing.T) {
+	in := "origin\thttps://alexis:secret@example.com/repo (fetch)\nssh://git@host/x and plain text user@example.com"
+	want := "origin\thttps://***@example.com/repo (fetch)\nssh://***@host/x and plain text user@example.com"
+	if got := RedactText(in); got != want {
+		t.Fatalf("RedactText = %q, want %q", got, want)
+	}
+}
+
+func TestTraceExecScrubsCapturedOutput(t *testing.T) {
+	var output synchronizedBuffer
+	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
+	done := TraceExec(With(context.Background(), logger), "git", []string{"remote", "-v"}, "")
+	done([]byte("origin https://alexis:secret@example.com/repo (fetch)\n"), nil)
+	got := output.String()
+	if strings.Contains(got, "secret") || !strings.Contains(got, "https://***@example.com/repo") {
+		t.Fatalf("captured output was not scrubbed: %q", got)
+	}
+}
+
+func TestStepContextCancellationStopsHeartbeat(t *testing.T) {
+	withStepTimings(t, 10*time.Millisecond, 15*time.Millisecond, 30*time.Millisecond)
+	synctest.Test(t, func(t *testing.T) {
+		var output synchronizedBuffer
+		logger := slog.New(NewCLIHandler(&output, slog.LevelInfo))
+		base, cancel := context.WithCancel(t.Context())
+		_, stopped := startStep(With(base, logger), "canceled step")
+		cancel()
+		synctest.Wait()
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("heartbeat goroutine leaked after context cancellation")
+		}
+	})
+}
+
+func withStepTimings(t *testing.T, firstInfo, infoInterval, warn time.Duration) {
+	t.Helper()
+	oldFirstInfo := stepFirstInfoDelay
+	oldInfoInterval := stepInfoInterval
+	oldWarn := stepWarnDelay
+	stepFirstInfoDelay = firstInfo
+	stepInfoInterval = infoInterval
+	stepWarnDelay = warn
+	t.Cleanup(func() {
+		stepFirstInfoDelay = oldFirstInfo
+		stepInfoInterval = oldInfoInterval
+		stepWarnDelay = oldWarn
+	})
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}

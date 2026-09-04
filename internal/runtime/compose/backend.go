@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
@@ -25,7 +26,9 @@ type ExecRunner struct{}
 func (ExecRunner) Run(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	trace := logctx.TraceExec(ctx, name, args, dir)
 	out, err := cmd.CombinedOutput()
+	trace(out, err)
 	if err != nil {
 		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -192,8 +195,11 @@ func (b Backend) runLimited(ctx context.Context, root string, maxBytes int, args
 	cmd.Dir = root
 	cmd.Stdout = buf
 	cmd.Stderr = buf
-	if err := cmd.Run(); err != nil {
-		return buf.Bytes(), fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(buf.Bytes())))
+	trace := logctx.TraceExec(ctx, "docker", args, root)
+	runErr := cmd.Run()
+	trace(buf.Bytes(), runErr)
+	if runErr != nil {
+		return buf.Bytes(), fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), runErr, strings.TrimSpace(string(buf.Bytes())))
 	}
 	return buf.Bytes(), nil
 }
@@ -222,14 +228,17 @@ func (b Backend) runForeground(ctx context.Context, root string, stdout io.Write
 		}
 		cmd.WaitDelay = runtime.GracefulWaitDelay
 	}
-	if err := cmd.Run(); err != nil {
+	trace := logctx.TraceExec(ctx, "docker", args, root)
+	runErr := cmd.Run()
+	trace(nil, runErr)
+	if runErr != nil {
 		// A graceful shutdown via context cancellation (Ctrl-C, or a sibling
 		// backend exiting) is the expected way out of an attached run — not an
 		// error to surface.
 		if graceful && ctx.Err() != nil {
 			return nil
 		}
-		return fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
+		return fmt.Errorf("docker %s: %w", strings.Join(args, " "), runErr)
 	}
 	return nil
 }

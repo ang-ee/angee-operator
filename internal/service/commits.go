@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -70,7 +70,7 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		c, err := walker.Next()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				fmt.Fprintf(os.Stderr, "operator: commit walk on %s truncated: %v\n", repoPath, err)
+				logctx.From(ctx).Warn(fmt.Sprintf("commit walk on %s truncated: %v", repoPath, err))
 			}
 			break
 		}

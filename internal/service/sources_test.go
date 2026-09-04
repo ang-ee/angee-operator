@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
@@ -44,11 +47,16 @@ func newUnreachableGitSource(t *testing.T) (*Platform, string, manifest.Source) 
 // materialize from that cache even when the refresh fetch can no longer reach
 // the remote: bring-up and provisioning must not hard-fail on the refresh.
 func TestMaterializeSourceBestEffortRefreshKeepsCache(t *testing.T) {
-	ctx := context.Background()
+	var stderr bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&stderr, slog.LevelWarn)))
 	p, cache, source := newUnreachableGitSource(t)
 
 	if err := p.materializeSource(ctx, "app", source, true); err != nil {
 		t.Fatalf("materializeSource(bestEffort) with an unreachable remote and an existing cache = %v, want nil", err)
+	}
+	wantWarning := "warning: could not refresh source \"app\"; using the existing cache (update it with `angee source pull app`)\n"
+	if got := stderr.String(); got != wantWarning {
+		t.Fatalf("warning output = %q, want %q", got, wantWarning)
 	}
 	if !git.New().RefExists(ctx, cache, "main") {
 		t.Fatalf("cache lost its main ref after a best-effort refresh")

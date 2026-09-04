@@ -1,13 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
@@ -95,6 +98,50 @@ func TestStackPrepareWritesSecretSafeGeneratedFiles(t *testing.T) {
 	}
 	if !strings.Contains(string(envData), "ANGEE_SECRET_POSTGRES_PASSWORD") || !strings.Contains(string(envData), "super-secret") {
 		t.Fatalf("env file does not contain runtime secret env var: %s", envData)
+	}
+}
+
+func TestStackPrepareNarratesPhasesInOrder(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "narration-test",
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	platform, err := NewWithBackends(root, stubStatusBackend{}, stubStatusBackend{})
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	var logs bytes.Buffer
+	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))
+	if _, err := platform.StackPrepare(ctx); err != nil {
+		t.Fatalf("StackPrepare: %v", err)
+	}
+
+	output := logs.String()
+	position := 0
+	for _, phase := range []string{
+		"loading stack",
+		"materializing sources",
+		"materializing declared workspaces",
+		"compiling stack",
+		"writing runtime files",
+	} {
+		start := "angee: " + phase + "\n"
+		index := strings.Index(output[position:], start)
+		if index < 0 {
+			t.Fatalf("missing phase %q after byte %d in logs:\n%s", phase, position, output)
+		}
+		position += index + len(start)
+		finished := "angee: finished " + phase + " duration="
+		index = strings.Index(output[position:], finished)
+		if index < 0 {
+			t.Fatalf("missing duration-bearing completion for %q in logs:\n%s", phase, output)
+		}
+		position += index + len(finished)
 	}
 }
 

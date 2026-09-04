@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/service"
@@ -92,18 +93,22 @@ func New(baseURL string) *RemoteClient {
 func (p *RemoteClient) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint("/healthz", nil), nil)
+	endpoint := p.endpoint("/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
+	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
 	resp, err := p.client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return err
 	}
 	// Drain before closing so the keep-alive connection can be reused by the
 	// StackInit request that follows to the same operator.
-	_, _ = io.Copy(io.Discard, resp.Body)
+	_, readErr := io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	trace(resp.StatusCode, readErr)
 	return nil
 }
 
@@ -630,29 +635,38 @@ func (p *RemoteClient) doJSON(ctx context.Context, method, path string, query ur
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, p.endpoint(path, query), body)
+	endpoint := p.endpoint(path, query)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return err
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	trace := logctx.TraceHTTP(ctx, method, endpoint)
 	resp, err := p.client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		trace(resp.StatusCode, err)
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		return operatorHTTPError(resp.StatusCode, data)
+		err := operatorHTTPError(resp.StatusCode, data)
+		trace(resp.StatusCode, err)
+		return err
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
+		trace(resp.StatusCode, nil)
 		return nil
 	}
-	return json.Unmarshal(data, out)
+	err = json.Unmarshal(data, out)
+	trace(resp.StatusCode, err)
+	return err
 }
 
 func (p *RemoteClient) doBytes(ctx context.Context, method, path string, query url.Values, in any) ([]byte, error) {
@@ -660,53 +674,76 @@ func (p *RemoteClient) doBytes(ctx context.Context, method, path string, query u
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, p.endpoint(path, query), body)
+	endpoint := p.endpoint(path, query)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return nil, err
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	trace := logctx.TraceHTTP(ctx, method, endpoint)
 	resp, err := p.client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		trace(resp.StatusCode, err)
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, operatorHTTPError(resp.StatusCode, data)
+		err := operatorHTTPError(resp.StatusCode, data)
+		trace(resp.StatusCode, err)
+		return nil, err
 	}
+	trace(resp.StatusCode, nil)
 	return data, nil
 }
 
 func (p *RemoteClient) stream(ctx context.Context, path string, query url.Values) (<-chan string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint(path, query), nil)
+	endpoint := p.endpoint(path, query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
+	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
 	resp, err := p.client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		data, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
+			trace(resp.StatusCode, readErr)
 			return nil, readErr
 		}
-		return nil, operatorHTTPError(resp.StatusCode, data)
+		err := operatorHTTPError(resp.StatusCode, data)
+		trace(resp.StatusCode, err)
+		return nil, err
 	}
 	out := make(chan string)
 	go func() {
 		defer close(out)
-		defer resp.Body.Close()
+		var streamErr error
+		defer func() {
+			_ = resp.Body.Close()
+			trace(resp.StatusCode, streamErr)
+		}()
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
-			out <- scanner.Text() + "\n"
+			select {
+			case out <- scanner.Text() + "\n":
+			case <-ctx.Done():
+				streamErr = ctx.Err()
+				return
+			}
 		}
+		streamErr = scanner.Err()
 	}()
 	return out, nil
 }
@@ -715,23 +752,30 @@ func (p *RemoteClient) stream(ctx context.Context, path string, query url.Values
 // pre-stream HTTP error. A cancelled ctx aborts the in-flight request, which
 // unblocks the copy.
 func (p *RemoteClient) streamTo(ctx context.Context, path string, query url.Values, w io.Writer) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint(path, query), nil)
+	endpoint := p.endpoint(path, query)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
+	trace := logctx.TraceHTTP(ctx, http.MethodGet, endpoint)
 	resp, err := p.client.Do(req)
 	if err != nil {
+		trace(0, err)
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		data, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
+			trace(resp.StatusCode, readErr)
 			return readErr
 		}
-		return operatorHTTPError(resp.StatusCode, data)
+		err := operatorHTTPError(resp.StatusCode, data)
+		trace(resp.StatusCode, err)
+		return err
 	}
 	_, err = io.Copy(w, resp.Body)
+	trace(resp.StatusCode, err)
 	return err
 }
 
