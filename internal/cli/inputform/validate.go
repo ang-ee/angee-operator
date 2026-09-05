@@ -55,7 +55,10 @@ func validateSingle(desc api.TemplateInputDescriptor, value string) error {
 			return fmt.Errorf("template input %s must be an integer", desc.Name)
 		}
 	case "bool", "boolean":
-		if _, err := strconv.ParseBool(value); err != nil {
+		// Same set the platform preflight accepts.
+		switch strings.ToLower(value) {
+		case "true", "false", "1", "0", "yes", "no", "y", "n":
+		default:
 			return fmt.Errorf("template input %s must be a boolean", desc.Name)
 		}
 	}

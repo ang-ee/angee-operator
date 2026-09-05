@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -169,5 +170,194 @@ func TestWorkspaceCreatePreflightAppliesStackWorkspaceDefaults(t *testing.T) {
 	}
 	if resp.EffectiveInputs["topic"] != "mine" || resp.EffectiveInputs["work_state_source"] != "" {
 		t.Fatalf("EffectiveInputs = %v, want explicit inputs to win", resp.EffectiveInputs)
+	}
+}
+
+func TestWorkspaceCreatePreflightAppliesQuestionDefaults(t *testing.T) {
+	root := t.TempDir()
+	writePreflightTemplate(t, root, `_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    topic:
+      required: true
+      default: metadata-topic
+    branch:
+      required: true
+      default: main
+topic:
+  required: true
+  default: question-topic
+count:
+  type: int
+  required: true
+  default: 4
+enabled:
+  type: bool
+  required: true
+  default: false
+`)
+	p, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{Template: "dev-pr"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"topic": "question-topic", "branch": "main", "count": "4", "enabled": "false"}
+	if !resp.OK || !reflect.DeepEqual(resp.EffectiveInputs, want) {
+		t.Fatalf("preflight = %#v, want OK with effective inputs %#v", resp, want)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "host",
+		WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{
+			"dev-pr": {Inputs: map[string]string{"topic": "stack-topic"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		inputs map[string]string
+		want   string
+		ok     bool
+	}{
+		{name: "stack", want: "stack-topic", ok: true},
+		{name: "request", inputs: map[string]string{"topic": "request-topic"}, want: "request-topic", ok: true},
+		{name: "explicit empty", inputs: map[string]string{"topic": ""}, want: "", ok: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{Template: "dev-pr", Inputs: tc.inputs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.OK != tc.ok || resp.EffectiveInputs["topic"] != tc.want {
+				t.Fatalf("preflight = %#v, want OK=%t and topic=%q", resp, tc.ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceCreatePreflightQuestionWithoutDefaultOverridesMetadata(t *testing.T) {
+	root := t.TempDir()
+	writePreflightTemplate(t, root, `_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    topic:
+      default: metadata-topic
+topic:
+  required: true
+`)
+	p, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{Template: "dev-pr"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.OK || !reflect.DeepEqual(resp.MissingRequired, []string{"topic"}) {
+		t.Fatalf("preflight = %#v, want missing topic", resp)
+	}
+}
+
+func TestWorkspaceCreatePreflightSkipsAbsentGeneratedRequired(t *testing.T) {
+	root := t.TempDir()
+	writePreflightTemplate(t, root, `_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    metadata_token:
+      generated: true
+      required: true
+token:
+  generated: true
+  required: true
+`)
+	p, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		inputs  map[string]string
+		missing []string
+	}{
+		{name: "generated during render"},
+		{name: "explicit empty", inputs: map[string]string{"token": ""}, missing: []string{"token"}},
+		{name: "provided", inputs: map[string]string{"token": "provided"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{Template: "dev-pr", Inputs: tc.inputs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.OK != (len(tc.missing) == 0) || len(resp.MissingRequired) != len(tc.missing) {
+				t.Fatalf("preflight = %#v, want missing %v", resp, tc.missing)
+			}
+			for i, name := range tc.missing {
+				if resp.MissingRequired[i] != name {
+					t.Fatalf("MissingRequired = %v, want %v", resp.MissingRequired, tc.missing)
+				}
+			}
+			if _, ok := resp.EffectiveInputs["metadata_token"]; ok {
+				t.Fatalf("preflight generated an input: %#v", resp.EffectiveInputs)
+			}
+		})
+	}
+}
+
+func TestWorkspaceCreatePreflightValidatesMultiselectItems(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    string
+		value  string
+		reason string
+	}{
+		{name: "integers", typ: "int", value: `["1","2"]`},
+		{name: "booleans", typ: "bool", value: `["true","false"]`},
+		{name: "strings without type", value: `["a","b"]`},
+		{name: "empty list", typ: "int", value: `[]`},
+		{name: "invalid integer", typ: "int", value: `["1","bad"]`, reason: `not an integer: "bad"`},
+		{name: "invalid boolean", typ: "bool", value: `["true","maybe"]`, reason: `not a boolean: "maybe"`},
+		{name: "scalar", typ: "int", value: `"1"`, reason: "must be a JSON array of strings"},
+		{name: "numeric list", typ: "int", value: `[1,2]`, reason: "must be a JSON array of strings"},
+		{name: "null", typ: "bool", value: `null`, reason: "must be a JSON array of strings"},
+		{name: "null selection", value: `[null]`, reason: "must be a JSON array of strings"},
+		{name: "malformed without type", value: `["a"`, reason: "must be a JSON array of strings"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			question := "items:\n  multiselect: true\n"
+			if tc.typ != "" {
+				question += "  type: " + tc.typ + "\n"
+			}
+			writePreflightTemplate(t, root, "_angee:\n  kind: workspace\n  name: dev-pr\n"+question)
+			p, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{
+				Template: "dev-pr",
+				Inputs:   map[string]string{"items": tc.value},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.OK != (tc.reason == "") {
+				t.Fatalf("preflight = %#v, want reason %q", resp, tc.reason)
+			}
+			if tc.reason != "" {
+				want := []api.PreflightFailure{{Field: "items", Reason: tc.reason}}
+				if !reflect.DeepEqual(resp.InvalidInputs, want) {
+					t.Fatalf("InvalidInputs = %#v, want %#v", resp.InvalidInputs, want)
+				}
+			}
+		})
 	}
 }

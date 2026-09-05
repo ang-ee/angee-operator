@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -231,7 +232,7 @@ runtime_mode:
 	if err != nil {
 		t.Fatalf("resolve inputs: %v", err)
 	}
-	if inputs["project_name"] != "app" || inputs["runtime_mode"] != "docker" {
+	if _, hasDefault := inputs["project_name"]; hasDefault || inputs["runtime_mode"] != "docker" {
 		t.Fatalf("inputs = %#v", inputs)
 	}
 	for _, want := range []string{
@@ -392,14 +393,14 @@ func TestTemplateInputsYesRequiresDescriptorExceptPaths(t *testing.T) {
 	}
 }
 
-func TestTemplateInputsYesFillsDefaultsWithoutPrompts(t *testing.T) {
+func TestTemplateInputsYesLeavesDefaultsToRendererWithoutPrompts(t *testing.T) {
 	root := t.TempDir()
 	writeInputTemplate(t, root, "project_name:\n  default: app\nruntime_mode:\n  default: process\n  choices: [process, docker]\n")
 	inputs, stderr, err := resolveTemplateInputsForTest(t, root, "", map[string]string{"runtime_mode": "docker", "extra": "value"}, true)
 	if err != nil {
 		t.Fatalf("resolve inputs: %v", err)
 	}
-	if inputs["project_name"] != "app" || inputs["runtime_mode"] != "docker" || inputs["extra"] != "value" {
+	if _, hasDefault := inputs["project_name"]; hasDefault || inputs["runtime_mode"] != "docker" || inputs["extra"] != "value" {
 		t.Fatalf("inputs = %#v", inputs)
 	}
 	if stderr != "" {
@@ -990,5 +991,258 @@ func writeExistingStackRoot(t *testing.T, root string) {
 	}
 	if err := os.WriteFile(filepath.Join(root, ".angee", "existing"), []byte("keep"), 0o644); err != nil {
 		t.Fatalf("WriteFile(existing) error = %v", err)
+	}
+}
+
+func TestInitAnswersRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	template := writeInputTemplate(t, root, `_answers_file: .copier-answers.stack.yml
+project_name:
+  default: original
+runtime_mode:
+  default: process
+  choices: [process, docker]
+enabled:
+  type: bool
+  default: false
+port:
+  type: int
+  default: 8000
+`)
+	if err := os.WriteFile(filepath.Join(template, "angee.yaml.jinja"), []byte("version: 1\nkind: stack\nname: {{ project_name }}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	run := func(args ...string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		cmd := NewRootWithIO(strings.NewReader(""), &stdout, &stderr)
+		cmd.SetArgs(append([]string{"--root", root}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v; stderr: %s", args, err, &stderr)
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("unexpected prompts: %s", &stderr)
+		}
+	}
+	run("stack", "init", "dev", first, "--yes", "--input", "project_name=round-trip", "--input", "runtime_mode=docker", "--input", "enabled=true", "--input", "port=9000")
+	answers := filepath.Join(first, ".copier-answers.stack.yml")
+	original, err := inputform.LoadAnswersFile(answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"project_name": "round-trip", "runtime_mode": "docker", "enabled": "true", "port": "9000"}
+	for key, value := range want {
+		if original[key] != value {
+			t.Fatalf("recorded input %s = %q, want %q", key, original[key], value)
+		}
+	}
+	run("init", second, "--template", "dev", "--answers", answers, "--yes")
+	replayed, err := inputform.LoadAnswersFile(filepath.Join(second, ".copier-answers.stack.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(replayed, original) {
+		t.Fatalf("replayed inputs = %#v, original = %#v", replayed, original)
+	}
+}
+
+func TestInitAnswersInvalidChoice(t *testing.T) {
+	for _, command := range [][]string{{"init"}, {"stack", "init", "dev"}} {
+		for _, yes := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/yes=%v", strings.Join(command, " "), yes), func(t *testing.T) {
+				root := t.TempDir()
+				writeInputTemplate(t, root, "runtime_mode:\n  choices: [process, docker]\n")
+				path := filepath.Join(root, "answers.yml")
+				if err := os.WriteFile(path, []byte("runtime_mode: invalid\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				var stdout, stderr bytes.Buffer
+				cmd := NewRootWithIO(strings.NewReader(""), &stdout, &stderr)
+				args := append([]string{"--root", root}, command...)
+				args = append(args, "--answers", path)
+				if yes {
+					args = append(args, "--yes")
+				}
+				cmd.SetArgs(args)
+				err := cmd.Execute()
+				if err == nil || err.Error() != "template input runtime_mode must be one of: process, docker" {
+					t.Fatalf("Execute() error = %v", err)
+				}
+				if stderr.Len() != 0 {
+					t.Fatalf("unexpected prompts: %s", &stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestWorkspaceCreateInputForm(t *testing.T) {
+	for _, tc := range []struct {
+		name, stdin, stackDefault string
+		defaultRequired           bool
+		emptyStackDefault         bool
+		flags                     []string
+		prompts                   int
+	}{
+		{name: "flags satisfied", flags: []string{"--input", "topic=flag"}},
+		{name: "stack satisfied", stackDefault: "stack"},
+		{name: "required default", defaultRequired: true},
+		{name: "empty stack default", emptyStackDefault: true, stdin: "scripted\n", prompts: 1},
+		{name: "blank stack default", stackDefault: " ", stdin: "scripted\n", prompts: 1},
+		{name: "scripted missing", stdin: "scripted\n", prompts: 1},
+		{name: "yes satisfied", flags: []string{"--input", "topic=flag", "--yes"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			template := filepath.Join(root, ".templates", "workspaces", "dev")
+			if err := os.MkdirAll(template, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			config := `_angee:
+  kind: workspace
+  name: dev
+  inputs:
+    topic:
+      required: true
+topic:
+  required: true
+optional:
+  default: renderer-default
+`
+			if tc.defaultRequired {
+				config = strings.Replace(config, "topic:\n  required: true", "topic:\n  required: true\n  default: default-topic", 1)
+			}
+			if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(template, "README.md.jinja"), []byte("{{ topic }} {{ optional }}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stackDefault != "" || tc.emptyStackDefault {
+				stack := &manifest.Stack{Version: 1, Kind: "stack", Name: "host", WorkspaceDefaults: map[string]manifest.WorkspaceDefaults{"workspaces/dev": {Inputs: map[string]string{"topic": tc.stackDefault}}}}
+				if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			cmd := NewRootWithIO(strings.NewReader(tc.stdin), &stdout, &stderr)
+			cmd.SetArgs(append([]string{"--root", root, "workspace", "create", "test", "--template", "dev"}, tc.flags...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute(): %v; stderr: %s", err, &stderr)
+			}
+			if count := strings.Count(stderr.String(), "topic: "); count != tc.prompts {
+				t.Fatalf("topic prompts = %d, want %d: %s", count, tc.prompts, &stderr)
+			}
+			if strings.Contains(stderr.String(), "optional") {
+				t.Fatalf("prompted for satisfied optional value: %s", &stderr)
+			}
+		})
+	}
+}
+
+func TestCreateInteractiveRejectsYesAndNonTerminal(t *testing.T) {
+	for _, command := range [][]string{
+		{"workspace", "create", "test", "--template", "dev"},
+		{"service", "create", "--template", "dev", "--workspace", "test"},
+	} {
+		for _, yes := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/yes=%v", command[0], yes), func(t *testing.T) {
+				var stdout, stderr bytes.Buffer
+				cmd := NewRootWithIO(strings.NewReader(""), &stdout, &stderr)
+				args := append([]string{"--root", t.TempDir()}, command...)
+				args = append(args, "-i")
+				want := "--interactive requires a terminal; use --input or --answers, or pipe answers without --interactive"
+				if yes {
+					args = append(args, "--yes")
+					want = "--interactive cannot be combined with --yes"
+				}
+				cmd.SetArgs(args)
+				if err := cmd.Execute(); err == nil || err.Error() != want {
+					t.Fatalf("Execute() error = %v, want %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestTemplateAnswersLayering(t *testing.T) {
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	cmd := NewRootWithIO(strings.NewReader(""), &stdout, &stderr)
+	cmd.Flags().StringArray("answers", nil, "")
+	for i, content := range []string{"topic: first\nanswer: first\n", "topic: second\nanswer: second\n"} {
+		path := filepath.Join(root, fmt.Sprintf("answers%d.yml", i))
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Flags().Set("answers", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := loadTemplateInputValues(cmd, map[string]string{"topic": "flag"}, map[string]string{"topic": "stack", "stack_only": "kept"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"topic": "flag", "answer": "second", "stack_only": "kept"}
+	origins := map[string]inputform.Origin{"topic": inputform.OriginFlag, "answer": inputform.OriginAnswers, "stack_only": inputform.OriginStack}
+	if !reflect.DeepEqual(result.Values, want) || !reflect.DeepEqual(result.Origins, origins) {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+type workspaceInputPreflightPlatform struct {
+	service.API
+	descriptor api.TemplateDescriptor
+	responses  []api.WorkspaceCreatePreflightResponse
+	requests   []api.WorkspaceCreateRequest
+	ref        string
+}
+
+func (p *workspaceInputPreflightPlatform) Template(_ context.Context, ref string) (api.TemplateDescriptor, error) {
+	p.ref = ref
+	return p.descriptor, nil
+}
+
+func (p *workspaceInputPreflightPlatform) WorkspaceCreatePreflight(_ context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceCreatePreflightResponse, error) {
+	p.requests = append(p.requests, req)
+	return p.responses[len(p.requests)-1], nil
+}
+
+func TestWorkspaceCreateRechecksExplicitInputs(t *testing.T) {
+	for _, final := range []api.WorkspaceCreatePreflightResponse{
+		{OK: true},
+		{MissingRequired: []string{"server_required"}, InvalidInputs: []api.PreflightFailure{{Field: "region", Reason: "unavailable"}}},
+	} {
+		t.Run(fmt.Sprintf("ok=%v", final.OK), func(t *testing.T) {
+			platform := &workspaceInputPreflightPlatform{
+				descriptor: api.TemplateDescriptor{Inputs: []api.TemplateInputDescriptor{
+					{Name: "topic", Required: true, Question: true},
+					{Name: "region", Default: "template", Question: true},
+					{Name: "default_only", Default: "renderer", Question: true},
+				}},
+				responses: []api.WorkspaceCreatePreflightResponse{
+					{StackDefaults: map[string]string{"region": "stack"}, MissingRequired: []string{"topic"}},
+					final,
+				},
+			}
+			var stdout, stderr bytes.Buffer
+			cmd := NewRootWithIO(strings.NewReader("answer\n"), &stdout, &stderr)
+			cmd.SetContext(context.Background())
+			got, err := resolveWorkspaceTemplateInputs(cmd, platform, api.WorkspaceCreateRequest{Name: "feature", Template: "dev"}, inputform.ModeScripted, false)
+			if final.OK {
+				if err != nil || !reflect.DeepEqual(got, map[string]string{"topic": "answer", "region": "stack"}) {
+					t.Fatalf("inputs = %#v, error = %v", got, err)
+				}
+			} else if err == nil || err.Error() != "template input server_required is required; pass --input server_required=value\ntemplate input region: unavailable" {
+				t.Fatalf("preflight error = %v", err)
+			}
+			if len(platform.requests) != 2 || len(platform.requests[0].Inputs) != 0 || !reflect.DeepEqual(platform.requests[1].Inputs, map[string]string{"topic": "answer", "region": "stack"}) {
+				t.Fatalf("preflight requests = %#v", platform.requests)
+			}
+			if platform.ref != "workspaces/dev" || strings.Count(stderr.String(), "topic: ") != 1 {
+				t.Fatalf("ref = %q, prompts = %q", platform.ref, stderr.String())
+			}
+		})
 	}
 }

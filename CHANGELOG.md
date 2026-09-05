@@ -8,6 +8,18 @@ latest tag.
 
 ### Added
 
+- `--answers <file>` on `angee init`, `angee stack init`, `angee workspace
+  create`, and `angee service create` loads YAML answers, including Copier
+  answers files. Repeated files layer over template defaults and workspace
+  creation's stack defaults, then `--input` flags and form edits take precedence.
+  Copier metadata keys are ignored, lists use the multiselect JSON encoding,
+  and answers receive type and choice validation even with `--yes`.
+- `angee workspace create` and `angee service create` share the template input
+  form, opening when required inputs are missing, inherited values are invalid,
+  or with `--interactive` / `-i`. Workspace forms pre-fill stack defaults and
+  repeat preflight before creation. `--yes` / `-y` accepts defaults and supplied
+  answers without prompts; piped stdin uses line prompts for missing required
+  inputs. Satisfied inputs keep creation non-prompting by default.
 - `angee init` and `angee stack init` provide an interactive input form with
   help, choice lists, origin markers, masked secrets, backward navigation,
   and final confirmation. Confirmed answers are summarized to stderr.

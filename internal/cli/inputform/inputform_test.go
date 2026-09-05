@@ -76,24 +76,88 @@ func TestDefaultsReportsEveryMissingRequiredFlag(t *testing.T) {
 
 func TestProvidedInputsValidatedBeforePrompts(t *testing.T) {
 	for _, mode := range []Mode{ModeDefaults, ModeScripted, ModeInteractive} {
-		for _, desc := range []api.TemplateInputDescriptor{
-			{Name: "port", Type: "int", Question: true},
-			{Name: "port", Type: "int", Generated: true},
-			{Name: "port", Type: "int"},
-		} {
-			var out bytes.Buffer
-			_, err := Run(context.Background(), Request{
-				Mode: mode, Provided: map[string]string{"port": "invalid"},
-				Inputs: []api.TemplateInputDescriptor{desc},
-				In:     failReader{t: t}, Out: &out, Err: &out,
-			})
-			if err == nil || err.Error() != "template input port must be an integer" {
-				t.Fatalf("mode %d, descriptor %#v: error = %v", mode, desc, err)
-			}
-			if out.Len() != 0 {
-				t.Fatalf("mode %d printed before validating: %q", mode, out.String())
+		for _, origin := range []Origin{OriginFlag, OriginAnswers, OriginStack} {
+			for _, desc := range []api.TemplateInputDescriptor{
+				{Name: "port", Type: "int", Question: true},
+				{Name: "port", Type: "int", Question: true, Immutable: true},
+				{Name: "port", Type: "int", Generated: true},
+				{Name: "port", Type: "int"},
+			} {
+				if origin == OriginStack && mode == ModeInteractive && desc.Question && !desc.Immutable {
+					continue // Editable inherited values are covered by the interactive correction test.
+				}
+				var out bytes.Buffer
+				_, err := Run(context.Background(), Request{
+					Mode: mode, Provided: map[string]string{"port": "invalid"},
+					Origins: map[string]Origin{"port": origin},
+					Inputs:  []api.TemplateInputDescriptor{desc},
+					In:      failReader{t: t}, Out: &out, Err: &out,
+				})
+				if err == nil || err.Error() != "template input port must be an integer" {
+					t.Fatalf("mode %d, origin %s, descriptor %#v: error = %v", mode, origin, desc, err)
+				}
+				if out.Len() != 0 {
+					t.Fatalf("mode %d printed before validating: %q", mode, out.String())
+				}
 			}
 		}
+	}
+}
+
+func TestRunLayeredOriginsAndExplicitValues(t *testing.T) {
+	provided := make(map[string]string)
+	origins := make(map[string]Origin)
+	for _, layer := range []struct {
+		values map[string]string
+		origin Origin
+	}{
+		{map[string]string{"stack": "stack", "answers": "stack", "later_answers": "stack", "flag": "stack"}, OriginStack},
+		{map[string]string{"answers": "first-file", "later_answers": "first-file", "flag": "first-file"}, OriginAnswers},
+		{map[string]string{"later_answers": "last-file", "flag": "last-file"}, OriginAnswers},
+		{map[string]string{"flag": "flag", "extra": "keep"}, OriginFlag},
+	} {
+		for key, value := range layer.values {
+			provided[key] = value
+			origins[key] = layer.origin
+		}
+	}
+	var inputs []api.TemplateInputDescriptor
+	for _, name := range []string{"default", "stack", "answers", "later_answers", "flag", "edit"} {
+		inputs = append(inputs, api.TemplateInputDescriptor{Name: name, Question: true, Default: "template"})
+	}
+	result, err := Run(context.Background(), Request{
+		Mode: ModeScripted, In: strings.NewReader("\nchanged\n"), Inputs: inputs,
+		Provided: provided, Origins: origins,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantValues := map[string]string{
+		"default": "template", "stack": "stack", "answers": "first-file", "later_answers": "last-file",
+		"flag": "flag", "extra": "keep", "edit": "changed",
+	}
+	wantOrigins := map[string]Origin{
+		"default": OriginDefault, "stack": OriginStack, "answers": OriginAnswers, "later_answers": OriginAnswers,
+		"flag": OriginFlag, "extra": OriginFlag, "edit": OriginChanged,
+	}
+	if !reflect.DeepEqual(result.Values, wantValues) || !reflect.DeepEqual(result.Origins, wantOrigins) {
+		t.Fatalf("result = %#v, want values %#v, origins %#v", result, wantValues, wantOrigins)
+	}
+	explicit := result.Explicit()
+	delete(wantValues, "default")
+	if !reflect.DeepEqual(explicit, wantValues) {
+		t.Fatalf("Explicit = %#v, want %#v", explicit, wantValues)
+	}
+	explicit["stack"] = "mutated"
+	if result.Values["stack"] != "stack" {
+		t.Fatal("Explicit reused the result map")
+	}
+}
+
+func TestExplicitRetainsValuesWithoutOrigin(t *testing.T) {
+	result := Result{Values: map[string]string{"extra": "keep"}}
+	if got := result.Explicit(); !reflect.DeepEqual(got, result.Values) {
+		t.Fatalf("Explicit = %#v, want %#v", got, result.Values)
 	}
 }
 

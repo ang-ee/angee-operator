@@ -26,6 +26,7 @@ type Origin string
 
 const (
 	OriginDefault  Origin = "default"
+	OriginStack    Origin = "stack"
 	OriginAnswers  Origin = "answers"
 	OriginFlag     Origin = "flag"
 	OriginRecorded Origin = "recorded"
@@ -49,6 +50,18 @@ type Request struct {
 type Result struct {
 	Values  map[string]string
 	Origins map[string]Origin
+}
+
+// Explicit returns the values supplied or changed by the caller, leaving
+// template defaults for the renderer to resolve.
+func (r Result) Explicit() map[string]string {
+	values := make(map[string]string)
+	for key, value := range r.Values {
+		if r.Origins[key] != OriginDefault {
+			values[key] = value
+		}
+	}
+	return values
 }
 
 // ErrAborted indicates that the user declined or interrupted the form.
@@ -82,6 +95,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	for _, desc := range req.Inputs {
 		if value, ok := req.Provided[desc.Name]; ok {
 			if err := Validate(desc, value); err != nil {
+				// Stack defaults can be stale for the chosen workspace template.
+				// Let the interactive form correct editable inherited answers;
+				// explicit answers files and flags always fail immediately.
+				if req.Mode == ModeInteractive && req.Origins[desc.Name] == OriginStack &&
+					desc.Question && !desc.Generated && !desc.Immutable {
+					continue
+				}
 				// Defaults mode reports every missing required input together,
 				// including explicit empty values. Other invalid provided values
 				// fail before inspecting defaults or opening any prompts.

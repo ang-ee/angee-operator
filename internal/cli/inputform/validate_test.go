@@ -27,7 +27,7 @@ func TestValidate(t *testing.T) {
 		{name: "true", typ: "bool", value: "true"},
 		{name: "false", typ: "boolean", value: "false"},
 		{name: "one", typ: "bool", value: "1"},
-		{name: "invalid bool", typ: "bool", value: "yes", want: "template input answer must be a boolean"},
+		{name: "invalid bool", typ: "bool", value: "maybe", want: "template input answer must be a boolean"},
 		{name: "choice value", choices: choices, value: "b"},
 		{name: "choice label rejected", choices: choices, value: "Second", want: "template input answer must be one of: a, b"},
 		{name: "empty choice rejected", choices: choices, want: "template input answer must be one of: a, b"},

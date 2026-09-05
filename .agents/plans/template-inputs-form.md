@@ -421,7 +421,7 @@ user change them before re-rendering:
       keep `--yes`; add `--answers <file>` with the layering and
       conversion rules of §4.7; tests including a round trip from a
       rendered `.copier-answers.stack.yml`.
-- [ ] **E. Wire workspace create and service create.** Preflight first;
+- [x] **E. Wire workspace create and service create.** Preflight first;
       stack defaults as pre-fill; `--answers`; tests.
 - [ ] **F. Interactive update.** `TemplateInputsResponse` and the three
       platform methods over REST/GraphQL (parity + Hasura contract tests);

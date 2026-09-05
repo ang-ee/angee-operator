@@ -273,6 +273,22 @@ func TestInteractiveRunRejectsNo(t *testing.T) {
 	}
 }
 
+func TestInteractiveRunCorrectsInvalidStackDefault(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result, err := Run(ctx, Request{
+		Mode: ModeInteractive, In: strings.NewReader("\x01\x0b8080\t\r"), Out: io.Discard,
+		Provided: map[string]string{"port": "invalid"}, Origins: map[string]Origin{"port": OriginStack},
+		Inputs: []api.TemplateInputDescriptor{{Name: "port", Type: "int", Question: true, Required: true}},
+	})
+	if ctx.Err() != nil || err != nil {
+		t.Fatalf("Run failed: context=%v, err=%v", ctx.Err(), err)
+	}
+	if result.Values["port"] != "8080" || result.Origins["port"] != OriginChanged {
+		t.Fatalf("corrected stack default = %#v", result)
+	}
+}
+
 func TestInteractiveRunUpdatesDescriptions(t *testing.T) {
 	// Unlike drive, Run executes dynamic descriptions on Bubble Tea command
 	// goroutines. Many separate key events exercise concurrent reads and writes
