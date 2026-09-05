@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ var allocRefRE = regexp.MustCompile(`\$\{\s*alloc\.`)
 
 // StackUpdateTemplateOptions configures StackUpdateFromTemplate.
 type StackUpdateTemplateOptions struct {
+	// Inputs overrides recorded answers; managed workspace ports take precedence.
+	Inputs map[string]string
 	// DryRun computes the merge and reports the changes without writing the
 	// manifest or regenerating the derived runtime files.
 	DryRun bool
@@ -50,49 +53,13 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if err := ctx.Err(); err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	ours, _, exists, err := readGuardedStackDocument(p.root, p.root, "angee.yaml", nil)
+	origin, err := p.resolveStackTemplateOrigin(ctx)
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	if !exists {
-		return StackUpdateTemplateResult{}, fmt.Errorf("stack manifest %q does not exist", manifest.Path(p.root))
-	}
-
-	// Resolve the template: prefer the recorded template.active, fall back to
-	// the answers file's _src_path.
-	answersFile := ".copier-answers.yml"
-	ref := ""
-	if ours.Template != nil {
-		if ours.Template.AnswersFile != "" {
-			answersFile = ours.Template.AnswersFile
-		}
-		ref = ours.Template.Active
-	}
-	// The answers file is written by copier at the render target, which is the
-	// ANGEE_ROOT or its parent (e.g. <project>/.copier-answers.yml with the
-	// manifest at <project>/.angee/angee.yaml). Look in both — but only accept
-	// the parent's file if its recorded ANGEE_ROOT points back to this root, so
-	// an unrelated parent project's answers can't be picked up.
-	renderTarget, srcPath, answers, ok, err := p.locateStackAnswers(answersFile)
-	if err != nil {
+	templatePath, renderTarget, answers := origin.Path, origin.RenderTarget, origin.Answers
+	if err := validateImmutableTemplateInputs(origin.Ref, templatePath, answers, opts.Inputs); err != nil {
 		return StackUpdateTemplateResult{}, err
-	}
-	if !ok {
-		// Without the recorded answers a re-render would fall back to template
-		// defaults and silently refresh sections from the wrong inputs.
-		return StackUpdateTemplateResult{}, &InvalidInputError{
-			Field:  "template",
-			Reason: fmt.Sprintf("missing answers file %q; re-create the stack with `angee stack init --force` before `stack update --template`", answersFile),
-		}
-	}
-	if ref == "" {
-		ref = srcPath
-	}
-	if ref == "" {
-		return StackUpdateTemplateResult{}, &InvalidInputError{
-			Field:  "template",
-			Reason: "stack records no template (template.active / .copier-answers.yml); re-create with `angee stack init --force`",
-		}
 	}
 
 	// A workspace inner stack's allocated ports are owned by the parent stack's
@@ -102,7 +69,13 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	// allocated ports onto the recorded answers so the re-render honours the
 	// workspace's ports; other inputs (project, sources, …) still come from the
 	// answers file, so a stale workspace record can't repoint them.
-	renderInputs := answers
+	renderInputs := copierx.Inputs{}
+	for key, value := range answers {
+		renderInputs[key] = value
+	}
+	for key, value := range opts.Inputs {
+		renderInputs[key] = value
+	}
 	workspaceInner := false
 	portInputs, err := p.workspacePortInputs(ctx)
 	if err != nil {
@@ -110,18 +83,9 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	}
 	if len(portInputs) > 0 {
 		workspaceInner = true
-		renderInputs = copierx.Inputs{}
-		for key, value := range answers {
-			renderInputs[key] = value
-		}
 		for key, value := range portInputs {
 			renderInputs[key] = value
 		}
-	}
-
-	templatePath, _, err := p.resolveTemplate(ctx, ref, "stack")
-	if err != nil {
-		return StackUpdateTemplateResult{}, err
 	}
 
 	mergedInputs, err := copierx.TemplateInputs(templatePath, renderInputs)
@@ -294,6 +258,71 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackRuntime, rollbackDocuments, rollbackFiles, rollbackResources)
 	}
 	return result, nil
+}
+
+type stackTemplateOrigin struct {
+	Ref          string
+	Path         string
+	RenderTarget string
+	Answers      copierx.Inputs
+}
+
+// resolveStackTemplateOrigin keeps introspection and re-rendering on the same
+// manifest template, answers file, and render target, including parent renders.
+func (p *Platform) resolveStackTemplateOrigin(ctx context.Context) (stackTemplateOrigin, error) {
+	if err := ctx.Err(); err != nil {
+		return stackTemplateOrigin{}, err
+	}
+	ours, _, exists, err := readGuardedStackDocument(p.root, p.root, "angee.yaml", nil)
+	if err != nil {
+		return stackTemplateOrigin{}, err
+	}
+	if !exists {
+		return stackTemplateOrigin{}, fmt.Errorf("stack manifest %q does not exist", manifest.Path(p.root))
+	}
+
+	// Resolve the template: prefer the recorded template.active, fall back to
+	// the answers file's _src_path.
+	answersFile := ".copier-answers.yml"
+	ref := ""
+	if ours.Template != nil {
+		if ours.Template.AnswersFile != "" {
+			answersFile = ours.Template.AnswersFile
+		}
+		ref = ours.Template.Active
+	}
+	// The answers file is written by copier at the render target, which is the
+	// ANGEE_ROOT or its parent (e.g. <project>/.copier-answers.yml with the
+	// manifest at <project>/.angee/angee.yaml). Look in both — but only accept
+	// the parent's file if its recorded ANGEE_ROOT points back to this root, so
+	// an unrelated parent project's answers can't be picked up.
+	renderTarget, srcPath, answers, ok, err := p.locateStackAnswers(answersFile)
+	if err != nil {
+		return stackTemplateOrigin{}, err
+	}
+	if !ok {
+		// Without the recorded answers a re-render would fall back to template
+		// defaults and silently refresh sections from the wrong inputs.
+		return stackTemplateOrigin{}, &InvalidInputError{
+			Field:  "template",
+			Reason: fmt.Sprintf("missing answers file %q; re-create the stack with `angee stack init --force` before `stack update --template`", answersFile),
+		}
+	}
+	if ref == "" {
+		ref = srcPath
+	}
+	if ref == "" {
+		return stackTemplateOrigin{}, &InvalidInputError{
+			Field:  "template",
+			Reason: "stack records no template (template.active / .copier-answers.yml); re-create with `angee stack init --force`",
+		}
+	}
+
+	templatePath, _, err := p.resolveTemplate(ctx, ref, "stack")
+	if err != nil {
+		return stackTemplateOrigin{}, err
+	}
+	return stackTemplateOrigin{Ref: ref, Path: templatePath, RenderTarget: renderTarget, Answers: answers}, nil
 }
 
 func decodeStackDocument(data []byte) (*manifest.Stack, error) {
@@ -553,28 +582,71 @@ func (p *Platform) locateStackAnswers(answersFile string) (target string, srcPat
 }
 
 // readTemplateAnswers parses a Copier answers file, returning its recorded
-// template path (`_src_path`) and the non-metadata answers as template inputs.
-// Answers are stringified into the string-keyed input map (matching StackInit's
-// scalar-input model); non-scalar answers are not meaningfully supported.
+// template path and non-metadata answers. Scalars retain their source text;
+// lists use the JSON array encoding accepted by template input forms.
 func readTemplateAnswers(path string) (srcPath string, inputs copierx.Inputs, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", nil, err
 	}
-	var raw map[string]any
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
 		return "", nil, err
 	}
 	inputs = copierx.Inputs{}
-	for key, value := range raw {
+	if len(document.Content) == 0 {
+		return "", inputs, nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return "", nil, fmt.Errorf("answers file %s: expected a YAML mapping", path)
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i].Value
+		if key != "_src_path" && (strings.HasPrefix(key, "_") || root.Content[i].Tag == "!!merge") {
+			continue
+		}
+		value, err := recordedAnswerValue(root.Content[i+1])
+		if err != nil {
+			return "", nil, fmt.Errorf("answers file %s: key %s: %w", path, key, err)
+		}
+		var text string
+		if scalar, ok := value.(string); ok {
+			text = scalar
+		} else {
+			encoded, _ := json.Marshal(value) // recordedAnswerValue returns only strings and lists.
+			text = string(encoded)
+		}
 		if key == "_src_path" {
-			srcPath = fmt.Sprint(value)
-			continue
+			srcPath = text
+		} else {
+			inputs[key] = text
 		}
-		if strings.HasPrefix(key, "_") {
-			continue
-		}
-		inputs[key] = fmt.Sprint(value)
 	}
 	return srcPath, inputs, nil
+}
+
+func recordedAnswerValue(node *yaml.Node) (any, error) {
+	for node.Kind == yaml.AliasNode && node.Alias != nil {
+		node = node.Alias
+	}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return "", nil
+		}
+		return node.Value, nil
+	case yaml.SequenceNode:
+		items := make([]any, len(node.Content))
+		for i, item := range node.Content {
+			var err error
+			items[i], err = recordedAnswerValue(item)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("only scalars and lists are supported")
+	}
 }

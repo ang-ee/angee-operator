@@ -688,6 +688,11 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 	if err := manifest.Ensure(stack, metadata.Ensure); err != nil {
 		return api.WorkspaceRef{}, err
 	}
+	recorded := mergeStringMaps(stackWorkspaceDefaults(stack, templateRef), workspace.Inputs)
+	if err := validateImmutableTemplateInputs(templateRef, templatePath, recorded, req.Inputs); err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	workspace.Inputs = recorded
 	if req.Inputs != nil {
 		if workspace.Inputs == nil {
 			workspace.Inputs = map[string]string{}

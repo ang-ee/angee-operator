@@ -124,6 +124,12 @@ models:
     fields:
       id:
         resolver: true
+  TemplateInputsResponse:
+    model:
+      - github.com/ang-ee/angee-operator/api.TemplateInputsResponse
+    fields:
+      recorded:
+        resolver: true
   TemplateInputDescriptor:
     model:
       - github.com/ang-ee/angee-operator/api.TemplateInputDescriptor

@@ -40,6 +40,7 @@ type ResolverRoot interface {
 	StackStatus() StackStatusResolver
 	Subscription() SubscriptionResolver
 	TemplateDescriptor() TemplateDescriptorResolver
+	TemplateInputsResponse() TemplateInputsResponseResolver
 	WorkspaceCreatePreflight() WorkspaceCreatePreflightResolver
 	WorkspaceRef() WorkspaceRefResolver
 	WorkspaceStatus() WorkspaceStatusResolver
@@ -239,41 +240,44 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		File                func(childComplexity int, source string, path string) int
-		GitOpsTopology      func(childComplexity int, withCommits *int) int
-		Health              func(childComplexity int) int
-		IngressStatus       func(childComplexity int) int
-		Jobs                func(childComplexity int, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) int
-		JobsAggregate       func(childComplexity int, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) int
-		JobsByPk            func(childComplexity int, id string) int
-		McpDescriptor       func(childComplexity int) int
-		SecretValue         func(childComplexity int, name string) int
-		Secrets             func(childComplexity int, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) int
-		SecretsAggregate    func(childComplexity int, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) int
-		SecretsByPk         func(childComplexity int, id string) int
-		ServiceEndpoint     func(childComplexity int, name string) int
-		ServiceLogs         func(childComplexity int, name string, limit *int) int
-		Services            func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
-		ServicesAggregate   func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
-		ServicesByPk        func(childComplexity int, id string) int
-		ServicesGroups      func(childComplexity int, groupBy []*model.ServicesGroupBySpec, where *model.ServicesBoolExp, having *model.ServicesHaving, orderBy []*model.ServicesGroupOrder, limit *int, offset *int) int
-		SourceDiff          func(childComplexity int, name string, ref *string) int
-		Sources             func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
-		SourcesAggregate    func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
-		SourcesByPk         func(childComplexity int, id string) int
-		SourcesGroups       func(childComplexity int, groupBy []*model.SourcesGroupBySpec, where *model.SourcesBoolExp, having *model.SourcesHaving, orderBy []*model.SourcesGroupOrder, limit *int, offset *int) int
-		StackLogs           func(childComplexity int, services []string, limit *int) int
-		StackStatus         func(childComplexity int) int
-		Templates           func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
-		TemplatesAggregate  func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
-		TemplatesByPk       func(childComplexity int, id string) int
-		WorkspaceGit        func(childComplexity int, name string) int
-		WorkspaceLogs       func(childComplexity int, name string, limit *int) int
-		WorkspaceSourceDiff func(childComplexity int, workspace string, slot string, ref *string) int
-		WorkspaceStatus     func(childComplexity int, name string) int
-		Workspaces          func(childComplexity int, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) int
-		WorkspacesAggregate func(childComplexity int, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) int
-		WorkspacesByPk      func(childComplexity int, id string) int
+		File                    func(childComplexity int, source string, path string) int
+		GitOpsTopology          func(childComplexity int, withCommits *int) int
+		Health                  func(childComplexity int) int
+		IngressStatus           func(childComplexity int) int
+		Jobs                    func(childComplexity int, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) int
+		JobsAggregate           func(childComplexity int, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) int
+		JobsByPk                func(childComplexity int, id string) int
+		McpDescriptor           func(childComplexity int) int
+		SecretValue             func(childComplexity int, name string) int
+		Secrets                 func(childComplexity int, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) int
+		SecretsAggregate        func(childComplexity int, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) int
+		SecretsByPk             func(childComplexity int, id string) int
+		ServiceEndpoint         func(childComplexity int, name string) int
+		ServiceLogs             func(childComplexity int, name string, limit *int) int
+		ServiceTemplateInputs   func(childComplexity int, name string) int
+		Services                func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
+		ServicesAggregate       func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
+		ServicesByPk            func(childComplexity int, id string) int
+		ServicesGroups          func(childComplexity int, groupBy []*model.ServicesGroupBySpec, where *model.ServicesBoolExp, having *model.ServicesHaving, orderBy []*model.ServicesGroupOrder, limit *int, offset *int) int
+		SourceDiff              func(childComplexity int, name string, ref *string) int
+		Sources                 func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
+		SourcesAggregate        func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
+		SourcesByPk             func(childComplexity int, id string) int
+		SourcesGroups           func(childComplexity int, groupBy []*model.SourcesGroupBySpec, where *model.SourcesBoolExp, having *model.SourcesHaving, orderBy []*model.SourcesGroupOrder, limit *int, offset *int) int
+		StackLogs               func(childComplexity int, services []string, limit *int) int
+		StackStatus             func(childComplexity int) int
+		StackTemplateInputs     func(childComplexity int) int
+		Templates               func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
+		TemplatesAggregate      func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
+		TemplatesByPk           func(childComplexity int, id string) int
+		WorkspaceGit            func(childComplexity int, name string) int
+		WorkspaceLogs           func(childComplexity int, name string, limit *int) int
+		WorkspaceSourceDiff     func(childComplexity int, workspace string, slot string, ref *string) int
+		WorkspaceStatus         func(childComplexity int, name string) int
+		WorkspaceTemplateInputs func(childComplexity int, name string) int
+		Workspaces              func(childComplexity int, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) int
+		WorkspacesAggregate     func(childComplexity int, where *model.WorkspacesBoolExp, orderBy []*model.WorkspacesOrderBy, limit *int, offset *int) int
+		WorkspacesByPk          func(childComplexity int, id string) int
 	}
 
 	RouteRef struct {
@@ -437,6 +441,13 @@ type ComplexityRoot struct {
 		Type        func(childComplexity int) int
 		Validator   func(childComplexity int) int
 		When        func(childComplexity int) int
+	}
+
+	TemplateInputsResponse struct {
+		Recorded   func(childComplexity int) int
+		Target     func(childComplexity int) int
+		Template   func(childComplexity int) int
+		Unrecorded func(childComplexity int) int
 	}
 
 	WorkspaceCreatePreflight struct {
@@ -657,6 +668,9 @@ type MutationResolver interface {
 type QueryResolver interface {
 	Health(ctx context.Context) (*model.MutationResult, error)
 	StackStatus(ctx context.Context) (*api.StackStatusResponse, error)
+	StackTemplateInputs(ctx context.Context) (*api.TemplateInputsResponse, error)
+	WorkspaceTemplateInputs(ctx context.Context, name string) (*api.TemplateInputsResponse, error)
+	ServiceTemplateInputs(ctx context.Context, name string) (*api.TemplateInputsResponse, error)
 	ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error)
 	IngressStatus(ctx context.Context) (*api.IngressStatus, error)
 	Services(ctx context.Context, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) ([]*api.ServiceState, error)
@@ -720,6 +734,9 @@ type SubscriptionResolver interface {
 }
 type TemplateDescriptorResolver interface {
 	ID(ctx context.Context, obj *api.TemplateDescriptor) (string, error)
+}
+type TemplateInputsResponseResolver interface {
+	Recorded(ctx context.Context, obj *api.TemplateInputsResponse) ([]*model.KeyValue, error)
 }
 type WorkspaceCreatePreflightResolver interface {
 	EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error)
@@ -1918,6 +1935,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ServiceLogs(childComplexity, args["name"].(string), args["limit"].(*int)), true
+	case "Query.serviceTemplateInputs":
+		if e.ComplexityRoot.Query.ServiceTemplateInputs == nil {
+			break
+		}
+
+		args, err := ec.field_Query_serviceTemplateInputs_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ServiceTemplateInputs(childComplexity, args["name"].(string)), true
 	case "Query.services":
 		if e.ComplexityRoot.Query.Services == nil {
 			break
@@ -2034,6 +2062,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.StackStatus(childComplexity), true
+	case "Query.stackTemplateInputs":
+		if e.ComplexityRoot.Query.StackTemplateInputs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.StackTemplateInputs(childComplexity), true
 	case "Query.templates":
 		if e.ComplexityRoot.Query.Templates == nil {
 			break
@@ -2111,6 +2145,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.WorkspaceStatus(childComplexity, args["name"].(string)), true
+	case "Query.workspaceTemplateInputs":
+		if e.ComplexityRoot.Query.WorkspaceTemplateInputs == nil {
+			break
+		}
+
+		args, err := ec.field_Query_workspaceTemplateInputs_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.WorkspaceTemplateInputs(childComplexity, args["name"].(string)), true
 	case "Query.workspaces":
 		if e.ComplexityRoot.Query.Workspaces == nil {
 			break
@@ -2861,6 +2906,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.When(childComplexity), true
+
+	case "TemplateInputsResponse.recorded":
+		if e.ComplexityRoot.TemplateInputsResponse.Recorded == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputsResponse.Recorded(childComplexity), true
+	case "TemplateInputsResponse.target":
+		if e.ComplexityRoot.TemplateInputsResponse.Target == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputsResponse.Target(childComplexity), true
+	case "TemplateInputsResponse.template":
+		if e.ComplexityRoot.TemplateInputsResponse.Template == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputsResponse.Template(childComplexity), true
+	case "TemplateInputsResponse.unrecorded":
+		if e.ComplexityRoot.TemplateInputsResponse.Unrecorded == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputsResponse.Unrecorded(childComplexity), true
 
 	case "WorkspaceCreatePreflight.effectiveInputs":
 		if e.ComplexityRoot.WorkspaceCreatePreflight.EffectiveInputs == nil {
@@ -4381,6 +4451,9 @@ input WorkspaceCreateInput {
 type Query {
   health: MutationResult
   stackStatus: StackStatus
+  stackTemplateInputs: TemplateInputsResponse!
+  workspaceTemplateInputs(name: String!): TemplateInputsResponse!
+  serviceTemplateInputs(name: String!): TemplateInputsResponse!
   serviceEndpoint(name: String!): ServiceEndpoint
   ingressStatus: IngressStatus
 
@@ -4517,6 +4590,13 @@ type WorkspaceCreatePreflight {
   effectiveInputs: [KeyValue!]!
   missingRequired: [String!]!
   invalidInputs: [PreflightFailure!]!
+}
+
+type TemplateInputsResponse {
+  target: String!
+  template: TemplateDescriptor!
+  recorded: [KeyValue!]!
+  unrecorded: [String!]!
 }
 
 type TemplateInputDescriptor {
@@ -5178,6 +5258,20 @@ func (ec *executionContext) childFields_TemplateInputDescriptor(ctx context.Cont
 		return ec.fieldContext_TemplateInputDescriptor_validator(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TemplateInputDescriptor", field.Name)
+}
+
+func (ec *executionContext) childFields_TemplateInputsResponse(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "target":
+		return ec.fieldContext_TemplateInputsResponse_target(ctx, field)
+	case "template":
+		return ec.fieldContext_TemplateInputsResponse_template(ctx, field)
+	case "recorded":
+		return ec.fieldContext_TemplateInputsResponse_recorded(ctx, field)
+	case "unrecorded":
+		return ec.fieldContext_TemplateInputsResponse_unrecorded(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TemplateInputsResponse", field.Name)
 }
 
 func (ec *executionContext) childFields_WorkspaceCreatePreflight(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -6678,6 +6772,20 @@ func (ec *executionContext) field_Query_serviceLogs_args(ctx context.Context, ra
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_serviceTemplateInputs_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_services_aggregate_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -7167,6 +7275,20 @@ func (ec *executionContext) field_Query_workspaceSourceDiff_args(ctx context.Con
 }
 
 func (ec *executionContext) field_Query_workspaceStatus_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_workspaceTemplateInputs_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
@@ -11691,6 +11813,126 @@ func (ec *executionContext) fieldContext_Query_stackStatus(_ context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_stackTemplateInputs(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_stackTemplateInputs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().StackTemplateInputs(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.TemplateInputsResponse) graphql.Marshaler {
+			return ec.marshalNTemplateInputsResponse2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputsResponse(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_stackTemplateInputs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateInputsResponse(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_workspaceTemplateInputs(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_workspaceTemplateInputs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().WorkspaceTemplateInputs(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.TemplateInputsResponse) graphql.Marshaler {
+			return ec.marshalNTemplateInputsResponse2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputsResponse(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_workspaceTemplateInputs(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateInputsResponse(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_workspaceTemplateInputs_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_serviceTemplateInputs(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_serviceTemplateInputs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ServiceTemplateInputs(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.TemplateInputsResponse) graphql.Marshaler {
+			return ec.marshalNTemplateInputsResponse2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputsResponse(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_serviceTemplateInputs(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateInputsResponse(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_serviceTemplateInputs_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_serviceEndpoint(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16069,6 +16311,116 @@ func (ec *executionContext) _TemplateInputDescriptor_validator(ctx context.Conte
 }
 func (ec *executionContext) fieldContext_TemplateInputDescriptor_validator(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputsResponse_target(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputsResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputsResponse_target(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Target, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputsResponse_target(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputsResponse", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputsResponse_template(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputsResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputsResponse_template(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Template, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v api.TemplateDescriptor) graphql.Marshaler {
+			return ec.marshalNTemplateDescriptor2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptor(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputsResponse_template(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TemplateInputsResponse",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateDescriptor(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TemplateInputsResponse_recorded(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputsResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputsResponse_recorded(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.TemplateInputsResponse().Recorded(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValue) graphql.Marshaler {
+			return ec.marshalNKeyValue2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐKeyValueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputsResponse_recorded(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TemplateInputsResponse",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KeyValue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TemplateInputsResponse_unrecorded(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputsResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputsResponse_unrecorded(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Unrecorded, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputsResponse_unrecorded(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputsResponse", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _WorkspaceCreatePreflight_ok(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceCreatePreflightResponse) (ret graphql.Marshaler) {
@@ -23455,6 +23807,72 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "stackTemplateInputs":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_stackTemplateInputs(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "workspaceTemplateInputs":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_workspaceTemplateInputs(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "serviceTemplateInputs":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_serviceTemplateInputs(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "serviceEndpoint":
 			field := field
 
@@ -25364,6 +25782,91 @@ func (ec *executionContext) _TemplateInputDescriptor(ctx context.Context, sel as
 			out.Values[i] = ec._TemplateInputDescriptor_when(ctx, field, obj)
 		case "validator":
 			out.Values[i] = ec._TemplateInputDescriptor_validator(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var templateInputsResponseImplementors = []string{"TemplateInputsResponse"}
+
+func (ec *executionContext) _TemplateInputsResponse(ctx context.Context, sel ast.SelectionSet, obj *api.TemplateInputsResponse) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, templateInputsResponseImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TemplateInputsResponse")
+		case "target":
+			out.Values[i] = ec._TemplateInputsResponse_target(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "template":
+			out.Values[i] = ec._TemplateInputsResponse_template(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "recorded":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TemplateInputsResponse_recorded(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "unrecorded":
+			out.Values[i] = ec._TemplateInputsResponse_unrecorded(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -27703,6 +28206,10 @@ func (ec *executionContext) marshalNTemplateConflict2ᚕgithubᚗcomᚋangᚑee�
 	return ret
 }
 
+func (ec *executionContext) marshalNTemplateDescriptor2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptor(ctx context.Context, sel ast.SelectionSet, v api.TemplateDescriptor) graphql.Marshaler {
+	return ec._TemplateDescriptor(ctx, sel, &v)
+}
+
 func (ec *executionContext) marshalNTemplateDescriptor2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateDescriptorᚄ(ctx context.Context, sel ast.SelectionSet, v []*api.TemplateDescriptor) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -27767,6 +28274,20 @@ func (ec *executionContext) marshalNTemplateInputDescriptor2ᚕgithubᚗcomᚋan
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNTemplateInputsResponse2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputsResponse(ctx context.Context, sel ast.SelectionSet, v api.TemplateInputsResponse) graphql.Marshaler {
+	return ec._TemplateInputsResponse(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTemplateInputsResponse2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputsResponse(ctx context.Context, sel ast.SelectionSet, v *api.TemplateInputsResponse) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TemplateInputsResponse(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNWorkspaceCreateInput2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐWorkspaceCreateInput(ctx context.Context, v any) (model.WorkspaceCreateInput, error) {

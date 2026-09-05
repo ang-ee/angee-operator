@@ -201,7 +201,8 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
 	initCmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
 	cmd.AddCommand(initCmd)
-	var updateTemplate, updateDryRun, updateOverwrite bool
+	var updateTemplate, updateDryRun, updateOverwrite, updateInteractive bool
+	var updateInputs []string
 	updateCmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update generated runtime files (with --template, re-render angee.yaml from its stack template first)",
@@ -212,6 +213,12 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			"the runtime files are regenerated. --template runs locally only.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireUpdateInteractiveMode(cmd, updateInteractive); err != nil {
+				return err
+			}
+			if !updateTemplate && (updateInteractive || len(updateInputs) > 0 || cmd.Flags().Changed("answers")) {
+				return fmt.Errorf("--interactive, --input, and --answers only apply with --template")
+			}
 			if updateDryRun && !updateTemplate {
 				return fmt.Errorf("--dry-run only applies with --template")
 			}
@@ -230,7 +237,15 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun, Overwrite: updateOverwrite})
+				inputs, err := parseKeyValues(updateInputs)
+				if err != nil {
+					return err
+				}
+				inputs, err = resolveUpdateTemplateInputs(cmd, inputs, updateInteractive, "stack", "", platform.StackTemplateInputs)
+				if err != nil {
+					return err
+				}
+				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{Inputs: inputs, DryRun: updateDryRun, Overwrite: updateOverwrite})
 				if err != nil {
 					return err
 				}
@@ -275,6 +290,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render all stack template output before regenerating runtime files")
 	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print changes without writing")
 	updateCmd.Flags().BoolVar(&updateOverwrite, "overwrite", false, "with --template, replace conflicting locally modified files")
+	updateCmd.Flags().BoolVarP(&updateInteractive, "interactive", "i", false, "with --template, review recorded template inputs before re-rendering")
+	updateCmd.Flags().StringArrayVar(&updateInputs, "input", nil, "with --template, override template input K=V")
+	updateCmd.Flags().StringArray("answers", nil, "with --template, load template answers YAML (repeatable)")
 	cmd.AddCommand(updateCmd)
 	var purge bool
 	destroyCmd := &cobra.Command{
@@ -606,7 +624,7 @@ func serviceInitCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var req api.ServiceInitRequest
 	var env []string
-	var fromTemplate, dryRun, overwrite bool
+	var fromTemplate, dryRun, overwrite, interactive bool
 	var inputValues []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
@@ -614,6 +632,12 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Name = args[0]
+			if err := requireUpdateInteractiveMode(cmd, interactive); err != nil {
+				return err
+			}
+			if !fromTemplate && (interactive || cmd.Flags().Changed("answers")) {
+				return fmt.Errorf("--interactive and --answers only apply with --template")
+			}
 			if !fromTemplate && (dryRun || overwrite || len(inputValues) != 0) {
 				return fmt.Errorf("--input, --dry-run, and --overwrite only apply with --template")
 			}
@@ -628,6 +652,13 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 					return err
 				}
 				platform, err := localPlatform(root, operatorURL)
+				if err != nil {
+					return err
+				}
+				inputs, err = resolveUpdateTemplateInputs(cmd, inputs, interactive, "service", req.Name,
+					func(ctx context.Context) (api.TemplateInputsResponse, error) {
+						return platform.ServiceTemplateInputs(ctx, req.Name)
+					})
 				if err != nil {
 					return err
 				}
@@ -680,6 +711,8 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 	bindServiceFlags(cmd, &req, &env)
 	cmd.Flags().BoolVar(&fromTemplate, "template", false, "re-render the service from its recorded Copier template")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "with --template, override template input K=V")
+	cmd.Flags().StringArray("answers", nil, "with --template, load template answers YAML (repeatable)")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "with --template, review recorded template inputs before re-rendering")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "with --template, report changes without writing")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "with --template, replace conflicting local changes")
 	return cmd
@@ -1021,12 +1054,15 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var ttl string
 	var inputValues []string
-	var overwrite bool
+	var overwrite, interactive bool
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update workspace metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireUpdateInteractiveMode(cmd, interactive); err != nil {
+				return err
+			}
 			inputs, err := parseKeyValues(inputValues)
 			if err != nil {
 				return err
@@ -1035,7 +1071,7 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			if err != nil {
 				return err
 			}
-			ref, err := platform.WorkspaceUpdate(cmd.Context(), args[0], api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl, Overwrite: overwrite})
+			ref, err := updateWorkspaceFromTemplate(cmd, platform, args[0], api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl, Overwrite: overwrite}, interactive)
 			if err != nil {
 				return err
 			}
@@ -1048,6 +1084,8 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	}
 	cmd.Flags().StringVar(&ttl, "ttl", "", "workspace TTL")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "workspace input K=V")
+	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "review recorded template inputs before re-rendering")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace conflicting locally modified template files")
 	return cmd
 }

@@ -123,8 +123,13 @@ runtime_mode:
 	}
 	defs := mergeInputDefs(cfg)
 	question := defs["runtime_mode"]
-	if question.Type != "str" || question.Help != "Question help." || question.Default != "process" || question.Secret || question.Immutable || question.Generated || question.Order != 0 {
-		t.Errorf("top-level question did not replace metadata: %+v", question)
+	// The question owns what the user sees; the metadata flags that only
+	// `_angee.inputs` can express survive the merge.
+	if question.Type != "str" || question.Help != "Question help." || question.Default != "process" || question.Secret || question.Order != 0 || len(question.Choices) != 2 || question.Choices[0].Value != "process" {
+		t.Errorf("top-level question did not replace metadata presentation: %+v", question)
+	}
+	if !question.Immutable || !question.Generated {
+		t.Errorf("metadata flags lost under the question: %+v", question)
 	}
 	metadataOnly := defs["metadata_only"]
 	if defs["empty_metadata"].Order != -1 {
@@ -448,4 +453,20 @@ func TestParseMetadata(t *testing.T) {
 			t.Fatalf("ReadMetadata = %+v, ParseMetadata = %+v", fromPath, fromBytes)
 		}
 	})
+}
+
+func TestMergeInputDefKeepsMetadataFlagsUnderTheQuestion(t *testing.T) {
+	meta := Input{Required: true, Immutable: true, Generated: true, Length: 12, Type: "str", Help: "meta help", Order: -1}
+	question := Input{Type: "int", Default: 3, Help: "question help", Order: 4, Choices: []Choice{{Value: "3", Label: "3"}}}
+	merged := MergeInputDef(meta, question)
+	if !merged.Required || !merged.Immutable || !merged.Generated || merged.Length != 12 {
+		t.Fatalf("metadata flags lost: %+v", merged)
+	}
+	if merged.Type != "int" || merged.Default != 3 || merged.Help != "question help" || merged.Order != 4 || len(merged.Choices) != 1 {
+		t.Fatalf("question fields lost: %+v", merged)
+	}
+	fallback := MergeInputDef(meta, Input{Order: 2})
+	if fallback.Type != "str" || fallback.Help != "meta help" || fallback.Order != 2 {
+		t.Fatalf("metadata fallback lost: %+v", fallback)
+	}
 }

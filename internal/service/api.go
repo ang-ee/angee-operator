@@ -45,6 +45,7 @@ type API interface {
 
 // StackAPI covers stack lifecycle and compilation.
 type StackAPI interface {
+	StackTemplateInputs(ctx context.Context) (api.TemplateInputsResponse, error)
 	StackInit(ctx context.Context, template, targetPath string, inputs map[string]string, force bool) (StackInitResult, error)
 	StackUpdate(ctx context.Context) error
 	StackDestroy(ctx context.Context, purge bool) error
@@ -78,6 +79,7 @@ type RuntimeAPI interface {
 
 // ServiceAPI covers service manifest CRUD and template-based creation.
 type ServiceAPI interface {
+	ServiceTemplateInputs(ctx context.Context, name string) (api.TemplateInputsResponse, error)
 	ServiceList(ctx context.Context, q query.Args) ([]api.ServiceState, int, error)
 	ServiceInit(ctx context.Context, req api.ServiceInitRequest) error
 	ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error
@@ -94,6 +96,7 @@ type JobAPI interface {
 
 // WorkspaceAPI covers workspace lifecycle, status, logs, and aggregate git ops.
 type WorkspaceAPI interface {
+	WorkspaceTemplateInputs(ctx context.Context, name string) (api.TemplateInputsResponse, error)
 	WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceRef, error)
 	WorkspaceList(ctx context.Context, q query.Args) ([]api.WorkspaceRef, int, error)
 	WorkspaceGet(ctx context.Context, name string) (api.WorkspaceRef, error)

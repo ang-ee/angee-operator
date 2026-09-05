@@ -800,6 +800,9 @@ input WorkspaceCreateInput {
 type Query {
   health: MutationResult
   stackStatus: StackStatus
+  stackTemplateInputs: TemplateInputsResponse!
+  workspaceTemplateInputs(name: String!): TemplateInputsResponse!
+  serviceTemplateInputs(name: String!): TemplateInputsResponse!
   serviceEndpoint(name: String!): ServiceEndpoint
   ingressStatus: IngressStatus
 
@@ -936,6 +939,13 @@ type WorkspaceCreatePreflight {
   effectiveInputs: [KeyValue!]!
   missingRequired: [String!]!
   invalidInputs: [PreflightFailure!]!
+}
+
+type TemplateInputsResponse {
+  target: String!
+  template: TemplateDescriptor!
+  recorded: [KeyValue!]!
+  unrecorded: [String!]!
 }
 
 type TemplateInputDescriptor {

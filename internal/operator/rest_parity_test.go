@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -230,5 +231,75 @@ name: test
 	server.server.Handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRESTAndGraphQLTemplateInputsMatch(t *testing.T) {
+	server := newRenderedTemplateInputsServer(t)
+	for _, tc := range []struct {
+		path  string
+		query string
+	}{
+		{"/stack/template-inputs", "stackTemplateInputs"},
+		{"/workspaces/feature/template-inputs", `workspaceTemplateInputs(name: "feature")`},
+		{"/services/agent-feature/template-inputs", `serviceTemplateInputs(name: "agent-feature")`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rest := doREST[api.TemplateInputsResponse](t, server, http.MethodGet, tc.path, nil)
+			body, err := json.Marshal(map[string]string{"query": `{ result: ` + tc.query + ` {
+				target unrecorded recorded { key value }
+				template { ref kind name path inputs {
+					name type required immutable generated default question order help placeholder
+					secret multiselect choices { value label } choices_expr: choicesExpr when validator
+				} }
+			} }`})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var gql struct {
+				Data struct {
+					Result struct {
+						Target     string                        `json:"target"`
+						Template   api.TemplateDescriptor        `json:"template"`
+						Recorded   []struct{ Key, Value string } `json:"recorded"`
+						Unrecorded []string                      `json:"unrecorded"`
+					} `json:"result"`
+				} `json:"data"`
+				Errors []map[string]any `json:"errors"`
+			}
+			req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("GraphQL status = %d: %s", rr.Code, rr.Body.String())
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &gql); err != nil {
+				t.Fatal(err)
+			}
+			if len(gql.Errors) != 0 {
+				t.Fatalf("GraphQL errors: %v", gql.Errors)
+			}
+			result := gql.Data.Result
+			recorded := make(map[string]string, len(result.Recorded))
+			previous := ""
+			for _, value := range result.Recorded {
+				if value.Key <= previous {
+					t.Fatalf("recorded keys are not in deterministic order: %v", result.Recorded)
+				}
+				previous = value.Key
+				recorded[value.Key] = value.Value
+			}
+			// GraphQL represents absent lists as []; REST may omit them.
+			for i := range result.Template.Inputs {
+				if len(result.Template.Inputs[i].Choices) == 0 {
+					result.Template.Inputs[i].Choices = nil
+				}
+			}
+			got := api.TemplateInputsResponse{Target: result.Target, Template: result.Template, Recorded: recorded, Unrecorded: result.Unrecorded}
+			if !reflect.DeepEqual(got, rest) {
+				t.Fatalf("GraphQL = %+v, REST = %+v", got, rest)
+			}
+		})
 	}
 }

@@ -415,6 +415,33 @@ func (r *queryResolver) StackStatus(ctx context.Context) (*api.StackStatusRespon
 	return &status, err
 }
 
+// StackTemplateInputs is the resolver for the stackTemplateInputs field.
+func (r *queryResolver) StackTemplateInputs(ctx context.Context) (*api.TemplateInputsResponse, error) {
+	result, err := r.Platform.StackTemplateInputs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// WorkspaceTemplateInputs is the resolver for the workspaceTemplateInputs field.
+func (r *queryResolver) WorkspaceTemplateInputs(ctx context.Context, name string) (*api.TemplateInputsResponse, error) {
+	result, err := r.Platform.WorkspaceTemplateInputs(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ServiceTemplateInputs is the resolver for the serviceTemplateInputs field.
+func (r *queryResolver) ServiceTemplateInputs(ctx context.Context, name string) (*api.TemplateInputsResponse, error) {
+	result, err := r.Platform.ServiceTemplateInputs(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // ServiceEndpoint is the resolver for the serviceEndpoint field.
 func (r *queryResolver) ServiceEndpoint(ctx context.Context, name string) (*api.ServiceEndpoint, error) {
 	endpoint, err := r.Platform.ServiceEndpoint(ctx, name)
@@ -919,6 +946,14 @@ func (r *templateDescriptorResolver) ID(ctx context.Context, obj *api.TemplateDe
 	return obj.Ref, nil
 }
 
+// Recorded is the resolver for the recorded field.
+func (r *templateInputsResponseResolver) Recorded(ctx context.Context, obj *api.TemplateInputsResponse) ([]*model.KeyValue, error) {
+	if obj == nil {
+		return nil, nil
+	}
+	return keyValueList(obj.Recorded), nil
+}
+
 // EffectiveInputs is the resolver for the effectiveInputs field.
 func (r *workspaceCreatePreflightResolver) EffectiveInputs(ctx context.Context, obj *api.WorkspaceCreatePreflightResponse) ([]*model.KeyValue, error) {
 	if obj == nil {
@@ -1012,6 +1047,11 @@ func (r *Resolver) TemplateDescriptor() TemplateDescriptorResolver {
 	return &templateDescriptorResolver{r}
 }
 
+// TemplateInputsResponse returns TemplateInputsResponseResolver implementation.
+func (r *Resolver) TemplateInputsResponse() TemplateInputsResponseResolver {
+	return &templateInputsResponseResolver{r}
+}
+
 // WorkspaceCreatePreflight returns WorkspaceCreatePreflightResolver implementation.
 func (r *Resolver) WorkspaceCreatePreflight() WorkspaceCreatePreflightResolver {
 	return &workspaceCreatePreflightResolver{r}
@@ -1033,6 +1073,7 @@ type sourceStateResolver struct{ *Resolver }
 type stackStatusResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 type templateDescriptorResolver struct{ *Resolver }
+type templateInputsResponseResolver struct{ *Resolver }
 type workspaceCreatePreflightResolver struct{ *Resolver }
 type workspaceRefResolver struct{ *Resolver }
 type workspaceStatusResolver struct{ *Resolver }

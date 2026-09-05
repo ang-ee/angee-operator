@@ -41,6 +41,15 @@ func TestHasuraProviderDocumentsValidate(t *testing.T) {
 				}
 			}
 		}`,
+		"recordedTemplateInputs": `query RecordedTemplateInputs($name: String!) {
+			stackTemplateInputs { ...recordedFields }
+			workspaceTemplateInputs(name: $name) { ...recordedFields }
+			serviceTemplateInputs(name: $name) { ...recordedFields }
+		}
+		fragment recordedFields on TemplateInputsResponse {
+			target recorded { key value } unrecorded
+			template { ref inputs { name immutable secret } }
+		}`,
 		"create": `mutation Create($object: services_insert_input!) {
 			insert_services_one(object: $object) { id name }
 		}`,

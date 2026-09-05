@@ -121,8 +121,12 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 	for name, def := range metadata.Inputs {
 		defs[name] = def
 	}
-	for name, def := range questions {
-		defs[name] = def
+	for name, question := range questions {
+		if meta, ok := defs[name]; ok {
+			defs[name] = copierx.MergeInputDef(meta, question)
+			continue
+		}
+		defs[name] = question
 	}
 	inputs := make([]api.TemplateInputDescriptor, 0, len(defs))
 	for name, def := range defs {

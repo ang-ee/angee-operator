@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -242,5 +243,60 @@ func TestServiceUpdateFromTemplateUsesDedicatedRoute(t *testing.T) {
 	}
 	if result.Name != "agent/one" || !result.Changed {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestTemplateInputsMethods(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		call func(*RemoteClient) (api.TemplateInputsResponse, error)
+	}{
+		{"stack", "/stack/template-inputs", func(client *RemoteClient) (api.TemplateInputsResponse, error) {
+			return client.StackTemplateInputs(t.Context())
+		}},
+		{"workspace", "/workspaces/feature%2Fone/template-inputs", func(client *RemoteClient) (api.TemplateInputsResponse, error) {
+			return client.WorkspaceTemplateInputs(t.Context(), "feature/one")
+		}},
+		{"service", "/services/agent%2Fone/template-inputs", func(client *RemoteClient) (api.TemplateInputsResponse, error) {
+			return client.ServiceTemplateInputs(t.Context(), "agent/one")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := api.TemplateInputsResponse{
+				Target: tc.name,
+				Template: api.TemplateDescriptor{Ref: "templates/example", Inputs: []api.TemplateInputDescriptor{
+					{Name: "topic", Question: true}, {Name: "token", Question: true, Secret: true},
+				}},
+				Recorded: map[string]string{"topic": "recorded"}, Unrecorded: []string{"token"},
+			}
+			status := http.StatusOK
+			handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method != http.MethodGet || req.URL.EscapedPath() != tc.path || req.URL.RawQuery != "" {
+					t.Fatalf("request = %s %s, want GET %s", req.Method, req.URL, tc.path)
+				}
+				w.WriteHeader(status)
+				if status != http.StatusOK {
+					_ = json.NewEncoder(w).Encode(api.ErrorResponse{Error: "template origin is missing"})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(want)
+			})
+			client := New("http://operator.test")
+			client.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, req)
+				return recorder.Result(), nil
+			})
+			got, err := tc.call(client)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("TemplateInputs() = %+v, %v; want %+v", got, err, want)
+			}
+			status = http.StatusBadRequest
+			if _, err := tc.call(client); err == nil || !strings.Contains(err.Error(), "template origin is missing") {
+				t.Fatalf("TemplateInputs() error = %v, want template origin error", err)
+			}
+		})
 	}
 }

@@ -90,6 +90,9 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 	if err != nil {
 		return api.ServiceTemplateUpdateResult{}, err
 	}
+	if err := validateImmutableTemplateInputs(templateRef, templatePath, answers, req.Inputs); err != nil {
+		return api.ServiceTemplateUpdateResult{}, err
+	}
 	metadata, err := copierx.ValidateMetadata(templatePath, "service")
 	if err != nil {
 		return api.ServiceTemplateUpdateResult{}, err

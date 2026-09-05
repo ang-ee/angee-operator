@@ -324,6 +324,15 @@ type TemplateDescriptor struct {
 	Inputs []TemplateInputDescriptor `json:"inputs"`
 }
 
+// TemplateInputsResponse pairs a template descriptor with the answers a
+// previous render recorded for one target, for interactive re-rendering.
+type TemplateInputsResponse struct {
+	Target     string             `json:"target"`
+	Template   TemplateDescriptor `json:"template"`
+	Recorded   map[string]string  `json:"recorded"`
+	Unrecorded []string           `json:"unrecorded,omitempty"`
+}
+
 type ConnectionTokenResponse struct {
 	Token     string `json:"token"`
 	Actor     string `json:"actor"`

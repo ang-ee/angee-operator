@@ -53,11 +53,11 @@ type Result struct {
 }
 
 // Explicit returns the values supplied or changed by the caller, leaving
-// template defaults for the renderer to resolve.
+// template defaults and unchanged recorded answers for the renderer to resolve.
 func (r Result) Explicit() map[string]string {
 	values := make(map[string]string)
 	for key, value := range r.Values {
-		if r.Origins[key] != OriginDefault {
+		if r.Origins[key] != OriginDefault && r.Origins[key] != OriginRecorded {
 			values[key] = value
 		}
 	}

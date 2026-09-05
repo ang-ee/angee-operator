@@ -106,10 +106,40 @@ func mergeInputDefs(cfg config) map[string]Input {
 	for name, def := range cfg.Angee.Inputs {
 		defs[name] = def
 	}
-	for name, def := range cfg.Questions {
-		defs[name] = def
+	for name, question := range cfg.Questions {
+		if meta, ok := defs[name]; ok {
+			defs[name] = MergeInputDef(meta, question)
+			continue
+		}
+		defs[name] = question
 	}
 	return defs
+}
+
+// MergeInputDef combines an `_angee.inputs` declaration with the top-level
+// question of the same name. The question owns everything the user sees
+// (type, default, help, choices, secret, order, …); the metadata flags that
+// only `_angee.inputs` can express (required, immutable, generated, length)
+// are kept from either side, so declaring `immutable: true` under
+// `_angee.inputs` still applies when the question repeats the name.
+func MergeInputDef(meta, question Input) Input {
+	merged := question
+	merged.Required = meta.Required || question.Required
+	merged.Immutable = meta.Immutable || question.Immutable
+	merged.Generated = meta.Generated || question.Generated
+	if merged.Length == 0 {
+		merged.Length = meta.Length
+	}
+	if merged.Type == "" {
+		merged.Type = meta.Type
+	}
+	if merged.Default == nil {
+		merged.Default = meta.Default
+	}
+	if merged.Help == "" {
+		merged.Help = meta.Help
+	}
+	return merged
 }
 
 type CopyRequest struct {
