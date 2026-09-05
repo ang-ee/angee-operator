@@ -946,6 +946,20 @@ type TemplateInputDescriptor {
   generated: Boolean!
   default: String
   question: Boolean!
+  order: Int!
+  help: String
+  placeholder: String
+  secret: Boolean!
+  multiselect: Boolean!
+  choices: [TemplateInputChoice!]!
+  choicesExpr: String
+  when: String
+  validator: String
+}
+
+type TemplateInputChoice {
+  value: String!
+  label: String!
 }
 
 type TemplateDescriptor {

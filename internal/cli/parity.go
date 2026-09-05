@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/platformclient"
@@ -108,13 +110,60 @@ func templateGetCommand(stdout io.Writer, root, operatorURL *string, jsonOutput 
 			if *jsonOutput {
 				return writeJSON(stdout, desc)
 			}
-			fmt.Fprintf(stdout, "ref\t%s\nkind\t%s\nname\t%s\npath\t%s\n", desc.Ref, desc.Kind, desc.Name, desc.Path)
+			fmt.Fprintf(stdout, "ref\t%s\nkind\t%s\nname\t%s\npath\t%s\ninputs\n", desc.Ref, desc.Kind, desc.Name, desc.Path)
+			nameWidth := 0
 			for _, in := range desc.Inputs {
-				fmt.Fprintf(stdout, "input.%s\trequired=%v type=%s default=%q\n", in.Name, in.Required, in.Type, in.Default)
+				nameWidth = max(nameWidth, utf8.RuneCountInString(in.Name))
+			}
+			for _, in := range desc.Inputs {
+				fmt.Fprintf(stdout, "  %-*s  %s\n", nameWidth, in.Name, templateInputAttributes(in))
+				fmt.Fprint(stdout, wrappedTemplateHelp(in.Help, 6))
+				if in.When != "" {
+					fmt.Fprintf(stdout, "      when: %s\n", in.When)
+				}
 			}
 			return nil
 		},
 	}
+}
+
+func templateInputAttributes(input api.TemplateInputDescriptor) string {
+	typ := input.Type
+	if typ == "" {
+		typ = "str"
+	}
+	attributes := []string{typ}
+	if input.Required {
+		attributes = append(attributes, "required")
+	}
+	if input.Default != "" {
+		if input.Secret {
+			attributes = append(attributes, "default set")
+		} else {
+			attributes = append(attributes, fmt.Sprintf("default %q", input.Default))
+		}
+	}
+	if len(input.Choices) > 0 {
+		attributes = append(attributes, "choices: "+strings.Join(templateInputChoiceValues(input), " | "))
+	} else if input.ChoicesExpr != "" {
+		attributes = append(attributes, "choices: "+input.ChoicesExpr)
+	}
+	if input.Multiselect {
+		attributes = append(attributes, "multiselect")
+	}
+	if input.Secret {
+		attributes = append(attributes, "secret")
+	}
+	if input.Generated {
+		attributes = append(attributes, "generated")
+	}
+	if input.Immutable {
+		attributes = append(attributes, "immutable")
+	}
+	if !input.Question {
+		attributes = append(attributes, "read-only")
+	}
+	return strings.Join(attributes, "  ")
 }
 
 // tokenCommand exposes per-actor scoped JWT minting on the CLI.

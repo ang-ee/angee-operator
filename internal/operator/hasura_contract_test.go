@@ -33,6 +33,14 @@ func TestHasuraProviderDocumentsValidate(t *testing.T) {
 		"getMany": `query GetMany($where: services_bool_exp) {
 			services(where: $where) { id name }
 		}`,
+		"templateInputs": `query TemplateInputs($id: String!) {
+			templates_by_pk(id: $id) {
+				id ref inputs {
+					name type required immutable generated default question order help placeholder
+					secret multiselect choices { value label } choicesExpr when validator
+				}
+			}
+		}`,
 		"create": `mutation Create($object: services_insert_input!) {
 			insert_services_one(object: $object) { id name }
 		}`,

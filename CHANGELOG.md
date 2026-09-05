@@ -6,6 +6,25 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- Template input descriptors expose question order, help, placeholders, secret
+  and multiselect flags, ordered choice values and labels, dynamic choice
+  expressions, conditions, and validators over the CLI, REST, and GraphQL.
+  Inputs follow `copier.yml` order, with metadata-only inputs last.
+- Template introspection supports `services/` refs through
+  `GET /templates/{ref...}` and the corresponding CLI and GraphQL operations.
+
+### Changed
+
+- Init line prompts display help and choices in template order, accept yes/no
+  boolean answers, hide secret defaults, and retry invalid answers up to three
+  times. Both prompts and `--input` validate types and choice values, including
+  under `--yes`, which now fetches the descriptor before accepting defaults.
+- `angee template get` displays readable input blocks with aligned names,
+  defaults, choices, flags, wrapped help, and conditions. Secret defaults are
+  shown as `default set`; `--json` exposes the enriched descriptor.
+
 ## v0.12.1 — 2026-09-04
 
 ### Fixed

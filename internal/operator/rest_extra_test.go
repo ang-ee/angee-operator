@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -140,14 +141,7 @@ name: test
 	if err := os.MkdirAll(filepath.Join(templateRoot, "template"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(template) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(`_subdirectory: template
-_angee:
-  kind: workspace
-  name: dev-pr
-  inputs:
-    topic:
-      required: true
-`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(introspectionCopierYAML), 0o644); err != nil {
 		t.Fatalf("WriteFile(copier.yml) error = %v", err)
 	}
 	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
@@ -163,6 +157,69 @@ _angee:
 	desc := doREST[api.TemplateDescriptor](t, server, http.MethodGet, "/templates/workspaces/dev-pr", nil)
 	if desc.Kind != "workspace" || desc.Name != "dev-pr" {
 		t.Fatalf("template descriptor = %+v, want workspace dev-pr", desc)
+	}
+	assertTemplateIntrospectionInputs(t, desc.Inputs)
+	assertTemplateIntrospectionInputs(t, list.Nodes[0].Inputs)
+}
+
+const introspectionCopierYAML = `_subdirectory: template
+_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    topic:
+      required: true
+runtime_mode:
+  type: str
+  default: process
+  help: Choose how services run.
+  placeholder: Select a runtime
+  choices:
+    Local processes: process
+    Docker containers: docker
+  multiselect: true
+  when: false
+api_key:
+  type: str
+  help: API authentication key.
+  secret: true
+  validator: "{{ 'required' if not api_key else '' }}"
+profile:
+  type: str
+  choices: "{{ available_profiles }}"
+  when: "{{ runtime_mode == 'docker' }}"
+`
+
+func assertTemplateIntrospectionInputs(t *testing.T, inputs []api.TemplateInputDescriptor) {
+	t.Helper()
+	want := []api.TemplateInputDescriptor{
+		{
+			Name: "runtime_mode", Type: "str", Default: "process", Question: true, Order: 0,
+			Help: "Choose how services run.", Placeholder: "Select a runtime", Multiselect: true, When: "false",
+			Choices: []api.TemplateInputChoice{
+				{Value: "process", Label: "Local processes"},
+				{Value: "docker", Label: "Docker containers"},
+			},
+		},
+		{
+			Name: "api_key", Type: "str", Question: true, Order: 1,
+			Help: "API authentication key.", Secret: true, Validator: "{{ 'required' if not api_key else '' }}",
+		},
+		{
+			Name: "profile", Type: "str", Question: true, Order: 2,
+			ChoicesExpr: "{{ available_profiles }}", When: "{{ runtime_mode == 'docker' }}",
+		},
+		{Name: "topic", Required: true, Order: -1},
+	}
+	// GraphQL exposes an absent choice list as []; REST omits it. Both
+	// represent no static choices, so normalize that transport difference.
+	for i := range inputs {
+		if len(inputs[i].Choices) == 0 {
+			inputs[i].Choices = nil
+		}
+	}
+	if !reflect.DeepEqual(inputs, want) {
+		t.Fatalf("template inputs = %+v, want %+v", inputs, want)
 	}
 }
 

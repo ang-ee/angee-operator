@@ -408,11 +408,11 @@ user change them before re-rendering:
 
 ## 5. Delivery checklist (Codex-sized chunks)
 
-- [ ] **A. Descriptor enrichment.** `copierx` ordered parse + new fields;
+- [x] **A. Descriptor enrichment.** `copierx` ordered parse + new fields;
       `api` + GraphQL schema + gqlgen regen; `services/` kind; line
       prompt prints help + choices and rejects bad choices; docs
       (`operator-api.md`, `graphql/`), CHANGELOG.
-- [ ] **B. `angee template list|describe`.** CLI over existing platform
+- [x] **B. `angee template list|describe`.** CLI over existing platform
       methods; `--json`; docs `commands.md`.
 - [ ] **C. `inputform` package.** Modes, field mapping, single-screen
       group with origin markers and final confirm, small-terminal paging,

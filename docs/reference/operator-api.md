@@ -294,8 +294,30 @@ GET /templates/{ref...}
 
 `GET /templates` enumerates every template under `<root>/.templates/<kind>/<name>`
 and `<root>/templates/<kind>/<name>`. `GET /templates/{ref...}` resolves a
-specific ref (relative path, absolute path, or supported remote URL) and
+specific ref (`stacks/`, `workspaces/`, or `services/`, or a supported remote URL) and
 returns a single descriptor with the input schema.
+
+Each descriptor contains `ref`, `kind`, `name`, `path`, and `inputs`. Inputs
+follow top-level `copier.yml` question order, then metadata-only `_angee.inputs`
+entries sorted by name. Each input carries `name`, `type`, `required`,
+`immutable`, `generated`, `default`, and these form fields:
+
+| REST field | Meaning |
+| --- | --- |
+| `order` | Zero-based question position; `-1` for metadata-only inputs. |
+| `help` | Question help text. |
+| `placeholder` | Hint for an empty input. |
+| `secret` | Hide the value in prompts and text displays. |
+| `multiselect` | The question allows multiple choices. |
+| `choices` | Ordered `{ "value": "...", "label": "..." }` entries. |
+| `choices_expr` | Raw Jinja expression for dynamic choices. |
+| `when` | Raw condition; booleans are strings `"true"` or `"false"`. |
+| `validator` | Raw Jinja validation expression. |
+| `question` | True for top-level questions; false for metadata-only inputs. |
+
+Optional empty form fields are omitted in REST JSON. Dynamic choices, `when`,
+and `validator` are carried unchanged; the CLI does not evaluate their Jinja.
+Absolute paths and refs containing `..` are rejected by introspection.
 
 Connection tokens:
 
@@ -596,8 +618,14 @@ diagnostic display.
 
 `templates: [TemplateDescriptor!]!` enumerates every template under
 `<root>/.templates/<kind>/<name>` and `<root>/templates/<kind>/<name>`.
-`template(ref: String!): TemplateDescriptor` resolves an explicit ref
-(`workspaces/dev-pr`, an absolute path, or a supported remote URL) and
+`templates_by_pk(id: String!): TemplateDescriptor` resolves an explicit ref
+(`workspaces/dev-pr`, `stacks/dev`, `services/worker`, or a supported remote URL) and
 returns the same shape. Each descriptor carries `ref`, `kind`, `name`,
-`path`, and a sorted list of `TemplateInputDescriptor`
-(`name`, `type`, `required`, `immutable`, `generated`, `default`).
+`path`, and an ordered list of `TemplateInputDescriptor`. Inputs carry `name`,
+`type`, `required`, `immutable`, `generated`, `default`, `order`, `help`,
+`placeholder`, `secret`, `multiselect`, `choices`, `choicesExpr`, `when`,
+`validator`, and `question`, with the same meanings as the REST fields above.
+`choices: [TemplateInputChoice!]!` contains `value: String!` and `label: String!`
+in declaration order. GraphQL uses `choicesExpr` for REST's `choices_expr`.
+Question inputs come first in file order; metadata-only entries have `order: -1`
+and follow in name order. Conditions and validators remain informational.

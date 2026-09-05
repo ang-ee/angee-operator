@@ -67,6 +67,18 @@ a URL, or a local path; names resolve from the local template search paths
 first and fall back to the template registry (ang-ee/angee-django, or
 `ANGEE_TEMPLATE_REGISTRY`).
 
+For named or remote templates, init prompts follow the question order in
+`copier.yml`, showing help and available choices before each prompt. Boolean
+questions accept `y`/`yes`, `n`/`no`, or `true`/`false`. Invalid types or choices
+produce a warning and retry the question, up to three attempts. Secret defaults
+and entered secret values are omitted from prompt output.
+
+`--input key=value` answers are validated against declared types and choices,
+including with `--yes`. `--yes` still accepts template defaults without
+prompting, but requires the input descriptor to be fetched successfully.
+Local path templates (absolute paths or refs containing `..`) retain their
+existing direct-render behavior without descriptor validation or prompts.
+
 The init commands bootstrap a new root, so they tolerate a missing operator: if
 `ANGEE_OPERATOR_URL` (or `--operator`) is set but the operator is not reachable,
 init prints a notice and renders the template locally instead of failing. A
@@ -301,13 +313,38 @@ has no native pubsub.
 ### Template introspection
 
 ```sh
-angee template list
-angee template get <ref>
+angee template list [--json]
+angee template get <ref> [--json]
 ```
 
 Walks `<root>/.templates/<kind>/<name>` and
 `<root>/templates/<kind>/<name>`, listing every discoverable Copier
 template plus its input schema.
+
+`template get` accepts `stacks/`, `workspaces/`, and `services/` refs. Its text
+output lists inputs in template question order, followed by metadata-only
+inputs sorted by name:
+
+```text
+ref     stacks/dev
+kind    stack
+name    dev
+path    /abs/path
+inputs
+  project_name   str  default "app"
+      Machine name of the project host; also the chained project's name.
+  runtime_mode   str  default "process"  choices: process | docker
+      Run framework application services as local processes or Docker containers.
+  api_key        str  required  secret
+  operator_port  int  generated  read-only
+```
+
+Inputs may also show `multiselect`, `immutable`, and a separate `when:` line.
+Secret defaults appear as `default set`. Dynamic choices appear as
+`choices: <expression>`; `when` and `validator` expressions are informational
+and are not evaluated by these prompts. `--json` returns the complete
+descriptor, including labels, placeholders, and raw expressions, for clients
+building forms.
 
 ### Connection tokens
 

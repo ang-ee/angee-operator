@@ -415,14 +415,28 @@ type ComplexityRoot struct {
 		Ref    func(childComplexity int) int
 	}
 
+	TemplateInputChoice struct {
+		Label func(childComplexity int) int
+		Value func(childComplexity int) int
+	}
+
 	TemplateInputDescriptor struct {
-		Default   func(childComplexity int) int
-		Generated func(childComplexity int) int
-		Immutable func(childComplexity int) int
-		Name      func(childComplexity int) int
-		Question  func(childComplexity int) int
-		Required  func(childComplexity int) int
-		Type      func(childComplexity int) int
+		Choices     func(childComplexity int) int
+		ChoicesExpr func(childComplexity int) int
+		Default     func(childComplexity int) int
+		Generated   func(childComplexity int) int
+		Help        func(childComplexity int) int
+		Immutable   func(childComplexity int) int
+		Multiselect func(childComplexity int) int
+		Name        func(childComplexity int) int
+		Order       func(childComplexity int) int
+		Placeholder func(childComplexity int) int
+		Question    func(childComplexity int) int
+		Required    func(childComplexity int) int
+		Secret      func(childComplexity int) int
+		Type        func(childComplexity int) int
+		Validator   func(childComplexity int) int
+		When        func(childComplexity int) int
 	}
 
 	WorkspaceCreatePreflight struct {
@@ -2738,6 +2752,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TemplateDescriptor.Ref(childComplexity), true
 
+	case "TemplateInputChoice.label":
+		if e.ComplexityRoot.TemplateInputChoice.Label == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputChoice.Label(childComplexity), true
+	case "TemplateInputChoice.value":
+		if e.ComplexityRoot.TemplateInputChoice.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputChoice.Value(childComplexity), true
+
+	case "TemplateInputDescriptor.choices":
+		if e.ComplexityRoot.TemplateInputDescriptor.Choices == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Choices(childComplexity), true
+	case "TemplateInputDescriptor.choicesExpr":
+		if e.ComplexityRoot.TemplateInputDescriptor.ChoicesExpr == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.ChoicesExpr(childComplexity), true
 	case "TemplateInputDescriptor.default":
 		if e.ComplexityRoot.TemplateInputDescriptor.Default == nil {
 			break
@@ -2750,18 +2789,42 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.Generated(childComplexity), true
+	case "TemplateInputDescriptor.help":
+		if e.ComplexityRoot.TemplateInputDescriptor.Help == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Help(childComplexity), true
 	case "TemplateInputDescriptor.immutable":
 		if e.ComplexityRoot.TemplateInputDescriptor.Immutable == nil {
 			break
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.Immutable(childComplexity), true
+	case "TemplateInputDescriptor.multiselect":
+		if e.ComplexityRoot.TemplateInputDescriptor.Multiselect == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Multiselect(childComplexity), true
 	case "TemplateInputDescriptor.name":
 		if e.ComplexityRoot.TemplateInputDescriptor.Name == nil {
 			break
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.Name(childComplexity), true
+	case "TemplateInputDescriptor.order":
+		if e.ComplexityRoot.TemplateInputDescriptor.Order == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Order(childComplexity), true
+	case "TemplateInputDescriptor.placeholder":
+		if e.ComplexityRoot.TemplateInputDescriptor.Placeholder == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Placeholder(childComplexity), true
 	case "TemplateInputDescriptor.question":
 		if e.ComplexityRoot.TemplateInputDescriptor.Question == nil {
 			break
@@ -2774,12 +2837,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.Required(childComplexity), true
+	case "TemplateInputDescriptor.secret":
+		if e.ComplexityRoot.TemplateInputDescriptor.Secret == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Secret(childComplexity), true
 	case "TemplateInputDescriptor.type":
 		if e.ComplexityRoot.TemplateInputDescriptor.Type == nil {
 			break
 		}
 
 		return e.ComplexityRoot.TemplateInputDescriptor.Type(childComplexity), true
+	case "TemplateInputDescriptor.validator":
+		if e.ComplexityRoot.TemplateInputDescriptor.Validator == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.Validator(childComplexity), true
+	case "TemplateInputDescriptor.when":
+		if e.ComplexityRoot.TemplateInputDescriptor.When == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateInputDescriptor.When(childComplexity), true
 
 	case "WorkspaceCreatePreflight.effectiveInputs":
 		if e.ComplexityRoot.WorkspaceCreatePreflight.EffectiveInputs == nil {
@@ -4446,6 +4527,20 @@ type TemplateInputDescriptor {
   generated: Boolean!
   default: String
   question: Boolean!
+  order: Int!
+  help: String
+  placeholder: String
+  secret: Boolean!
+  multiselect: Boolean!
+  choices: [TemplateInputChoice!]!
+  choicesExpr: String
+  when: String
+  validator: String
+}
+
+type TemplateInputChoice {
+  value: String!
+  label: String!
 }
 
 type TemplateDescriptor {
@@ -5037,6 +5132,16 @@ func (ec *executionContext) childFields_TemplateDescriptor(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type TemplateDescriptor", field.Name)
 }
 
+func (ec *executionContext) childFields_TemplateInputChoice(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "value":
+		return ec.fieldContext_TemplateInputChoice_value(ctx, field)
+	case "label":
+		return ec.fieldContext_TemplateInputChoice_label(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TemplateInputChoice", field.Name)
+}
+
 func (ec *executionContext) childFields_TemplateInputDescriptor(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -5053,6 +5158,24 @@ func (ec *executionContext) childFields_TemplateInputDescriptor(ctx context.Cont
 		return ec.fieldContext_TemplateInputDescriptor_default(ctx, field)
 	case "question":
 		return ec.fieldContext_TemplateInputDescriptor_question(ctx, field)
+	case "order":
+		return ec.fieldContext_TemplateInputDescriptor_order(ctx, field)
+	case "help":
+		return ec.fieldContext_TemplateInputDescriptor_help(ctx, field)
+	case "placeholder":
+		return ec.fieldContext_TemplateInputDescriptor_placeholder(ctx, field)
+	case "secret":
+		return ec.fieldContext_TemplateInputDescriptor_secret(ctx, field)
+	case "multiselect":
+		return ec.fieldContext_TemplateInputDescriptor_multiselect(ctx, field)
+	case "choices":
+		return ec.fieldContext_TemplateInputDescriptor_choices(ctx, field)
+	case "choicesExpr":
+		return ec.fieldContext_TemplateInputDescriptor_choicesExpr(ctx, field)
+	case "when":
+		return ec.fieldContext_TemplateInputDescriptor_when(ctx, field)
+	case "validator":
+		return ec.fieldContext_TemplateInputDescriptor_validator(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TemplateInputDescriptor", field.Name)
 }
@@ -15525,6 +15648,52 @@ func (ec *executionContext) fieldContext_TemplateDescriptor_inputs(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _TemplateInputChoice_value(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputChoice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputChoice_value(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Value, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputChoice_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputChoice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputChoice_label(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputChoice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputChoice_label(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Label, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputChoice_label(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputChoice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _TemplateInputDescriptor_name(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15684,6 +15853,222 @@ func (ec *executionContext) _TemplateInputDescriptor_question(ctx context.Contex
 }
 func (ec *executionContext) fieldContext_TemplateInputDescriptor_question(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_order(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_order(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Order, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_order(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_help(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_help(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Help, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_help(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_placeholder(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_placeholder(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Placeholder, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_placeholder(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_secret(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_secret(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Secret, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_secret(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_multiselect(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_multiselect(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Multiselect, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_multiselect(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_choices(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_choices(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Choices, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []api.TemplateInputChoice) graphql.Marshaler {
+			return ec.marshalNTemplateInputChoice2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputChoiceᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_choices(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TemplateInputDescriptor",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateInputChoice(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_choicesExpr(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_choicesExpr(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ChoicesExpr, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_choicesExpr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_when(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_when(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.When, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_when(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateInputDescriptor_validator(ctx context.Context, field graphql.CollectedField, obj *api.TemplateInputDescriptor) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateInputDescriptor_validator(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Validator, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateInputDescriptor_validator(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateInputDescriptor", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _WorkspaceCreatePreflight_ok(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceCreatePreflightResponse) (ret graphql.Marshaler) {
@@ -24865,6 +25250,50 @@ func (ec *executionContext) _TemplateDescriptor(ctx context.Context, sel ast.Sel
 	return out
 }
 
+var templateInputChoiceImplementors = []string{"TemplateInputChoice"}
+
+func (ec *executionContext) _TemplateInputChoice(ctx context.Context, sel ast.SelectionSet, obj *api.TemplateInputChoice) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, templateInputChoiceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TemplateInputChoice")
+		case "value":
+			out.Values[i] = ec._TemplateInputChoice_value(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "label":
+			out.Values[i] = ec._TemplateInputChoice_label(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var templateInputDescriptorImplementors = []string{"TemplateInputDescriptor"}
 
 func (ec *executionContext) _TemplateInputDescriptor(ctx context.Context, sel ast.SelectionSet, obj *api.TemplateInputDescriptor) graphql.Marshaler {
@@ -24905,6 +25334,36 @@ func (ec *executionContext) _TemplateInputDescriptor(ctx context.Context, sel as
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "order":
+			out.Values[i] = ec._TemplateInputDescriptor_order(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "help":
+			out.Values[i] = ec._TemplateInputDescriptor_help(ctx, field, obj)
+		case "placeholder":
+			out.Values[i] = ec._TemplateInputDescriptor_placeholder(ctx, field, obj)
+		case "secret":
+			out.Values[i] = ec._TemplateInputDescriptor_secret(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "multiselect":
+			out.Values[i] = ec._TemplateInputDescriptor_multiselect(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "choices":
+			out.Values[i] = ec._TemplateInputDescriptor_choices(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "choicesExpr":
+			out.Values[i] = ec._TemplateInputDescriptor_choicesExpr(ctx, field, obj)
+		case "when":
+			out.Values[i] = ec._TemplateInputDescriptor_when(ctx, field, obj)
+		case "validator":
+			out.Values[i] = ec._TemplateInputDescriptor_validator(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -27268,6 +27727,26 @@ func (ec *executionContext) marshalNTemplateDescriptor2ᚖgithubᚗcomᚋangᚑe
 		return graphql.Null
 	}
 	return ec._TemplateDescriptor(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNTemplateInputChoice2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputChoice(ctx context.Context, sel ast.SelectionSet, v api.TemplateInputChoice) graphql.Marshaler {
+	return ec._TemplateInputChoice(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTemplateInputChoice2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputChoiceᚄ(ctx context.Context, sel ast.SelectionSet, v []api.TemplateInputChoice) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTemplateInputChoice2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputChoice(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNTemplateInputDescriptor2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐTemplateInputDescriptor(ctx context.Context, sel ast.SelectionSet, v api.TemplateInputDescriptor) graphql.Marshaler {

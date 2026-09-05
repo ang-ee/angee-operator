@@ -127,6 +127,9 @@ models:
   TemplateInputDescriptor:
     model:
       - github.com/ang-ee/angee-operator/api.TemplateInputDescriptor
+  TemplateInputChoice:
+    model:
+      - github.com/ang-ee/angee-operator/api.TemplateInputChoice
   ConnectionToken:
     model:
       - github.com/ang-ee/angee-operator/api.ConnectionTokenResponse

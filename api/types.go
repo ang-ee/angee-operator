@@ -288,6 +288,32 @@ type TemplateInputDescriptor struct {
 	// (typically generated/immutable). Interactive prompting consumes this
 	// to prompt only for real questions.
 	Question bool `json:"question"`
+	// Order is the zero-based question position in copier.yml, or -1 for metadata-only inputs.
+	Order int `json:"order"`
+	// Help describes the input to the user.
+	Help string `json:"help,omitempty"`
+	// Placeholder is the hint shown when the input has no value.
+	Placeholder string `json:"placeholder,omitempty"`
+	// Secret marks values that must be hidden in prompts and text output.
+	Secret bool `json:"secret,omitempty"`
+	// Multiselect allows selecting multiple choices.
+	Multiselect bool `json:"multiselect,omitempty"`
+	// Choices contains allowed values and labels in declaration order.
+	Choices []TemplateInputChoice `json:"choices,omitempty"`
+	// ChoicesExpr is the raw Jinja expression for dynamically computed choices.
+	ChoicesExpr string `json:"choices_expr,omitempty"`
+	// When is the raw condition, with boolean conditions rendered as "true" or "false".
+	When string `json:"when,omitempty"`
+	// Validator is the raw Jinja validation expression, informational to clients.
+	Validator string `json:"validator,omitempty"`
+}
+
+// TemplateInputChoice pairs a stored input value with its display label.
+type TemplateInputChoice struct {
+	// Value is the answer passed to Copier.
+	Value string `json:"value"`
+	// Label is the human-readable choice text.
+	Label string `json:"label"`
 }
 
 type TemplateDescriptor struct {

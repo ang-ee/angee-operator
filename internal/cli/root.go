@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/fslock"
@@ -767,9 +768,6 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, templa
 	if provided == nil {
 		provided = map[string]string{}
 	}
-	if yes {
-		return provided, nil
-	}
 	// Filesystem-path templates (absolute, or containing ".." segments) exist
 	// only locally and are rejected by Template()'s introspection guard, which
 	// is reachable over REST/GraphQL. StackInit resolves such paths directly,
@@ -780,7 +778,7 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, templa
 	}
 	// Derive the interactive questions from the template descriptor, which is
 	// served identically over local, REST, and GraphQL transports — so this
-	// works against `--operator` too. desc.Inputs is already sorted by name.
+	// works against `--operator` too. desc.Inputs is in template question order.
 	//
 	// These callers always init a STACK template. Template() infers the kind
 	// from the ref's first path segment, so a bare name like "dev" needs the
@@ -795,6 +793,16 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, templa
 	if err != nil {
 		return nil, err
 	}
+	for _, input := range desc.Inputs {
+		if value, ok := provided[input.Name]; ok {
+			if err := validateTemplateInput(input, value); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if yes {
+		return provided, nil
+	}
 	out := map[string]string{}
 	for key, value := range provided {
 		out[key] = value
@@ -808,34 +816,142 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, templa
 		if _, ok := out[key]; ok {
 			continue
 		}
-		defaultValue := input.Default
-		hasDefault := defaultValue != ""
-		prompt := key + ": "
-		if hasDefault {
-			prompt = fmt.Sprintf("%s [%s]: ", key, defaultValue)
-		}
-		if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
+		value, err := promptTemplateInput(cmd, reader, input)
+		if err != nil {
 			return nil, err
 		}
-		line, err := reader.ReadString('\n')
-		if err != nil && len(line) == 0 {
-			return nil, fmt.Errorf("template input %s requires interactive input; use --yes to accept defaults or --input %s=value", key, key)
-		}
-		value := strings.TrimSpace(line)
-		if value == "" && hasDefault {
-			value = defaultValue
-		}
-		if value == "" && input.Required {
-			return nil, fmt.Errorf("template input %s is required; pass --input %s=value", key, key)
-		}
 		if value != "" {
-			if err := validateTemplateInputValue(key, input.Type, value); err != nil {
-				return nil, err
-			}
 			out[key] = value
 		}
 	}
 	return out, nil
+}
+
+// promptAttempts bounds how often an invalid answer is re-asked before the
+// validation error is returned.
+const promptAttempts = 3
+
+// promptTemplateInput asks one question on the line reader. It is the
+// scripted fallback: a plain reader cannot suppress terminal echo, so secret
+// answers are only kept out of the prompt and never printed back, not masked.
+func promptTemplateInput(cmd *cobra.Command, reader *bufio.Reader, input api.TemplateInputDescriptor) (string, error) {
+	prompt := input.Name + ": "
+	if !input.Secret {
+		switch input.Type {
+		case "bool", "boolean":
+			prompt = input.Name + " [y/N]: "
+			if defaultTrue, _ := strconv.ParseBool(input.Default); defaultTrue {
+				prompt = input.Name + " [Y/n]: "
+			}
+		default:
+			if input.Default != "" {
+				prompt = fmt.Sprintf("%s [%s]: ", input.Name, input.Default)
+			}
+		}
+	}
+	for attempt := 1; ; attempt++ {
+		if _, err := fmt.Fprint(cmd.ErrOrStderr(), wrappedTemplateHelp(input.Help, 2)); err != nil {
+			return "", err
+		}
+		if len(input.Choices) > 0 {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "  choices: %s\n", strings.Join(templateInputChoiceValues(input), " | ")); err != nil {
+				return "", err
+			}
+		}
+		if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
+			return "", err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			return "", fmt.Errorf("template input %s requires interactive input; use --yes to accept defaults or --input %s=value", input.Name, input.Name)
+		}
+		// Scripted readers do not echo a newline; keep subsequent help and
+		// validation warnings on their own lines without echoing the answer.
+		// A terminal already echoes the user's Enter.
+		if !(cmd.InOrStdin() == os.Stdin && stdinIsTerminal()) {
+			if _, err := fmt.Fprintln(cmd.ErrOrStderr()); err != nil {
+				return "", err
+			}
+		}
+		value := strings.TrimSpace(line)
+		if value == "" {
+			value = input.Default
+		}
+		if input.Type == "bool" || input.Type == "boolean" {
+			switch strings.ToLower(value) {
+			case "y", "yes":
+				value = "true"
+			case "n", "no":
+				value = "false"
+			}
+		}
+		var validationErr error
+		if value == "" && input.Required {
+			validationErr = fmt.Errorf("template input %s is required; pass --input %s=value", input.Name, input.Name)
+		} else if value != "" {
+			validationErr = validateTemplateInput(input, value)
+		}
+		if validationErr == nil {
+			return value, nil
+		}
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", validationErr); err != nil {
+			return "", err
+		}
+		if attempt == promptAttempts {
+			return "", validationErr
+		}
+	}
+}
+
+func templateInputChoiceValues(input api.TemplateInputDescriptor) []string {
+	values := make([]string, len(input.Choices))
+	for i, choice := range input.Choices {
+		values[i] = choice.Value
+	}
+	return values
+}
+
+func validateTemplateInput(input api.TemplateInputDescriptor, value string) error {
+	// Multiselect answers carry several values; their element-wise check
+	// arrives with the form package.
+	if len(input.Choices) > 0 && !input.Multiselect {
+		valid := false
+		for _, choice := range input.Choices {
+			if value == choice.Value {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("template input %s must be one of: %s", input.Name, strings.Join(templateInputChoiceValues(input), ", "))
+		}
+	}
+	return validateTemplateInputValue(input.Name, input.Type, value)
+}
+
+// wrappedTemplateHelp preserves explicit line breaks and wraps text to 78
+// columns, including the indentation used by prompts and template get.
+func wrappedTemplateHelp(help string, indent int) string {
+	if strings.TrimSpace(help) == "" {
+		return ""
+	}
+	prefix := strings.Repeat(" ", indent)
+	var out strings.Builder
+	for _, paragraph := range strings.Split(strings.TrimSpace(help), "\n") {
+		line := ""
+		for _, word := range strings.Fields(paragraph) {
+			if line != "" && indent+utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) > 78 {
+				out.WriteString(prefix + line + "\n")
+				line = ""
+			}
+			if line != "" {
+				line += " "
+			}
+			line += word
+		}
+		out.WriteString(prefix + line + "\n")
+	}
+	return out.String()
 }
 
 func validateTemplateInputValue(key string, typ string, value string) error {
