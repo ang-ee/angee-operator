@@ -106,10 +106,40 @@ func mergeInputDefs(cfg config) map[string]Input {
 	for name, def := range cfg.Angee.Inputs {
 		defs[name] = def
 	}
-	for name, def := range cfg.Questions {
-		defs[name] = def
+	for name, question := range cfg.Questions {
+		if meta, ok := defs[name]; ok {
+			defs[name] = MergeInputDef(meta, question)
+			continue
+		}
+		defs[name] = question
 	}
 	return defs
+}
+
+// MergeInputDef combines an `_angee.inputs` declaration with the top-level
+// question of the same name. The question owns everything the user sees
+// (type, default, help, choices, secret, order, …); the metadata flags that
+// only `_angee.inputs` can express (required, immutable, generated, length)
+// are kept from either side, so declaring `immutable: true` under
+// `_angee.inputs` still applies when the question repeats the name.
+func MergeInputDef(meta, question Input) Input {
+	merged := question
+	merged.Required = meta.Required || question.Required
+	merged.Immutable = meta.Immutable || question.Immutable
+	merged.Generated = meta.Generated || question.Generated
+	if merged.Length == 0 {
+		merged.Length = meta.Length
+	}
+	if merged.Type == "" {
+		merged.Type = meta.Type
+	}
+	if merged.Default == nil {
+		merged.Default = meta.Default
+	}
+	if merged.Help == "" {
+		merged.Help = meta.Help
+	}
+	return merged
 }
 
 type CopyRequest struct {
@@ -139,12 +169,124 @@ type InstanceNaming struct {
 }
 
 type Input struct {
-	Type      string `yaml:"type"`
-	Required  bool   `yaml:"required"`
-	Default   any    `yaml:"default"`
-	Immutable bool   `yaml:"immutable"`
-	Generated bool   `yaml:"generated"`
-	Length    int    `yaml:"length"`
+	Type        string   `yaml:"type"`
+	Required    bool     `yaml:"required"`
+	Default     any      `yaml:"default"`
+	Immutable   bool     `yaml:"immutable"`
+	Generated   bool     `yaml:"generated"`
+	Length      int      `yaml:"length"`
+	Help        string   `yaml:"help"`
+	Placeholder string   `yaml:"placeholder"`
+	Secret      bool     `yaml:"secret"`
+	Multiselect bool     `yaml:"multiselect"`
+	Validator   string   `yaml:"validator"`
+	When        any      `yaml:"when"`
+	Order       int      `yaml:"-"`
+	Choices     []Choice `yaml:"-"`
+	ChoicesExpr string   `yaml:"-"`
+}
+
+// Choice preserves the displayed label and the value passed to Copier.
+type Choice struct {
+	Value string
+	Label string
+}
+
+// UnmarshalYAML retains choice order for both Copier questions and _angee.inputs.
+func (input *Input) UnmarshalYAML(node *yaml.Node) error {
+	type fields Input
+	var decoded fields
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*input = Input(decoded)
+	for _, entry := range orderedYAMLMapping(node) {
+		if entry.key.Value != "choices" {
+			continue
+		}
+		choices := dereferenceYAMLNode(entry.value)
+		// Copier's extended form, where a choice value is itself a mapping
+		// with value/validator keys, is not modelled: such entries are
+		// skipped, so a template using only that form degrades to free text.
+		switch choices.Kind {
+		case yaml.SequenceNode:
+			for _, choice := range choices.Content {
+				choice = dereferenceYAMLNode(choice)
+				if choice.Kind == yaml.ScalarNode {
+					input.Choices = append(input.Choices, Choice{Value: choice.Value, Label: choice.Value})
+				}
+			}
+		case yaml.MappingNode:
+			for _, choice := range orderedYAMLMapping(choices) {
+				label, value := dereferenceYAMLNode(choice.key), dereferenceYAMLNode(choice.value)
+				if label.Kind == yaml.ScalarNode && value.Kind == yaml.ScalarNode {
+					input.Choices = append(input.Choices, Choice{Value: value.Value, Label: label.Value})
+				}
+			}
+		case yaml.ScalarNode:
+			if choices.Tag == "!!str" {
+				input.ChoicesExpr = choices.Value
+			}
+		}
+	}
+	return nil
+}
+
+type yamlMappingEntry struct {
+	key, value *yaml.Node
+}
+
+// orderedYAMLMapping expands merges where they are declared. Explicit keys win,
+// and earlier mappings in a merge sequence take precedence, as in YAML decoding.
+func orderedYAMLMapping(node *yaml.Node) []yamlMappingEntry {
+	visiting := map[*yaml.Node]bool{}
+	var expand func(*yaml.Node) []yamlMappingEntry
+	expand = func(node *yaml.Node) []yamlMappingEntry {
+		node = dereferenceYAMLNode(node)
+		if node.Kind != yaml.MappingNode || visiting[node] {
+			return nil
+		}
+		visiting[node] = true
+		defer delete(visiting, node)
+		explicit := map[string]bool{}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := dereferenceYAMLNode(node.Content[i])
+			if key.Tag != "!!merge" {
+				explicit[key.Value] = true
+			}
+		}
+		var entries []yamlMappingEntry
+		merged := map[string]bool{}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, value := dereferenceYAMLNode(node.Content[i]), node.Content[i+1]
+			if key.Tag != "!!merge" {
+				entries = append(entries, yamlMappingEntry{key: key, value: value})
+				continue
+			}
+			value = dereferenceYAMLNode(value)
+			mappings := []*yaml.Node{value}
+			if value.Kind == yaml.SequenceNode {
+				mappings = value.Content
+			}
+			for _, mapping := range mappings {
+				for _, entry := range expand(mapping) {
+					if !explicit[entry.key.Value] && !merged[entry.key.Value] {
+						entries = append(entries, entry)
+						merged[entry.key.Value] = true
+					}
+				}
+			}
+		}
+		return entries
+	}
+	return expand(node)
+}
+
+func dereferenceYAMLNode(node *yaml.Node) *yaml.Node {
+	if node.Kind == yaml.AliasNode {
+		return node.Alias
+	}
+	return node
 }
 
 type TemplateSource struct {
@@ -260,14 +402,22 @@ func readConfig(templatePath string) (config, error) {
 }
 
 func parseConfig(data []byte) (config, error) {
-	var cfg config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
 		return config{}, err
 	}
+	var cfg config
+	if err := document.Decode(&cfg); err != nil {
+		return config{}, err
+	}
+	for name, input := range cfg.Angee.Inputs {
+		input.Order = -1
+		cfg.Angee.Inputs[name] = input
+	}
 	var raw map[string]any
-	if err := yaml.Unmarshal(data, &raw); err == nil {
+	if err := document.Decode(&raw); err == nil {
 		cfg.Defaults = defaultsFromRaw(raw)
-		cfg.Questions = questionsFromRaw(raw)
+		cfg.Questions = questionsFromRaw(&document)
 	}
 	if cfg.Subdirectory == "" {
 		cfg.Subdirectory = "."
@@ -281,24 +431,29 @@ func parseConfig(data []byte) (config, error) {
 	return cfg, nil
 }
 
-func questionsFromRaw(raw map[string]any) map[string]Input {
+func questionsFromRaw(raw *yaml.Node) map[string]Input {
 	questions := map[string]Input{}
-	for key, value := range raw {
+	if raw.Kind == yaml.DocumentNode && len(raw.Content) > 0 {
+		raw = raw.Content[0]
+	}
+	if raw.Kind != yaml.MappingNode {
+		return questions
+	}
+	order := 0
+	for _, entry := range orderedYAMLMapping(raw) {
+		key, value := entry.key.Value, dereferenceYAMLNode(entry.value)
 		if strings.HasPrefix(key, "_") {
 			continue
 		}
-		body, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		encoded, err := yaml.Marshal(body)
-		if err != nil {
+		if value.Kind != yaml.MappingNode {
 			continue
 		}
 		var input Input
-		if err := yaml.Unmarshal(encoded, &input); err != nil {
+		if err := value.Decode(&input); err != nil {
 			continue
 		}
+		input.Order = order
+		order++
 		questions[key] = input
 	}
 	return questions

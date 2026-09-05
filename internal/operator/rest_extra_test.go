@@ -3,14 +3,17 @@ package operator
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 // TestRESTParityEndpointsRequireBearerToken proves every REST endpoint
@@ -46,6 +49,9 @@ name: test
 		{http.MethodPost, "/workspaces/x/sources/y/rebase-abort", ""},
 		{http.MethodPost, "/workspaces/x/sources/y/rebase-continue", ""},
 		{http.MethodPost, "/workspaces/x/sources/y/publish", `{"remote":"origin"}`},
+		{http.MethodGet, "/stack/template-inputs", ""},
+		{http.MethodGet, "/workspaces/x/template-inputs", ""},
+		{http.MethodGet, "/services/x/template-inputs", ""},
 		{http.MethodGet, "/templates", ""},
 		{http.MethodGet, "/templates/workspaces/dev-pr", ""},
 		{http.MethodPost, "/tokens/mint", `{"actor":"u","ttl":"1h"}`},
@@ -140,14 +146,7 @@ name: test
 	if err := os.MkdirAll(filepath.Join(templateRoot, "template"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(template) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(`_subdirectory: template
-_angee:
-  kind: workspace
-  name: dev-pr
-  inputs:
-    topic:
-      required: true
-`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(introspectionCopierYAML), 0o644); err != nil {
 		t.Fatalf("WriteFile(copier.yml) error = %v", err)
 	}
 	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
@@ -163,6 +162,69 @@ _angee:
 	desc := doREST[api.TemplateDescriptor](t, server, http.MethodGet, "/templates/workspaces/dev-pr", nil)
 	if desc.Kind != "workspace" || desc.Name != "dev-pr" {
 		t.Fatalf("template descriptor = %+v, want workspace dev-pr", desc)
+	}
+	assertTemplateIntrospectionInputs(t, desc.Inputs)
+	assertTemplateIntrospectionInputs(t, list.Nodes[0].Inputs)
+}
+
+const introspectionCopierYAML = `_subdirectory: template
+_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    topic:
+      required: true
+runtime_mode:
+  type: str
+  default: process
+  help: Choose how services run.
+  placeholder: Select a runtime
+  choices:
+    Local processes: process
+    Docker containers: docker
+  multiselect: true
+  when: false
+api_key:
+  type: str
+  help: API authentication key.
+  secret: true
+  validator: "{{ 'required' if not api_key else '' }}"
+profile:
+  type: str
+  choices: "{{ available_profiles }}"
+  when: "{{ runtime_mode == 'docker' }}"
+`
+
+func assertTemplateIntrospectionInputs(t *testing.T, inputs []api.TemplateInputDescriptor) {
+	t.Helper()
+	want := []api.TemplateInputDescriptor{
+		{
+			Name: "runtime_mode", Type: "str", Default: "process", Question: true, Order: 0,
+			Help: "Choose how services run.", Placeholder: "Select a runtime", Multiselect: true, When: "false",
+			Choices: []api.TemplateInputChoice{
+				{Value: "process", Label: "Local processes"},
+				{Value: "docker", Label: "Docker containers"},
+			},
+		},
+		{
+			Name: "api_key", Type: "str", Question: true, Order: 1,
+			Help: "API authentication key.", Secret: true, Validator: "{{ 'required' if not api_key else '' }}",
+		},
+		{
+			Name: "profile", Type: "str", Question: true, Order: 2,
+			ChoicesExpr: "{{ available_profiles }}", When: "{{ runtime_mode == 'docker' }}",
+		},
+		{Name: "topic", Required: true, Order: -1},
+	}
+	// GraphQL exposes an absent choice list as []; REST omits it. Both
+	// represent no static choices, so normalize that transport difference.
+	for i := range inputs {
+		if len(inputs[i].Choices) == 0 {
+			inputs[i].Choices = nil
+		}
+	}
+	if !reflect.DeepEqual(inputs, want) {
+		t.Fatalf("template inputs = %+v, want %+v", inputs, want)
 	}
 }
 
@@ -315,4 +377,149 @@ func doREST[T any](t *testing.T, server *Server, method, path string, body []byt
 		t.Fatalf("Unmarshal: %v, body = %s", err, rr.Body.String())
 	}
 	return out
+}
+
+// newRenderedTemplateInputsServer exercises origins written by actual renders,
+// including Copier's omission of secret answers.
+func newRenderedTemplateInputsServer(t *testing.T) *Server {
+	t.Helper()
+	base := t.TempDir()
+	root := filepath.Join(base, "stack")
+	templates := make(map[string]string)
+	for _, kind := range []string{"stack", "workspace", "service"} {
+		template := filepath.Join(base, kind+"-template")
+		templates[kind] = template
+		if err := os.MkdirAll(filepath.Join(template, "template"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		config := fmt.Sprintf(`_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: %s
+  name: example
+  inputs:
+    slug:
+      immutable: true
+topic:
+  type: str
+  default: default-topic
+  help: Describe this render.
+slug:
+  type: str
+  default: fixed
+token:
+  type: str
+  secret: true
+  default: ""
+`, kind)
+		if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(templates["stack"], "template", "angee.yaml.jinja"): fmt.Sprintf(`version: 1
+kind: stack
+name: rendered
+template:
+  active: %q
+  answers_file: .copier-answers.yml
+`, templates["stack"]),
+		filepath.Join(templates["workspace"], "template", "README.md.jinja"): "{{ topic }}\n",
+		filepath.Join(templates["service"], "template", "service.yaml.jinja"): `services:
+  {{ service_name }}:
+    runtime: container
+    image: alpine:3.22
+    env:
+      TOPIC: "{{ topic }}"
+`,
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	platform, err := service.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := platform.StackInit(t.Context(), templates["stack"], root, map[string]string{"topic": "previous-stack"}, false); err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	if _, err := platform.WorkspaceCreate(t.Context(), api.WorkspaceCreateRequest{
+		Template: templates["workspace"], Name: "feature", Inputs: map[string]string{"topic": "previous-workspace"},
+	}); err != nil {
+		t.Fatalf("WorkspaceCreate: %v", err)
+	}
+	if _, err := platform.ServiceCreate(t.Context(), api.ServiceCreateRequest{
+		Template: templates["service"], Workspace: "feature", Inputs: map[string]string{"topic": "previous-service"},
+	}); err != nil {
+		t.Fatalf("ServiceCreate: %v", err)
+	}
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestRESTTemplateInputsRenderedTargets(t *testing.T) {
+	server := newRenderedTemplateInputsServer(t)
+	for _, tc := range []struct {
+		target string
+		kind   string
+		path   string
+	}{
+		{"stack", "stack", "/stack/template-inputs"},
+		{"workspace/feature", "workspace", "/workspaces/feature/template-inputs"},
+		{"service/agent-feature", "service", "/services/agent-feature/template-inputs"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			got := doREST[api.TemplateInputsResponse](t, server, http.MethodGet, tc.path, nil)
+			if got.Target != tc.target || got.Template.Kind != tc.kind || got.Recorded["topic"] != "previous-"+tc.kind {
+				t.Fatalf("TemplateInputs = %+v", got)
+			}
+			if !reflect.DeepEqual(got.Unrecorded, []string{"token"}) {
+				t.Fatalf("Unrecorded = %v, want [token]", got.Unrecorded)
+			}
+			if _, exists := got.Recorded["token"]; exists {
+				t.Fatalf("secret was recorded: %v", got.Recorded)
+			}
+			for key := range got.Recorded {
+				if strings.HasPrefix(key, "_") {
+					t.Fatalf("Copier metadata key %q exposed as an answer", key)
+				}
+			}
+			if len(got.Template.Inputs) != 3 || got.Template.Inputs[1].Name != "slug" || !got.Template.Inputs[1].Immutable || !got.Template.Inputs[2].Secret {
+				t.Fatalf("descriptor inputs = %+v", got.Template.Inputs)
+			}
+		})
+	}
+}
+
+func TestRESTTemplateInputsMissingOrigin(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, "version: 1\nkind: stack\nname: test\n")
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	for _, tc := range []struct {
+		path   string
+		status int
+	}{
+		{"/stack/template-inputs", http.StatusBadRequest},
+		{"/workspaces/missing/template-inputs", http.StatusNotFound},
+		{"/services/missing/template-inputs", http.StatusNotFound},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rr.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", rr.Code, tc.status, rr.Body.String())
+			}
+		})
+	}
 }

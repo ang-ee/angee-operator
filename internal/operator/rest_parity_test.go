@@ -7,8 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ang-ee/angee-operator/api"
 )
 
 // TestTemplateRefRejectsAbsoluteAndTraversal locks in the
@@ -131,14 +134,7 @@ name: test
 	if err := os.MkdirAll(filepath.Join(templateRoot, "template"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(template) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(`_subdirectory: template
-_angee:
-  kind: workspace
-  name: dev-pr
-  inputs:
-    topic:
-      required: true
-`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(introspectionCopierYAML), 0o644); err != nil {
 		t.Fatalf("WriteFile(copier.yml) error = %v", err)
 	}
 	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
@@ -153,13 +149,23 @@ _angee:
 	if restRR.Code != http.StatusOK {
 		t.Fatalf("REST status = %d, want 200: %s", restRR.Code, restRR.Body.String())
 	}
-	var rest map[string]any
+	var rest api.TemplateDescriptor
 	if err := json.Unmarshal(restRR.Body.Bytes(), &rest); err != nil {
 		t.Fatalf("REST unmarshal: %v", err)
 	}
 
 	gqlBody, _ := json.Marshal(map[string]any{
-		"query": `{ templates_by_pk(id: "workspaces/dev-pr") { ref kind name inputs { name required } } }`,
+		"query": `{
+			templates_by_pk(id: "workspaces/dev-pr") { ...templateFields }
+			templates { ...templateFields }
+		}
+		fragment templateFields on TemplateDescriptor {
+			ref kind name inputs {
+				name type required immutable generated default question
+				order help placeholder secret multiselect choices { value label }
+				choices_expr: choicesExpr when validator
+			}
+		}`,
 	})
 	gqlReq := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(gqlBody))
 	gqlReq.Header.Set("Content-Type", "application/json")
@@ -170,7 +176,8 @@ _angee:
 	}
 	var gql struct {
 		Data struct {
-			Template map[string]any `json:"templates_by_pk"`
+			Template  api.TemplateDescriptor   `json:"templates_by_pk"`
+			Templates []api.TemplateDescriptor `json:"templates"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
@@ -184,15 +191,21 @@ _angee:
 	// Both surfaces should agree on the load-bearing fields. REST returns
 	// the full struct including `path`; GraphQL selects a subset. Compare
 	// the fields actually requested in the GraphQL query.
-	if rest["ref"] != gql.Data.Template["ref"] {
-		t.Fatalf("ref mismatch: REST=%v GraphQL=%v", rest["ref"], gql.Data.Template["ref"])
+	if rest.Ref != gql.Data.Template.Ref {
+		t.Fatalf("ref mismatch: REST=%v GraphQL=%v", rest.Ref, gql.Data.Template.Ref)
 	}
-	if rest["kind"] != gql.Data.Template["kind"] {
-		t.Fatalf("kind mismatch: REST=%v GraphQL=%v", rest["kind"], gql.Data.Template["kind"])
+	if rest.Kind != gql.Data.Template.Kind {
+		t.Fatalf("kind mismatch: REST=%v GraphQL=%v", rest.Kind, gql.Data.Template.Kind)
 	}
-	if rest["name"] != gql.Data.Template["name"] {
-		t.Fatalf("name mismatch: REST=%v GraphQL=%v", rest["name"], gql.Data.Template["name"])
+	if rest.Name != gql.Data.Template.Name {
+		t.Fatalf("name mismatch: REST=%v GraphQL=%v", rest.Name, gql.Data.Template.Name)
 	}
+	assertTemplateIntrospectionInputs(t, rest.Inputs)
+	assertTemplateIntrospectionInputs(t, gql.Data.Template.Inputs)
+	if len(gql.Data.Templates) != 1 || gql.Data.Templates[0].Ref != rest.Ref {
+		t.Fatalf("GraphQL templates = %+v, want one %s", gql.Data.Templates, rest.Ref)
+	}
+	assertTemplateIntrospectionInputs(t, gql.Data.Templates[0].Inputs)
 }
 
 // TestRESTBodySizeLimit asserts that decode's MaxBytesReader cap rejects
@@ -218,5 +231,75 @@ name: test
 	server.server.Handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body=%s)", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRESTAndGraphQLTemplateInputsMatch(t *testing.T) {
+	server := newRenderedTemplateInputsServer(t)
+	for _, tc := range []struct {
+		path  string
+		query string
+	}{
+		{"/stack/template-inputs", "stackTemplateInputs"},
+		{"/workspaces/feature/template-inputs", `workspaceTemplateInputs(name: "feature")`},
+		{"/services/agent-feature/template-inputs", `serviceTemplateInputs(name: "agent-feature")`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rest := doREST[api.TemplateInputsResponse](t, server, http.MethodGet, tc.path, nil)
+			body, err := json.Marshal(map[string]string{"query": `{ result: ` + tc.query + ` {
+				target unrecorded recorded { key value }
+				template { ref kind name path inputs {
+					name type required immutable generated default question order help placeholder
+					secret multiselect choices { value label } choices_expr: choicesExpr when validator
+				} }
+			} }`})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var gql struct {
+				Data struct {
+					Result struct {
+						Target     string                        `json:"target"`
+						Template   api.TemplateDescriptor        `json:"template"`
+						Recorded   []struct{ Key, Value string } `json:"recorded"`
+						Unrecorded []string                      `json:"unrecorded"`
+					} `json:"result"`
+				} `json:"data"`
+				Errors []map[string]any `json:"errors"`
+			}
+			req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("GraphQL status = %d: %s", rr.Code, rr.Body.String())
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &gql); err != nil {
+				t.Fatal(err)
+			}
+			if len(gql.Errors) != 0 {
+				t.Fatalf("GraphQL errors: %v", gql.Errors)
+			}
+			result := gql.Data.Result
+			recorded := make(map[string]string, len(result.Recorded))
+			previous := ""
+			for _, value := range result.Recorded {
+				if value.Key <= previous {
+					t.Fatalf("recorded keys are not in deterministic order: %v", result.Recorded)
+				}
+				previous = value.Key
+				recorded[value.Key] = value.Value
+			}
+			// GraphQL represents absent lists as []; REST may omit them.
+			for i := range result.Template.Inputs {
+				if len(result.Template.Inputs[i].Choices) == 0 {
+					result.Template.Inputs[i].Choices = nil
+				}
+			}
+			got := api.TemplateInputsResponse{Target: result.Target, Template: result.Template, Recorded: recorded, Unrecorded: result.Unrecorded}
+			if !reflect.DeepEqual(got, rest) {
+				t.Fatalf("GraphQL = %+v, REST = %+v", got, rest)
+			}
+		})
 	}
 }

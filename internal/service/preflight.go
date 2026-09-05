@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -33,7 +34,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 	if err != nil {
 		return api.WorkspaceCreatePreflightResponse{}, err
 	}
-	questions, _, err := copierx.TemplateQuestions(templatePath)
+	questions, questionDefaults, err := copierx.TemplateQuestions(templatePath)
 	if err != nil {
 		return api.WorkspaceCreatePreflightResponse{}, err
 	}
@@ -56,7 +57,9 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 		return api.WorkspaceCreatePreflightResponse{}, err
 	}
 	provided := mergeStringMaps(stackDefaults, req.Inputs)
-	effective := workspaceInputs(metadata, provided)
+	// Questions override metadata declarations, including their defaults. Use
+	// Copier's parsed default strings before layering stack and request inputs.
+	effective := workspaceInputs(copierx.Metadata{Inputs: defs}, mergeStringMaps(questionDefaults, provided))
 	missing := []string{}
 	invalid := []api.PreflightFailure{}
 
@@ -65,6 +68,9 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 			continue
 		}
 		value, ok := effective[name]
+		if !ok && def.Generated {
+			continue
+		}
 		if !ok || strings.TrimSpace(value) == "" {
 			missing = append(missing, name)
 		}
@@ -76,10 +82,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 		if !declared {
 			continue
 		}
-		if def.Type == "" {
-			continue
-		}
-		if reason := validateInputType(def.Type, value); reason != "" {
+		if reason := validatePreflightInputType(def, value); reason != "" {
 			invalid = append(invalid, api.PreflightFailure{Field: name, Reason: reason})
 		}
 	}
@@ -94,6 +97,25 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 		MissingRequired:  missing,
 		InvalidInputs:    invalid,
 	}, nil
+}
+
+func validatePreflightInputType(def copierx.Input, value string) string {
+	if !def.Multiselect {
+		return validateInputType(def.Type, value)
+	}
+	var selections []*string
+	if err := json.Unmarshal([]byte(value), &selections); err != nil || selections == nil {
+		return "must be a JSON array of strings"
+	}
+	for _, selection := range selections {
+		if selection == nil {
+			return "must be a JSON array of strings"
+		}
+		if reason := validateInputType(def.Type, *selection); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 func validateInputType(declared, value string) string {

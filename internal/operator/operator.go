@@ -163,6 +163,7 @@ func NewServer(config Config) (*Server, error) {
 	// allowlist is the cross-site guard.
 	mux.Handle("GET /graphql", s.graphqlWSHandler)
 	mux.Handle("GET /stack/status", s.auth(http.HandlerFunc(s.stackStatus)))
+	mux.Handle("GET /stack/template-inputs", s.auth(http.HandlerFunc(s.stackTemplateInputs)))
 	mux.Handle("POST /stack/init", s.auth(http.HandlerFunc(s.stackInit)))
 	mux.Handle("POST /stack/update", s.auth(http.HandlerFunc(s.stackUpdate)))
 	mux.Handle("POST /stack/prepare", s.auth(http.HandlerFunc(s.stackPrepare)))
@@ -189,6 +190,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /services/create", s.auth(http.HandlerFunc(s.serviceCreate)))
 	mux.Handle("PATCH /services/{name}", s.auth(http.HandlerFunc(s.serviceUpdate)))
 	mux.Handle("POST /services/{name}/template/update", s.auth(http.HandlerFunc(s.serviceUpdateFromTemplate)))
+	mux.Handle("GET /services/{name}/template-inputs", s.auth(http.HandlerFunc(s.serviceTemplateInputs)))
 	mux.Handle("POST /services/{name}/up", s.auth(http.HandlerFunc(s.serviceUp)))
 	mux.Handle("POST /services/{name}/start", s.auth(http.HandlerFunc(s.serviceStart)))
 	mux.Handle("POST /services/{name}/stop", s.auth(http.HandlerFunc(s.serviceStop)))
@@ -210,6 +212,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /workspaces/{name}", s.auth(http.HandlerFunc(s.workspaceGet)))
 	mux.Handle("PATCH /workspaces/{name}", s.auth(http.HandlerFunc(s.workspaceUpdate)))
 	mux.Handle("GET /workspaces/{name}/status", s.auth(http.HandlerFunc(s.workspaceStatus)))
+	mux.Handle("GET /workspaces/{name}/template-inputs", s.auth(http.HandlerFunc(s.workspaceTemplateInputs)))
 	mux.Handle("GET /workspaces/{name}/logs", s.auth(http.HandlerFunc(s.workspaceLogs)))
 	mux.Handle("POST /workspaces/{name}/destroy", s.auth(http.HandlerFunc(s.workspaceDestroy)))
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))

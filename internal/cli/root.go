@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,12 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/cli/inputform"
 	"github.com/ang-ee/angee-operator/internal/fslock"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/operator"
@@ -24,6 +23,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -121,7 +121,10 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 		Long: "Initialize a stack from a template. The default `dev` template renders the\n" +
 			"framework-dev stack from the template registry (ang-ee/angee-templates):\n" +
 			"a project host at the stack root whose manifest declares the framework\n" +
-			"repos as sources — `angee dev` then materializes and boots everything.",
+			"repos as sources — `angee dev` then materializes and boots everything.\n\n" +
+			"Review template inputs in a single-screen form before rendering.\n" +
+			"Set ANGEE_ACCESSIBLE=1 for line prompts, or use --yes to accept defaults\n" +
+			"without a form. Piped stdin and TERM=dumb also use line prompts.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := ""
@@ -150,8 +153,9 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 	}
 	cmd.Flags().StringVarP(&template, "template", "t", "dev", "stack template (name, name@ref, owner/repo//path, URL, or local path)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
-	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
+	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
 	return cmd
 }
 
@@ -163,7 +167,10 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd := &cobra.Command{
 		Use:   "init <template> [path]",
 		Short: "Initialize a stack from a template",
-		Args:  cobra.RangeArgs(1, 2),
+		Long: "Initialize a stack from a template and review its inputs before rendering.\n\n" +
+			"Set ANGEE_ACCESSIBLE=1 for line prompts, or use --yes to accept defaults\n" +
+			"without a form. Piped stdin and TERM=dumb also use line prompts.",
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := ""
 			if len(args) == 2 {
@@ -190,10 +197,12 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 		},
 	}
 	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite a non-empty stack root")
-	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively")
+	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
+	initCmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
 	cmd.AddCommand(initCmd)
-	var updateTemplate, updateDryRun, updateOverwrite bool
+	var updateTemplate, updateDryRun, updateOverwrite, updateInteractive bool
+	var updateInputs []string
 	updateCmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update generated runtime files (with --template, re-render angee.yaml from its stack template first)",
@@ -204,6 +213,12 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			"the runtime files are regenerated. --template runs locally only.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireUpdateInteractiveMode(cmd, updateInteractive); err != nil {
+				return err
+			}
+			if !updateTemplate && (updateInteractive || len(updateInputs) > 0 || cmd.Flags().Changed("answers")) {
+				return fmt.Errorf("--interactive, --input, and --answers only apply with --template")
+			}
 			if updateDryRun && !updateTemplate {
 				return fmt.Errorf("--dry-run only applies with --template")
 			}
@@ -222,7 +237,15 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{DryRun: updateDryRun, Overwrite: updateOverwrite})
+				inputs, err := parseKeyValues(updateInputs)
+				if err != nil {
+					return err
+				}
+				inputs, err = resolveUpdateTemplateInputs(cmd, inputs, updateInteractive, "stack", "", platform.StackTemplateInputs)
+				if err != nil {
+					return err
+				}
+				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{Inputs: inputs, DryRun: updateDryRun, Overwrite: updateOverwrite})
 				if err != nil {
 					return err
 				}
@@ -267,6 +290,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render all stack template output before regenerating runtime files")
 	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print changes without writing")
 	updateCmd.Flags().BoolVar(&updateOverwrite, "overwrite", false, "with --template, replace conflicting locally modified files")
+	updateCmd.Flags().BoolVarP(&updateInteractive, "interactive", "i", false, "with --template, review recorded template inputs before re-rendering")
+	updateCmd.Flags().StringArrayVar(&updateInputs, "input", nil, "with --template, override template input K=V")
+	updateCmd.Flags().StringArray("answers", nil, "with --template, load template answers YAML (repeatable)")
 	cmd.AddCommand(updateCmd)
 	var purge bool
 	destroyCmd := &cobra.Command{
@@ -598,7 +624,7 @@ func serviceInitCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var req api.ServiceInitRequest
 	var env []string
-	var fromTemplate, dryRun, overwrite bool
+	var fromTemplate, dryRun, overwrite, interactive bool
 	var inputValues []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
@@ -606,6 +632,12 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Name = args[0]
+			if err := requireUpdateInteractiveMode(cmd, interactive); err != nil {
+				return err
+			}
+			if !fromTemplate && (interactive || cmd.Flags().Changed("answers")) {
+				return fmt.Errorf("--interactive and --answers only apply with --template")
+			}
 			if !fromTemplate && (dryRun || overwrite || len(inputValues) != 0) {
 				return fmt.Errorf("--input, --dry-run, and --overwrite only apply with --template")
 			}
@@ -620,6 +652,13 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 					return err
 				}
 				platform, err := localPlatform(root, operatorURL)
+				if err != nil {
+					return err
+				}
+				inputs, err = resolveUpdateTemplateInputs(cmd, inputs, interactive, "service", req.Name,
+					func(ctx context.Context) (api.TemplateInputsResponse, error) {
+						return platform.ServiceTemplateInputs(ctx, req.Name)
+					})
 				if err != nil {
 					return err
 				}
@@ -672,6 +711,8 @@ func serviceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 	bindServiceFlags(cmd, &req, &env)
 	cmd.Flags().BoolVar(&fromTemplate, "template", false, "re-render the service from its recorded Copier template")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "with --template, override template input K=V")
+	cmd.Flags().StringArray("answers", nil, "with --template, load template answers YAML (repeatable)")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "with --template, review recorded template inputs before re-rendering")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "with --template, report changes without writing")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "with --template, replace conflicting local changes")
 	return cmd
@@ -764,11 +805,9 @@ func stackInitError(template string, err error) error {
 }
 
 func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, template string, provided map[string]string, yes bool) (map[string]string, error) {
-	if provided == nil {
-		provided = map[string]string{}
-	}
-	if yes {
-		return provided, nil
+	layered, err := loadTemplateInputValues(cmd, provided, nil)
+	if err != nil {
+		return nil, err
 	}
 	// Filesystem-path templates (absolute, or containing ".." segments) exist
 	// only locally and are rejected by Template()'s introspection guard, which
@@ -776,11 +815,11 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, templa
 	// so skip descriptor-derived prompting for them and rely on --input/--yes
 	// for any non-default inputs.
 	if filepath.IsAbs(template) || strings.Contains(template, "..") {
-		return provided, nil
+		return layered.Explicit(), nil
 	}
 	// Derive the interactive questions from the template descriptor, which is
 	// served identically over local, REST, and GraphQL transports — so this
-	// works against `--operator` too. desc.Inputs is already sorted by name.
+	// works against `--operator` too. desc.Inputs is in template question order.
 	//
 	// These callers always init a STACK template. Template() infers the kind
 	// from the ref's first path segment, so a bare name like "dev" needs the
@@ -795,66 +834,33 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, templa
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]string{}
-	for key, value := range provided {
-		out[key] = value
+	result, err := inputform.Run(cmd.Context(), inputform.Request{
+		Title:    "Initialize stack " + ref,
+		Inputs:   desc.Inputs,
+		Provided: layered.Values,
+		Origins:  layered.Origins,
+		Mode:     inputform.DetectMode(yes, cmd.InOrStdin() == os.Stdin && stdinIsTerminal(), os.Getenv),
+		In:       cmd.InOrStdin(),
+		Out:      cmd.OutOrStdout(),
+		Err:      cmd.ErrOrStderr(),
+	})
+	if err != nil {
+		return nil, err
 	}
-	reader := bufio.NewReader(cmd.InOrStdin())
-	for _, input := range desc.Inputs {
-		if !input.Question || input.Generated {
-			continue
-		}
-		key := input.Name
-		if _, ok := out[key]; ok {
-			continue
-		}
-		defaultValue := input.Default
-		hasDefault := defaultValue != ""
-		prompt := key + ": "
-		if hasDefault {
-			prompt = fmt.Sprintf("%s [%s]: ", key, defaultValue)
-		}
-		if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
-			return nil, err
-		}
-		line, err := reader.ReadString('\n')
-		if err != nil && len(line) == 0 {
-			return nil, fmt.Errorf("template input %s requires interactive input; use --yes to accept defaults or --input %s=value", key, key)
-		}
-		value := strings.TrimSpace(line)
-		if value == "" && hasDefault {
-			value = defaultValue
-		}
-		if value == "" && input.Required {
-			return nil, fmt.Errorf("template input %s is required; pass --input %s=value", key, key)
-		}
-		if value != "" {
-			if err := validateTemplateInputValue(key, input.Type, value); err != nil {
-				return nil, err
-			}
-			out[key] = value
-		}
-	}
-	return out, nil
+	return result.Explicit(), nil
 }
 
-func validateTemplateInputValue(key string, typ string, value string) error {
-	switch typ {
-	case "", "str", "string", "path":
-		return nil
-	case "int", "integer":
-		if _, err := strconv.Atoi(value); err != nil {
-			return fmt.Errorf("template input %s must be an integer", key)
-		}
-		return nil
-	case "bool", "boolean":
-		if _, err := strconv.ParseBool(value); err != nil {
-			return fmt.Errorf("template input %s must be a boolean", key)
-		}
-		return nil
-	default:
-		return nil
+func templateInputChoiceValues(input api.TemplateInputDescriptor) []string {
+	values := make([]string, len(input.Choices))
+	for i, choice := range input.Choices {
+		values[i] = choice.Value
 	}
+	return values
+}
+
+// wrappedTemplateHelp shares the form's 78-column help layout with template get.
+func wrappedTemplateHelp(help string, indent int) string {
+	return inputform.WrappedHelp(help, indent)
 }
 
 func displayPath(path string) string {
@@ -899,8 +905,7 @@ func newLocalPlatform(root string) (*service.Platform, error) {
 }
 
 func stdinIsTerminal() bool {
-	stat, err := os.Stdin.Stat()
-	return err == nil && stat.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(os.Stdin.Fd())
 }
 
 // initPlatform selects the platform for stack-init commands. When an operator
@@ -1049,12 +1054,15 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var ttl string
 	var inputValues []string
-	var overwrite bool
+	var overwrite, interactive bool
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update workspace metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireUpdateInteractiveMode(cmd, interactive); err != nil {
+				return err
+			}
 			inputs, err := parseKeyValues(inputValues)
 			if err != nil {
 				return err
@@ -1063,7 +1071,7 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			if err != nil {
 				return err
 			}
-			ref, err := platform.WorkspaceUpdate(cmd.Context(), args[0], api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl, Overwrite: overwrite})
+			ref, err := updateWorkspaceFromTemplate(cmd, platform, args[0], api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl, Overwrite: overwrite}, interactive)
 			if err != nil {
 				return err
 			}
@@ -1076,6 +1084,8 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	}
 	cmd.Flags().StringVar(&ttl, "ttl", "", "workspace TTL")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "workspace input K=V")
+	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "review recorded template inputs before re-rendering")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "replace conflicting locally modified template files")
 	return cmd
 }
@@ -1228,11 +1238,20 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	var req api.WorkspaceCreateRequest
 	var inputs []string
+	var yes, interactive bool
 	cmd := &cobra.Command{
 		Use:   "create <name> --template <template>",
 		Short: "Create a workspace",
-		Args:  cobra.ExactArgs(1),
+		Long: "Create a workspace from a template. The form appears when required inputs\n" +
+			"are missing or invalid on a terminal, or with --interactive. Piped stdin\n" +
+			"prompts only for unresolved inputs; --yes accepts defaults without prompts.\n\n" +
+			"Example:\n  angee workspace create feature --template dev-pr --answers answers.yml",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			mode, err := createTemplateFormMode(cmd, yes, interactive)
+			if err != nil {
+				return err
+			}
 			req.Name = args[0]
 			if req.Template == "" {
 				return fmt.Errorf("--template is required")
@@ -1243,6 +1262,10 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			}
 			req.Inputs = parsedInputs
 			platform, err := localPlatform(root, operatorURL)
+			if err != nil {
+				return err
+			}
+			req.Inputs, err = resolveWorkspaceTemplateInputs(cmd, platform, req, mode, interactive)
 			if err != nil {
 				return err
 			}
@@ -1258,6 +1281,9 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 		},
 	}
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
+	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "review all template inputs in the form (requires a terminal)")
 	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "template ref, URL, or path")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
 	cmd.Flags().BoolVar(&req.Sync, "sync", false, "reconcile leftover worktree state from a failed create instead of failing")

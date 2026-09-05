@@ -96,6 +96,60 @@ angee workspace create fix-issue-123 --template https://github.com/example/templ
 The resolver clones the repository into the user cache, checks out the
 requested branch or `?ref=`, and renders the template path.
 
+## Questions and inputs
+
+Every top-level key of `copier.yml` that is not prefixed with `_` is a
+question. Angee reads the question metadata into the template descriptor
+(`angee template get <ref>`, `GET /templates/{ref}`, GraphQL `templates`)
+and drives its input form from it, so what you declare is what the user
+sees:
+
+```yaml
+runtime_mode:
+  type: str
+  default: process
+  choices: [process, docker]
+  help: Run framework application services as local processes or Docker containers.
+
+api_key:
+  type: str
+  secret: true
+  help: Anthropic API key; stored in the stack's secret backend.
+
+seed_users:
+  type: str
+  multiselect: true
+  choices:
+    Admin account: admin
+    Demo tenant: demo
+  help: Fixtures to load on first provision.
+```
+
+| Field | Effect in the form |
+| --- | --- |
+| Declaration order | Questions are asked in `copier.yml` order; put the decisions a user must make first and image pins last. |
+| `help` | Shown under the input; keep it to one or two sentences. |
+| `default` | Pre-filled value, shown as `(default)` until changed. |
+| `choices` | Rendered as a list (a filterable one above eight entries); values are validated in every mode, including `--input` and `--yes`. The mapping form (`Label: value`) shows the label and stores the value. A Jinja string is kept as an expression and falls back to free text. |
+| `multiselect: true` | Multiple choices; the stored value is a JSON array string such as `["admin","demo"]`. |
+| `type: bool` | A Yes/No toggle; `yes`/`no`/`y`/`n`/`true`/`false` are accepted from flags and answers files. |
+| `type: int` | Validated as an integer. |
+| `type: path` | Free text; the value is rewritten relative to the stack root as described under [Local Resolution](#local-resolution). |
+| `secret: true` | Masked while typing and in the summary; never written to the answers file, so it is asked again on re-render. |
+| `placeholder` | Hint shown while the input is empty. |
+| `required: true` (in `_angee.inputs`) | The form refuses an empty value; non-interactive runs name the `--input` flag to pass. |
+| `when`, `validator` | Carried in the descriptor but not evaluated by the form yet; the render still applies them. |
+
+`_angee.inputs` declares metadata-only inputs (`generated`, `immutable`,
+`required`) that are not questions; they appear read-only in the form.
+When the same name is declared as a question and under `_angee.inputs`,
+the question wins.
+
+Answers recorded by a render (`.copier-answers.stack.yml` for stacks,
+`.copier-answers.yml` for workspaces and services) can be replayed with
+`--answers <file>` on the create commands, and `angee stack update
+--template -i` re-opens the form with the recorded values.
+
 ## Workspace metadata
 
 Workspace templates may declare inputs, sources to materialize, chained

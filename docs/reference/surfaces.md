@@ -71,6 +71,9 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceCreatePreflight` | Yes | Yes | Yes | `angee workspace preflight`; REST `POST /workspaces/preflight`. |
 | `Templates` | Yes | Yes | Yes | `angee template list`; REST `GET /templates`. |
 | `Template` | Yes | Yes | Yes | `angee template get`; REST `GET /templates/{ref...}`. |
+| `StackTemplateInputs` | Yes | Yes | Yes | Recorded answers behind `stack update --template -i`; REST `GET /stack/template-inputs`; GraphQL `stackTemplateInputs`. |
+| `WorkspaceTemplateInputs` | Yes | Yes | Yes | Recorded answers behind `workspace update -i`; REST `GET /workspaces/{name}/template-inputs`; GraphQL `workspaceTemplateInputs`. |
+| `ServiceTemplateInputs` | Yes | Yes | Yes | Recorded answers behind `service update --template -i`; REST `GET /services/{name}/template-inputs`; GraphQL `serviceTemplateInputs`. |
 | `SecretsList` | Yes | Yes | Yes | CLI `angee secret list`; REST `GET /secrets`. |
 | `SecretGet` | Yes | Yes | Yes | CLI `angee secret get`; REST `GET /secrets/{name}`. |
 | `SecretValue` | Yes | Yes | Yes | CLI `angee secret reveal`; REST `GET /secrets/{name}/value`. Privileged value-read. |

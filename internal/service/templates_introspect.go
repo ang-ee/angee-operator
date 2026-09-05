@@ -121,19 +121,36 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 	for name, def := range metadata.Inputs {
 		defs[name] = def
 	}
-	for name, def := range questions {
-		defs[name] = def
+	for name, question := range questions {
+		if meta, ok := defs[name]; ok {
+			defs[name] = copierx.MergeInputDef(meta, question)
+			continue
+		}
+		defs[name] = question
 	}
 	inputs := make([]api.TemplateInputDescriptor, 0, len(defs))
 	for name, def := range defs {
 		_, isQuestion := questions[name]
 		desc := api.TemplateInputDescriptor{
-			Name:      name,
-			Type:      def.Type,
-			Required:  def.Required,
-			Immutable: def.Immutable,
-			Generated: def.Generated,
-			Question:  isQuestion,
+			Name:        name,
+			Type:        def.Type,
+			Required:    def.Required,
+			Immutable:   def.Immutable,
+			Generated:   def.Generated,
+			Question:    isQuestion,
+			Order:       def.Order,
+			Help:        def.Help,
+			Placeholder: def.Placeholder,
+			Secret:      def.Secret,
+			Multiselect: def.Multiselect,
+			ChoicesExpr: def.ChoicesExpr,
+			Validator:   def.Validator,
+		}
+		for _, choice := range def.Choices {
+			desc.Choices = append(desc.Choices, api.TemplateInputChoice{Value: choice.Value, Label: choice.Label})
+		}
+		if def.When != nil {
+			desc.When = fmt.Sprint(def.When)
 		}
 		if v, ok := defaults[name]; ok {
 			desc.Default = v
@@ -142,7 +159,19 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 		}
 		inputs = append(inputs, desc)
 	}
-	sort.Slice(inputs, func(i, j int) bool { return inputs[i].Name < inputs[j].Name })
+	sort.Slice(inputs, func(i, j int) bool {
+		left, right := inputs[i], inputs[j]
+		if left.Order != right.Order {
+			if left.Order == -1 {
+				return false
+			}
+			if right.Order == -1 {
+				return true
+			}
+			return left.Order < right.Order
+		}
+		return left.Name < right.Name
+	})
 	return api.TemplateDescriptor{
 		Ref:    ref,
 		Kind:   metadata.Kind,
@@ -154,8 +183,8 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 
 // templateKindFromRef extracts the kind segment from a relative ref like
 // `workspaces/dev-pr` and returns the singular form that resolveTemplate
-// expects. Only the plural kinds we actually recognise are mapped; any
-// other first segment returns an empty string so resolveTemplate's
+// expects: workspaces, stacks, and services map to workspace, stack, and
+// service. Any other first segment returns an empty string so resolveTemplate's
 // "not found" path takes over with a meaningful error.
 func templateKindFromRef(ref string) string {
 	if filepath.IsAbs(ref) || isRemoteTemplateRef(ref) {
@@ -170,6 +199,8 @@ func templateKindFromRef(ref string) string {
 		return "workspace"
 	case "stacks":
 		return "stack"
+	case "services":
+		return "service"
 	default:
 		return ""
 	}

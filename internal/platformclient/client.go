@@ -641,6 +641,30 @@ func (p *RemoteClient) GitOpsTopologyWithCommits(ctx context.Context, withCommit
 	return topo, nil
 }
 
+func (p *RemoteClient) StackTemplateInputs(ctx context.Context) (api.TemplateInputsResponse, error) {
+	var result api.TemplateInputsResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/stack/template-inputs", nil, nil, &result); err != nil {
+		return api.TemplateInputsResponse{}, err
+	}
+	return result, nil
+}
+
+func (p *RemoteClient) WorkspaceTemplateInputs(ctx context.Context, name string) (api.TemplateInputsResponse, error) {
+	var result api.TemplateInputsResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(name)+"/template-inputs", nil, nil, &result); err != nil {
+		return api.TemplateInputsResponse{}, err
+	}
+	return result, nil
+}
+
+func (p *RemoteClient) ServiceTemplateInputs(ctx context.Context, name string) (api.TemplateInputsResponse, error) {
+	var result api.TemplateInputsResponse
+	if err := p.doJSON(ctx, http.MethodGet, "/services/"+url.PathEscape(name)+"/template-inputs", nil, nil, &result); err != nil {
+		return api.TemplateInputsResponse{}, err
+	}
+	return result, nil
+}
+
 func (p *RemoteClient) Templates(ctx context.Context, q query.Args) ([]api.TemplateDescriptor, int, error) {
 	var resp api.TemplateListResponse
 	if err := p.doJSON(ctx, http.MethodGet, "/templates", listQueryValues(q), nil, &resp); err != nil {

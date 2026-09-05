@@ -165,6 +165,33 @@ func (s *Server) workspaceSourcePublish(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) stackTemplateInputs(w http.ResponseWriter, r *http.Request) {
+	result, err := s.platform.StackTemplateInputs(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) workspaceTemplateInputs(w http.ResponseWriter, r *http.Request) {
+	result, err := s.platform.WorkspaceTemplateInputs(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) serviceTemplateInputs(w http.ResponseWriter, r *http.Request) {
+	result, err := s.platform.ServiceTemplateInputs(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) templates(w http.ResponseWriter, r *http.Request) {
 	q, err := parseListQuery(r)
 	if err != nil {

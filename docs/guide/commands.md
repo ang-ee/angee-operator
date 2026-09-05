@@ -41,6 +41,7 @@ sharing it, since a tool may print other data you consider sensitive.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `ANGEE_VERBOSE` | `0` | Default diagnostic verbosity: `0` is warnings only, `1` names phases, and `2` traces commands and requests. |
+| `ANGEE_ACCESSIBLE` | unset | Set to `1` to use scripted line prompts for template inputs instead of the interactive form. |
 | `ANGEE_GIT_TIMEOUT` | `2m` | Deadline for network git clone, fetch, pull, and push operations. Accepts a Go duration; `0` disables the deadline. |
 | `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
 | `ANGEE_OPERATOR_TIMEOUT` | `30m` | Deadline for non-streaming requests to a remote operator. Accepts a Go duration; `0` disables the deadline. Streaming requests are not given this timeout. |
@@ -54,9 +55,9 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 
 ```sh
 angee doctor
-angee init [path] [--template <ref>] [--input key=value ...] [--yes] [--force]
-angee stack init <template> [path] [--input key=value ...] [--yes] [--force]
-angee stack update [--template] [--dry-run] [--overwrite]
+angee init [path] [--template <ref>] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
+angee stack init <template> [path] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
+angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...]] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
@@ -66,6 +67,96 @@ name (`dev`), a pinned name (`dev@v1.2`), an `owner/repo//subpath` reference,
 a URL, or a local path; names resolve from the local template search paths
 first and fall back to the template registry (ang-ee/angee-django, or
 `ANGEE_TEMPLATE_REGISTRY`).
+
+### Template answers files
+
+`angee init`, `angee stack init`, `angee workspace create`, and
+`angee service create` accept repeatable `--answers <file>` flags. Each file
+must contain a YAML mapping; an empty file supplies no answers. Use a Copier
+answers file from an earlier render, such as `.copier-answers.stack.yml`, or
+write one yourself:
+
+```yaml
+_src_path: stacks/dev  # Copier metadata is ignored
+project_name: notes
+debug: true
+port: 8080
+features: [api, worker]
+```
+
+Keys starting with `_`, including `_src_path` and `_commit`, are ignored.
+Scalars become strings using the same conversion as template defaults
+(`fmt.Sprint`): `true` becomes `"true"`, and `8080` becomes `"8080"`. Lists
+become JSON array strings, so the example's `features` is passed as
+`["api","worker"]`, the multiselect encoding. Scalar list members are also
+converted to strings. Nested mappings are rejected with the file and key name;
+non-mapping documents are rejected with the file name.
+
+Values are layered from lowest to highest priority:
+
+1. Template defaults.
+2. Stack `workspace_defaults`, for workspace creation only.
+3. `--answers` files, in the order given; later files win.
+4. `--input key=value` flags.
+5. Edits made in the form.
+
+Form origin markers are `default`, `stack`, `answers`, `flag`, and `changed`.
+Only values supplied by the stack, an answers file, a flag, or a form edit
+are sent as explicit inputs; the renderer resolves template defaults.
+Answers files are read by the CLI, including when using `--operator`.
+`--interactive` requires a terminal with `TERM` other than `dumb` and
+`ANGEE_ACCESSIBLE` unset; it cannot be combined with `--yes`.
+For templates with descriptors, answers are validated against declared types
+and choices in every mode, including `--yes`, just like `--input`.
+
+```sh
+angee init copy --template dev --answers original/.copier-answers.stack.yml --yes
+angee stack init dev notes --answers common.yml --answers local.yml --input project_name=notes --yes
+angee workspace create fix-123 --template dev-pr-multi --answers workspace.yml --yes
+angee service create --template agent --workspace fix-123 --answers service.yml --yes
+```
+
+### Init input form
+
+For named or remote templates, `angee init` and `angee stack init` open a
+single-screen, scrollable form in a terminal. Inputs follow `copier.yml` order,
+with help under each input, choices shown as lists, and value origins marked as
+`default`, `answers`, `flag`, or `changed`. Secret inputs are masked. Generated,
+immutable, and other read-only inputs appear above the final confirmation.
+
+Use Tab or Enter to move forward, Shift+Tab to go back and edit an answer,
+↑↓ to choose a list option, and ←→ to toggle Yes/No. Space toggles multiselect
+options. The final `Render the template?` confirmation must be Yes to continue.
+No or Ctrl+C aborts with `aborted, nothing rendered`, exits with code 130, and
+renders nothing. Terminals shorter than 15 lines page through groups of five
+fields using the same keys.
+
+After confirmation, a plain summary is printed to stderr before rendering:
+
+```text
+inputs for Initialize stack stacks/dev:
+  project_name = notes (changed)
+  runtime_mode = process (default)
+  api_key = ******** (flag)
+```
+
+`--answers <file>` and `--input key=value` pre-fill the form; answers are
+validated against declared types and choices, including with `--yes`.
+Multiselect values use JSON arrays, for example
+`--input 'features=["api","worker"]'`; an empty selection is `[]`.
+When no static choices are available, multiselects use validated JSON text.
+`--yes` accepts template defaults without prompts or a form, but requires the
+input descriptor to be fetched successfully. Missing required answers are
+reported together, one per line, naming the exact `--input key=value` flags.
+
+Piped stdin, `ANGEE_ACCESSIBLE=1`, and `TERM=dumb` use line prompts on stdin,
+with help and available choices printed to stderr. Boolean questions accept
+`y`/`yes`, `n`/`no`, or `true`/`false`. Invalid types or choices produce a warning
+and retry the question, up to three attempts. Secret defaults and entered
+secret values are omitted from prompt output. EOF returns an error naming the
+input and suggesting `--yes` or `--input key=value`; it never opens the form.
+Local path templates (absolute paths or refs containing `..`) retain their
+existing direct-render behavior without descriptor validation or prompts.
 
 The init commands bootstrap a new root, so they tolerate a missing operator: if
 `ANGEE_OPERATOR_URL` (or `--operator`) is set but the operator is not reachable,
@@ -81,7 +172,45 @@ Rendered files are tracked: unchanged template files update or delete
 automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
 prints all changes without writing. Bare `stack update` remains derived-files
-only; template reconciliation needs the stack's `.copier-answers.yml`.
+only; template reconciliation needs the stack's recorded Copier answers file.
+
+### Interactive template updates
+
+Open the input form before re-rendering an existing target:
+
+```sh
+angee stack update --template -i
+angee workspace update fix-123 -i
+angee service update worker --template -i
+```
+
+`--interactive` / `-i` pre-fills the previous render's answers, marked
+`recorded`. Workspace values come from stack `workspace_defaults` overlaid
+with the workspace's persisted inputs. Immutable inputs appear read-only.
+Secret questions without recorded answers start empty and display
+`(not recorded)`; entered secrets remain masked.
+
+Repeatable `--answers <file>` values override recorded answers, and
+`--input key=value` overrides answers files. These options also work without
+`-i`. The form titles are `Update stack from <ref>`,
+`Update workspace <name> from <ref>`, and `Update service <name> from <ref>`.
+Confirm with `Re-render the stack?`, `Re-render the workspace?`, or
+`Re-render the service?`. Only form edits and explicit answers/flags are
+submitted as overrides. If none are submitted, Angee prints `no input changes`
+and still re-renders. `--overwrite` and the stack/service `--dry-run` flags
+retain their usual behavior. Stack template updates remain local-only;
+workspace and service forms also work through `--operator`.
+
+`-i` requires an interactive terminal. With `--yes`, piped stdin,
+`ANGEE_ACCESSIBLE=1`, or `TERM=dumb`, it fails with
+`--interactive requires a terminal; pass --input/--answers instead`.
+
+All three template update paths reject explicit changes to immutable inputs,
+including changes supplied without a form. The error names the input:
+`template input <key> is immutable; it was rendered as "<old>"`.
+For secret inputs the reason is
+`template input <key> is immutable; it cannot change after the first render`,
+without exposing the previous value.
 
 ## Runtime
 
@@ -103,9 +232,9 @@ and local-process services. Runtime actions are routed by each service's
 ## Services
 
 ```sh
-angee service create --template <template> --workspace <name> [--name name] [--input key=value ...]
+angee service create --template <template> --workspace <name> [--name name] [--answers <file> ...] [--input key=value ...] [--yes | --interactive]
 angee service update <name> [field flags]
-angee service update <name> --template [--input key=value ...] [--dry-run] [--overwrite]
+angee service update <name> --template [-i] [--answers <file> ...] [--input key=value ...] [--dry-run] [--overwrite]
 angee service destroy <name> [--stop=false]
 angee service list
 ```
@@ -118,6 +247,8 @@ same-field or asset conflict fails before writing unless `--overwrite` is set.
 Service identity, workspace binding, and existing allocations cannot be changed
 through template inputs. With `--dry-run`, conflicts are reported without
 writing and without turning the preview into a failed apply.
+Use `-i` to review recorded answers before rendering; see
+[Interactive template updates](#interactive-template-updates).
 
 ```sh
 angee service init <name> [flags]                       # field-based
@@ -156,10 +287,29 @@ contract.
 ```sh
 --template <ref>      template ref or absolute path (required)
 --workspace <name>    target workspace (required)
+--answers <file>      repeatable; load YAML template answers (see Template answers files)
 --input key=value     repeatable; passed to the Copier template
+--yes, -y             accept defaults and supplied inputs without prompting
+--interactive, -i     review template inputs in the form (requires a terminal)
 --name <name>         override the resolved service name (default: agent-${workspace.name})
 --start               start the service after create
 ```
+
+`service create` resolves a bare template name as `services/<name>`; references
+containing `/` and remote URLs pass through. In an interactive terminal, the
+form appears when required inputs are missing or values are invalid, or when
+you request it with `--interactive` / `-i`. If inputs are already satisfied,
+creation proceeds without prompts. The form title is
+`Create service from <ref>` and its confirmation is `Create the service?`.
+
+`--yes` / `-y` never prompts, and rejects missing required inputs or invalid
+answers. It cannot be combined with `--interactive` / `-i`. With piped stdin
+or scripted accessibility mode, missing required inputs trigger line prompts;
+when nothing is missing, creation proceeds without prompts. `-i` requires a
+terminal. Absolute template paths and refs containing `..` keep their direct
+rendering behavior without descriptor validation or a form. See
+[Template answers files](#template-answers-files) for file format, validation,
+and input precedence.
 
 If `--runtime` is omitted, `--image` creates a container service and
 `--command` creates a local service.
@@ -198,8 +348,8 @@ matching `sourceDiff` / `workspaceSource*` GraphQL mutations). See
 ## Workspaces
 
 ```sh
-angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--sync]
-angee workspace update <name> [--ttl duration] [--input key=value ...] [--overwrite]
+angee workspace create <name> --template <template> [--ttl duration] [--answers <file> ...] [--input key=value ...] [--yes | --interactive] [--sync]
+angee workspace update <name> [-i] [--ttl duration] [--answers <file> ...] [--input key=value ...] [--overwrite]
 angee workspace list  # alias: ls
 angee workspace get <name>
 angee workspace status [name]
@@ -213,6 +363,29 @@ angee workspace destroy <name> [--purge]
 
 `angee ws` is an alias for `angee workspace`, so `angee ws ls` and
 `angee ws status <name>` are equivalent to their long forms.
+
+`workspace update -i` reviews recorded answers before re-rendering; see
+[Interactive template updates](#interactive-template-updates).
+
+`workspace create` accepts repeatable `--answers <file>` flags, `--yes` / `-y`,
+and `--interactive` / `-i`. A bare template name is described as
+`workspaces/<name>`; references containing `/` and remote URLs pass through.
+Preflight applies the stack's `workspace_defaults` before answers files and
+`--input` flags. See [Template answers files](#template-answers-files) for the
+YAML format, validation, and complete layering order.
+
+In an interactive terminal, the form appears when preflight reports missing
+required inputs or invalid values, or when requested with `-i`. With all inputs
+satisfied and no `-i`, creation proceeds without prompts. The form title is
+`Create workspace <name> from <ref>` and the confirmation is
+`Create the workspace?`. Preflight runs again after the form and creation
+fails if required inputs are still missing or values remain invalid.
+
+`--yes` never prompts and cannot be combined with `-i`; `-i` requires a
+terminal. Piped stdin, `ANGEE_ACCESSIBLE=1`, and `TERM=dumb` use line prompts
+when required inputs are missing, and proceed without prompts when all inputs
+are satisfied. Absolute template paths and refs containing `..` skip the form
+and retain preflight validation.
 
 `create --sync` reconciles a worktree left behind by an earlier create that
 failed after materializing it: it removes that one leftover worktree and
@@ -301,13 +474,38 @@ has no native pubsub.
 ### Template introspection
 
 ```sh
-angee template list
-angee template get <ref>
+angee template list [--json]
+angee template get <ref> [--json]
 ```
 
 Walks `<root>/.templates/<kind>/<name>` and
 `<root>/templates/<kind>/<name>`, listing every discoverable Copier
 template plus its input schema.
+
+`template get` accepts `stacks/`, `workspaces/`, and `services/` refs. Its text
+output lists inputs in template question order, followed by metadata-only
+inputs sorted by name:
+
+```text
+ref     stacks/dev
+kind    stack
+name    dev
+path    /abs/path
+inputs
+  project_name   str  default "app"
+      Machine name of the project host; also the chained project's name.
+  runtime_mode   str  default "process"  choices: process | docker
+      Run framework application services as local processes or Docker containers.
+  api_key        str  required  secret
+  operator_port  int  generated  read-only
+```
+
+Inputs may also show `multiselect`, `immutable`, and a separate `when:` line.
+Secret defaults appear as `default set`. Dynamic choices appear as
+`choices: <expression>`; `when` and `validator` expressions are informational
+and are not evaluated by these prompts. `--json` returns the complete
+descriptor, including labels, placeholders, and raw expressions, for clients
+building forms.
 
 ### Connection tokens
 
