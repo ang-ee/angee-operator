@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/cli/inputform"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/service"
@@ -31,6 +33,26 @@ func TestVersionFlag(t *testing.T) {
 	want := "angee version " + Version + "\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "aborted", err: inputform.ErrAborted, want: 130},
+		{name: "wrapped abort", err: fmt.Errorf("form: %w", inputform.ErrAborted), want: 130},
+		{name: "ordinary error", err: errors.New("failed"), want: 1},
+		{name: "same text", err: errors.New(inputform.ErrAborted.Error()), want: 1},
+		{name: "nil", want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExitCode(tc.err); got != tc.want {
+				t.Fatalf("ExitCode(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -370,6 +392,52 @@ func TestTemplateInputsYesRequiresDescriptorExceptPaths(t *testing.T) {
 	}
 }
 
+func TestTemplateInputsYesFillsDefaultsWithoutPrompts(t *testing.T) {
+	root := t.TempDir()
+	writeInputTemplate(t, root, "project_name:\n  default: app\nruntime_mode:\n  default: process\n  choices: [process, docker]\n")
+	inputs, stderr, err := resolveTemplateInputsForTest(t, root, "", map[string]string{"runtime_mode": "docker", "extra": "value"}, true)
+	if err != nil {
+		t.Fatalf("resolve inputs: %v", err)
+	}
+	if inputs["project_name"] != "app" || inputs["runtime_mode"] != "docker" || inputs["extra"] != "value" {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	if stderr != "" {
+		t.Fatalf("--yes printed prompts: %q", stderr)
+	}
+}
+
+func TestTemplateInputsYesListsMissingRequiredFlags(t *testing.T) {
+	root := t.TempDir()
+	writeInputTemplate(t, root, "api_key:\n  required: true\nproject_name:\n  required: true\n")
+	_, stderr, err := resolveTemplateInputsForTest(t, root, "", nil, true)
+	want := "template input api_key is required; pass --input api_key=value\ntemplate input project_name is required; pass --input project_name=value"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+	if stderr != "" {
+		t.Fatalf("--yes printed prompts: %q", stderr)
+	}
+}
+
+func TestInitHelpDocumentsFormFallbacks(t *testing.T) {
+	for _, args := range [][]string{{"init", "--help"}, {"stack", "init", "--help"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			cmd := NewRoot(&stdout, &stderr)
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute(): %v", err)
+			}
+			for _, want := range []string{"ANGEE_ACCESSIBLE=1", "TERM=dumb", "accept template defaults and run non-interactively (no form)"} {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("help missing %q: %s", want, stdout.String())
+				}
+			}
+		})
+	}
+}
+
 func TestTemplateGetReadableInputs(t *testing.T) {
 	root := t.TempDir()
 	templatePath := writeInputTemplate(t, root, `project_name:
@@ -462,6 +530,10 @@ func TestTemplateHelpWrapsAt78Columns(t *testing.T) {
 
 func resolveTemplateInputsForTest(t *testing.T, root, stdin string, provided map[string]string, yes bool) (map[string]string, string, error) {
 	t.Helper()
+	// An injected reader must remain scripted even when the environment would
+	// otherwise allow the full-screen form.
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("ANGEE_ACCESSIBLE", "")
 	platform, err := service.New(root)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)

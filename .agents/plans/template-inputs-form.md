@@ -414,10 +414,10 @@ user change them before re-rendering:
       (`operator-api.md`, `graphql/`), CHANGELOG.
 - [x] **B. `angee template list|describe`.** CLI over existing platform
       methods; `--json`; docs `commands.md`.
-- [ ] **C. `inputform` package.** Modes, field mapping, single-screen
+- [x] **C. `inputform` package.** Modes, field mapping, single-screen
       group with origin markers and final confirm, small-terminal paging,
       abort semantics, tests via scripted mode and driven bubbletea model.
-- [ ] **D. Wire init / stack init.** Replace `resolveStackTemplateInputs`;
+- [x] **D. Wire init / stack init.** Replace `resolveStackTemplateInputs`;
       keep `--yes`; add `--answers <file>` with the layering and
       conversion rules of §4.7; tests including a round trip from a
       rendered `.copier-answers.stack.yml`.
@@ -436,7 +436,17 @@ user change them before re-rendering:
       `describe --answers-template`; `TemplateValidate` for
       `when`/`validator`.
 
-## 6. Open questions
+## 6. Known limitations
+
+- The first frame waits on lipgloss's background-colour query (termenv OSC
+  11, a 5s constant timeout). Real terminals answer within milliseconds and
+  termenv skips the query under screen, tmux, and dumb TERMs; a terminal
+  that swallows OSC replies pays the full timeout once. `ANGEE_ACCESSIBLE=1`
+  avoids the form entirely.
+- Ctrl-C during that first wait is a plain SIGINT (raw mode is not on yet),
+  so the shell reports 130 without the "aborted" message.
+
+## 7. Open questions
 
 - Should `--input` for a choice question with an invalid value fail fast
   (proposed: yes, same validation as the form) even under `--yes`?

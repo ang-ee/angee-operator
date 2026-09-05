@@ -8,6 +8,11 @@ latest tag.
 
 ### Added
 
+- `angee init` and `angee stack init` provide an interactive input form with
+  help, choice lists, origin markers, masked secrets, backward navigation,
+  and final confirmation. Confirmed answers are summarized to stderr.
+  `--yes` accepts defaults without prompts; piped stdin, `ANGEE_ACCESSIBLE=1`,
+  and `TERM=dumb` use scripted line prompts.
 - Template input descriptors expose question order, help, placeholders, secret
   and multiselect flags, ordered choice values and labels, dynamic choice
   expressions, conditions, and validators over the CLI, REST, and GraphQL.
@@ -17,6 +22,8 @@ latest tag.
 
 ### Changed
 
+- Aborting an init form with No or Ctrl+C exits with code 130 and prints
+  `aborted, nothing rendered` without rendering template output.
 - Init line prompts display help and choices in template order, accept yes/no
   boolean answers, hide secret defaults, and retry invalid answers up to three
   times. Both prompts and `--input` validate types and choice values, including

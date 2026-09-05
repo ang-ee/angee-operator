@@ -41,6 +41,7 @@ sharing it, since a tool may print other data you consider sensitive.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `ANGEE_VERBOSE` | `0` | Default diagnostic verbosity: `0` is warnings only, `1` names phases, and `2` traces commands and requests. |
+| `ANGEE_ACCESSIBLE` | unset | Set to `1` to use scripted line prompts for init instead of the interactive form. |
 | `ANGEE_GIT_TIMEOUT` | `2m` | Deadline for network git clone, fetch, pull, and push operations. Accepts a Go duration; `0` disables the deadline. |
 | `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
 | `ANGEE_OPERATOR_TIMEOUT` | `30m` | Deadline for non-streaming requests to a remote operator. Accepts a Go duration; `0` disables the deadline. Streaming requests are not given this timeout. |
@@ -67,15 +68,42 @@ a URL, or a local path; names resolve from the local template search paths
 first and fall back to the template registry (ang-ee/angee-django, or
 `ANGEE_TEMPLATE_REGISTRY`).
 
-For named or remote templates, init prompts follow the question order in
-`copier.yml`, showing help and available choices before each prompt. Boolean
-questions accept `y`/`yes`, `n`/`no`, or `true`/`false`. Invalid types or choices
-produce a warning and retry the question, up to three attempts. Secret defaults
-and entered secret values are omitted from prompt output.
+For named or remote templates, `angee init` and `angee stack init` open a
+single-screen, scrollable form in a terminal. Inputs follow `copier.yml` order,
+with help under each input, choices shown as lists, and value origins marked as
+`default`, `flag`, or `changed`. Secret inputs are masked. Generated, immutable,
+and other read-only inputs appear above the final confirmation.
 
-`--input key=value` answers are validated against declared types and choices,
-including with `--yes`. `--yes` still accepts template defaults without
-prompting, but requires the input descriptor to be fetched successfully.
+Use Tab or Enter to move forward, Shift+Tab to go back and edit an answer,
+↑↓ to choose a list option, and ←→ to toggle Yes/No. Space toggles multiselect
+options. The final `Render the template?` confirmation must be Yes to continue.
+No or Ctrl+C aborts with `aborted, nothing rendered`, exits with code 130, and
+renders nothing. Terminals shorter than 15 lines page through groups of five
+fields using the same keys.
+
+After confirmation, a plain summary is printed to stderr before rendering:
+
+```text
+inputs for Initialize stack stacks/dev:
+  project_name = notes (changed)
+  runtime_mode = process (default)
+  api_key = ******** (flag)
+```
+
+`--input key=value` pre-fills the form; answers are validated against declared
+types and choices, including with `--yes`. Multiselect values use JSON arrays,
+for example `--input 'features=["api","worker"]'`; an empty selection is `[]`.
+When no static choices are available, multiselects use validated JSON text.
+`--yes` accepts template defaults without prompts or a form, but requires the
+input descriptor to be fetched successfully. Missing required answers are
+reported together, one per line, naming the exact `--input key=value` flags.
+
+Piped stdin, `ANGEE_ACCESSIBLE=1`, and `TERM=dumb` use line prompts on stdin,
+with help and available choices printed to stderr. Boolean questions accept
+`y`/`yes`, `n`/`no`, or `true`/`false`. Invalid types or choices produce a warning
+and retry the question, up to three attempts. Secret defaults and entered
+secret values are omitted from prompt output. EOF returns an error naming the
+input and suggesting `--yes` or `--input key=value`; it never opens the form.
 Local path templates (absolute paths or refs containing `..`) retain their
 existing direct-render behavior without descriptor validation or prompts.
 
