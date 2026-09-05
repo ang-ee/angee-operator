@@ -1,6 +1,6 @@
 # Template Inputs: Interactive Editing Form
 
-**Status:** Draft · **Created:** 2026-09-05 · **Owner:** CLI / operator
+**Status:** Done 2026-09-05 (v0.13.0) · **Created:** 2026-09-05 · **Owner:** CLI / operator
 
 `angee init`, `angee stack init`, `angee workspace create`, and
 `angee service create` all take template inputs, but only the two init
@@ -423,12 +423,12 @@ user change them before re-rendering:
       rendered `.copier-answers.stack.yml`.
 - [x] **E. Wire workspace create and service create.** Preflight first;
       stack defaults as pre-fill; `--answers`; tests.
-- [ ] **F. Interactive update.** `TemplateInputsResponse` and the three
+- [x] **F. Interactive update.** `TemplateInputsResponse` and the three
       platform methods over REST/GraphQL (parity + Hasura contract tests);
       `-i` on `stack update --template`, `workspace update`,
       `service update --template`; review-first form mode; tests including
       a stack rendered, updated with one changed answer, and re-rendered.
-- [ ] **G. Docs + release.** `commands.md` (interactive section, key
+- [x] **G. Docs + release.** `commands.md` (interactive section, key
       map, env vars), `templates.md` (author guidance: write `help`,
       `choices`, `placeholder`; keep questions in the order to ask),
       CHANGELOG `v0.13.0`, tag.

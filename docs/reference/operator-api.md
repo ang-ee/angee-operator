@@ -60,6 +60,7 @@ Stack:
 
 ```http
 GET  /stack/status
+GET  /stack/template-inputs
 POST /stack/init
 POST /stack/update
 POST /stack/prepare
@@ -78,6 +79,7 @@ GET   /services
 POST  /services                 field-based init (image / command / env)
 POST  /services/create          template-based create (Copier template, kind=service)
 PATCH /services/{name}
+GET   /services/{name}/template-inputs
 POST  /services/{name}/template/update  re-render and reconcile a template-created service
 POST  /services/{name}/up        idempotent create-and-start
 POST  /services/{name}/start
@@ -200,6 +202,7 @@ Workspaces:
 GET   /workspaces
 POST  /workspaces
 GET   /workspaces/{name}
+GET   /workspaces/{name}/template-inputs
 PATCH /workspaces/{name}
 GET   /workspaces/{name}/status
 GET   /workspaces/{name}/logs
@@ -318,6 +321,47 @@ entries sorted by name. Each input carries `name`, `type`, `required`,
 Optional empty form fields are omitted in REST JSON. Dynamic choices, `when`,
 and `validator` are carried unchanged; the CLI does not evaluate their Jinja.
 Absolute paths and refs containing `..` are rejected by introspection.
+
+### Recorded template inputs
+
+Fetch a target's template descriptor and previous render's answers before
+building an update form:
+
+```http
+GET /stack/template-inputs
+GET /workspaces/{name}/template-inputs
+GET /services/{name}/template-inputs
+```
+
+Each returns `TemplateInputsResponse`:
+
+```json
+{
+  "target": "workspace/fix-123",
+  "template": {
+    "ref": "workspaces/dev-pr",
+    "kind": "workspace",
+    "name": "dev-pr",
+    "path": "/stack/templates/workspaces/dev-pr",
+    "inputs": []
+  },
+  "recorded": {"project_name": "notes"},
+  "unrecorded": ["api_token"]
+}
+```
+
+`target` is `stack`, `workspace/<name>`, or `service/<name>`; `template` has
+the full descriptor shape described above. `recorded` excludes `_` metadata
+keys. Stack and service answers use the same origin and answers-file
+resolution as their template update operations. Workspace answers combine
+stack `workspace_defaults` for the template with the workspace's persisted
+`inputs`, which take precedence. `unrecorded` lists secret questions with no
+recorded value and is omitted from REST JSON when empty.
+
+Template updates reject changes to immutable inputs with an invalid-input
+error naming the input: `template input <key> is immutable; it was rendered
+as "<old>"`. Secret inputs instead report `template input <key> is immutable;
+it cannot change after the first render` without including the value.
 
 Connection tokens:
 
@@ -629,3 +673,37 @@ returns the same shape. Each descriptor carries `ref`, `kind`, `name`,
 in declaration order. GraphQL uses `choicesExpr` for REST's `choices_expr`.
 Question inputs come first in file order; metadata-only entries have `order: -1`
 and follow in name order. Conditions and validators remain informational.
+
+### Recorded template inputs
+
+The equivalent GraphQL queries are:
+
+```graphql
+type Query {
+  stackTemplateInputs: TemplateInputsResponse!
+  workspaceTemplateInputs(name: String!): TemplateInputsResponse!
+  serviceTemplateInputs(name: String!): TemplateInputsResponse!
+}
+
+type TemplateInputsResponse {
+  target: String!
+  template: TemplateDescriptor!
+  recorded: [KeyValue!]!
+  unrecorded: [String!]!
+}
+```
+
+`recorded` uses the same `{key, value}` list as workspace `inputs` and
+preflight `effectiveInputs`, sorted by key. `unrecorded` is an empty list when
+every secret question has a recorded value. For example:
+
+```graphql
+query {
+  workspaceTemplateInputs(name: "fix-123") {
+    target
+    template { ref inputs { name help immutable secret } }
+    recorded { key value }
+    unrecorded
+  }
+}
+```

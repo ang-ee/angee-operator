@@ -6,43 +6,66 @@ latest tag.
 
 ## Unreleased
 
+## v0.13.0 — 2026-09-05
+
 ### Added
 
-- `--answers <file>` on `angee init`, `angee stack init`, `angee workspace
-  create`, and `angee service create` loads YAML answers, including Copier
-  answers files. Repeated files layer over template defaults and workspace
-  creation's stack defaults, then `--input` flags and form edits take precedence.
-  Copier metadata keys are ignored, lists use the multiselect JSON encoding,
-  and answers receive type and choice validation even with `--yes`.
-- `angee workspace create` and `angee service create` share the template input
-  form, opening when required inputs are missing, inherited values are invalid,
-  or with `--interactive` / `-i`. Workspace forms pre-fill stack defaults and
-  repeat preflight before creation. `--yes` / `-y` accepts defaults and supplied
-  answers without prompts; piped stdin uses line prompts for missing required
-  inputs. Satisfied inputs keep creation non-prompting by default.
-- `angee init` and `angee stack init` provide an interactive input form with
-  help, choice lists, origin markers, masked secrets, backward navigation,
-  and final confirmation. Confirmed answers are summarized to stderr.
-  `--yes` accepts defaults without prompts; piped stdin, `ANGEE_ACCESSIBLE=1`,
-  and `TERM=dumb` use scripted line prompts.
-- Template input descriptors expose question order, help, placeholders, secret
-  and multiselect flags, ordered choice values and labels, dynamic choice
-  expressions, conditions, and validators over the CLI, REST, and GraphQL.
-  Inputs follow `copier.yml` order, with metadata-only inputs last.
-- Template introspection supports `services/` refs through
-  `GET /templates/{ref...}` and the corresponding CLI and GraphQL operations.
+- **Interactive template input form.** `angee init` and `angee stack init`
+  open a single scrollable screen listing every question in `copier.yml`
+  order, with its help text, choice lists, Yes/No toggles, masked secrets,
+  and an origin marker (`default`, `answers`, `flag`, `recorded`, `changed`).
+  Tab/Enter move forward, Shift+Tab moves back, ↑↓ pick a choice, ←→ toggle,
+  and a final `Render the template?` confirm gates the render. No or Ctrl+C
+  prints `aborted, nothing rendered` and exits 130. After confirmation the
+  answers are summarised to stderr. Piped stdin, `ANGEE_ACCESSIBLE=1`, and
+  `TERM=dumb` fall back to line prompts that print help and choices and
+  re-ask invalid answers; `--yes` accepts defaults with no prompts and
+  reports every missing required input with the exact `--input` flag.
+- **Answers files.** `--answers <file>` (repeatable) on `init`, `stack init`,
+  `workspace create`, `service create`, and the template update commands
+  loads a YAML mapping such as a recorded `.copier-answers*.yml`: `_` keys are
+  ignored, scalars keep their source text, lists become the multiselect JSON
+  array encoding. Files layer over template defaults and stack
+  `workspace_defaults`, under `--input` and form edits.
+- **Form on workspace and service create.** `angee workspace create` and
+  `angee service create` gain `--yes`/`-y` and `--interactive`/`-i`, open the
+  form with `-i` or when required inputs are missing on a terminal, and send
+  only explicit inputs to the platform; fully specified scripted calls keep
+  running without prompts.
+- **Interactive update with recorded answers.** `angee stack update
+  --template -i`, `angee workspace update <name> -i`, and `angee service
+  update <name> --template -i` open the form pre-filled with the previous
+  render's answers (`recorded`), list immutable inputs read-only, ask again
+  for secrets that are never recorded, and re-render with the changes.
+  `stack update --template` also accepts `--input` and `--answers`.
+- **Recorded inputs over the API.** `GET /stack/template-inputs`,
+  `GET /workspaces/{name}/template-inputs`, `GET /services/{name}/template-inputs`
+  and the GraphQL queries `stackTemplateInputs`, `workspaceTemplateInputs`,
+  `serviceTemplateInputs` return the template descriptor with the recorded,
+  non-secret answers for one target.
+- **Richer template descriptors.** `api.TemplateInputDescriptor` (CLI
+  `template get --json`, REST `GET /templates/{ref...}`, GraphQL) carries
+  `order`, `help`, `placeholder`, `secret`, `multiselect`, ordered `choices`
+  (list, `Label: value` map, and Jinja string forms), `when`, and
+  `validator`; inputs follow `copier.yml` order with metadata-only inputs
+  last, and `services/<name>` refs resolve. A name declared both as a
+  question and under `_angee.inputs` keeps the question's presentation and
+  the metadata's `required`/`immutable`/`generated` flags.
 
 ### Changed
 
-- Aborting an init form with No or Ctrl+C exits with code 130 and prints
-  `aborted, nothing rendered` without rendering template output.
-- Init line prompts display help and choices in template order, accept yes/no
-  boolean answers, hide secret defaults, and retry invalid answers up to three
-  times. Both prompts and `--input` validate types and choice values, including
-  under `--yes`, which now fetches the descriptor before accepting defaults.
-- `angee template get` displays readable input blocks with aligned names,
-  defaults, choices, flags, wrapped help, and conditions. Secret defaults are
-  shown as `default set`; `--json` exposes the enriched descriptor.
+- `--input` and `--answers` values are validated against declared types and
+  choices in every mode, including `--yes`; `runtime_mode=prod` now fails
+  with `template input runtime_mode must be one of: process, docker` instead
+  of rendering.
+- Stack, workspace, and service template updates reject a change to an
+  `immutable` input before rendering, naming the input without echoing a
+  secret value.
+- `angee template get` prints one readable block per input (type, default,
+  choices, flags, wrapped help, `when`) instead of `input.<name>` lines;
+  secret defaults show as `default set`.
+- The template-author guide documents how `help`, `choices`, `secret`,
+  `multiselect`, `placeholder`, and declaration order shape the form.
 
 ## v0.12.1 — 2026-09-04
 

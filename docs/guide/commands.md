@@ -57,7 +57,7 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 angee doctor
 angee init [path] [--template <ref>] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
 angee stack init <template> [path] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
-angee stack update [--template] [--dry-run] [--overwrite]
+angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...]] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
@@ -172,7 +172,45 @@ Rendered files are tracked: unchanged template files update or delete
 automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
 prints all changes without writing. Bare `stack update` remains derived-files
-only; template reconciliation needs the stack's `.copier-answers.yml`.
+only; template reconciliation needs the stack's recorded Copier answers file.
+
+### Interactive template updates
+
+Open the input form before re-rendering an existing target:
+
+```sh
+angee stack update --template -i
+angee workspace update fix-123 -i
+angee service update worker --template -i
+```
+
+`--interactive` / `-i` pre-fills the previous render's answers, marked
+`recorded`. Workspace values come from stack `workspace_defaults` overlaid
+with the workspace's persisted inputs. Immutable inputs appear read-only.
+Secret questions without recorded answers start empty and display
+`(not recorded)`; entered secrets remain masked.
+
+Repeatable `--answers <file>` values override recorded answers, and
+`--input key=value` overrides answers files. These options also work without
+`-i`. The form titles are `Update stack from <ref>`,
+`Update workspace <name> from <ref>`, and `Update service <name> from <ref>`.
+Confirm with `Re-render the stack?`, `Re-render the workspace?`, or
+`Re-render the service?`. Only form edits and explicit answers/flags are
+submitted as overrides. If none are submitted, Angee prints `no input changes`
+and still re-renders. `--overwrite` and the stack/service `--dry-run` flags
+retain their usual behavior. Stack template updates remain local-only;
+workspace and service forms also work through `--operator`.
+
+`-i` requires an interactive terminal. With `--yes`, piped stdin,
+`ANGEE_ACCESSIBLE=1`, or `TERM=dumb`, it fails with
+`--interactive requires a terminal; pass --input/--answers instead`.
+
+All three template update paths reject explicit changes to immutable inputs,
+including changes supplied without a form. The error names the input:
+`template input <key> is immutable; it was rendered as "<old>"`.
+For secret inputs the reason is
+`template input <key> is immutable; it cannot change after the first render`,
+without exposing the previous value.
 
 ## Runtime
 
@@ -196,7 +234,7 @@ and local-process services. Runtime actions are routed by each service's
 ```sh
 angee service create --template <template> --workspace <name> [--name name] [--answers <file> ...] [--input key=value ...] [--yes | --interactive]
 angee service update <name> [field flags]
-angee service update <name> --template [--input key=value ...] [--dry-run] [--overwrite]
+angee service update <name> --template [-i] [--answers <file> ...] [--input key=value ...] [--dry-run] [--overwrite]
 angee service destroy <name> [--stop=false]
 angee service list
 ```
@@ -209,6 +247,8 @@ same-field or asset conflict fails before writing unless `--overwrite` is set.
 Service identity, workspace binding, and existing allocations cannot be changed
 through template inputs. With `--dry-run`, conflicts are reported without
 writing and without turning the preview into a failed apply.
+Use `-i` to review recorded answers before rendering; see
+[Interactive template updates](#interactive-template-updates).
 
 ```sh
 angee service init <name> [flags]                       # field-based
@@ -309,7 +349,7 @@ matching `sourceDiff` / `workspaceSource*` GraphQL mutations). See
 
 ```sh
 angee workspace create <name> --template <template> [--ttl duration] [--answers <file> ...] [--input key=value ...] [--yes | --interactive] [--sync]
-angee workspace update <name> [--ttl duration] [--input key=value ...] [--overwrite]
+angee workspace update <name> [-i] [--ttl duration] [--answers <file> ...] [--input key=value ...] [--overwrite]
 angee workspace list  # alias: ls
 angee workspace get <name>
 angee workspace status [name]
@@ -323,6 +363,9 @@ angee workspace destroy <name> [--purge]
 
 `angee ws` is an alias for `angee workspace`, so `angee ws ls` and
 `angee ws status <name>` are equivalent to their long forms.
+
+`workspace update -i` reviews recorded answers before re-rendering; see
+[Interactive template updates](#interactive-template-updates).
 
 `workspace create` accepts repeatable `--answers <file>` flags, `--yes` / `-y`,
 and `--interactive` / `-i`. A bare template name is described as
