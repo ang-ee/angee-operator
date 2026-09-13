@@ -94,13 +94,17 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 		delete(p.jobRunCompiled, expired)
 	}
 	p.latestJobRun = id
+	// Snapshot the receipt while still holding the lock. Returning it after the
+	// executor goroutine spawns would race the executor's setNode writes, which
+	// mutate the stored record's Nodes backing array (WARNING: DATA RACE).
+	receipt := cloneJobRun(op)
 	p.jobRunsMu.Unlock()
 	operationContext := ctx
 	if p.detachedContext != nil {
 		operationContext = p.detachedContext
 	}
 	go p.executeJobRun(operationContext, id, release)
-	return cloneJobRun(op), nil
+	return receipt, nil
 }
 
 // JobRun preserves the synchronous local API while the operator transports use
@@ -278,14 +282,59 @@ func stackNodeDependencies(stack *manifest.Stack, name string) []string {
 func (p *Platform) updateJobRun(id string, fn func(*api.JobRunOperation)) {
 	p.jobRunsMu.Lock()
 	op := p.jobRuns[id]
+	// Copy-on-write the Nodes slice so a mutation never writes through to a
+	// backing array that a previously returned snapshot may still alias. The
+	// stored record then never shares its Nodes array with any escaped clone.
+	op.Nodes = append([]api.JobRunNode(nil), op.Nodes...)
 	fn(&op)
 	p.jobRuns[id] = op
 	p.jobRunsMu.Unlock()
 }
 
+const (
+	jobRunTimeoutEnv     = "ANGEE_JOB_TIMEOUT"
+	defaultJobRunTimeout = 30 * time.Minute
+)
+
+// jobRunTimeout resolves the wall-clock bound applied to a detached job run.
+// It mirrors the ANGEE_GIT_TIMEOUT convention: a package default overridable
+// by an env var holding a Go duration. A value of 0 (or a malformed/negative
+// value) disables the bound, matching the git timeout's escape hatch.
+func jobRunTimeout() time.Duration {
+	raw, ok := os.LookupEnv(jobRunTimeoutEnv)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return defaultJobRunTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout < 0 {
+		return defaultJobRunTimeout
+	}
+	return timeout
+}
+
+// jobRunContext derives the execution context for a detached job run. A
+// positive timeout yields a context that expires after it; a zero timeout
+// leaves the parent unbounded. The returned cancel func must always be called
+// (defer) to release the timer and avoid a context leak.
+func jobRunContext(parent context.Context) (context.Context, context.CancelFunc, time.Duration) {
+	timeout := jobRunTimeout()
+	if timeout <= 0 {
+		return parent, func() {}, 0
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, timeout
+}
+
 func (p *Platform) executeJobRun(ctx context.Context, id string, release func()) {
 	defer release()
 	defer func() { p.jobRunsMu.Lock(); p.activeJobRun = false; p.jobRunsMu.Unlock() }()
+	// executeJobRun runs under the daemon-lifetime detachedContext and holds the
+	// single-slot mutation lease until it returns. A container job blocks on
+	// `docker compose wait` with no timeout, so a job whose container never
+	// exits would hold the lease (and activeJobRun) forever, rejecting every
+	// other lifecycle mutation until the daemon restarts. Bound the execution.
+	ctx, cancel, timeout := jobRunContext(ctx)
+	defer cancel()
 	p.jobRunsMu.RLock()
 	stack := p.jobRunStacks[id]
 	compiled := p.jobRunCompiled[id]
@@ -294,6 +343,19 @@ func (p *Platform) executeJobRun(ctx context.Context, id string, release func())
 		p.finishJobRun(id, errors.New("job operation runtime snapshot is unavailable"))
 		return
 	}
+	err := p.runJobGraph(ctx, id, stack, compiled)
+	if timeout > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		p.finishTimedOutJobRun(id, timeout)
+		return
+	}
+	p.finishJobRun(id, err)
+}
+
+// runJobGraph drives the operation's node graph to completion, marking node
+// states as it goes, and returns a non-nil error if the run failed. It never
+// finalizes the operation itself: the caller owns finishJobRun so a timeout can
+// override the outcome with a clear message.
+func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.Stack, compiled *CompiledStack) error {
 	op, _ := p.JobRunGet(ctx, id)
 	done := map[string]bool{}
 	failed := map[string]bool{}
@@ -358,23 +420,20 @@ func (p *Platform) executeJobRun(ctx context.Context, id string, release func())
 							p.setNode(id, pendingIndex, api.JobRunBlocked, "root job failed")
 						}
 					}
-					p.finishJobRun(id, err)
-					return
+					return err
 				}
 			}
 			remaining--
 			progressed = true
 		}
 		if !progressed {
-			p.finishJobRun(id, fmt.Errorf("job dependency graph cannot make progress"))
-			return
+			return fmt.Errorf("job dependency graph cannot make progress")
 		}
 	}
 	if len(failed) > 0 {
-		p.finishJobRun(id, fmt.Errorf("one or more dependents failed"))
-		return
+		return fmt.Errorf("one or more dependents failed")
 	}
-	p.finishJobRun(id, nil)
+	return nil
 }
 
 func (p *Platform) dependencySatisfied(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) (bool, error) {
@@ -459,6 +518,36 @@ func (p *Platform) finishJobRun(id string, err error) {
 			o.Error = boundedJobError(err.Error())
 		} else {
 			o.Status = api.JobRunSucceeded
+		}
+	})
+	p.jobRunsMu.Lock()
+	delete(p.jobRunStacks, id)
+	delete(p.jobRunCompiled, id)
+	p.jobRunsMu.Unlock()
+}
+
+// finishTimedOutJobRun finalizes a run whose execution context hit its
+// deadline. It records a clear timeout error and marks every node that had not
+// already reached a terminal state (running -> failed, pending -> blocked), so
+// no node dangles as pending or running. The lease is released by the caller's
+// deferred release in executeJobRun.
+func (p *Platform) finishTimedOutJobRun(id string, timeout time.Duration) {
+	now := time.Now().UTC()
+	message := fmt.Sprintf("job run timed out after %s (raise %s, or set it to 0, to allow longer runs)", timeout, jobRunTimeoutEnv)
+	p.updateJobRun(id, func(o *api.JobRunOperation) {
+		o.EndedAt = &now
+		o.CurrentStep = ""
+		o.Status = api.JobRunFailed
+		o.Error = boundedJobError(message)
+		for i := range o.Nodes {
+			switch o.Nodes[i].Status {
+			case api.JobRunRunning:
+				o.Nodes[i].Status = api.JobRunFailed
+				o.Nodes[i].Message = boundedJobError(message)
+			case api.JobRunPending:
+				o.Nodes[i].Status = api.JobRunBlocked
+				o.Nodes[i].Message = boundedJobError("job run timed out before this node started")
+			}
 		}
 	})
 	p.jobRunsMu.Lock()

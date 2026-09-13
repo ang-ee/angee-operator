@@ -67,6 +67,11 @@ type devLifecycleBackend struct {
 	logs       atomic.Int32
 	started    chan struct{}
 	downErr    error
+	// streamLogsExitsEarly makes StreamLogs return an already-closed channel,
+	// modelling a follower whose stream ends promptly (a container recreated by
+	// `angee restart`, or no containers up yet) so the re-attach loop is
+	// exercised without a live process.
+	streamLogsExitsEarly bool
 }
 
 type applyRecordingBackend struct {
@@ -186,9 +191,18 @@ func TestStackDownUsesGeneratedRuntimeArtifactsAndJoinsErrors(t *testing.T) {
 func (b *devLifecycleBackend) StreamLogs(ctx context.Context, _ runtime.LogsRequest) (<-chan string, error) {
 	b.logs.Add(1)
 	if b.started != nil {
-		b.started <- struct{}{}
+		// Non-blocking: the follower re-attaches, so more calls than the test
+		// drains must not wedge this goroutine on a full channel.
+		select {
+		case b.started <- struct{}{}:
+		default:
+		}
 	}
 	lines := make(chan string)
+	if b.streamLogsExitsEarly {
+		close(lines)
+		return lines, nil
+	}
 	go func() {
 		defer close(lines)
 		<-ctx.Done()
@@ -241,5 +255,83 @@ func TestStackDevForegroundLeavesContainersRunningOnCancellation(t *testing.T) {
 	}
 	if local.foreground.Load() != 1 || local.down.Load() != 0 {
 		t.Fatalf("local lifecycle: foreground=%d down=%d", local.foreground.Load(), local.down.Load())
+	}
+}
+
+// TestStackDevForegroundFollowerExitDoesNotStopLocalSupervisor proves the dev
+// container log follower is detached from the local supervisor's lifetime: when
+// the follower's stream ends early (a container recreated by `angee restart`, or
+// a transient docker hiccup) it must NOT cancel the local processes, and it must
+// re-attach while the dev context is alive. The command still ends cleanly on
+// Ctrl-C (ctx cancel) with a nil error.
+func TestStackDevForegroundFollowerExitDoesNotStopLocalSupervisor(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "dev-follower-exit",
+		Services: map[string]manifest.Service{
+			"database": {Runtime: manifest.RuntimeContainer, Image: "postgres:16"},
+			"web":      {Runtime: manifest.RuntimeLocal, Command: []string{"serve"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	started := make(chan struct{}, 2)
+	containers := &devLifecycleBackend{started: started, streamLogsExitsEarly: true}
+	local := &devLifecycleBackend{started: started}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- platform.StackDevForeground(ctx, false, io.Discard, io.Discard) }()
+
+	// Both backends must have started: the local supervisor and at least one
+	// follower attach (which immediately exits early).
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("dev runtime did not start")
+		}
+	}
+
+	// The follower has exited early. If its exit tore down the local supervisor,
+	// StackDevForeground would return here; assert it stays alive instead.
+	select {
+	case err := <-done:
+		t.Fatalf("StackDevForeground returned early (err=%v): follower exit stopped the local supervisor", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if local.foreground.Load() != 1 || local.down.Load() != 0 {
+		t.Fatalf("local lifecycle after follower exit: foreground=%d down=%d, want 1/0", local.foreground.Load(), local.down.Load())
+	}
+
+	// The follower must re-attach while the context is alive rather than give up
+	// after a single stream.
+	deadline := time.After(4 * devLogFollowRetryDelay)
+	for containers.logs.Load() < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("follower did not re-attach: StreamLogs calls = %d, want >= 2", containers.logs.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("StackDevForeground: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StackDevForeground did not return after cancellation")
+	}
+	if local.down.Load() != 0 {
+		t.Fatalf("local supervisor was stopped (down=%d), want 0", local.down.Load())
 	}
 }

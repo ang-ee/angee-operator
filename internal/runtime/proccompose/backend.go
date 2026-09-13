@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +26,16 @@ import (
 )
 
 const processComposeInstallPackage = "github.com/f1bonacc1/process-compose@latest"
+
+// controlPlaneTimeout bounds every process-compose control-plane HTTP request.
+// The API is a loopback service, so this ceiling only guards against a wedged
+// supervisor; each request still honours the caller's context on top of it.
+const controlPlaneTimeout = 30 * time.Second
+
+// controlPlaneClient issues the process-compose REST calls. It replaces
+// http.DefaultClient, which has no timeout and can hang a job or status call
+// indefinitely against a stuck supervisor.
+var controlPlaneClient = &http.Client{Timeout: controlPlaneTimeout}
 
 type Runner interface {
 	Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
@@ -129,9 +138,19 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		return nil, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", name)
 	}
 	target.Services = []string{name}
-	baseline, err := b.processGeneration(ctx, target, name)
+	// Snapshot the job's process entry before triggering the re-run. Both the
+	// re-run's end time and its pid are compared against this baseline below so
+	// a fresh completion can be told apart from a lingering terminal sample of
+	// the previous run.
+	baseline, err := b.processEntry(ctx, target, name)
 	if err != nil {
-		return nil, fmt.Errorf("read process generation: %w", err)
+		return nil, fmt.Errorf("read process baseline: %w", err)
+	}
+	var baselineEnd *time.Time
+	var baselinePid int
+	if baseline != nil {
+		baselineEnd = baseline.ProcessEndTime
+		baselinePid = baseline.PID
 	}
 	updates, err := processUpdates(process)
 	if err != nil {
@@ -146,6 +165,24 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 			return nil, err
 		}
 	}
+	// Two triggers spawn the re-run, and process-compose leaves each in a very
+	// different state:
+	//   * updateProcess (compiled config changed) does removeProcess +
+	//     addProcessAndRun, which builds a FRESH ProcessState via
+	//     types.NewProcessState (end time nil, pid 0), so the completion carries
+	//     a brand-new end time.
+	//   * Restart (nothing changed) does doRestart -> runProcess, which REUSES
+	//     the existing ProcessState (GetProcessState/withProcState). process-compose
+	//     sets ProcessEndTime/ProcessStartTime only while they are nil and never
+	//     resets them (src/app/process.go:154-156, :570-572), and increments
+	//     Restarts only under the restart policy, not on a manual restart — so the
+	//     re-run's completion keeps the PREVIOUS run's end time. Pid, by contrast,
+	//     is assigned unconditionally on every launch (process.go:153), so the
+	//     re-run always gets a new pid.
+	// A terminal sample therefore counts as this run's completion only when one of
+	// three signals confirms it is fresh (see below); otherwise it is a leftover
+	// of the previous run and we keep polling.
+	sawTransitional := false
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -153,13 +190,41 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
-			statuses, err := b.Status(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+			entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
 			if err != nil {
 				continue
 			}
-			for _, status := range statuses {
-				state := strings.ToLower(strings.TrimSpace(status.State))
-				if status.Name != name || status.Generation == baseline || state == "running" || state == "pending" {
+			for _, entry := range entries {
+				if entry.Name != name {
+					continue
+				}
+				state := strings.ToLower(strings.TrimSpace(entry.Status))
+				// process-compose treats only Completed, Error and Skipped as
+				// terminal (isTerminalStatus in its src/cmd/process_monitor.go).
+				// Pending/Launching/Launched/Running/Restarting/Terminating are
+				// transitional: ProcessStartTime — and therefore the generation
+				// string — advances the instant a re-run is launched, well before
+				// the process actually runs. A poll landing in that launch window
+				// must not be read as a completed exit 0; it instead proves the
+				// re-run is genuinely under way (signal (c) below).
+				if !isTerminalState(state) {
+					sawTransitional = true
+					continue
+				}
+				// Accept a terminal sample as this run's completion when any one of:
+				//   (a) end time is set and differs from the baseline — the update
+				//       path (fresh ProcessState) and the first-ever run.
+				//   (b) pid is set and differs from the baseline pid — the restart
+				//       path, where the end time lingers but every launch gets a new
+				//       pid; also catches a run that finishes before the first poll.
+				//   (c) we already saw a transitional state — the restart path where
+				//       the fresh pid could not be sampled.
+				// A terminal sample carrying the baseline's end time and pid that we
+				// never saw leave a terminal state is a stale leftover of the
+				// previous run; skip it and keep polling.
+				freshEnd := entry.ProcessEndTime != nil && !sameInstant(entry.ProcessEndTime, baselineEnd)
+				newPid := entry.PID != 0 && entry.PID != baselinePid
+				if !freshEnd && !newPid && !sawTransitional {
 					continue
 				}
 				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, MaxBytes: 1 << 20, ControlPort: target.ControlPort})
@@ -170,19 +235,43 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 					}
 				}
 				out := []byte(captured.String())
-				if status.ExitCode == nil {
-					return out, fmt.Errorf("process-compose job %s completed without an exit code", name)
-				}
-				if *status.ExitCode != 0 {
-					return out, fmt.Errorf("process-compose job %s exited with status %d", name, *status.ExitCode)
-				}
-				if logErr != nil {
+				switch {
+				case entry.ExitCode != 0:
+					return out, fmt.Errorf("process-compose job %s exited with status %d", name, entry.ExitCode)
+				case state == "error":
+					return out, fmt.Errorf("process-compose job %s failed to run", name)
+				case state == "skipped":
+					return out, fmt.Errorf("process-compose job %s was skipped without running", name)
+				case logErr != nil:
 					return out, logErr
+				default:
+					return out, nil
 				}
-				return out, nil
 			}
 		}
 	}
+}
+
+// isTerminalState reports whether a process-compose status is one it treats as
+// terminal. Its own isTerminalStatus (src/cmd/process_monitor.go) counts exactly
+// Completed, Error and Skipped; every other status is a transitional launch,
+// run, restart or shutdown phase.
+func isTerminalState(state string) bool {
+	switch state {
+	case "completed", "error", "skipped":
+		return true
+	}
+	return false
+}
+
+// sameInstant reports whether two optional timestamps denote the same instant,
+// treating nil as "unset". It distinguishes a fresh completion from a stale
+// terminal sample that still carries the previous run's end time.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
@@ -192,7 +281,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 		return false, err
 	}
 	setProcessToken(req, target.EnvFile)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -266,7 +355,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	}
 	post.Header.Set("Content-Type", "application/json")
 	setProcessToken(post, target.EnvFile)
-	result, err := http.DefaultClient.Do(post)
+	result, err := controlPlaneClient.Do(post)
 	if err != nil {
 		return false, err
 	}
@@ -293,7 +382,7 @@ func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Targe
 		return false, err
 	}
 	setProcessToken(req, target.EnvFile)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -331,7 +420,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 		return false, err
 	}
 	setProcessToken(list, target.EnvFile)
-	response, err := http.DefaultClient.Do(list)
+	response, err := controlPlaneClient.Do(list)
 	if err != nil {
 		return false, err
 	}
@@ -354,7 +443,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 			return false, err
 		}
 		setProcessToken(info, target.EnvFile)
-		current, err := http.DefaultClient.Do(info)
+		current, err := controlPlaneClient.Do(info)
 		if err != nil {
 			return false, err
 		}
@@ -402,7 +491,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 	}
 	post.Header.Set("Content-Type", "application/json")
 	setProcessToken(post, target.EnvFile)
-	result, err := http.DefaultClient.Do(post)
+	result, err := controlPlaneClient.Do(post)
 	if err != nil {
 		return false, err
 	}
@@ -434,27 +523,6 @@ func setProcessToken(req *http.Request, envFile string) {
 		req.Header.Set("X-PC-Token-Key", token)
 	}
 }
-func shellWords(words []string) string {
-	quoted := make([]string, len(words))
-	for i, w := range words {
-		quoted[i] = "'" + strings.ReplaceAll(w, "'", "'\\''") + "'"
-	}
-	return strings.Join(quoted, " ")
-}
-
-func envList(environment map[string]string) []string {
-	keys := make([]string, 0, len(environment))
-	for key := range environment {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	result := make([]string, 0, len(keys))
-	for _, key := range keys {
-		result = append(result, key+"="+environment[key])
-	}
-	return result
-}
-
 func jsonValue(value any) (any, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -557,17 +625,21 @@ func processUpdates(process Process) (map[string]any, error) {
 	return updates, nil
 }
 
-func (b Backend) processGeneration(ctx context.Context, target runtime.Target, name string) (string, error) {
-	statuses, err := b.Status(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+// processEntry returns the named process's native list entry, or nil when the
+// process is not yet registered. RunJob snapshots this before a re-run so it can
+// tell the re-run's completion (a fresh end time or a fresh pid) apart from a
+// lingering terminal sample of the previous run.
+func (b Backend) processEntry(ctx context.Context, target runtime.Target, name string) (*processListEntry, error) {
+	entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	for _, status := range statuses {
-		if status.Name == name {
-			return status.Generation, nil
+	for i := range entries {
+		if entries[i].Name == name {
+			return &entries[i], nil
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
@@ -637,29 +709,7 @@ func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-cha
 }
 
 func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
-	args := b.clientArgs(req.ControlPort)
-	args = append(args, "list", "-o", "json")
-	out, err := b.run(ctx, req.Root, "", args...)
-	if err != nil {
-		return nil, err
-	}
-	return parseList(out)
-}
-
-type processListEntry struct {
-	Name             string     `json:"name"`
-	Status           string     `json:"status"`
-	IsRunning        bool       `json:"is_running"`
-	ExitCode         int        `json:"exit_code"`
-	IsReady          string     `json:"is_ready"`
-	PID              int        `json:"pid"`
-	Restarts         int        `json:"restarts"`
-	ProcessStartTime *time.Time `json:"process_start_time"`
-	ProcessEndTime   *time.Time `json:"process_end_time"`
-}
-
-func parseList(data []byte) ([]runtime.ServiceStatus, error) {
-	entries, err := decodeProcessList(data)
+	entries, err := b.processList(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -679,6 +729,32 @@ func parseList(data []byte) ([]runtime.ServiceStatus, error) {
 		})
 	}
 	return statuses, nil
+}
+
+type processListEntry struct {
+	Name             string     `json:"name"`
+	Status           string     `json:"status"`
+	IsRunning        bool       `json:"is_running"`
+	ExitCode         int        `json:"exit_code"`
+	IsReady          string     `json:"is_ready"`
+	PID              int        `json:"pid"`
+	Restarts         int        `json:"restarts"`
+	ProcessStartTime *time.Time `json:"process_start_time"`
+	ProcessEndTime   *time.Time `json:"process_end_time"`
+}
+
+// processList runs `process-compose list -o json` and returns the decoded native
+// process entries. Status maps these to runtime.ServiceStatus; RunJob consumes
+// the raw entries directly so it can gate job completion on the native end time,
+// which the generation string does not losslessly round-trip.
+func (b Backend) processList(ctx context.Context, req runtime.StatusRequest) ([]processListEntry, error) {
+	args := b.clientArgs(req.ControlPort)
+	args = append(args, "list", "-o", "json")
+	out, err := b.run(ctx, req.Root, "", args...)
+	if err != nil {
+		return nil, err
+	}
+	return decodeProcessList(out)
 }
 
 // decodeProcessList extracts the JSON array that `process-compose list -o json`

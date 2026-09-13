@@ -126,9 +126,17 @@ func NewServer(config Config) (*Server, error) {
 		config.jobOutput = os.Stdout
 	}
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	// The lifecycle context is owned by the returned Server (cancelled by
+	// ListenAndServe/Shutdown). On any early-return error path before the
+	// Server is constructed, cancel it here so it is never leaked.
+	started := false
+	defer func() {
+		if !started {
+			lifecycleCancel()
+		}
+	}()
 	platform, err := service.New(config.Root, service.WithJobOutput(config.jobOutput), service.WithDetachedContext(lifecycleCtx))
 	if err != nil {
-		lifecycleCancel()
 		return nil, err
 	}
 	jwtSecret := config.JWTSecret
@@ -153,6 +161,7 @@ func NewServer(config Config) (*Server, error) {
 	}
 	s.graphqlHandler = graphqlHandler
 	s.graphqlWSHandler = graphqlWSHandler
+	started = true
 	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)

@@ -793,42 +793,6 @@ func (p *RemoteClient) doJSON(ctx context.Context, method, path string, query ur
 	return err
 }
 
-func (p *RemoteClient) doBytes(ctx context.Context, method, path string, query url.Values, in any) ([]byte, error) {
-	body, err := jsonBody(in)
-	if err != nil {
-		return nil, err
-	}
-	endpoint := p.endpoint(path, query)
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
-	if err != nil {
-		return nil, err
-	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	trace := logctx.TraceHTTP(ctx, method, endpoint)
-	resp, err := p.requestClient().Do(req)
-	if err != nil {
-		err = p.requestError(ctx, method, path, err)
-		trace(0, err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		err = p.requestError(ctx, method, path, err)
-		trace(resp.StatusCode, err)
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		err := operatorHTTPError(resp.StatusCode, data)
-		trace(resp.StatusCode, err)
-		return nil, err
-	}
-	trace(resp.StatusCode, nil)
-	return data, nil
-}
-
 func (p *RemoteClient) stream(ctx context.Context, path string, query url.Values) (<-chan string, error) {
 	endpoint := p.endpoint(path, query)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

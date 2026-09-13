@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -202,6 +203,82 @@ func TestJobRunStartReturnsDurableQueryableReceipt(t *testing.T) {
 	}
 	if latest == nil || latest.ID != receipt.ID || latest.Status != api.JobRunSucceeded {
 		t.Fatalf("latest = %#v, want completed operation %q", latest, receipt.ID)
+	}
+}
+
+// blockingJobBackend runs a job that never terminates on its own; it returns
+// only when the execution context is cancelled, standing in for a container
+// stuck on `docker compose wait`.
+type blockingJobBackend struct {
+	stubStatusBackend
+}
+
+func (b blockingJobBackend) RunJob(ctx context.Context, _ runtime.Target, _ runtime.JobSpec) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestJobRunStartTimesOutReleasesLeaseAndFailsReceipt(t *testing.T) {
+	t.Setenv(jobRunTimeoutEnv, "50ms")
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "jobs",
+		Jobs: map[string]manifest.Job{
+			"root": {Runtime: manifest.RuntimeLocal, Command: []string{"root"}},
+		},
+	}
+	root := t.TempDir()
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	backend := blockingJobBackend{}
+	p, err := NewWithBackends(root, backend, backend)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+
+	receipt, err := p.JobRunStart(context.Background(), "root", nil, false)
+	if err != nil {
+		t.Fatalf("JobRunStart: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for receipt.Status == api.JobRunPending || receipt.Status == api.JobRunRunning {
+		if time.Now().After(deadline) {
+			t.Fatalf("job run did not time out: %#v", receipt)
+		}
+		time.Sleep(2 * time.Millisecond)
+		receipt, err = p.JobRunGet(context.Background(), receipt.ID)
+		if err != nil {
+			t.Fatalf("JobRunGet: %v", err)
+		}
+	}
+
+	if receipt.Status != api.JobRunFailed {
+		t.Fatalf("status = %q, want failed", receipt.Status)
+	}
+	if !strings.Contains(receipt.Error, "timed out") {
+		t.Fatalf("error = %q, want a timeout message", receipt.Error)
+	}
+	for _, node := range receipt.Nodes {
+		if node.Status == api.JobRunPending || node.Status == api.JobRunRunning {
+			t.Fatalf("node %q left non-terminal after timeout: %q", node.Name, node.Status)
+		}
+	}
+
+	// The single-slot mutation lease must be free again once the stuck run has
+	// been bounded and finalized.
+	_, release, err := p.beginMutation(context.Background(), "job")
+	if err != nil {
+		t.Fatalf("mutation lease not released after timeout: %v", err)
+	}
+	release()
+	p.jobRunsMu.RLock()
+	active := p.activeJobRun
+	p.jobRunsMu.RUnlock()
+	if active {
+		t.Fatal("activeJobRun still set after timeout")
 	}
 }
 

@@ -10,14 +10,28 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
-	"golang.org/x/sync/errgroup"
 )
 
 const defaultProcessComposeControlPort = 8080
+
+// devLogFollowTail bounds the recent container-log backlog `angee dev` replays
+// before it follows live output. Container services now survive across dev
+// sessions, so an unbounded `docker compose logs --follow` would dump the whole
+// accumulated history on every start; this keeps just enough recent context to
+// orient the user while still surfacing live lines.
+const devLogFollowTail = 50
+
+// devLogFollowRetryDelay spaces re-attach attempts for the `angee dev` container
+// log follower. A follow ends when a container is recreated (clean EOF) or when
+// no containers are up yet (`docker compose logs` returns at once); the delay
+// keeps the re-attach loop from hot-spinning in those cases while still picking
+// a container that `angee restart` brings back up shortly after.
+const devLogFollowRetryDelay = time.Second
 
 func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 	ctx, release, err := p.beginMutation(ctx, "stack")
@@ -231,35 +245,74 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		se = guardDevSink(stderr)
 	}
 
-	// Follow detached container logs alongside the attached local supervisor.
-	// Each call blocks until interrupted, so they run concurrently. The derived
-	// cancel makes the first stream to exit, cleanly or otherwise, stop the
-	// other; errgroup's own context cancels only on a non-nil error.
-	groupCtx, cancel := context.WithCancel(ctx)
+	// The local process supervisor owns the dev command's lifetime. The
+	// container log follower is a detached tail alongside it: its exit — a clean
+	// EOF when `angee restart <svc>` recreates a container, or a transient docker
+	// hiccup — must NOT tear down the local supervisor, so it re-attaches with a
+	// short backoff while the dev context is alive and never cancels its sibling.
+	// Ctrl-C cancels ctx and stops both; the local supervisor's own exit cancels
+	// the follower via the derived context.
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	g, gctx := errgroup.WithContext(groupCtx)
+
+	var wg sync.WaitGroup
+	var devErr error
 	if hasContainers {
-		g.Go(func() error {
-			defer cancel()
-			lines, err := p.composeBackend.StreamLogs(gctx, runtime.LogsRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Follow: true})
-			if err != nil {
-				return err
-			}
-			for line := range lines {
-				if _, err := io.WriteString(so, line); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.followDevContainerLogs(runCtx, stack, so, se)
+		}()
 	}
 	if hasLocal {
-		g.Go(func() error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// The supervisor is the dev command's foreground process. When it
+			// returns — Ctrl-C, or the local processes all exiting — cancel the
+			// detached follower so it stops re-attaching and the command ends.
 			defer cancel()
-			return p.procBackend.UpForeground(gctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, so, se)
-		})
+			devErr = p.procBackend.UpForeground(runCtx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, so, se)
+		}()
 	}
-	return g.Wait()
+	wg.Wait()
+	return devErr
+}
+
+// followDevContainerLogs tails detached container logs for `angee dev`, writing
+// each line to stdout. It re-attaches after every stream ends so a container
+// recreated by `angee restart` from another shell is followed again, backing off
+// between attempts and giving up quietly once ctx is cancelled (Ctrl-C or the
+// local supervisor exiting). A follow that fails to start is surfaced as a
+// warning on stderr rather than swallowed; neither an error nor an EOF changes
+// the dev exit code.
+func (p *Platform) followDevContainerLogs(ctx context.Context, stack *manifest.Stack, stdout io.Writer, stderr io.Writer) {
+	for ctx.Err() == nil {
+		lines, err := p.composeBackend.StreamLogs(ctx, runtime.LogsRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Follow: true, Tail: devLogFollowTail})
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(stderr, "angee dev: following container logs failed: %v (retrying)\n", err)
+		} else {
+			for line := range lines {
+				if _, werr := io.WriteString(stdout, line); werr != nil {
+					// The dev output sink is gone; stop following rather than
+					// spin re-attaching to a writer that will keep failing.
+					return
+				}
+			}
+		}
+		// The stream ended: a clean EOF (recreated container), a startup error,
+		// or an immediate return because no containers are up. Wait before
+		// re-attaching so a persistently-empty project or a flapping docker
+		// daemon can't turn the loop into a busy-wait.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(devLogFollowRetryDelay):
+		}
+	}
 }
 
 // guardDevSink wraps w so concurrent writes from the two dev backends serialize,

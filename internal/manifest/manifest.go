@@ -613,7 +613,9 @@ func (s *Stack) ValidateExtended() error {
 }
 
 func (s *Stack) validateDependencyGraph() error {
-	deps := make(map[string][]string, len(s.Services)+len(s.Jobs))
+	// No capacity hint: a summed len() hint trips CodeQL's
+	// go/allocation-size-overflow, and the map grows fine without one.
+	deps := make(map[string][]string)
 	for name, service := range s.Services {
 		if _, collision := s.Jobs[name]; collision {
 			return fmt.Errorf("name %q is declared as both a service and a job", name)
