@@ -222,6 +222,11 @@ services:
 Container services require `image` or `build`. Local services require
 `command` and must not set `image`.
 
+Set `stop_grace_period` to bound graceful shutdown before the runtime
+force-stops a service. The value uses Go duration syntax, such as `30s` or
+`2m`. Compose receives the duration directly; process-compose rounds it up to
+whole seconds. The default is `10s`.
+
 ### Readiness probes
 
 A service can declare when it is ready to accept work. Set exactly one probe

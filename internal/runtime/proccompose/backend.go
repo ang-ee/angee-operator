@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -209,12 +210,34 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
 		return false, err
 	}
+	previousShutdownTimeout := nativeShutdownTimeout(config["shutDownParams"])
 	config["name"] = name
 	changed := false
 	for key, value := range updates {
 		normalized, err := jsonValue(value)
 		if err != nil {
 			return false, err
+		}
+		// The named-update API accepts the complete native ProcessConfig and
+		// does not merge nested shutdown fields. Preserve settings owned by the
+		// existing supervisor definition (custom command, parent_only, etc.)
+		// while replacing the compiled fields Angee owns.
+		if key == "shutDownParams" && normalized != nil {
+			desired, desiredOK := normalized.(map[string]any)
+			current, currentOK := config[key].(map[string]any)
+			if desiredOK && currentOK {
+				merged := maps.Clone(current)
+				for nestedKey, nestedValue := range desired {
+					// SIGTERM is supplied for newly-added processes because the
+					// HTTP API skips the file loader's defaults. An existing
+					// process may own a custom signal; retain it.
+					if nestedKey == "signal" && current[nestedKey] != nil {
+						continue
+					}
+					merged[nestedKey] = nestedValue
+				}
+				normalized = merged
+			}
 		}
 		if !reflect.DeepEqual(config[key], normalized) {
 			changed = true
@@ -223,6 +246,15 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	}
 	if !changed {
 		return false, nil
+	}
+	if previousShutdownTimeout == 0 && nativeShutdownTimeout(config["shutDownParams"]) > 0 {
+		inactive, err := b.processSafelyInactive(ctx, target, name)
+		if err != nil {
+			return false, err
+		}
+		if !inactive {
+			return false, fmt.Errorf("process %s is active without a shutdown timeout; stop it or restart the supervisor to load stop_grace_period before applying its configuration", name)
+		}
 	}
 	payload, err := json.Marshal(config)
 	if err != nil {
@@ -243,6 +275,50 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 		return false, fmt.Errorf("update process config: %s", result.Status)
 	}
 	return true, nil
+}
+
+func nativeShutdownTimeout(value any) int {
+	params, ok := value.(map[string]any)
+	if !ok {
+		return 0
+	}
+	timeout, _ := params["shutDownTimeout"].(float64)
+	return int(timeout)
+}
+
+func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Target, name string) (bool, error) {
+	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/"+url.PathEscape(name), nil)
+	if err != nil {
+		return false, err
+	}
+	setProcessToken(req, target.EnvFile)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return false, fmt.Errorf("get process state: %s", resp.Status)
+	}
+	var state struct {
+		IsRunning bool   `json:"is_running"`
+		Status    string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return false, err
+	}
+	if state.IsRunning {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(state.Status)) {
+	case "completed", "disabled", "skipped", "error", "scheduled":
+		return true, nil
+	default:
+		// Unknown and transitional states are unsafe: removeProcess can still
+		// hold a Process object and wait indefinitely even when is_running is false.
+		return false, nil
+	}
 }
 
 // addMissingProcess round-trips every current native process configuration
@@ -297,7 +373,17 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 		}
 		processes[state.Name] = config
 	}
-	compiled := map[string]any{"name": name}
+	// POST /project accepts decoded native types directly, bypassing the file
+	// loader that normally supplies these required identity/default fields.
+	compiled := map[string]any{
+		"name": name, "replicaName": name, "namespace": "default",
+		"replicas": 1, "launchTimeout": 5,
+		"shutDownParams": map[string]any{"signal": 15},
+		// UpdateProject does not derive executable/args for a new process.
+		// Register an inert placeholder, then activate it through UpdateProcess,
+		// whose native owner performs that command setup before running it.
+		"disabled": true,
+	}
 	for key, value := range updates {
 		normalized, err := jsonValue(value)
 		if err != nil {
@@ -324,6 +410,15 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 	if result.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
 		return false, fmt.Errorf("add process config: %s: %s", result.Status, strings.TrimSpace(string(body)))
+	}
+	activation := maps.Clone(updates)
+	activation["disabled"] = false
+	changed, err := b.updateProcess(ctx, target, name, activation)
+	if err != nil {
+		return false, fmt.Errorf("activate added process: %w", err)
+	}
+	if !changed {
+		return false, fmt.Errorf("activate added process: native placeholder was not updated")
 	}
 	return true, nil
 }
@@ -433,6 +528,9 @@ func processUpdates(process Process) (map[string]any, error) {
 		"environment": process.Environment,
 		"workingDir":  process.WorkingDir,
 		"dependsOn":   dependsOn,
+	}
+	if process.Shutdown != nil {
+		updates["shutDownParams"] = process.Shutdown
 	}
 	if process.ReadinessProbe == nil {
 		updates["readinessProbe"] = nil
@@ -693,7 +791,6 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 		}
 		return cmd.Process.Signal(os.Interrupt)
 	}
-	cmd.WaitDelay = runtime.GracefulWaitDelay
 	trace := logctx.TraceExec(ctx, name, args, root, slog.Any("env", logctx.EnvKeys(env)))
 	runErr := cmd.Run()
 	trace(nil, runErr)

@@ -363,6 +363,31 @@ func TestCompileContainerReadinessProbes(t *testing.T) {
 	}
 }
 
+func TestCompileServiceStopGracePeriod(t *testing.T) {
+	for _, runtimeType := range []manifest.Runtime{manifest.RuntimeContainer, manifest.RuntimeLocal} {
+		t.Run(string(runtimeType), func(t *testing.T) {
+			stack := compileReadinessStack(runtimeType, nil)
+			service := stack.Services["ready"]
+			service.StopGracePeriod = "1500ms"
+			stack.Services["ready"] = service
+			compiled, err := Compile(stack, t.TempDir(), nil)
+			if err != nil {
+				t.Fatalf("Compile() error = %v", err)
+			}
+			if runtimeType == manifest.RuntimeContainer {
+				if got := compiled.Compose.Services["ready"].StopGracePeriod; got != "1500ms" {
+					t.Fatalf("stop_grace_period = %q, want 1500ms", got)
+				}
+				return
+			}
+			shutdown := compiled.ProcessCompose.Processes["ready"].Shutdown
+			if shutdown == nil || shutdown.TimeoutSeconds != 2 || shutdown.Signal != 15 {
+				t.Fatalf("shutdown = %#v, want timeout_seconds 2 and SIGTERM", shutdown)
+			}
+		})
+	}
+}
+
 func TestCompileLocalReadinessProbes(t *testing.T) {
 	tests := map[string]struct {
 		probe *manifest.ReadyProbe
@@ -589,6 +614,7 @@ services:
         image: nginx:alpine
         extra_hosts:
             - host.docker.internal:host-gateway
+        stop_grace_period: 10s
 `, composeProjectName("demo", root))
 	if !bytes.Equal(composeYAML, []byte(wantCompose)) {
 		t.Fatalf("Compose output changed without ready\ngot:\n%s\nwant:\n%s", composeYAML, wantCompose)
@@ -605,6 +631,9 @@ processes:
         depends_on:
             docker:
                 condition: process_started
+        shutdown:
+            timeout_seconds: 10
+            signal: 15
 `
 	if !bytes.Equal(processYAML, []byte(wantProcess)) {
 		t.Fatalf("process-compose output changed without ready\ngot:\n%s\nwant:\n%s", processYAML, wantProcess)

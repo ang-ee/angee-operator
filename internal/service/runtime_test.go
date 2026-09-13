@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -65,6 +66,7 @@ type devLifecycleBackend struct {
 	down       atomic.Int32
 	logs       atomic.Int32
 	started    chan struct{}
+	downErr    error
 }
 
 type applyRecordingBackend struct {
@@ -150,7 +152,35 @@ func (b *devLifecycleBackend) UpForeground(ctx context.Context, _ runtime.Target
 
 func (b *devLifecycleBackend) Down(context.Context, runtime.Target) error {
 	b.down.Add(1)
-	return nil
+	return b.downErr
+}
+
+func TestStackDownUsesGeneratedRuntimeArtifactsAndJoinsErrors(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "down", Services: map[string]manifest.Service{}}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"docker-compose.yaml", "process-compose.yaml"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("generated"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	composeErr := errors.New("compose down")
+	processErr := errors.New("process down")
+	containers := &devLifecycleBackend{downErr: composeErr}
+	local := &devLifecycleBackend{downErr: processErr}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = platform.StackDown(t.Context())
+	if !errors.Is(err, composeErr) || !errors.Is(err, processErr) {
+		t.Fatalf("StackDown() error = %v, want both backend errors", err)
+	}
+	if containers.down.Load() != 1 || local.down.Load() != 1 {
+		t.Fatalf("down calls = compose %d local %d, want 1 each", containers.down.Load(), local.down.Load())
+	}
 }
 
 func (b *devLifecycleBackend) StreamLogs(ctx context.Context, _ runtime.LogsRequest) (<-chan string, error) {

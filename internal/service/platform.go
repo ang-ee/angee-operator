@@ -685,6 +685,11 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 		if err != nil {
 			return nil, fmt.Errorf("service %s workdir: %w", name, err)
 		}
+		stopGracePeriod := service.NormalizedStopGracePeriod()
+		stopTimeout, err := serviceStopTimeout(stopGracePeriod)
+		if err != nil {
+			return nil, fmt.Errorf("service %s stop_grace_period: %w", name, err)
+		}
 		switch service.Runtime {
 		case manifest.RuntimeContainer:
 			containerMounts, err := resolveContainerMounts(mounts, mountResolver)
@@ -700,10 +705,11 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Volumes:     containerMounts,
 				// host.docker.internal is Docker Desktop magic; host-gateway gives
 				// plain-Linux containers host-local operator access and is harmless on Desktop.
-				ExtraHosts:  []string{"host.docker.internal:host-gateway"},
-				WorkingDir:  workdir,
-				Healthcheck: composeHealthcheck(service.Ready),
-				DependsOn:   composeDependsOn(append(service.After, service.DependsOn...), stack),
+				ExtraHosts:      []string{"host.docker.internal:host-gateway"},
+				WorkingDir:      workdir,
+				Healthcheck:     composeHealthcheck(service.Ready),
+				DependsOn:       composeDependsOn(append(service.After, service.DependsOn...), stack),
+				StopGracePeriod: stopGracePeriod,
 			}
 		case manifest.RuntimeLocal:
 			localEnv, err := localMountEnv(mounts, mountResolver)
@@ -733,6 +739,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				WorkingDir:     workdir,
 				ReadinessProbe: readinessProbe,
 				DependsOn:      processDependsOn(append(service.After, service.DependsOn...), stack),
+				Shutdown:       stopTimeout,
 			}
 		}
 	}
@@ -786,11 +793,18 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 		if workdir != "" && !filepath.IsAbs(workdir) {
 			workdir = filepath.Join(root, workdir)
 		}
+		shutdown, err := serviceStopTimeout(manifest.DefaultStopGracePeriod)
+		if err != nil {
+			return nil, fmt.Errorf("job %s default stop grace: %w", name, err)
+		}
 		compiled.ProcessCompose.Processes[name] = proccompose.Process{
 			Command:     shellCommand(command),
 			Environment: envList(env),
 			WorkingDir:  workdir,
 			DependsOn:   processDependsOn(job.DependsOn, stack),
+			// Local jobs share the runtime's default bounded shutdown so the
+			// foreground supervisor can honor every process before its own exit.
+			Shutdown: shutdown,
 		}
 	}
 
@@ -941,6 +955,23 @@ func durationSecondsCeil(value string) (int, error) {
 		seconds++
 	}
 	return int(seconds), nil
+}
+
+func serviceStopTimeout(value string) (*proccompose.Shutdown, error) {
+	if value == "" {
+		return nil, nil
+	}
+	seconds, err := durationSecondsCeil(value)
+	if err != nil {
+		return nil, err
+	}
+	if seconds < 1 {
+		return nil, fmt.Errorf("must be a positive duration")
+	}
+	// process-compose's file loader normally supplies SIGTERM (15), but its
+	// named-update API accepts an already-decoded process and does not run that
+	// defaulting pass. Carry the native default in the transient update too.
+	return &proccompose.Shutdown{TimeoutSeconds: seconds, Signal: 15}, nil
 }
 
 func escapeRuntimeInterpolation(value string) string {

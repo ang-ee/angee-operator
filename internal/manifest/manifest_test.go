@@ -174,6 +174,19 @@ func TestReadyProbeValidation(t *testing.T) {
 	}
 }
 
+func TestServiceStopGracePeriodValidation(t *testing.T) {
+	for _, value := range []string{"later", "0s"} {
+		path := filepath.Join(t.TempDir(), "angee.yaml")
+		data := "version: 1\nkind: stack\nname: grace\nservices:\n  web:\n    runtime: local\n    command: [server]\n    stop_grace_period: " + value + "\n"
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if _, err := LoadFile(path); err == nil || !strings.Contains(err.Error(), "stop_grace_period must be a positive duration") {
+			t.Fatalf("LoadFile(%q) error = %v", value, err)
+		}
+	}
+}
+
 func TestLoadFileReadyProbeRejectsZeroRetries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "angee.yaml")
 	data := `version: 1

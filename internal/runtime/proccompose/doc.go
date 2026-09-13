@@ -13,6 +13,12 @@ type Process struct {
 	WorkingDir     string                       `yaml:"working_dir,omitempty"`
 	ReadinessProbe *Probe                       `yaml:"readiness_probe,omitempty" json:"readiness_probe,omitempty"`
 	DependsOn      map[string]ProcessDependency `yaml:"depends_on,omitempty"`
+	Shutdown       *Shutdown                    `yaml:"shutdown,omitempty" json:"shutdown,omitempty"`
+}
+
+type Shutdown struct {
+	TimeoutSeconds int `yaml:"timeout_seconds,omitempty" json:"shutDownTimeout,omitempty"`
+	Signal         int `yaml:"signal,omitempty" json:"signal,omitempty"`
 }
 
 type Probe struct {

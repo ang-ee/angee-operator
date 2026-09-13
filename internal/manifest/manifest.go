@@ -236,6 +236,18 @@ type Service struct {
 	DependsOn []string          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	Route     *Route            `yaml:"route,omitempty" json:"route,omitempty"`
 	Ready     *ReadyProbe       `yaml:"ready,omitempty" json:"ready,omitempty"`
+	// StopGracePeriod bounds graceful shutdown before the runtime force-stops
+	// the service. It uses Go duration syntax (for example, "30s").
+	StopGracePeriod string `yaml:"stop_grace_period,omitempty" json:"stop_grace_period,omitempty" jsonschema:"default=10s"`
+}
+
+const DefaultStopGracePeriod = "10s"
+
+func (s Service) NormalizedStopGracePeriod() string {
+	if s.StopGracePeriod == "" {
+		return DefaultStopGracePeriod
+	}
+	return s.StopGracePeriod
 }
 
 type Route struct {
@@ -493,7 +505,7 @@ func (s *Stack) Validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("manifest name is required")
 	}
-	if err := s.validateReadiness(); err != nil {
+	if err := s.validateServiceRuntime(); err != nil {
 		return err
 	}
 	if err := validateStruct(s); err != nil {
@@ -651,10 +663,16 @@ func nodeKind(s *Stack, name string) string {
 	return "service"
 }
 
-func (s *Stack) validateReadiness() error {
+func (s *Stack) validateServiceRuntime() error {
 	for name, service := range s.Services {
 		if err := validateReadyProbe(name, service.Ready); err != nil {
 			return err
+		}
+		if service.StopGracePeriod != "" {
+			duration, err := time.ParseDuration(service.StopGracePeriod)
+			if err != nil || duration <= 0 {
+				return fmt.Errorf("service %q: stop_grace_period must be a positive duration", name)
+			}
 		}
 	}
 	return nil

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -297,30 +298,18 @@ func (p *Platform) StackDown(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	hasContainers := false
-	hasLocal := false
-	for _, service := range stack.Services {
-		switch service.Runtime {
-		case manifest.RuntimeContainer:
-			hasContainers = true
-		case manifest.RuntimeLocal:
-			hasLocal = true
-		}
+	var downErrors []error
+	if _, statErr := os.Stat(filepath.Join(p.root, "docker-compose.yaml")); statErr == nil {
+		downErrors = append(downErrors, p.composeBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}))
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		downErrors = append(downErrors, statErr)
 	}
-	for _, job := range stack.Jobs {
-		if job.Runtime == manifest.RuntimeLocal {
-			hasLocal = true
-		}
+	if _, statErr := os.Stat(filepath.Join(p.root, "process-compose.yaml")); statErr == nil {
+		downErrors = append(downErrors, p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)}))
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		downErrors = append(downErrors, statErr)
 	}
-	if hasContainers {
-		if err := p.composeBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
-			return err
-		}
-	}
-	if hasLocal {
-		return p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)})
-	}
-	return nil
+	return errors.Join(downErrors...)
 }
 
 func (p *Platform) ServiceUp(ctx context.Context, names []string) error {

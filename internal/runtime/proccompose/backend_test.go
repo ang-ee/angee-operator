@@ -3,10 +3,15 @@ package proccompose
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -167,6 +172,141 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
+	}
+}
+
+func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
+	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}})
+	if err != nil {
+		t.Fatalf("processUpdates() error = %v", err)
+	}
+	shutdown, ok := updates["shutDownParams"].(*Shutdown)
+	if !ok || shutdown.TimeoutSeconds != 30 || shutdown.Signal != 15 {
+		t.Fatalf("shutDownParams = %#v, want timeout 30 and SIGTERM", updates["shutDownParams"])
+	}
+}
+
+func TestProcessUpdatesPreservesShutdownWhenGraceIsOmitted(t *testing.T) {
+	updates, err := processUpdates(Process{})
+	if err != nil {
+		t.Fatalf("processUpdates() error = %v", err)
+	}
+	if _, ok := updates["shutDownParams"]; ok {
+		t.Fatalf("processUpdates() included shutDownParams: %#v", updates["shutDownParams"])
+	}
+}
+
+func TestAddMissingProcessSuppliesNativeIdentityDefaults(t *testing.T) {
+	var added map[string]any
+	var activated map[string]any
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/processes":
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		case r.URL.Path == "/project":
+			var project struct {
+				Processes map[string]map[string]any `json:"processes"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
+				t.Errorf("decode project: %v", err)
+			}
+			added = project.Processes["job"]
+			_, _ = io.WriteString(w, `{}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
+			_ = json.NewEncoder(w).Encode(added)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			if err := json.NewDecoder(r.Body).Decode(&activated); err != nil {
+				t.Errorf("decode activation: %v", err)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, portText, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portText)
+	_, err = (Backend{}).addMissingProcess(t.Context(), runtime.Target{ControlPort: port}, "job", map[string]any{"command": "run"})
+	if err != nil {
+		t.Fatalf("addMissingProcess() error = %v", err)
+	}
+	if added["name"] != "job" || added["replicaName"] != "job" || added["namespace"] != "default" || added["replicas"] != float64(1) || added["launchTimeout"] != float64(5) {
+		t.Fatalf("added native identity/defaults = %#v", added)
+	}
+	if shutdown := added["shutDownParams"].(map[string]any); shutdown["signal"] != float64(15) {
+		t.Fatalf("added shutdown defaults = %#v", shutdown)
+	}
+	if added["disabled"] != true || activated["disabled"] != false || activated["command"] != "run" {
+		t.Fatalf("bootstrap payloads = added %#v activated %#v", added, activated)
+	}
+	wantRequests := []string{"GET /processes", "POST /project", "GET /process/info/job", "POST /process"}
+	if !reflect.DeepEqual(requests, wantRequests) {
+		t.Fatalf("requests = %v, want %v", requests, wantRequests)
+	}
+}
+
+func TestUpdateProcessPreservesNativeShutdownFields(t *testing.T) {
+	var posted map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/worker":
+			_, _ = io.WriteString(w, `{"name":"worker","replicaName":"worker","command":"old","shutDownParams":{"shutDownCommand":"cleanup","signal":2,"parentOnly":true}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/process/worker":
+			_, _ = io.WriteString(w, `{"status":"Completed","is_running":false}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+				t.Errorf("decode process: %v", err)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	changed, err := (Backend{}).updateProcess(t.Context(), runtime.Target{ControlPort: port}, "worker", map[string]any{
+		"command": "new", "shutDownParams": &Shutdown{TimeoutSeconds: 30, Signal: 15},
+	})
+	if err != nil || !changed {
+		t.Fatalf("updateProcess() = %v, %v", changed, err)
+	}
+	shutdown := posted["shutDownParams"].(map[string]any)
+	if shutdown["shutDownCommand"] != "cleanup" || shutdown["signal"] != float64(2) || shutdown["parentOnly"] != true || shutdown["shutDownTimeout"] != float64(30) {
+		t.Fatalf("posted shutdown = %#v", shutdown)
+	}
+}
+
+func TestUpdateProcessRefusesUnboundedRunningLegacyProcess(t *testing.T) {
+	posted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/worker":
+			_, _ = io.WriteString(w, `{"name":"worker","replicaName":"worker","command":"old","shutDownParams":{"signal":15}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/process/worker":
+			_, _ = io.WriteString(w, `{"status":"Terminating","is_running":false}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			posted = true
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	_, err := (Backend{}).updateProcess(t.Context(), runtime.Target{ControlPort: port}, "worker", map[string]any{
+		"command": "new", "shutDownParams": &Shutdown{TimeoutSeconds: 30, Signal: 15},
+	})
+	if err == nil || !strings.Contains(err.Error(), "active without a shutdown timeout") {
+		t.Fatalf("updateProcess() error = %v", err)
+	}
+	if posted {
+		t.Fatal("updateProcess posted unsafe legacy update")
 	}
 }
 

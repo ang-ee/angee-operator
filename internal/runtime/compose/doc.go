@@ -10,18 +10,19 @@ type File struct {
 }
 
 type Service struct {
-	Image       string                       `yaml:"image,omitempty"`
-	Build       any                          `yaml:"build,omitempty"`
-	Command     []string                     `yaml:"command,omitempty"`
-	Environment map[string]string            `yaml:"environment,omitempty"`
-	Labels      map[string]string            `yaml:"labels,omitempty"`
-	Ports       []string                     `yaml:"ports,omitempty"`
-	Volumes     []string                     `yaml:"volumes,omitempty"`
-	ExtraHosts  []string                     `yaml:"extra_hosts,omitempty" json:"extra_hosts,omitempty"`
-	Networks    []string                     `yaml:"networks,omitempty"`
-	WorkingDir  string                       `yaml:"working_dir,omitempty"`
-	Healthcheck *Healthcheck                 `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
-	DependsOn   map[string]ServiceDependency `yaml:"depends_on,omitempty"`
+	Image           string                       `yaml:"image,omitempty"`
+	Build           any                          `yaml:"build,omitempty"`
+	Command         []string                     `yaml:"command,omitempty"`
+	Environment     map[string]string            `yaml:"environment,omitempty"`
+	Labels          map[string]string            `yaml:"labels,omitempty"`
+	Ports           []string                     `yaml:"ports,omitempty"`
+	Volumes         []string                     `yaml:"volumes,omitempty"`
+	ExtraHosts      []string                     `yaml:"extra_hosts,omitempty" json:"extra_hosts,omitempty"`
+	Networks        []string                     `yaml:"networks,omitempty"`
+	WorkingDir      string                       `yaml:"working_dir,omitempty"`
+	Healthcheck     *Healthcheck                 `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
+	DependsOn       map[string]ServiceDependency `yaml:"depends_on,omitempty"`
+	StopGracePeriod string                       `yaml:"stop_grace_period,omitempty"`
 }
 
 type Healthcheck struct {
