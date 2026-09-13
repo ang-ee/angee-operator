@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -335,10 +336,6 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := p.StackPrepare(ctx)
-	if err != nil {
-		return nil, err
-	}
 	container := []string{}
 	local := []string{}
 	if len(services) == 0 {
@@ -365,14 +362,14 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		return backend.Logs(ctx, req)
 	}
 	var channels []<-chan string
-	if len(compiled.Compose.Services) > 0 && len(container) > 0 {
+	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) && len(container) > 0 {
 		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
 		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, ch)
 	}
-	if len(compiled.ProcessCompose.Processes) > 0 && len(local) > 0 {
+	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) && len(local) > 0 {
 		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err

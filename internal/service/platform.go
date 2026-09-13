@@ -143,6 +143,11 @@ func (p *Platform) LoadStack() (*manifest.Stack, error) {
 }
 
 func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	return p.stackPrepare(ctx, nil, true, "", false)
 }
 
@@ -505,6 +510,11 @@ func (p *Platform) runtimeArtifactDocuments(renderTarget string, stack *manifest
 }
 
 func (p *Platform) StackCompile(ctx context.Context) (*CompiledStack, error) {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
