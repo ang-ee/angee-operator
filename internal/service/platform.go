@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -36,6 +37,15 @@ type Platform struct {
 	portUnavailable func(int) bool
 	jobOutput       *jobOutputSink
 	interactive     bool
+	jobRunsMu       sync.RWMutex
+	jobRuns         map[string]api.JobRunOperation
+	latestJobRun    string
+	activeJobRun    bool
+	jobRunStacks    map[string]*manifest.Stack
+	jobRunCompiled  map[string]*CompiledStack
+	jobRunOrder     []string
+	detachedContext context.Context
+	mutationLease   chan struct{}
 }
 
 // Option configures a Platform.
@@ -58,6 +68,12 @@ func WithInteractive(interactive bool) Option {
 	}
 }
 
+// WithDetachedContext owns work that survives a transport request and is
+// cancelled with its hosting daemon.
+func WithDetachedContext(ctx context.Context) Option {
+	return func(platform *Platform) { platform.detachedContext = ctx }
+}
+
 type CompiledStack struct {
 	Compose        compose.File
 	ProcessCompose proccompose.File
@@ -76,11 +92,26 @@ func New(root string, options ...Option) (*Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	platform := &Platform{root: abs, composeBackend: compose.NewBackend(), procBackend: proccompose.NewBackend(), portUnavailable: hostPortUnavailable}
+	platform := &Platform{root: abs, composeBackend: compose.NewBackend(), procBackend: proccompose.NewBackend(), portUnavailable: hostPortUnavailable, jobRuns: map[string]api.JobRunOperation{}, jobRunStacks: map[string]*manifest.Stack{}, jobRunCompiled: map[string]*CompiledStack{}, mutationLease: make(chan struct{}, 1)}
+	platform.mutationLease <- struct{}{}
 	for _, option := range options {
 		option(platform)
 	}
 	return platform, nil
+}
+
+type mutationLeaseContextKey struct{}
+
+func (p *Platform) beginMutation(ctx context.Context, field string) (context.Context, func(), error) {
+	if owner, ok := ctx.Value(mutationLeaseContextKey{}).(*Platform); ok && owner == p {
+		return ctx, func() {}, nil
+	}
+	select {
+	case <-p.mutationLease:
+		return context.WithValue(ctx, mutationLeaseContextKey{}, p), func() { p.mutationLease <- struct{}{} }, nil
+	default:
+		return ctx, nil, &InvalidInputError{Field: field, Reason: "another stack mutation is active"}
+	}
 }
 
 func NewWithBackends(root string, composeBackend, procBackend runtime.Backend) (*Platform, error) {
@@ -112,6 +143,14 @@ func (p *Platform) LoadStack() (*manifest.Stack, error) {
 }
 
 func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
+	return p.stackPrepare(ctx, nil, true, "", false)
+}
+
+// stackPrepare materializes stack-owned resources and compiles one complete
+// runtime snapshot. A job run with inputs keeps that snapshot in memory: only
+// the stable runtime environment is written, so request values never become
+// generated runtime state.
+func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[string]string, writeRuntime bool, operationRoot string, chained bool) (*CompiledStack, error) {
 	lock := fslock.RootLock(p.root)
 	var compiled *CompiledStack
 	err := lock.With(ctx, func() error {
@@ -140,8 +179,15 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 				return err
 			}
 		}
+		compileStack := stack
+		if operationRoot != "" {
+			compileStack, err = jobOperationStack(stack, operationRoot, chained)
+			if err != nil {
+				return err
+			}
+		}
 		finishCompiling := logctx.Step(ctx, "compiling stack")
-		compiledStack, resolvedSecrets, err := p.compileStackArtifacts(ctx, stack)
+		compiledStack, resolvedSecrets, err := p.compileStackArtifactsWithJobInputs(ctx, compileStack, jobInputs, operationRoot != "")
 		finishCompiling(err)
 		if err != nil {
 			return err
@@ -149,7 +195,7 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 		compiled = compiledStack
 		finishWriting := logctx.Step(ctx, "writing runtime files")
 		writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
-		if writeErr == nil {
+		if writeErr == nil && writeRuntime {
 			writeErr = p.writeCompiled(compiled)
 		}
 		finishWriting(writeErr)
@@ -238,6 +284,10 @@ func (p *Platform) stageStackResources(ctx context.Context, stack *manifest.Stac
 // materializing persist paths or source caches. Secret resolution retains its
 // normal backend semantics for imported and generated declarations.
 func (p *Platform) compileStackArtifacts(ctx context.Context, stack *manifest.Stack) (*CompiledStack, map[string]string, error) {
+	return p.compileStackArtifactsWithJobInputs(ctx, stack, nil, false)
+}
+
+func (p *Platform) compileStackArtifactsWithJobInputs(ctx context.Context, stack *manifest.Stack, jobInputs map[string]map[string]string, resolveProcessSecrets bool) (*CompiledStack, map[string]string, error) {
 	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
 	if err != nil {
 		return nil, nil, err
@@ -246,7 +296,7 @@ func (p *Platform) compileStackArtifacts(ctx context.Context, stack *manifest.St
 	if err != nil {
 		return nil, nil, err
 	}
-	compiled, err := Compile(stack, p.root, resolvedSecrets)
+	compiled, err := compile(stack, p.root, resolvedSecrets, jobInputs, resolveProcessSecrets)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -564,6 +614,10 @@ func markRuntimeUnknown(states map[string]runtime.ServiceStatus, stack *manifest
 }
 
 func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]string) (*CompiledStack, error) {
+	return compile(stack, root, resolvedSecrets, nil, false)
+}
+
+func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]string, jobInputs map[string]map[string]string, resolveProcessSecrets bool) (*CompiledStack, error) {
 	secretEnvVars := map[string]string{}
 	for name := range resolvedSecrets {
 		secretEnvVars[name] = substitute.SecretEnvName(name)
@@ -594,6 +648,9 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 	for _, name := range sortedKeys(stack.Services) {
 		service := stack.Services[name]
 		svcCtx := ctx
+		if resolveProcessSecrets && service.Runtime == manifest.RuntimeLocal {
+			svcCtx.SecretEnvVars = nil
+		}
 		svcCtx.Name = name
 		env, err := substitute.ResolveMap(service.Env, svcCtx)
 		if err != nil {
@@ -669,11 +726,12 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 
 	for _, name := range sortedKeys(stack.Jobs) {
 		job := stack.Jobs[name]
-		if job.Runtime != manifest.RuntimeLocal {
-			continue
-		}
 		jobCtx := ctx
+		if resolveProcessSecrets && job.Runtime == manifest.RuntimeLocal {
+			jobCtx.SecretEnvVars = nil
+		}
 		jobCtx.Name = name
+		jobCtx.Inputs = jobInputs[name]
 		env, err := substitute.ResolveMap(job.Env, jobCtx)
 		if err != nil {
 			return nil, fmt.Errorf("job %s env: %w", name, err)
@@ -689,6 +747,14 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 		workdir, err := substitute.Resolve(job.Workdir, jobCtx)
 		if err != nil {
 			return nil, fmt.Errorf("job %s workdir: %w", name, err)
+		}
+		if job.Runtime == manifest.RuntimeContainer {
+			containerMounts, err := resolveContainerMounts(mounts, mountResolver)
+			if err != nil {
+				return nil, fmt.Errorf("job %s mounts: %w", name, err)
+			}
+			compiled.Compose.Services[name] = compose.Service{Image: job.Image, Build: job.Build, Command: command, Environment: env, Volumes: containerMounts, WorkingDir: workdir, DependsOn: composeDependsOn(job.DependsOn, stack)}
+			continue
 		}
 		localEnv, err := localMountEnv(mounts, mountResolver)
 		if err != nil {

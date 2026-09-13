@@ -565,6 +565,7 @@ func jobListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 
 func jobRunCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var inputValues []string
+	var chainedRestart bool
 	cmd := &cobra.Command{
 		Use:   "run <name>",
 		Short: "Run a job",
@@ -578,16 +579,34 @@ func jobRunCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out, err := platform.JobRun(cmd.Context(), args[0], inputs)
-			if len(out) > 0 {
-				if _, writeErr := stdout.Write(out); writeErr != nil {
+			op, err := platform.JobRunStart(cmd.Context(), args[0], inputs, chainedRestart)
+			if err != nil {
+				return err
+			}
+			for op.Status == api.JobRunPending || op.Status == api.JobRunRunning {
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(200 * time.Millisecond):
+				}
+				op, err = platform.JobRunGet(cmd.Context(), op.ID)
+				if err != nil {
+					return err
+				}
+			}
+			if len(op.Output) > 0 {
+				if _, writeErr := io.WriteString(stdout, op.Output); writeErr != nil {
 					return writeErr
 				}
 			}
-			return err
+			if op.Status == api.JobRunFailed {
+				return errors.New(op.Error)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "job input K=V")
+	cmd.Flags().BoolVar(&chainedRestart, "chained-restart", false, "restart all downstream jobs and services after success")
 	return cmd
 }
 

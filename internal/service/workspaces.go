@@ -31,6 +31,11 @@ const (
 )
 
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (result api.WorkspaceRef, retErr error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace")
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	if req.Template == "" {
 		return api.WorkspaceRef{}, &InvalidInputError{Field: "template", Reason: "workspace template is required"}
 	}
@@ -504,6 +509,11 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 }
 
 func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool) error {
+	ctx, release, err := p.beginMutation(ctx, "workspace")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -665,6 +675,11 @@ func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, pa
 }
 
 func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace")
+	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -1127,6 +1142,11 @@ func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.S
 }
 
 func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.SourceState, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -1192,6 +1212,11 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 }
 
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) ([]api.SourceState, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace")
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err

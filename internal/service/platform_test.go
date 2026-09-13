@@ -476,6 +476,89 @@ func TestReadinessDependencyConditions(t *testing.T) {
 	}
 }
 
+func TestCompileKeepsManagedJobsInNativeStartupGraphs(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "managed-jobs",
+		Jobs: map[string]manifest.Job{
+			"container-setup": {Runtime: manifest.RuntimeContainer, Image: "busybox", Command: []string{"true"}},
+			"local-setup":     {Runtime: manifest.RuntimeLocal, Command: []string{"true"}},
+		},
+		Services: map[string]manifest.Service{
+			"container-app": {Runtime: manifest.RuntimeContainer, Image: "busybox", DependsOn: []string{"container-setup"}},
+			"local-app":     {Runtime: manifest.RuntimeLocal, Command: []string{"true"}, DependsOn: []string{"local-setup"}},
+		},
+	}
+	stack.Defaults()
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	compiled, err := Compile(stack, t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if _, ok := compiled.Compose.Services["container-setup"]; !ok {
+		t.Fatal("container job missing from Compose startup graph")
+	}
+	if got := compiled.Compose.Services["container-app"].DependsOn["container-setup"].Condition; got != "service_completed_successfully" {
+		t.Fatalf("container startup dependency = %q, want service_completed_successfully", got)
+	}
+	if _, ok := compiled.ProcessCompose.Processes["local-setup"]; !ok {
+		t.Fatal("local job missing from process-compose startup graph")
+	}
+	if got := compiled.ProcessCompose.Processes["local-app"].DependsOn["local-setup"].Condition; got != "process_completed_successfully" {
+		t.Fatalf("local startup dependency = %q, want process_completed_successfully", got)
+	}
+}
+
+func TestCompileTransientJobInputsResolveSecretsWithoutExpandingDollarValues(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "job-inputs",
+		Secrets: map[string]manifest.Secret{
+			"token": {},
+		},
+		Jobs: map[string]manifest.Job{
+			"root":  {Runtime: manifest.RuntimeLocal, Command: []string{"echo", "${inputs.value}"}, Env: map[string]string{"TOKEN": "${secret.token}"}},
+			"child": {Runtime: manifest.RuntimeLocal, Command: []string{"echo", "fixed"}, DependsOn: []string{"root"}},
+			"other": {Runtime: manifest.RuntimeLocal, Command: []string{"echo", "${inputs.value}"}},
+		},
+	}
+	stack.Defaults()
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	operation, err := jobOperationStack(stack, "root", true)
+	if err != nil {
+		t.Fatalf("jobOperationStack: %v", err)
+	}
+	if _, ok := operation.Jobs["other"]; ok {
+		t.Fatal("independent input-bearing job included in selected operation")
+	}
+	if _, ok := operation.Jobs["child"]; !ok {
+		t.Fatal("selected root's chained dependent missing from operation")
+	}
+	inputs := map[string]map[string]string{"root": {"value": "$HOME-literal"}}
+	emitted, err := compile(operation, t.TempDir(), map[string]string{"token": "resolved-secret"}, inputs, false)
+	if err != nil {
+		t.Fatalf("compile emitted: %v", err)
+	}
+	if got := strings.Join(emitted.ProcessCompose.Processes["root"].Environment, "\n"); !strings.Contains(got, "${ANGEE_SECRET_TOKEN}") || strings.Contains(got, "resolved-secret") {
+		t.Fatalf("emitted root environment = %q, want secret placeholder only", got)
+	}
+	transient, err := compile(operation, t.TempDir(), map[string]string{"token": "resolved-secret"}, inputs, true)
+	if err != nil {
+		t.Fatalf("compile transient: %v", err)
+	}
+	if got := strings.Join(transient.ProcessCompose.Processes["root"].Environment, "\n"); !strings.Contains(got, "resolved-secret") || strings.Contains(got, "${ANGEE_SECRET_TOKEN}") {
+		t.Fatalf("transient root environment = %q, want resolved secret only", got)
+	}
+	if got := transient.ProcessCompose.Processes["root"].Command; !strings.Contains(got, "$HOME-literal") {
+		t.Fatalf("root command = %q, want literal dollar-bearing input", got)
+	}
+	if got := transient.ProcessCompose.Processes["child"].Command; strings.Contains(got, "$HOME-literal") || !strings.Contains(got, "fixed") {
+		t.Fatalf("child command = %q, want its declared command without root input", got)
+	}
+}
+
 func TestCompileWithoutReadinessIsByteStable(t *testing.T) {
 	const root = "/stack"
 	stack := &manifest.Stack{

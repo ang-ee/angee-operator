@@ -110,12 +110,12 @@ func (r *mutationResolver) StackDestroy(ctx context.Context, purge *bool) (*mode
 }
 
 // JobRun is the resolver for the jobRun field.
-func (r *mutationResolver) JobRun(ctx context.Context, name string, inputs []*model.KeyValueInput) (string, error) {
-	out, err := r.Platform.JobRun(ctx, name, keyValuesFrom(inputs))
+func (r *mutationResolver) JobRun(ctx context.Context, name string, inputs []*model.KeyValueInput, chainedRestart *bool) (*model.JobRunOperation, error) {
+	op, err := r.Platform.JobRunStart(ctx, name, keyValuesFrom(inputs), boolPtrValue(chainedRestart))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(out), nil
+	return jobRunOperationModel(op), nil
 }
 
 // FileWrite is the resolver for the fileWrite field.
@@ -402,6 +402,33 @@ func (r *mutationResolver) DeleteSecretsByPk(ctx context.Context, id string) (*a
 		return nil, err
 	}
 	return &prev, nil
+}
+
+// JobRunOperation is the resolver for the jobRunOperation field.
+func (r *queryResolver) JobRunOperation(ctx context.Context, id string) (*model.JobRunOperation, error) {
+	op, err := r.Platform.JobRunGet(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return jobRunOperationModel(op), nil
+}
+
+// LatestJobRun is the resolver for the latestJobRun field.
+func (r *queryResolver) LatestJobRun(ctx context.Context) (*model.JobRunOperation, error) {
+	op, err := r.Platform.LatestJobRun(ctx)
+	if err != nil || op == nil {
+		return nil, err
+	}
+	return jobRunOperationModel(*op), nil
+}
+
+// JobRunPreview is the resolver for the jobRunPreview field.
+func (r *queryResolver) JobRunPreview(ctx context.Context, name string, chainedRestart bool) (*model.JobRunPreview, error) {
+	v, err := r.Platform.JobRunPreview(ctx, name, chainedRestart)
+	if err != nil {
+		return nil, err
+	}
+	return &model.JobRunPreview{Jobs: v.Jobs, Services: v.Services}, nil
 }
 
 // Health is the resolver for the health field.

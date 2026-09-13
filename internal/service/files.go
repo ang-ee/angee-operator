@@ -32,6 +32,11 @@ func (p *Platform) FileRead(ctx context.Context, source, path string) (api.FileC
 // FileWrite stores content at path under the named stack source. A non-empty
 // etag is an optimistic-concurrency precondition; a mismatch is a conflict.
 func (p *Platform) FileWrite(ctx context.Context, source, path, content, etag string) (api.FileRef, error) {
+	ctx, release, err := p.beginMutation(ctx, "file")
+	if err != nil {
+		return api.FileRef{}, err
+	}
+	defer release()
 	obj, err := p.fileObject(source, path)
 	if err != nil {
 		return api.FileRef{}, err

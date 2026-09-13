@@ -59,6 +59,11 @@ func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace,
 // publishing a workspace branch for the first time so an external
 // reviewer can open a PR against it.
 func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace source")
+	if err != nil {
+		return api.GitOpResult{}, err
+	}
+	defer release()
 	stack, wsSource, _, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err
@@ -96,6 +101,11 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 }
 
 func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string, args ...string) (api.GitOpResult, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace source")
+	if err != nil {
+		return api.GitOpResult{}, err
+	}
+	defer release()
 	_, _, _, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err

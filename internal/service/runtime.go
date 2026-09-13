@@ -18,6 +18,11 @@ import (
 const defaultProcessComposeControlPort = 8080
 
 func (p *Platform) StackBuild(ctx context.Context, services []string) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -26,6 +31,10 @@ func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -40,6 +49,11 @@ func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 }
 
 func (p *Platform) StackUp(ctx context.Context, services []string, build bool) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -48,6 +62,10 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -69,6 +87,11 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 }
 
 func (p *Platform) StackUpForeground(ctx context.Context, services []string, build bool, stdout io.Writer, stderr io.Writer) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -77,6 +100,10 @@ func (p *Platform) StackUpForeground(ctx context.Context, services []string, bui
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -98,6 +125,11 @@ func (p *Platform) StackUpForeground(ctx context.Context, services []string, bui
 }
 
 func (p *Platform) StackDev(ctx context.Context, build bool) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -106,6 +138,10 @@ func (p *Platform) StackDev(ctx context.Context, build bool) error {
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -123,6 +159,11 @@ func (p *Platform) StackDev(ctx context.Context, build bool) error {
 }
 
 func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io.Writer, stderr io.Writer) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -131,6 +172,10 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -230,6 +275,11 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 }
 
 func (p *Platform) StackDown(ctx context.Context) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -370,6 +420,11 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 }
 
 func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, names []string) (retErr error) {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if len(names) == 0 {
 		return fmt.Errorf("at least one service name is required")
 	}

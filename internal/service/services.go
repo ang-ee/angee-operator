@@ -13,6 +13,11 @@ import (
 )
 
 func (p *Platform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) error {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if req.Name == "" {
 		return &InvalidInputError{Field: "name", Reason: "service name is required"}
 	}
@@ -41,6 +46,11 @@ func (p *Platform) ServiceInit(ctx context.Context, req api.ServiceInitRequest) 
 }
 
 func (p *Platform) ServiceUpdate(ctx context.Context, req api.ServiceInitRequest) error {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if req.Name == "" {
 		return &InvalidInputError{Field: "name", Reason: "service name is required"}
 	}
@@ -86,6 +96,11 @@ func (p *Platform) ServiceUpdate(ctx context.Context, req api.ServiceInitRequest
 }
 
 func (p *Platform) ServiceDestroy(ctx context.Context, name string, stop bool) error {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err

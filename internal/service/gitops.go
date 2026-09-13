@@ -151,6 +151,11 @@ func countGitOpsState(summary *api.GitOpsSummary, state string, pushed bool) {
 }
 
 func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot string) (api.WorkspaceSourceStatus, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace source")
+	if err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	defer release()
 	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
@@ -168,6 +173,11 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 }
 
 func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot string) (api.WorkspaceSourceStatus, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace source")
+	if err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	defer release()
 	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
@@ -193,6 +203,11 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 }
 
 func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot, ref string) (api.WorkspaceSourceStatus, error) {
+	ctx, release, err := p.beginMutation(ctx, "workspace source")
+	if err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	defer release()
 	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err

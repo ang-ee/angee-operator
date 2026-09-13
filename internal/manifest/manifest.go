@@ -515,6 +515,9 @@ func validateStruct(stack *Stack) error {
 func hasCaddyMeta(s string) bool { return strings.ContainsAny(s, " \t\r\n{}#\"`") }
 
 func (s *Stack) ValidateExtended() error {
+	if err := s.validateDependencyGraph(); err != nil {
+		return err
+	}
 	for name, service := range s.Services {
 		if service.Route != nil && service.Runtime == RuntimeLocal {
 			return fmt.Errorf("service %q: route requires runtime: container", name)
@@ -595,6 +598,57 @@ func (s *Stack) ValidateExtended() error {
 		}
 	}
 	return nil
+}
+
+func (s *Stack) validateDependencyGraph() error {
+	deps := make(map[string][]string, len(s.Services)+len(s.Jobs))
+	for name, service := range s.Services {
+		if _, collision := s.Jobs[name]; collision {
+			return fmt.Errorf("name %q is declared as both a service and a job", name)
+		}
+		deps[name] = append(append([]string{}, service.After...), service.DependsOn...)
+	}
+	for name, job := range s.Jobs {
+		deps[name] = append([]string{}, job.DependsOn...)
+	}
+	for name, dependencies := range deps {
+		for _, dependency := range dependencies {
+			if _, ok := deps[dependency]; !ok {
+				return fmt.Errorf("%s %q depends on unknown node %q", nodeKind(s, name), name, dependency)
+			}
+		}
+	}
+	state := map[string]uint8{}
+	var visit func(string) error
+	visit = func(name string) error {
+		if state[name] == 1 {
+			return fmt.Errorf("dependency graph contains a cycle at %q", name)
+		}
+		if state[name] == 2 {
+			return nil
+		}
+		state[name] = 1
+		for _, dependency := range deps[name] {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		state[name] = 2
+		return nil
+	}
+	for name := range deps {
+		if err := visit(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nodeKind(s *Stack, name string) string {
+	if _, ok := s.Jobs[name]; ok {
+		return "job"
+	}
+	return "service"
 }
 
 func (s *Stack) validateReadiness() error {

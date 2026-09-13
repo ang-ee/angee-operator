@@ -9,14 +9,20 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 const processComposeInstallPackage = "github.com/f1bonacc1/process-compose@latest"
@@ -111,6 +117,362 @@ func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
 	return err
 }
 
+func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
+	name := job.Name
+	var document File
+	if err := yaml.Unmarshal(job.Configuration, &document); err != nil {
+		return nil, fmt.Errorf("decode process-compose job configuration: %w", err)
+	}
+	process, ok := document.Processes[name]
+	if !ok {
+		return nil, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", name)
+	}
+	target.Services = []string{name}
+	baseline, err := b.processGeneration(ctx, target, name)
+	if err != nil {
+		return nil, fmt.Errorf("read process generation: %w", err)
+	}
+	updates, err := processUpdates(process)
+	if err != nil {
+		return nil, err
+	}
+	changed, err := b.updateProcess(ctx, target, name, updates)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		if err := b.Restart(ctx, target); err != nil {
+			return nil, err
+		}
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			statuses, err := b.Status(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+			if err != nil {
+				continue
+			}
+			for _, status := range statuses {
+				state := strings.ToLower(strings.TrimSpace(status.State))
+				if status.Name != name || status.Generation == baseline || state == "running" || state == "pending" {
+					continue
+				}
+				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, MaxBytes: 1 << 20, ControlPort: target.ControlPort})
+				var captured strings.Builder
+				if logErr == nil {
+					for line := range logs {
+						captured.WriteString(line)
+						captured.WriteByte('\n')
+					}
+				}
+				out := []byte(captured.String())
+				if status.ExitCode == nil {
+					return out, fmt.Errorf("process-compose job %s completed without an exit code", name)
+				}
+				if *status.ExitCode != 0 {
+					return out, fmt.Errorf("process-compose job %s exited with status %d", name, *status.ExitCode)
+				}
+				if logErr != nil {
+					return out, logErr
+				}
+				return out, nil
+			}
+		}
+	}
+}
+
+func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
+	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/info/"+url.PathEscape(name), nil)
+	if err != nil {
+		return false, err
+	}
+	setProcessToken(req, target.EnvFile)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		message := strings.ToLower(string(body))
+		missing := resp.StatusCode == http.StatusNotFound || (resp.StatusCode == http.StatusBadRequest && (strings.Contains(message, "no such process") || strings.Contains(message, "not found")))
+		if missing {
+			return b.addMissingProcess(ctx, target, name, updates)
+		}
+		return false, fmt.Errorf("get process config: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var config map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+		return false, err
+	}
+	config["name"] = name
+	changed := false
+	for key, value := range updates {
+		normalized, err := jsonValue(value)
+		if err != nil {
+			return false, err
+		}
+		if !reflect.DeepEqual(config[key], normalized) {
+			changed = true
+			config[key] = normalized
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return false, err
+	}
+	post, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/process", bytes.NewReader(payload))
+	if err != nil {
+		return false, err
+	}
+	post.Header.Set("Content-Type", "application/json")
+	setProcessToken(post, target.EnvFile)
+	result, err := http.DefaultClient.Do(post)
+	if err != nil {
+		return false, err
+	}
+	defer result.Body.Close()
+	if result.StatusCode >= 300 {
+		return false, fmt.Errorf("update process config: %s", result.Status)
+	}
+	return true, nil
+}
+
+// addMissingProcess round-trips every current native process configuration
+// before adding the compiled job. POST /project replaces the project set, so a
+// partial payload would remove unrelated processes.
+func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
+	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
+	list, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/processes", nil)
+	if err != nil {
+		return false, err
+	}
+	setProcessToken(list, target.EnvFile)
+	response, err := http.DefaultClient.Do(list)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return false, fmt.Errorf("list process configs: %s", response.Status)
+	}
+	var states struct {
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&states); err != nil {
+		return false, err
+	}
+	processes := make(map[string]any, len(states.Data)+1)
+	for _, state := range states.Data {
+		info, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/info/"+url.PathEscape(state.Name), nil)
+		if err != nil {
+			return false, err
+		}
+		setProcessToken(info, target.EnvFile)
+		current, err := http.DefaultClient.Do(info)
+		if err != nil {
+			return false, err
+		}
+		if current.StatusCode >= 300 {
+			_ = current.Body.Close()
+			return false, fmt.Errorf("get process config %s: %s", state.Name, current.Status)
+		}
+		var config map[string]any
+		decodeErr := json.NewDecoder(current.Body).Decode(&config)
+		closeErr := current.Body.Close()
+		if decodeErr != nil {
+			return false, decodeErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		processes[state.Name] = config
+	}
+	compiled := map[string]any{"name": name}
+	for key, value := range updates {
+		normalized, err := jsonValue(value)
+		if err != nil {
+			return false, err
+		}
+		compiled[key] = normalized
+	}
+	processes[name] = compiled
+	payload, err := json.Marshal(map[string]any{"processes": processes})
+	if err != nil {
+		return false, err
+	}
+	post, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/project", bytes.NewReader(payload))
+	if err != nil {
+		return false, err
+	}
+	post.Header.Set("Content-Type", "application/json")
+	setProcessToken(post, target.EnvFile)
+	result, err := http.DefaultClient.Do(post)
+	if err != nil {
+		return false, err
+	}
+	defer result.Body.Close()
+	if result.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
+		return false, fmt.Errorf("add process config: %s: %s", result.Status, strings.TrimSpace(string(body)))
+	}
+	return true, nil
+}
+func setProcessToken(req *http.Request, envFile string) {
+	env, _ := runtime.ReadEnvFile(envFile)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PC_API_TOKEN=") {
+			req.Header.Set("X-PC-Token-Key", strings.TrimPrefix(entry, "PC_API_TOKEN="))
+			return
+		}
+	}
+	if token := os.Getenv("PC_API_TOKEN"); token != "" {
+		req.Header.Set("X-PC-Token-Key", token)
+	}
+}
+func shellWords(words []string) string {
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = "'" + strings.ReplaceAll(w, "'", "'\\''") + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
+func envList(environment map[string]string) []string {
+	keys := make([]string, 0, len(environment))
+	for key := range environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, key+"="+environment[key])
+	}
+	return result
+}
+
+func jsonValue(value any) (any, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(data, &normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
+	data := target.Configuration
+	if len(data) == 0 {
+		var err error
+		data, err = os.ReadFile(filepath.Join(target.Root, "process-compose.yaml"))
+		if err != nil {
+			return err
+		}
+	}
+	var document File
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return fmt.Errorf("read generated process-compose config: %w", err)
+	}
+	for _, name := range target.Services {
+		process, ok := document.Processes[name]
+		if !ok {
+			return fmt.Errorf("process %s is absent from the generated process-compose config", name)
+		}
+		updates, err := processUpdates(process)
+		if err != nil {
+			return err
+		}
+		changed, err := b.updateProcess(ctx, target, name, updates)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			named := target
+			named.Services = []string{name}
+			if err := b.Restart(ctx, named); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func processUpdates(process Process) (map[string]any, error) {
+	var dependsOn map[string]any
+	if len(process.DependsOn) > 0 {
+		dependsOn = map[string]any{}
+	}
+	for name, dependency := range process.DependsOn {
+		conditions := map[string]int{
+			"process_completed":              0,
+			"process_completed_successfully": 1,
+			"process_healthy":                2,
+			"process_started":                3,
+			"process_log_ready":              4,
+		}
+		condition, ok := conditions[dependency.Condition]
+		if !ok {
+			return nil, fmt.Errorf("process %s has unsupported dependency condition %q", name, dependency.Condition)
+		}
+		dependsOn[name] = map[string]any{"condition": condition}
+	}
+	updates := map[string]any{
+		"command":     process.Command,
+		"environment": process.Environment,
+		"workingDir":  process.WorkingDir,
+		"dependsOn":   dependsOn,
+	}
+	if process.ReadinessProbe == nil {
+		updates["readinessProbe"] = nil
+	} else {
+		probe := process.ReadinessProbe
+		readiness := map[string]any{
+			"initialDelay":     probe.InitialDelaySeconds,
+			"periodSeconds":    probe.PeriodSeconds,
+			"timeoutSeconds":   probe.TimeoutSeconds,
+			"successThreshold": 1,
+			"failureThreshold": probe.FailureThreshold,
+		}
+		if probe.Exec != nil {
+			readiness["exec"] = map[string]any{"command": probe.Exec.Command, "workingDir": probe.Exec.WorkingDir}
+		}
+		if probe.HTTPGet != nil {
+			readiness["httpGet"] = map[string]any{
+				"host": probe.HTTPGet.Host, "port": probe.HTTPGet.Port,
+				"path": probe.HTTPGet.Path, "scheme": probe.HTTPGet.Scheme,
+			}
+		}
+		updates["readinessProbe"] = readiness
+	}
+	return updates, nil
+}
+
+func (b Backend) processGeneration(ctx context.Context, target runtime.Target, name string) (string, error) {
+	statuses, err := b.Status(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+	if err != nil {
+		return "", err
+	}
+	for _, status := range statuses {
+		if status.Name == name {
+			return status.Generation, nil
+		}
+	}
+	return "", nil
+}
+
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
 	args := b.clientArgs(req.ControlPort)
 	args = append(args, "process", "logs")
@@ -188,11 +550,15 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 }
 
 type processListEntry struct {
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	IsRunning bool   `json:"is_running"`
-	ExitCode  int    `json:"exit_code"`
-	IsReady   string `json:"is_ready"`
+	Name             string     `json:"name"`
+	Status           string     `json:"status"`
+	IsRunning        bool       `json:"is_running"`
+	ExitCode         int        `json:"exit_code"`
+	IsReady          string     `json:"is_ready"`
+	PID              int        `json:"pid"`
+	Restarts         int        `json:"restarts"`
+	ProcessStartTime *time.Time `json:"process_start_time"`
+	ProcessEndTime   *time.Time `json:"process_end_time"`
 }
 
 func parseList(data []byte) ([]runtime.ServiceStatus, error) {
@@ -206,10 +572,13 @@ func parseList(data []byte) ([]runtime.ServiceStatus, error) {
 			continue
 		}
 		statuses = append(statuses, runtime.ServiceStatus{
-			Name:    entry.Name,
-			Runtime: "local",
-			State:   strings.ToLower(strings.TrimSpace(entry.Status)),
-			Health:  procHealth(entry),
+			Name:       entry.Name,
+			Runtime:    "local",
+			State:      strings.ToLower(strings.TrimSpace(entry.Status)),
+			Health:     procHealth(entry),
+			ExitCode:   &entry.ExitCode,
+			PID:        entry.PID,
+			Generation: fmt.Sprintf("%d:%v:%v", entry.Restarts, entry.ProcessStartTime, entry.ProcessEndTime),
 		})
 	}
 	return statuses, nil

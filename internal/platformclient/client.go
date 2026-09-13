@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -359,8 +360,53 @@ func (p *RemoteClient) JobList(ctx context.Context, q query.Args) ([]api.JobStat
 	return resp.Nodes, resp.TotalCount, nil
 }
 
+func (p *RemoteClient) JobRunStart(ctx context.Context, name string, inputs map[string]string, chainedRestart bool) (api.JobRunOperation, error) {
+	var op api.JobRunOperation
+	err := p.doJSON(ctx, http.MethodPost, "/jobs/"+url.PathEscape(name)+"/run", nil, api.JobRunRequest{Inputs: inputs, ChainedRestart: chainedRestart}, &op)
+	return op, err
+}
+
+// JobRun preserves the completed-output client contract for callers that do
+// not need an operation receipt.
 func (p *RemoteClient) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {
-	return p.doBytes(ctx, http.MethodPost, "/jobs/"+url.PathEscape(name)+"/run", nil, api.JobRunRequest{Inputs: inputs})
+	op, err := p.JobRunStart(ctx, name, inputs, false)
+	if err != nil {
+		return nil, err
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for op.Status == api.JobRunPending || op.Status == api.JobRunRunning {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			op, err = p.JobRunGet(ctx, op.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if op.Status == api.JobRunFailed {
+		return []byte(op.Output), errors.New(op.Error)
+	}
+	return []byte(op.Output), nil
+}
+func (p *RemoteClient) JobRunGet(ctx context.Context, id string) (api.JobRunOperation, error) {
+	var op api.JobRunOperation
+	err := p.doJSON(ctx, http.MethodGet, "/job-runs/"+url.PathEscape(id), nil, nil, &op)
+	return op, err
+}
+func (p *RemoteClient) LatestJobRun(ctx context.Context) (*api.JobRunOperation, error) {
+	var op *api.JobRunOperation
+	err := p.doJSON(ctx, http.MethodGet, "/job-runs/latest", nil, nil, &op)
+	return op, err
+}
+func (p *RemoteClient) JobRunPreview(ctx context.Context, name string, chained bool) (api.JobRunPreview, error) {
+	var v api.JobRunPreview
+	q := url.Values{}
+	q.Set("chained_restart", strconv.FormatBool(chained))
+	err := p.doJSON(ctx, http.MethodGet, "/jobs/"+url.PathEscape(name)+"/run-preview", q, nil, &v)
+	return v, err
 }
 
 func (p *RemoteClient) SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error) {

@@ -50,6 +50,11 @@ type StackUpdateTemplateResult struct {
 // `workspaces`, `port_leases`) and keeps allocated `ports` values, while
 // refreshing template-origin sections and keeping user-added keys.
 func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdateTemplateOptions) (StackUpdateTemplateResult, error) {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		return StackUpdateTemplateResult{}, err
 	}

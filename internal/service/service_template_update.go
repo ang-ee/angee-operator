@@ -18,6 +18,11 @@ import (
 )
 
 func (p *Platform) ServiceUpdateFromTemplate(ctx context.Context, name string, req api.ServiceUpdateTemplateRequest) (api.ServiceTemplateUpdateResult, error) {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return api.ServiceTemplateUpdateResult{}, err
+	}
+	defer release()
 	if name == "" {
 		return api.ServiceTemplateUpdateResult{}, &InvalidInputError{Field: "name", Reason: "service name is required"}
 	}

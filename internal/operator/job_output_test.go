@@ -1,330 +1,98 @@
 package operator
 
 import (
-	"bufio"
 	"context"
-	"errors"
-	"io"
-	"os"
-	"path/filepath"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
-type jobRunResult struct {
-	output []byte
-	err    error
+type jobRunAPI struct {
+	service.API
+	name             string
+	inputs           map[string]string
+	chainedRestart   bool
+	startedOperation api.JobRunOperation
+	storedOperation  api.JobRunOperation
 }
 
-func TestOperatorJobRunStreamsLocalOutputWhileRunning(t *testing.T) {
-	root := t.TempDir()
-	release := filepath.Join(root, "release")
-	writeJobOutputTestStack(t, root, "codegen", manifest.Job{
-		Runtime: manifest.RuntimeLocal,
-		Command: []string{
-			"sh",
-			"-c",
-			`printf 'first\n'; while [ ! -f "$RELEASE" ]; do sleep 0.01; done; printf 'second\n'`,
-		},
-		Env: map[string]string{"RELEASE": release},
-	})
+func (f *jobRunAPI) JobRunStart(_ context.Context, name string, inputs map[string]string, chainedRestart bool) (api.JobRunOperation, error) {
+	f.name = name
+	f.inputs = inputs
+	f.chainedRestart = chainedRestart
+	return f.startedOperation, nil
+}
 
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
+func (f *jobRunAPI) JobRunGet(_ context.Context, id string) (api.JobRunOperation, error) {
+	if id != f.storedOperation.ID {
+		return api.JobRunOperation{}, &service.NotFoundError{Kind: "job run", Name: id}
 	}
-	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000, jobOutput: writer})
-	if err != nil {
-		_ = reader.Close()
-		_ = writer.Close()
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	t.Cleanup(server.Close)
-	t.Cleanup(func() {
-		_ = os.WriteFile(release, []byte("release\n"), 0o600)
-		_ = writer.Close()
-		_ = reader.Close()
-	})
+	return f.storedOperation, nil
+}
 
-	lines, scanErr := scanJobOutput(reader)
-	result := make(chan jobRunResult, 1)
-	go func() {
-		output, runErr := server.platform.JobRun(context.Background(), "codegen", nil)
-		result <- jobRunResult{output: output, err: runErr}
-	}()
+func TestOperatorJobRunReturnsAcceptedReceiptAndForwardsPlan(t *testing.T) {
+	startedAt := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	fake := &jobRunAPI{startedOperation: api.JobRunOperation{
+		ID:             "run-1",
+		RootJob:        "codegen",
+		ChainedRestart: true,
+		Status:         api.JobRunPending,
+		StartedAt:      startedAt,
+		Nodes:          []api.JobRunNode{{Name: "codegen", Kind: "job", Status: api.JobRunPending}},
+	}}
+	server := &Server{platform: fake}
+	req := httptest.NewRequest(http.MethodPost, "/jobs/codegen/run", strings.NewReader(`{"inputs":{"target":"web"},"chained_restart":true}`))
+	req.SetPathValue("name", "codegen")
+	res := httptest.NewRecorder()
 
-	seen := waitForJobOutputLine(t, lines, "first")
-	select {
-	case got := <-result:
-		t.Fatalf("JobRun() completed before release: output = %q, error = %v", got.output, got.err)
-	default:
-	}
-	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(release) error = %v", err)
-	}
+	server.jobRun(res, req)
 
-	var got jobRunResult
-	select {
-	case got = <-result:
-	case <-time.After(5 * time.Second):
-		t.Fatal("JobRun() did not complete after release")
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusAccepted, res.Body.String())
 	}
-	if got.err != nil {
-		t.Fatalf("JobRun() error = %v", got.err)
+	if fake.name != "codegen" || !fake.chainedRestart || !reflect.DeepEqual(fake.inputs, map[string]string{"target": "web"}) {
+		t.Fatalf("forwarded request = name %q inputs %v chained %v", fake.name, fake.inputs, fake.chainedRestart)
 	}
-	if string(got.output) != "first\nsecond\n" {
-		t.Fatalf("JobRun() output = %q, want %q", got.output, "first\nsecond\n")
+	var got api.JobRunOperation
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
 	}
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("Close(job output writer) error = %v", err)
-	}
-	for line := range lines {
-		seen = append(seen, line)
-	}
-	if err := <-scanErr; err != nil {
-		t.Fatalf("scan job output error = %v", err)
-	}
-	terminal := strings.Join(seen, "\n")
-	for _, want := range []string{
-		"[job codegen] running",
-		"first",
-		"second",
-		"[job codegen] finished",
-	} {
-		if !strings.Contains(terminal, want) {
-			t.Fatalf("terminal output = %q, want %q", terminal, want)
-		}
-	}
-	if strings.Count(terminal, "first") != 1 || strings.Count(terminal, "second") != 1 {
-		t.Fatalf("terminal output duplicated command output: %q", terminal)
+	if !reflect.DeepEqual(got, fake.startedOperation) {
+		t.Fatalf("response = %#v, want %#v", got, fake.startedOperation)
 	}
 }
 
-func TestOperatorJobRunStreamsPartialOutputOnFailure(t *testing.T) {
-	root := t.TempDir()
-	writeJobOutputTestStack(t, root, "broken", manifest.Job{
-		Runtime: manifest.RuntimeLocal,
-		Command: []string{"sh", "-c", `printf 'partial\n'; exit 7`},
-	})
+func TestOperatorJobRunGetReturnsStoredOperation(t *testing.T) {
+	startedAt := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	fake := &jobRunAPI{storedOperation: api.JobRunOperation{
+		ID:        "run-1",
+		RootJob:   "codegen",
+		Status:    api.JobRunSucceeded,
+		StartedAt: startedAt,
+		Nodes:     []api.JobRunNode{{Name: "codegen", Kind: "job", Status: api.JobRunSucceeded}},
+	}}
+	server := &Server{platform: fake}
+	req := httptest.NewRequest(http.MethodGet, "/job-runs/run-1", nil)
+	req.SetPathValue("id", "run-1")
+	res := httptest.NewRecorder()
 
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000, jobOutput: writer})
-	if err != nil {
-		_ = reader.Close()
-		_ = writer.Close()
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	t.Cleanup(server.Close)
-	t.Cleanup(func() {
-		_ = writer.Close()
-		_ = reader.Close()
-	})
+	server.jobRunGet(res, req)
 
-	output, runErr := server.platform.JobRun(context.Background(), "broken", nil)
-	if runErr == nil {
-		t.Fatal("JobRun() error = nil, want failed command error")
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusOK, res.Body.String())
 	}
-	if string(output) != "partial\n" {
-		t.Fatalf("JobRun() output = %q, want %q", output, "partial\n")
+	var got api.JobRunOperation
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("Close(job output writer) error = %v", err)
-	}
-	terminalOutput, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("ReadAll(job output) error = %v", err)
-	}
-	terminal := string(terminalOutput)
-	for _, want := range []string{
-		"[job broken] running\n",
-		"partial\n",
-		"[job broken] failed\n",
-	} {
-		if !strings.Contains(terminal, want) {
-			t.Fatalf("terminal output = %q, want %q", terminal, want)
-		}
-	}
-	if strings.Contains(terminal, "[job broken] finished") {
-		t.Fatalf("terminal output = %q, failed job must not be marked finished", terminal)
-	}
-}
-
-func TestOperatorJobRunStreamsContainerOutput(t *testing.T) {
-	root := t.TempDir()
-	release := filepath.Join(root, "container-release")
-	writeJobOutputTestStack(t, root, "codegen-container", manifest.Job{
-		Runtime: manifest.RuntimeContainer,
-		Image:   "example/codegen:test",
-		Command: []string{"generate"},
-	})
-
-	binDir := t.TempDir()
-	dockerPath := filepath.Join(binDir, "docker")
-	fakeDocker := `#!/bin/sh
-printf 'container-stderr\n' >&2
-while [ ! -f "$FAKE_DOCKER_RELEASE" ]; do sleep 0.01; done
-printf 'container-stdout\n'
-`
-	if err := os.WriteFile(dockerPath, []byte(fakeDocker), 0o755); err != nil {
-		t.Fatalf("WriteFile(fake docker) error = %v", err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE_DOCKER_RELEASE", release)
-
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000, jobOutput: writer})
-	if err != nil {
-		_ = reader.Close()
-		_ = writer.Close()
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	t.Cleanup(server.Close)
-	t.Cleanup(func() {
-		_ = os.WriteFile(release, []byte("release\n"), 0o600)
-		_ = writer.Close()
-		_ = reader.Close()
-	})
-
-	lines, scanErr := scanJobOutput(reader)
-	result := make(chan jobRunResult, 1)
-	go func() {
-		output, runErr := server.platform.JobRun(context.Background(), "codegen-container", nil)
-		result <- jobRunResult{output: output, err: runErr}
-	}()
-
-	seen := waitForJobOutputLine(t, lines, "container-stderr")
-	select {
-	case got := <-result:
-		t.Fatalf("JobRun() completed before release: output = %q, error = %v", got.output, got.err)
-	default:
-	}
-	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(release) error = %v", err)
-	}
-
-	var got jobRunResult
-	select {
-	case got = <-result:
-	case <-time.After(5 * time.Second):
-		t.Fatal("JobRun() did not complete after release")
-	}
-	if got.err != nil {
-		t.Fatalf("JobRun() error = %v", got.err)
-	}
-	if string(got.output) != "container-stderr\ncontainer-stdout\n" {
-		t.Fatalf("JobRun() output = %q, want %q", got.output, "container-stderr\ncontainer-stdout\n")
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("Close(job output writer) error = %v", err)
-	}
-	for line := range lines {
-		seen = append(seen, line)
-	}
-	if err := <-scanErr; err != nil {
-		t.Fatalf("scan job output error = %v", err)
-	}
-	terminal := strings.Join(seen, "\n")
-	for _, want := range []string{
-		"[job codegen-container] running",
-		"container-stderr",
-		"container-stdout",
-		"[job codegen-container] finished",
-	} {
-		if !strings.Contains(terminal, want) {
-			t.Fatalf("terminal output = %q, want %q", terminal, want)
-		}
-	}
-	if strings.Count(terminal, "container-stderr") != 1 || strings.Count(terminal, "container-stdout") != 1 {
-		t.Fatalf("terminal output duplicated command output: %q", terminal)
-	}
-}
-
-func TestOperatorJobRunIgnoresTerminalWriterErrors(t *testing.T) {
-	root := t.TempDir()
-	writeJobOutputTestStack(t, root, "codegen", manifest.Job{
-		Runtime: manifest.RuntimeLocal,
-		Command: []string{"sh", "-c", `printf 'generated\n'`},
-	})
-	server, err := NewServer(Config{
-		Root:      root,
-		Bind:      "127.0.0.1",
-		Port:      9000,
-		jobOutput: failingJobOutputWriter{},
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	t.Cleanup(server.Close)
-
-	output, runErr := server.platform.JobRun(context.Background(), "codegen", nil)
-	if runErr != nil {
-		t.Fatalf("JobRun() error = %v, terminal writer errors must be best effort", runErr)
-	}
-	if string(output) != "generated\n" {
-		t.Fatalf("JobRun() output = %q, want %q", output, "generated\n")
-	}
-}
-
-type failingJobOutputWriter struct{}
-
-func (failingJobOutputWriter) Write([]byte) (int, error) {
-	return 0, errors.New("terminal unavailable")
-}
-
-func writeJobOutputTestStack(t *testing.T, root, name string, job manifest.Job) {
-	t.Helper()
-	stack := &manifest.Stack{
-		Version: manifest.VersionCurrent,
-		Kind:    manifest.KindStack,
-		Name:    "job-output-test",
-		Jobs:    map[string]manifest.Job{name: job},
-	}
-	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
-		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
-	}
-}
-
-func scanJobOutput(reader *os.File) (<-chan string, <-chan error) {
-	lines := make(chan string, 16)
-	errs := make(chan error, 1)
-	go func() {
-		defer close(lines)
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		errs <- scanner.Err()
-	}()
-	return lines, errs
-}
-
-func waitForJobOutputLine(t *testing.T, lines <-chan string, want string) []string {
-	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	var seen []string
-	for {
-		select {
-		case line, ok := <-lines:
-			if !ok {
-				t.Fatalf("job output closed before %q; saw %q", want, seen)
-			}
-			seen = append(seen, line)
-			if strings.Contains(line, want) {
-				return seen
-			}
-		case <-timer.C:
-			t.Fatalf("timed out waiting for job output %q; saw %q", want, seen)
-		}
+	if !reflect.DeepEqual(got, fake.storedOperation) {
+		t.Fatalf("response = %#v, want %#v", got, fake.storedOperation)
 	}
 }
