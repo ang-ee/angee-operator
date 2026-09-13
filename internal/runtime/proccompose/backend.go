@@ -164,9 +164,8 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, MaxBytes: 1 << 20, ControlPort: target.ControlPort})
 				var captured strings.Builder
 				if logErr == nil {
-					for line := range logs {
-						captured.WriteString(line)
-						captured.WriteByte('\n')
+					for chunk := range logs {
+						captured.WriteString(chunk)
 					}
 				}
 				out := []byte(captured.String())
@@ -658,19 +657,20 @@ func (b Backend) runLimited(ctx context.Context, root string, envFile string, ma
 	if err != nil {
 		return nil, err
 	}
-	buf := &limitedBuffer{remaining: maxBytes}
+	stdout := &limitedBuffer{remaining: maxBytes}
+	stderr := &limitedBuffer{remaining: 4096}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = root
 	cmd.Env = runtime.ChildEnviron(env)
-	cmd.Stdout = buf
-	cmd.Stderr = buf
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	trace := logctx.TraceExec(ctx, name, args, root, slog.Any("env", logctx.EnvKeys(env)))
 	runErr := cmd.Run()
-	trace(buf.Bytes(), runErr)
+	trace(stdout.Bytes(), runErr)
 	if runErr != nil {
-		return buf.Bytes(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), runErr, strings.TrimSpace(string(buf.Bytes())))
+		return stdout.Bytes(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), runErr, strings.TrimSpace(string(stderr.Bytes())))
 	}
-	return buf.Bytes(), nil
+	return stdout.Bytes(), nil
 }
 
 func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, args ...string) error {

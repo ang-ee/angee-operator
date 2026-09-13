@@ -63,6 +63,9 @@ angee up           # start container Services
 angee dev          # start container + local Services together
 ```
 
+Ctrl-C stops the local processes and foreground log stream while container
+services remain running. Use `angee down` to stop the whole stack.
+
 To bootstrap a fresh stack from a Stack template:
 
 ```sh

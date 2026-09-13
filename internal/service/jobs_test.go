@@ -89,7 +89,7 @@ func TestExecuteJobRunOrdersChainedJoinOnce(t *testing.T) {
 	backend := &recordingJobBackend{stubStatusBackend: stubStatusBackend{statuses: []runtime.ServiceStatus{{Name: "join", State: "running", ExitCode: &zero}}}}
 	p, id := newJobOperationPlatform(t, stack, backend, "root", true)
 
-	p.executeJobRun(context.Background(), id, nil, func() {})
+	p.executeJobRun(context.Background(), id, func() {})
 
 	op, err := p.JobRunGet(context.Background(), id)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestExecuteJobRunBlocksAllDescendantsAfterRootFailure(t *testing.T) {
 	backend := &recordingJobBackend{failJobs: map[string]error{"root": errors.New("root failed")}}
 	p, id := newJobOperationPlatform(t, stack, backend, "root", true)
 
-	p.executeJobRun(context.Background(), id, nil, func() {})
+	p.executeJobRun(context.Background(), id, func() {})
 
 	op, err := p.JobRunGet(context.Background(), id)
 	if err != nil {

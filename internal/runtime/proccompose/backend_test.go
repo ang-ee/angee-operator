@@ -161,9 +161,9 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 		t.Fatalf("args = %v, want %v", runner.args, wantArgs)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "build-watch", Runtime: "local", State: "running"},
-		{Name: "web", Runtime: "local", State: "running", Health: "healthy"},
-		{Name: "migrate", Runtime: "local", State: "completed"},
+		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -187,12 +187,43 @@ func TestBackendStatusParsesProcessListWithANSIBanner(t *testing.T) {
 		t.Fatalf("Status() error = %v", err)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "storybook", Runtime: "local", State: "running"},
+		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
 	}
 }
+
+func TestBackendStatusIncludesNativeGeneration(t *testing.T) {
+	const payload = `[
+	{"name":"migrate","status":"Completed","exit_code":0,"restarts":2,"process_start_time":"2026-09-13T10:00:00Z","process_end_time":"2026-09-13T10:00:01Z"}
+]`
+	backend := Backend{Runner: &stubListRunner{output: []byte(payload)}}
+	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: "/stack", ControlPort: 8080})
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if len(got) != 1 || got[0].ExitCode == nil || *got[0].ExitCode != 0 {
+		t.Fatalf("statuses = %#v, want completed zero-exit process", got)
+	}
+	wantGeneration := "2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
+	if got[0].Generation != wantGeneration {
+		t.Fatalf("generation = %q, want %q", got[0].Generation, wantGeneration)
+	}
+}
+
+func TestRunLimitedReturnsOnlyProcessLogStdout(t *testing.T) {
+	backend := Backend{LookupPath: func(string) (string, error) { return "/bin/sh", nil }}
+	out, err := backend.runLimited(context.Background(), t.TempDir(), "", 1024, "-c", "printf 'job-output\\n'; printf 'update-notice\\n' >&2")
+	if err != nil {
+		t.Fatalf("runLimited() error = %v", err)
+	}
+	if got, want := string(out), "job-output\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func intPointer(value int) *int { return &value }
 
 func TestBackendStatusPropagatesErrors(t *testing.T) {
 	wantErr := errors.New("supervisor offline")

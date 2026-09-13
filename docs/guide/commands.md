@@ -57,7 +57,7 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 angee doctor
 angee init [path] [--template <ref>] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
 angee stack init <template> [path] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
-angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...]] [--dry-run] [--overwrite]
+angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...] [--skip <path-or-pattern> ...]] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
@@ -173,6 +173,11 @@ automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
 prints all changes without writing. Bare `stack update` remains derived-files
 only; template reconciliation needs the stack's recorded Copier answers file.
+Repeatable `--skip <path-or-pattern>` keeps matching existing ordinary files
+untouched, including files removed from the newer template. A matching file
+that does not exist is still added. Skip patterns cannot match stack documents,
+Copier answers, or reconciliation state, and any unskipped conflict still stops
+the update.
 
 ### Interactive template updates
 
@@ -226,8 +231,9 @@ angee logs [service...] [--follow]
 ```
 
 `angee up` starts container services only. `angee dev` starts container services
-and local-process services. Runtime actions are routed by each service's
-`runtime` value.
+and local-process services. Ctrl-C stops the local processes and log stream while
+containers remain running; `angee down` performs a full shutdown. Runtime actions
+are routed by each service's `runtime` value.
 
 ## Services
 

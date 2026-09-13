@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	copier "github.com/fyltr/copier-go"
 )
 
 const (
@@ -109,6 +111,9 @@ type ReconcileOptions struct {
 	Mode      ReconcileMode
 	DryRun    bool
 	Overwrite bool
+	// Skip leaves matching existing ordinary files untouched. Missing matches
+	// are still rendered, matching copier-go's native --skip semantics.
+	Skip []string
 }
 
 type PreparedReconcile struct {
@@ -404,6 +409,21 @@ func PrepareReconcile(ctx context.Context, plan RenderPlan, opts ReconcileOption
 	if err != nil {
 		return nil, fmt.Errorf("validate render state path: %w", err)
 	}
+	skipMatcher := copier.NewPatternMatcher(opts.Skip)
+	managedPaths := make([]string, 0, len(metadata)+len(documents)+1)
+	managedPaths = append(managedPaths, mapKeys(metadata)...)
+	managedPaths = append(managedPaths, mapKeys(documents)...)
+	if stateInsideTarget {
+		managedPaths = append(managedPaths, stateTargetPath)
+	}
+	for _, pattern := range opts.Skip {
+		matcher := copier.NewPatternMatcher([]string{pattern})
+		for _, managed := range managedPaths {
+			if matcher.Matches(managed) {
+				return nil, fmt.Errorf("skip pattern %q matches managed reconciliation path %q", pattern, managed)
+			}
+		}
+	}
 	var renderedPaths []string
 	err = filepath.WalkDir(scratch, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -480,6 +500,9 @@ func PrepareReconcile(ctx context.Context, plan RenderPlan, opts ReconcileOption
 			return nil, fmt.Errorf("fingerprint current %q: %w", rel, err)
 		}
 		prepared.expectedLive[rel] = livePathExpectation{fingerprint: current, exists: currentExists}
+		if currentExists && skipMatcher.Matches(rel) {
+			continue
+		}
 		old, oldExists := oldState.Files[rel]
 		newFingerprint, newExists := prepared.newState.Files[rel]
 		overwrite := opts.Overwrite || opts.Mode == ReconcileCreate

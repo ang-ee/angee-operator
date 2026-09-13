@@ -206,14 +206,20 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 			return err
 		}
 	}
+	// Container services are deliberately detached from the dev command's
+	// lifetime. Ctrl-C ends log following and the local process supervisor;
+	// explicit `angee down` remains the owner of container shutdown.
+	if hasContainers {
+		if err := p.composeBackend.Up(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+			return err
+		}
+	}
 
 	// stdout/stderr may be a single shared writer (the operator streams both
-	// through one HTTP response). os/exec hands a child the terminal directly
-	// only when the sink is an *os.File; for anything else it runs a copier
-	// goroutine, so the two backends would race on the shared writer. Guard
-	// non-file sinks with a mutex, but pass *os.File sinks through untouched so
-	// the children keep the real TTY — and with it docker compose's and
-	// process-compose's per-service colouring.
+	// through one HTTP response). The container log follower and local process
+	// supervisor can write concurrently, so guard non-file sinks with a mutex.
+	// Pass *os.File sinks through untouched so the local supervisor keeps its
+	// real TTY and per-service colouring.
 	so, se := stdout, stderr
 	if stdout == stderr {
 		if w := guardDevSink(stdout); w != stdout {
@@ -224,20 +230,26 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		se = guardDevSink(stderr)
 	}
 
-	// Run both runtimes attached in the foreground so logs from every service
-	// stream together — docker compose keeps its native per-service coloured
-	// prefix, process-compose streams its own aggregated output. Each call
-	// blocks until interrupted, so they run concurrently. The derived cancel
-	// makes the first backend to exit — cleanly or not — tear the other down:
-	// errgroup's own context only cancels on a non-nil error, and an attached
-	// compose run returns nil on graceful shutdown, so we can't rely on it.
+	// Follow detached container logs alongside the attached local supervisor.
+	// Each call blocks until interrupted, so they run concurrently. The derived
+	// cancel makes the first stream to exit, cleanly or otherwise, stop the
+	// other; errgroup's own context cancels only on a non-nil error.
 	groupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	g, gctx := errgroup.WithContext(groupCtx)
 	if hasContainers {
 		g.Go(func() error {
 			defer cancel()
-			return p.composeBackend.UpForeground(gctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Attached: true}, so, se)
+			lines, err := p.composeBackend.StreamLogs(gctx, runtime.LogsRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Follow: true})
+			if err != nil {
+				return err
+			}
+			for line := range lines {
+				if _, err := io.WriteString(so, line); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 	if hasLocal {

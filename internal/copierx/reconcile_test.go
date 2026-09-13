@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -142,6 +143,29 @@ func TestPrepareReconcileRejectsEscapingAnswersFileBeforeRender(t *testing.T) {
 	}, ReconcileOptions{Mode: ReconcileUpdate})
 	if err == nil {
 		t.Fatal("PrepareReconcile succeeded with an escaping answers file")
+	}
+}
+
+func TestPrepareReconcileRejectsSkipOfManagedMetadata(t *testing.T) {
+	root := t.TempDir()
+	template := writeReconcileTemplate(t, root, "from template\n")
+	target := filepath.Join(root, "target")
+	statePath := filepath.Join(target, ".angee-render-state.json")
+	plan := RenderPlan{
+		Target: target, TargetRoot: root, StateRoot: target, StatePath: statePath,
+		Documents: []string{"managed.txt"},
+		Layers:    []RenderLayer{{Name: "test", Template: template, Inputs: Inputs{}}},
+	}
+	for _, pattern := range []string{"managed.txt", ".copier-answers.yml", ".angee-render-state.json"} {
+		t.Run(pattern, func(t *testing.T) {
+			prepared, err := PrepareReconcile(context.Background(), plan, ReconcileOptions{Mode: ReconcileUpdate, Skip: []string{pattern}})
+			if prepared != nil {
+				_ = prepared.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), "managed reconciliation path") {
+				t.Fatalf("PrepareReconcile skip %q error = %v", pattern, err)
+			}
+		})
 	}
 }
 
