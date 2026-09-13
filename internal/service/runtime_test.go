@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -64,6 +65,73 @@ type devLifecycleBackend struct {
 	down       atomic.Int32
 	logs       atomic.Int32
 	started    chan struct{}
+}
+
+type applyRecordingBackend struct {
+	stubStatusBackend
+	applied []runtime.Target
+}
+
+func (b *applyRecordingBackend) Apply(_ context.Context, target runtime.Target) error {
+	b.applied = append(b.applied, target)
+	return nil
+}
+
+func TestServiceRestartAppliesPreparedRuntimeConfiguration(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version:        manifest.VersionCurrent,
+		Kind:           manifest.KindStack,
+		Name:           "restart-config",
+		SecretsBackend: manifest.SecretsBackend{Type: "env-file", Path: ".env"},
+		Secrets: map[string]manifest.Secret{
+			"restart": {Required: true, Import: "env:RESTART_VALUE"},
+		},
+		Services: map[string]manifest.Service{
+			"database": {Runtime: manifest.RuntimeContainer, Image: "postgres:16"},
+			"web":      {Runtime: manifest.RuntimeLocal, Command: []string{"serve"}, Env: map[string]string{"RESTART_JOB": "deps", "RESTART_VALUE": "${secret.restart}"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	t.Setenv("RESTART_VALUE", "resolved-value")
+	containers := &applyRecordingBackend{}
+	local := &applyRecordingBackend{}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	if err := platform.ServiceRestart(context.Background(), []string{"database", "web"}); err != nil {
+		t.Fatalf("ServiceRestart: %v", err)
+	}
+	for name, backend := range map[string]*applyRecordingBackend{"container": containers, "local": local} {
+		if len(backend.applied) != 1 {
+			t.Fatalf("%s Apply calls = %d, want 1", name, len(backend.applied))
+		}
+		if len(backend.applied[0].Configuration) == 0 {
+			t.Fatalf("%s Apply received empty prepared configuration", name)
+		}
+	}
+	if got := containers.applied[0].Services; len(got) != 1 || got[0] != "database" {
+		t.Fatalf("container services = %v, want [database]", got)
+	}
+	if got := local.applied[0].Services; len(got) != 1 || got[0] != "web" {
+		t.Fatalf("local services = %v, want [web]", got)
+	}
+	if !bytes.Contains(local.applied[0].Configuration, []byte("RESTART_JOB=deps")) {
+		t.Fatalf("local configuration does not contain updated environment:\n%s", local.applied[0].Configuration)
+	}
+	if !bytes.Contains(local.applied[0].Configuration, []byte("RESTART_VALUE=resolved-value")) || bytes.Contains(local.applied[0].Configuration, []byte("${ANGEE_SECRET_RESTART}")) {
+		t.Fatalf("local Apply configuration does not contain only the resolved secret:\n%s", local.applied[0].Configuration)
+	}
+	disk, err := os.ReadFile(filepath.Join(root, "process-compose.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(process-compose.yaml): %v", err)
+	}
+	if !bytes.Contains(disk, []byte("${ANGEE_SECRET_RESTART}")) || bytes.Contains(disk, []byte("resolved-value")) {
+		t.Fatalf("disk process configuration did not retain only the secret placeholder:\n%s", disk)
+	}
 }
 
 func (b *devLifecycleBackend) Up(context.Context, runtime.Target) error {

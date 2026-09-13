@@ -148,14 +148,14 @@ func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
 		return nil, err
 	}
 	defer release()
-	return p.stackPrepare(ctx, nil, true, "", false)
+	return p.stackPrepare(ctx, nil, true, "", false, false)
 }
 
 // stackPrepare materializes stack-owned resources and compiles one complete
 // runtime snapshot. A job run with inputs keeps that snapshot in memory: only
 // the stable runtime environment is written, so request values never become
 // generated runtime state.
-func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[string]string, writeRuntime bool, operationRoot string, chained bool) (*CompiledStack, error) {
+func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[string]string, writeRuntime bool, operationRoot string, chained, transient bool) (*CompiledStack, error) {
 	lock := fslock.RootLock(p.root)
 	var compiled *CompiledStack
 	err := lock.With(ctx, func() error {
@@ -202,6 +202,9 @@ func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[st
 		writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
 		if writeErr == nil && writeRuntime {
 			writeErr = p.writeCompiled(compiled)
+		}
+		if writeErr == nil && transient && operationRoot == "" {
+			compiled, writeErr = compile(compileStack, p.root, resolvedSecrets, nil, true)
 		}
 		finishWriting(writeErr)
 		return writeErr

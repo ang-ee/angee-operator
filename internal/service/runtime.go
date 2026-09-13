@@ -446,7 +446,12 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 			return err
 		}
 	}
-	if _, err := p.StackPrepare(ctx); err != nil {
+	compiled, err := p.stackPrepare(ctx, nil, true, "", false, action == "restart")
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
+	if err != nil {
 		return err
 	}
 	container, local, err := splitRuntimeServices(stack, names)
@@ -490,17 +495,30 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 		return nil
 	case "restart":
 		if len(container) > 0 {
-			if err := p.composeBackend.Restart(ctx, containerTarget); err != nil {
+			if err := p.applyRuntimeConfiguration(ctx, compiled, manifest.RuntimeContainer, p.composeBackend, containerTarget); err != nil {
 				return err
 			}
 		}
 		if len(local) > 0 {
-			return p.procBackend.Restart(ctx, localTarget)
+			return p.applyRuntimeConfiguration(ctx, compiled, manifest.RuntimeLocal, p.procBackend, localTarget)
 		}
 		return nil
 	default:
 		return fmt.Errorf("unknown service runtime action %q", action)
 	}
+}
+
+func (p *Platform) applyRuntimeConfiguration(ctx context.Context, compiled *CompiledStack, kind manifest.Runtime, backend runtime.Backend, target runtime.Target) error {
+	configuration, err := p.compiledRuntimeConfiguration(compiled, kind)
+	if err != nil {
+		return err
+	}
+	target.Configuration = configuration
+	applier, ok := backend.(runtime.ApplyBackend)
+	if !ok {
+		return fmt.Errorf("%s runtime cannot apply the prepared configuration", kind)
+	}
+	return applier.Apply(ctx, target)
 }
 
 func processComposeControlPort(stack *manifest.Stack) int {

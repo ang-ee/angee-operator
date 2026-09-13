@@ -52,7 +52,7 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 	if len(inputs) != 0 {
 		jobInputs = map[string]map[string]string{name: inputs}
 	}
-	compiled, err := p.stackPrepare(ctx, jobInputs, false, name, chainedRestart)
+	compiled, err := p.stackPrepare(ctx, jobInputs, false, name, chainedRestart, true)
 	if err != nil {
 		release()
 		return api.JobRunOperation{}, err
@@ -473,16 +473,7 @@ func (p *Platform) applyService(ctx context.Context, stack *manifest.Stack, comp
 	if s.Runtime == manifest.RuntimeLocal {
 		backend = p.procBackend
 	}
-	configuration, err := p.compiledRuntimeConfiguration(compiled, s.Runtime)
-	if err != nil {
-		return err
-	}
-	target.Configuration = configuration
-	applier, ok := backend.(runtime.ApplyBackend)
-	if !ok {
-		return fmt.Errorf("service %s cannot be applied by the configured %s backend", name, s.Runtime)
-	}
-	if err := applier.Apply(ctx, target); err != nil {
+	if err := p.applyRuntimeConfiguration(ctx, compiled, s.Runtime, backend, target); err != nil {
 		return fmt.Errorf("apply service %s: %w", name, err)
 	}
 	return p.waitServiceReady(ctx, stack, compiled, name)
