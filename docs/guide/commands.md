@@ -43,6 +43,7 @@ sharing it, since a tool may print other data you consider sensitive.
 | `ANGEE_VERBOSE` | `0` | Default diagnostic verbosity: `0` is warnings only, `1` names phases, and `2` traces commands and requests. |
 | `ANGEE_ACCESSIBLE` | unset | Set to `1` to use scripted line prompts for template inputs instead of the interactive form. |
 | `ANGEE_GIT_TIMEOUT` | `2m` | Deadline for network git clone, fetch, pull, and push operations. Accepts a Go duration; `0` disables the deadline. |
+| `ANGEE_JOB_TIMEOUT` | `30m` | Deadline for a job run, including the downstream jobs and service restarts of `--chained-restart`. Accepts a Go duration; `0` disables the deadline. A run that hits it is recorded as failed and releases the stack for other lifecycle changes. |
 | `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
 | `ANGEE_OPERATOR_TIMEOUT` | `30m` | Deadline for non-streaming requests to a remote operator. Accepts a Go duration; `0` disables the deadline. Streaming requests are not given this timeout. |
 
@@ -57,7 +58,7 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 angee doctor
 angee init [path] [--template <ref>] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
 angee stack init <template> [path] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
-angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...]] [--dry-run] [--overwrite]
+angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...] [--skip <path-or-pattern> ...]] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
@@ -173,6 +174,11 @@ automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
 prints all changes without writing. Bare `stack update` remains derived-files
 only; template reconciliation needs the stack's recorded Copier answers file.
+Repeatable `--skip <path-or-pattern>` keeps matching existing ordinary files
+untouched, including files removed from the newer template. A matching file
+that does not exist is still added. Skip patterns cannot match stack documents,
+Copier answers, or reconciliation state, and any unskipped conflict still stops
+the update.
 
 ### Interactive template updates
 
@@ -226,8 +232,12 @@ angee logs [service...] [--follow]
 ```
 
 `angee up` starts container services only. `angee dev` starts container services
-and local-process services. Runtime actions are routed by each service's
-`runtime` value.
+detached and follows their logs alongside the local-process services, replaying
+only the recent container backlog rather than the whole accumulated history. If a
+container is recreated while `angee dev` runs — for example by `angee restart`
+from another shell — the follower re-attaches to its logs. Ctrl-C stops the local
+processes and log stream while containers remain running; `angee down` performs a
+full shutdown. Runtime actions are routed by each service's `runtime` value.
 
 ## Services
 
@@ -318,10 +328,12 @@ If `--runtime` is omitted, `--image` creates a container service and
 
 ```sh
 angee job list  # alias: ls
-angee job run <name> [--input key=value ...]
+angee job run <name> [--input key=value ...] [--chained-restart]
 ```
 
 `job run` executes the declared job command and writes the job output to stdout.
+`--chained-restart` follows a successful run by restarting its downstream jobs
+and services in dependency order; a failed prerequisite blocks its descendants.
 
 ## Sources
 

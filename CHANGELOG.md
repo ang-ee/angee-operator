@@ -6,6 +6,79 @@ latest tag.
 
 ## Unreleased
 
+## v0.15.0 — 2026-09-13
+
+### Added
+
+- **Managed application restarts.** `angee job run --chained-restart` reruns a
+  root job and then, once it succeeds and its dependents are ready, reruns the
+  downstream jobs and restarts the dependent services in dependency order;
+  failed or blocked prerequisites are reported per node without touching their
+  descendants, and upstream services keep running. The run is a daemon-owned
+  operation with a durable receipt across REST and GraphQL: `POST
+  /jobs/{name}/run` accepts optional `inputs`/`chained_restart` and returns
+  `202 Accepted` with a receipt immediately, `GET /job-runs/{id}` polls its
+  status, current step, per-node outcomes, and terminal output, `GET
+  /job-runs/latest` returns the most recently started receipt, and `GET
+  /jobs/{name}/run-preview` (GraphQL `jobRunPreview`) lists the affected jobs
+  and services before starting. Receipts are held in bounded daemon memory so a
+  client can disconnect and reconnect while an operation runs, but they are not
+  persisted — restarting or stopping the operator loses them.
+- **`stop_grace_period` service field.** A service can bound graceful shutdown
+  before the runtime force-stops it, in Go duration syntax (`30s`, `2m`); the
+  default is `10s`. Compose receives the duration directly and process-compose
+  rounds it up to whole seconds. Migration limitation: an active legacy
+  process-compose process started without a shutdown timeout must first be
+  stopped, or its supervisor relaunched, before its configuration can be
+  updated; the operator reports that condition rather than force-stopping the
+  worker.
+- **`angee stack update --template --skip <pattern>`.** The repeatable `--skip`
+  flag keeps matching existing files untouched, including files removed from the
+  newer template; a matched file that does not yet exist is still added. Skip
+  patterns cannot match stack documents, Copier answers, or reconciliation
+  state, and any unskipped conflict still stops the update.
+
+### Changed
+
+- **`angee dev` no longer owns container lifetime.** Container services start
+  detached and `angee dev` follows their logs alongside the local-process
+  supervisor; Ctrl-C stops the local processes and the log stream only, leaving
+  containers running, and `angee down` is now the single owner of container
+  shutdown. The container follower replays a bounded recent tail instead of the
+  whole accumulated history and re-attaches after a container is recreated (for
+  example by `angee restart <name>` from another shell).
+- **`angee restart <name>` applies the current service definition.** Restarting
+  a service now re-applies the freshly compiled configuration — including
+  updated command and environment — on both the container and local runtimes,
+  instead of restarting the previously running definition.
+- **Lifecycle changes are serialized by a shared mutation lease.** Stack and
+  service lifecycle operations take a single-slot, reentrant lease, so competing
+  mutations no longer interleave.
+- **Log reads no longer rewrite the stack.** Streaming a service's logs (and
+  `angee logs`) no longer runs stack prepare first, so reading logs cannot
+  regenerate runtime files or re-resolve secrets.
+
+### Fixed
+
+- **process-compose stderr no longer contaminates job output.** Job commands
+  now capture stdout and stderr separately, so diagnostics written to stderr are
+  kept out of the output returned to the caller.
+- **A stuck job can no longer hold the mutation lease forever.** A detached job
+  run is bounded by `ANGEE_JOB_TIMEOUT` (default `30m`; `0` disables the bound),
+  so a container job whose process never exits times out and releases the lease
+  instead of blocking every later lifecycle change until the daemon restarts.
+- **process-compose job completion is detected only on genuine terminal
+  states.** Completion is read only from `Completed`/`Error`/`Skipped`; a poll
+  landing in the launch window (`Pending`/`Launching`/`Running`/…) is no longer
+  misread as a completed exit 0, so a re-run's success is not reported
+  prematurely. A re-run of an unchanged job, which process-compose restarts in
+  place while keeping the previous end time, is now recognised by its new
+  process id instead of waiting out `ANGEE_JOB_TIMEOUT`.
+- **process-compose control-plane calls time out.** Every process-compose
+  control-plane HTTP request now uses a client with a 30-second timeout instead
+  of the unbounded default, so a hung supervisor cannot stall a job or status
+  call indefinitely.
+
 ## v0.14.0 — 2026-09-08
 
 ### Fixed

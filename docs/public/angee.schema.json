@@ -420,6 +420,10 @@
         },
         "ready": {
           "$ref": "#/$defs/ReadyProbe"
+        },
+        "stop_grace_period": {
+          "type": "string",
+          "default": "10s"
         }
       },
       "additionalProperties": false,

@@ -2,6 +2,7 @@ package compose
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,10 @@ type Runner interface {
 
 type ExecRunner struct{}
 
+type InputRunner interface {
+	RunInput(context.Context, string, []string, []byte, string, ...string) ([]byte, error)
+}
+
 func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
@@ -35,6 +40,14 @@ func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string
 		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+func (ExecRunner) RunInput(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = runtime.ChildEnviron(env)
+	cmd.Stdin = bytes.NewReader(input)
+	return cmd.CombinedOutput()
 }
 
 type Backend struct {
@@ -110,6 +123,62 @@ func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
 	return err
 }
 
+func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
+	service := job.Name
+	runner, ok := b.inputRunner()
+	if !ok {
+		return nil, fmt.Errorf("compose backend does not support in-memory job overrides")
+	}
+	args := configurationArgs(target.EnvFile)
+	args = append(args, "up", "-d", "--force-recreate", "--no-deps", service)
+	env, err := runtime.ReadEnvFile(target.EnvFile)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", args...); err != nil {
+		return nil, err
+	}
+	waitArgs := configurationArgs(target.EnvFile)
+	waitArgs = append(waitArgs, "wait", service)
+	_, waitErr := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", waitArgs...)
+	logArgs := configurationArgs(target.EnvFile)
+	logArgs = append(logArgs, "logs", "--no-color", "--no-log-prefix", service)
+	out, logErr := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", logArgs...)
+	if len(out) > 1<<20 {
+		out = out[len(out)-(1<<20):]
+	}
+	if waitErr != nil {
+		return out, fmt.Errorf("container job %s failed: %w", service, waitErr)
+	}
+	if logErr != nil {
+		return out, logErr
+	}
+	return out, nil
+}
+
+func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	if len(target.Configuration) != 0 {
+		args = configurationArgs(target.EnvFile)
+	}
+	args = append(args, "up", "-d", "--force-recreate", "--no-deps")
+	args = append(args, target.Services...)
+	if len(target.Configuration) != 0 {
+		runner, ok := b.inputRunner()
+		if !ok {
+			return fmt.Errorf("compose backend does not support in-memory runtime configuration")
+		}
+		env, err := runtime.ReadEnvFile(target.EnvFile)
+		if err != nil {
+			return err
+		}
+		_, err = runner.RunInput(ctx, target.Root, env, target.Configuration, "docker", args...)
+		return err
+	}
+	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
+	return err
+}
+
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
 	args := b.baseArgs(req.Root, req.EnvFile)
 	args = append(args, "logs")
@@ -176,8 +245,25 @@ func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-cha
 
 func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runtime.ServiceStatus, error) {
 	args := b.baseArgs(req.Root, req.EnvFile)
+	if len(req.Configuration) != 0 {
+		args = configurationArgs(req.EnvFile)
+	}
 	args = append(args, "ps", "--format", "json")
-	out, err := b.run(ctx, req.Root, req.EnvFile, args...)
+	var out []byte
+	var err error
+	if len(req.Configuration) != 0 {
+		runner, ok := b.inputRunner()
+		if !ok {
+			return nil, fmt.Errorf("compose backend does not support in-memory runtime configuration")
+		}
+		env, readErr := runtime.ReadEnvFile(req.EnvFile)
+		if readErr != nil {
+			return nil, readErr
+		}
+		out, err = runner.RunInput(ctx, req.Root, env, req.Configuration, "docker", args...)
+	} else {
+		out, err = b.run(ctx, req.Root, req.EnvFile, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +358,22 @@ func (b Backend) baseArgs(root, envFile string) []string {
 	return args
 }
 
+func configurationArgs(envFile string) []string {
+	args := []string{"compose", "-f", "-"}
+	if envFile != "" {
+		args = append(args, "--env-file", envFile)
+	}
+	return args
+}
+
+func (b Backend) inputRunner() (InputRunner, bool) {
+	if b.Runner == nil {
+		return ExecRunner{}, true
+	}
+	runner, ok := b.Runner.(InputRunner)
+	return runner, ok
+}
+
 func parsePS(data []byte) ([]runtime.ServiceStatus, error) {
 	var statuses []runtime.ServiceStatus
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -281,10 +383,11 @@ func parsePS(data []byte) ([]runtime.ServiceStatus, error) {
 			continue
 		}
 		var one struct {
-			Service string `json:"Service"`
-			Name    string `json:"Name"`
-			State   string `json:"State"`
-			Health  string `json:"Health"`
+			Service  string `json:"Service"`
+			Name     string `json:"Name"`
+			State    string `json:"State"`
+			Health   string `json:"Health"`
+			ExitCode int    `json:"ExitCode"`
 		}
 		if err := json.Unmarshal([]byte(line), &one); err != nil {
 			// Status reads combined output, so docker's stderr notices (orphan
@@ -299,7 +402,7 @@ func parsePS(data []byte) ([]runtime.ServiceStatus, error) {
 		if name == "" {
 			continue
 		}
-		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State, Health: one.Health})
+		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State, Health: one.Health, ExitCode: &one.ExitCode})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read docker compose status: %w", err)

@@ -16,6 +16,11 @@ type StackInitResult struct {
 }
 
 func (p *Platform) StackInit(ctx context.Context, template string, targetPath string, inputs map[string]string, force bool) (StackInitResult, error) {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return StackInitResult{}, err
+	}
+	defer release()
 	if template == "" {
 		return StackInitResult{}, &InvalidInputError{Field: "template", Reason: "stack template is required"}
 	}
@@ -160,11 +165,21 @@ func (p *Platform) resolveChainTemplate(ctx context.Context, stackTemplatePath, 
 }
 
 func (p *Platform) StackUpdate(ctx context.Context) error {
-	_, err := p.StackPrepare(ctx)
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = p.StackPrepare(ctx)
 	return err
 }
 
 func (p *Platform) StackDestroy(ctx context.Context, purge bool) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := p.StackDown(ctx); err != nil {
 		return err
 	}

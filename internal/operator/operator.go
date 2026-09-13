@@ -54,6 +54,7 @@ type Server struct {
 	graphqlHandler   http.Handler
 	graphqlWSHandler http.Handler
 	server           *http.Server
+	lifecycleCancel  context.CancelFunc
 }
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -124,7 +125,17 @@ func NewServer(config Config) (*Server, error) {
 	if config.jobOutput == nil {
 		config.jobOutput = os.Stdout
 	}
-	platform, err := service.New(config.Root, service.WithJobOutput(config.jobOutput))
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	// The lifecycle context is owned by the returned Server (cancelled by
+	// ListenAndServe/Shutdown). On any early-return error path before the
+	// Server is constructed, cancel it here so it is never leaked.
+	started := false
+	defer func() {
+		if !started {
+			lifecycleCancel()
+		}
+	}()
+	platform, err := service.New(config.Root, service.WithJobOutput(config.jobOutput), service.WithDetachedContext(lifecycleCtx))
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +153,7 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter, logStreamer: logStreamer}
+	s := &Server{config: config, platform: platform, eventHub: eventHub, tokens: minter, logStreamer: logStreamer, lifecycleCancel: lifecycleCancel}
 	config.Logger.Info("jwt signing key", "fingerprint", minter.Fingerprint())
 	graphqlHandler, graphqlWSHandler, err := newGraphQLHandler(s)
 	if err != nil {
@@ -150,6 +161,7 @@ func NewServer(config Config) (*Server, error) {
 	}
 	s.graphqlHandler = graphqlHandler
 	s.graphqlWSHandler = graphqlWSHandler
+	started = true
 	cop := http.NewCrossOriginProtection()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
@@ -184,6 +196,9 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /ingress/status", s.auth(http.HandlerFunc(s.ingressStatus)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobList)))
 	mux.Handle("POST /jobs/{name}/run", s.auth(http.HandlerFunc(s.jobRun)))
+	mux.Handle("GET /jobs/{name}/run-preview", s.auth(http.HandlerFunc(s.jobRunPreview)))
+	mux.Handle("GET /job-runs/latest", s.auth(http.HandlerFunc(s.latestJobRun)))
+	mux.Handle("GET /job-runs/{id}", s.auth(http.HandlerFunc(s.jobRunGet)))
 	mux.Handle("GET /jobs/{name}/logs", s.auth(http.HandlerFunc(s.jobLogs)))
 	mux.Handle("GET /services", s.auth(http.HandlerFunc(s.serviceList)))
 	mux.Handle("POST /services", s.auth(http.HandlerFunc(s.serviceInit)))
@@ -310,9 +325,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.server.Shutdown(shutdownCtx); err != nil {
+		s.lifecycleCancel()
 		<-errCh
 		return err
 	}
+	s.lifecycleCancel()
 	if tearDown {
 		s.tearDownStack()
 	}
@@ -651,14 +668,38 @@ func (s *Server) jobRun(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, err)
 		return
 	}
-	out, err := s.platform.JobRun(r.Context(), r.PathValue("name"), req.Inputs)
+	op, err := s.platform.JobRunStart(r.Context(), r.PathValue("name"), req.Inputs, req.ChainedRestart)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(out)
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (s *Server) jobRunGet(w http.ResponseWriter, r *http.Request) {
+	op, err := s.platform.JobRunGet(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+func (s *Server) latestJobRun(w http.ResponseWriter, r *http.Request) {
+	op, err := s.platform.LatestJobRun(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+func (s *Server) jobRunPreview(w http.ResponseWriter, r *http.Request) {
+	chained, _ := strconv.ParseBool(r.URL.Query().Get("chained_restart"))
+	v, err := s.platform.JobRunPreview(r.Context(), r.PathValue("name"), chained)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {

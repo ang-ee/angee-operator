@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 )
@@ -29,6 +30,31 @@ type IntComparisonExp struct {
 	In     []int `json:"_in,omitempty"`
 	Nin    []int `json:"_nin,omitempty"`
 	IsNull *bool `json:"_is_null,omitempty"`
+}
+
+type JobRunNode struct {
+	Name    string         `json:"name"`
+	Kind    JobRunNodeKind `json:"kind"`
+	Status  JobRunStatus   `json:"status"`
+	Message *string        `json:"message,omitempty"`
+}
+
+type JobRunOperation struct {
+	ID             string        `json:"id"`
+	RootJob        string        `json:"rootJob"`
+	ChainedRestart bool          `json:"chainedRestart"`
+	Status         JobRunStatus  `json:"status"`
+	CurrentStep    *string       `json:"currentStep,omitempty"`
+	StartedAt      time.Time     `json:"startedAt"`
+	EndedAt        *time.Time    `json:"endedAt,omitempty"`
+	Nodes          []*JobRunNode `json:"nodes"`
+	Output         *string       `json:"output,omitempty"`
+	Error          *string       `json:"error,omitempty"`
+}
+
+type JobRunPreview struct {
+	Jobs     []string `json:"jobs"`
+	Services []string `json:"services"`
 }
 
 type KeyValue struct {
@@ -587,6 +613,122 @@ func (e *Granularity) UnmarshalJSON(b []byte) error {
 }
 
 func (e Granularity) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type JobRunNodeKind string
+
+const (
+	JobRunNodeKindJob     JobRunNodeKind = "JOB"
+	JobRunNodeKindService JobRunNodeKind = "SERVICE"
+)
+
+var AllJobRunNodeKind = []JobRunNodeKind{
+	JobRunNodeKindJob,
+	JobRunNodeKindService,
+}
+
+func (e JobRunNodeKind) IsValid() bool {
+	switch e {
+	case JobRunNodeKindJob, JobRunNodeKindService:
+		return true
+	}
+	return false
+}
+
+func (e JobRunNodeKind) String() string {
+	return string(e)
+}
+
+func (e *JobRunNodeKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = JobRunNodeKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid JobRunNodeKind", str)
+	}
+	return nil
+}
+
+func (e JobRunNodeKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *JobRunNodeKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e JobRunNodeKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type JobRunStatus string
+
+const (
+	JobRunStatusPending   JobRunStatus = "PENDING"
+	JobRunStatusRunning   JobRunStatus = "RUNNING"
+	JobRunStatusSucceeded JobRunStatus = "SUCCEEDED"
+	JobRunStatusFailed    JobRunStatus = "FAILED"
+	JobRunStatusBlocked   JobRunStatus = "BLOCKED"
+)
+
+var AllJobRunStatus = []JobRunStatus{
+	JobRunStatusPending,
+	JobRunStatusRunning,
+	JobRunStatusSucceeded,
+	JobRunStatusFailed,
+	JobRunStatusBlocked,
+}
+
+func (e JobRunStatus) IsValid() bool {
+	switch e {
+	case JobRunStatusPending, JobRunStatusRunning, JobRunStatusSucceeded, JobRunStatusFailed, JobRunStatusBlocked:
+		return true
+	}
+	return false
+}
+
+func (e JobRunStatus) String() string {
+	return string(e)
+}
+
+func (e *JobRunStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = JobRunStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid JobRunStatus", str)
+	}
+	return nil
+}
+
+func (e JobRunStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *JobRunStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e JobRunStatus) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

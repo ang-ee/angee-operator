@@ -91,7 +91,10 @@ type ServiceAPI interface {
 // JobAPI covers job discovery and invocation.
 type JobAPI interface {
 	JobList(ctx context.Context, q query.Args) ([]api.JobState, int, error)
-	JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error)
+	JobRunStart(ctx context.Context, name string, inputs map[string]string, chainedRestart bool) (api.JobRunOperation, error)
+	JobRunGet(ctx context.Context, id string) (api.JobRunOperation, error)
+	LatestJobRun(ctx context.Context) (*api.JobRunOperation, error)
+	JobRunPreview(ctx context.Context, name string, chainedRestart bool) (api.JobRunPreview, error)
 }
 
 // WorkspaceAPI covers workspace lifecycle, status, logs, and aggregate git ops.

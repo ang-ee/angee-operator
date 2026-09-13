@@ -272,6 +272,11 @@ func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceSt
 }
 
 func (p *Platform) SourceFetch(ctx context.Context, name string) (api.SourceState, error) {
+	ctx, release, err := p.beginMutation(ctx, "source")
+	if err != nil {
+		return api.SourceState{}, err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return api.SourceState{}, err
@@ -299,6 +304,11 @@ func (p *Platform) SourceStatus(ctx context.Context, name string) (api.SourceSta
 }
 
 func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState, error) {
+	ctx, release, err := p.beginMutation(ctx, "source")
+	if err != nil {
+		return api.SourceState{}, err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return api.SourceState{}, err
@@ -320,6 +330,11 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState
 }
 
 func (p *Platform) SourcePush(ctx context.Context, name, ref string) (api.SourceState, error) {
+	ctx, release, err := p.beginMutation(ctx, "source")
+	if err != nil {
+		return api.SourceState{}, err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return api.SourceState{}, err

@@ -664,6 +664,102 @@ func TestStackUpdateFromTemplateDeletesTrackedUnchangedFile(t *testing.T) {
 	}
 }
 
+func TestStackUpdateFromTemplateSkipKeepsExistingFilesAndStillAddsMissing(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	template := writeStackTemplate(t, project, oneServiceTemplate)
+	output := filepath.Join(template, "template", "{{ ANGEE_ROOT }}")
+	for name, body := range map[string]string{
+		"kept.txt.jinja":     "template v1\n",
+		"conflict.txt.jinja": "template v1\n",
+		"obsolete.txt.jinja": "obsolete\n",
+	} {
+		if err := os.WriteFile(filepath.Join(output, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+	p, err := New(project)
+	if err != nil {
+		t.Fatalf("New(project): %v", err)
+	}
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, err := New(initialized.Root)
+	if err != nil {
+		t.Fatalf("New(stack root): %v", err)
+	}
+	for name, body := range map[string]string{"kept.txt": "user kept\n", "conflict.txt": "user conflict\n"} {
+		if err := os.WriteFile(filepath.Join(initialized.Root, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(output, "kept.txt.jinja"), []byte("template v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(kept template): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "conflict.txt.jinja"), []byte("template v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(conflict template): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "added.txt.jinja"), []byte("added\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(added template): %v", err)
+	}
+	if err := os.Remove(filepath.Join(output, "obsolete.txt.jinja")); err != nil {
+		t.Fatalf("Remove(obsolete template): %v", err)
+	}
+
+	dryRun, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{DryRun: true, Skip: []string{"kept.txt", "obsolete.txt"}})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(dry-run): %v", err)
+	}
+	if len(dryRun.Conflicts) != 1 || !strings.HasSuffix(dryRun.Conflicts[0].Path, "/conflict.txt") {
+		t.Fatalf("conflicts = %#v, want only unmatched conflict.txt", dryRun.Conflicts)
+	}
+	if !containsString(dryRun.Changes, "+ files/added.txt") || containsString(dryRun.Changes, "- files/obsolete.txt") {
+		t.Fatalf("changes = %v, want added.txt and no obsolete deletion", dryRun.Changes)
+	}
+	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Skip: []string{"kept.txt", "obsolete.txt"}}); err == nil {
+		t.Fatal("StackUpdateFromTemplate succeeded with an unskipped conflict")
+	}
+
+	result, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Skip: []string{"kept.txt", "conflict.txt", "obsolete.txt"}})
+	if err != nil {
+		t.Fatalf("StackUpdateFromTemplate(skip all conflicts): %v", err)
+	}
+	if !containsString(result.Changes, "+ files/added.txt") {
+		t.Fatalf("changes = %v, want added.txt", result.Changes)
+	}
+	for name, want := range map[string]string{
+		"kept.txt": "user kept\n", "conflict.txt": "user conflict\n", "obsolete.txt": "obsolete\n", "added.txt": "added\n",
+	} {
+		got, readErr := os.ReadFile(filepath.Join(initialized.Root, name))
+		if readErr != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", name, got, readErr, want)
+		}
+	}
+}
+
+func TestStackUpdateFromTemplateSkipRejectsManagedDocument(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	writeStackTemplate(t, project, oneServiceTemplate)
+	p, err := New(project)
+	if err != nil {
+		t.Fatalf("New(project): %v", err)
+	}
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, err := New(initialized.Root)
+	if err != nil {
+		t.Fatalf("New(stack root): %v", err)
+	}
+	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Skip: []string{"angee.yaml"}}); err == nil || !strings.Contains(err.Error(), "managed reconciliation path") {
+		t.Fatalf("StackUpdateFromTemplate skip managed document error = %v", err)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

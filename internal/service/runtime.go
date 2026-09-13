@@ -2,22 +2,43 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
-	"golang.org/x/sync/errgroup"
 )
 
 const defaultProcessComposeControlPort = 8080
 
+// devLogFollowTail bounds the recent container-log backlog `angee dev` replays
+// before it follows live output. Container services now survive across dev
+// sessions, so an unbounded `docker compose logs --follow` would dump the whole
+// accumulated history on every start; this keeps just enough recent context to
+// orient the user while still surfacing live lines.
+const devLogFollowTail = 50
+
+// devLogFollowRetryDelay spaces re-attach attempts for the `angee dev` container
+// log follower. A follow ends when a container is recreated (clean EOF) or when
+// no containers are up yet (`docker compose logs` returns at once); the delay
+// keeps the re-attach loop from hot-spinning in those cases while still picking
+// a container that `angee restart` brings back up shortly after.
+const devLogFollowRetryDelay = time.Second
+
 func (p *Platform) StackBuild(ctx context.Context, services []string) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -26,6 +47,10 @@ func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -40,6 +65,11 @@ func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 }
 
 func (p *Platform) StackUp(ctx context.Context, services []string, build bool) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -48,6 +78,10 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -69,6 +103,11 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 }
 
 func (p *Platform) StackUpForeground(ctx context.Context, services []string, build bool, stdout io.Writer, stderr io.Writer) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -77,6 +116,10 @@ func (p *Platform) StackUpForeground(ctx context.Context, services []string, bui
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -98,6 +141,11 @@ func (p *Platform) StackUpForeground(ctx context.Context, services []string, bui
 }
 
 func (p *Platform) StackDev(ctx context.Context, build bool) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -106,6 +154,10 @@ func (p *Platform) StackDev(ctx context.Context, build bool) error {
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -123,6 +175,11 @@ func (p *Platform) StackDev(ctx context.Context, build bool) error {
 }
 
 func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io.Writer, stderr io.Writer) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
@@ -131,6 +188,10 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
 	if err != nil {
 		return err
 	}
@@ -160,14 +221,20 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 			return err
 		}
 	}
+	// Container services are deliberately detached from the dev command's
+	// lifetime. Ctrl-C ends log following and the local process supervisor;
+	// explicit `angee down` remains the owner of container shutdown.
+	if hasContainers {
+		if err := p.composeBackend.Up(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+			return err
+		}
+	}
 
 	// stdout/stderr may be a single shared writer (the operator streams both
-	// through one HTTP response). os/exec hands a child the terminal directly
-	// only when the sink is an *os.File; for anything else it runs a copier
-	// goroutine, so the two backends would race on the shared writer. Guard
-	// non-file sinks with a mutex, but pass *os.File sinks through untouched so
-	// the children keep the real TTY — and with it docker compose's and
-	// process-compose's per-service colouring.
+	// through one HTTP response). The container log follower and local process
+	// supervisor can write concurrently, so guard non-file sinks with a mutex.
+	// Pass *os.File sinks through untouched so the local supervisor keeps its
+	// real TTY and per-service colouring.
 	so, se := stdout, stderr
 	if stdout == stderr {
 		if w := guardDevSink(stdout); w != stdout {
@@ -178,29 +245,74 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		se = guardDevSink(stderr)
 	}
 
-	// Run both runtimes attached in the foreground so logs from every service
-	// stream together — docker compose keeps its native per-service coloured
-	// prefix, process-compose streams its own aggregated output. Each call
-	// blocks until interrupted, so they run concurrently. The derived cancel
-	// makes the first backend to exit — cleanly or not — tear the other down:
-	// errgroup's own context only cancels on a non-nil error, and an attached
-	// compose run returns nil on graceful shutdown, so we can't rely on it.
-	groupCtx, cancel := context.WithCancel(ctx)
+	// The local process supervisor owns the dev command's lifetime. The
+	// container log follower is a detached tail alongside it: its exit — a clean
+	// EOF when `angee restart <svc>` recreates a container, or a transient docker
+	// hiccup — must NOT tear down the local supervisor, so it re-attaches with a
+	// short backoff while the dev context is alive and never cancels its sibling.
+	// Ctrl-C cancels ctx and stops both; the local supervisor's own exit cancels
+	// the follower via the derived context.
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	g, gctx := errgroup.WithContext(groupCtx)
+
+	var wg sync.WaitGroup
+	var devErr error
 	if hasContainers {
-		g.Go(func() error {
-			defer cancel()
-			return p.composeBackend.UpForeground(gctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Attached: true}, so, se)
-		})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.followDevContainerLogs(runCtx, stack, so, se)
+		}()
 	}
 	if hasLocal {
-		g.Go(func() error {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// The supervisor is the dev command's foreground process. When it
+			// returns — Ctrl-C, or the local processes all exiting — cancel the
+			// detached follower so it stops re-attaching and the command ends.
 			defer cancel()
-			return p.procBackend.UpForeground(gctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, so, se)
-		})
+			devErr = p.procBackend.UpForeground(runCtx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, so, se)
+		}()
 	}
-	return g.Wait()
+	wg.Wait()
+	return devErr
+}
+
+// followDevContainerLogs tails detached container logs for `angee dev`, writing
+// each line to stdout. It re-attaches after every stream ends so a container
+// recreated by `angee restart` from another shell is followed again, backing off
+// between attempts and giving up quietly once ctx is cancelled (Ctrl-C or the
+// local supervisor exiting). A follow that fails to start is surfaced as a
+// warning on stderr rather than swallowed; neither an error nor an EOF changes
+// the dev exit code.
+func (p *Platform) followDevContainerLogs(ctx context.Context, stack *manifest.Stack, stdout io.Writer, stderr io.Writer) {
+	for ctx.Err() == nil {
+		lines, err := p.composeBackend.StreamLogs(ctx, runtime.LogsRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Follow: true, Tail: devLogFollowTail})
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(stderr, "angee dev: following container logs failed: %v (retrying)\n", err)
+		} else {
+			for line := range lines {
+				if _, werr := io.WriteString(stdout, line); werr != nil {
+					// The dev output sink is gone; stop following rather than
+					// spin re-attaching to a writer that will keep failing.
+					return
+				}
+			}
+		}
+		// The stream ended: a clean EOF (recreated container), a startup error,
+		// or an immediate return because no containers are up. Wait before
+		// re-attaching so a persistently-empty project or a flapping docker
+		// daemon can't turn the loop into a busy-wait.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(devLogFollowRetryDelay):
+		}
+	}
 }
 
 // guardDevSink wraps w so concurrent writes from the two dev backends serialize,
@@ -230,34 +342,27 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 }
 
 func (p *Platform) StackDown(ctx context.Context) error {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	stack, err := p.LoadStack()
 	if err != nil {
 		return err
 	}
-	hasContainers := false
-	hasLocal := false
-	for _, service := range stack.Services {
-		switch service.Runtime {
-		case manifest.RuntimeContainer:
-			hasContainers = true
-		case manifest.RuntimeLocal:
-			hasLocal = true
-		}
+	var downErrors []error
+	if _, statErr := os.Stat(filepath.Join(p.root, "docker-compose.yaml")); statErr == nil {
+		downErrors = append(downErrors, p.composeBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}))
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		downErrors = append(downErrors, statErr)
 	}
-	for _, job := range stack.Jobs {
-		if job.Runtime == manifest.RuntimeLocal {
-			hasLocal = true
-		}
+	if _, statErr := os.Stat(filepath.Join(p.root, "process-compose.yaml")); statErr == nil {
+		downErrors = append(downErrors, p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)}))
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		downErrors = append(downErrors, statErr)
 	}
-	if hasContainers {
-		if err := p.composeBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
-			return err
-		}
-	}
-	if hasLocal {
-		return p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)})
-	}
-	return nil
+	return errors.Join(downErrors...)
 }
 
 func (p *Platform) ServiceUp(ctx context.Context, names []string) error {
@@ -282,10 +387,6 @@ func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool
 
 func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error) {
 	stack, err := p.LoadStack()
-	if err != nil {
-		return nil, err
-	}
-	compiled, err := p.StackPrepare(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -315,14 +416,14 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		return backend.Logs(ctx, req)
 	}
 	var channels []<-chan string
-	if len(compiled.Compose.Services) > 0 && len(container) > 0 {
+	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) && len(container) > 0 {
 		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
 		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, ch)
 	}
-	if len(compiled.ProcessCompose.Processes) > 0 && len(local) > 0 {
+	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) && len(local) > 0 {
 		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
@@ -370,6 +471,11 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 }
 
 func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, names []string) (retErr error) {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if len(names) == 0 {
 		return fmt.Errorf("at least one service name is required")
 	}
@@ -382,7 +488,12 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 			return err
 		}
 	}
-	if _, err := p.StackPrepare(ctx); err != nil {
+	compiled, err := p.stackPrepare(ctx, nil, true, "", false, action == "restart")
+	if err != nil {
+		return err
+	}
+	stack, err = p.LoadStack()
+	if err != nil {
 		return err
 	}
 	container, local, err := splitRuntimeServices(stack, names)
@@ -426,17 +537,30 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 		return nil
 	case "restart":
 		if len(container) > 0 {
-			if err := p.composeBackend.Restart(ctx, containerTarget); err != nil {
+			if err := p.applyRuntimeConfiguration(ctx, compiled, manifest.RuntimeContainer, p.composeBackend, containerTarget); err != nil {
 				return err
 			}
 		}
 		if len(local) > 0 {
-			return p.procBackend.Restart(ctx, localTarget)
+			return p.applyRuntimeConfiguration(ctx, compiled, manifest.RuntimeLocal, p.procBackend, localTarget)
 		}
 		return nil
 	default:
 		return fmt.Errorf("unknown service runtime action %q", action)
 	}
+}
+
+func (p *Platform) applyRuntimeConfiguration(ctx context.Context, compiled *CompiledStack, kind manifest.Runtime, backend runtime.Backend, target runtime.Target) error {
+	configuration, err := p.compiledRuntimeConfiguration(compiled, kind)
+	if err != nil {
+		return err
+	}
+	target.Configuration = configuration
+	applier, ok := backend.(runtime.ApplyBackend)
+	if !ok {
+		return fmt.Errorf("%s runtime cannot apply the prepared configuration", kind)
+	}
+	return applier.Apply(ctx, target)
 }
 
 func processComposeControlPort(stack *manifest.Stack) int {

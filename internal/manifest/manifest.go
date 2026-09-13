@@ -236,6 +236,18 @@ type Service struct {
 	DependsOn []string          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	Route     *Route            `yaml:"route,omitempty" json:"route,omitempty"`
 	Ready     *ReadyProbe       `yaml:"ready,omitempty" json:"ready,omitempty"`
+	// StopGracePeriod bounds graceful shutdown before the runtime force-stops
+	// the service. It uses Go duration syntax (for example, "30s").
+	StopGracePeriod string `yaml:"stop_grace_period,omitempty" json:"stop_grace_period,omitempty" jsonschema:"default=10s"`
+}
+
+const DefaultStopGracePeriod = "10s"
+
+func (s Service) NormalizedStopGracePeriod() string {
+	if s.StopGracePeriod == "" {
+		return DefaultStopGracePeriod
+	}
+	return s.StopGracePeriod
 }
 
 type Route struct {
@@ -493,7 +505,7 @@ func (s *Stack) Validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("manifest name is required")
 	}
-	if err := s.validateReadiness(); err != nil {
+	if err := s.validateServiceRuntime(); err != nil {
 		return err
 	}
 	if err := validateStruct(s); err != nil {
@@ -515,6 +527,9 @@ func validateStruct(stack *Stack) error {
 func hasCaddyMeta(s string) bool { return strings.ContainsAny(s, " \t\r\n{}#\"`") }
 
 func (s *Stack) ValidateExtended() error {
+	if err := s.validateDependencyGraph(); err != nil {
+		return err
+	}
 	for name, service := range s.Services {
 		if service.Route != nil && service.Runtime == RuntimeLocal {
 			return fmt.Errorf("service %q: route requires runtime: container", name)
@@ -597,10 +612,69 @@ func (s *Stack) ValidateExtended() error {
 	return nil
 }
 
-func (s *Stack) validateReadiness() error {
+func (s *Stack) validateDependencyGraph() error {
+	// No capacity hint: a summed len() hint trips CodeQL's
+	// go/allocation-size-overflow, and the map grows fine without one.
+	deps := make(map[string][]string)
+	for name, service := range s.Services {
+		if _, collision := s.Jobs[name]; collision {
+			return fmt.Errorf("name %q is declared as both a service and a job", name)
+		}
+		deps[name] = append(append([]string{}, service.After...), service.DependsOn...)
+	}
+	for name, job := range s.Jobs {
+		deps[name] = append([]string{}, job.DependsOn...)
+	}
+	for name, dependencies := range deps {
+		for _, dependency := range dependencies {
+			if _, ok := deps[dependency]; !ok {
+				return fmt.Errorf("%s %q depends on unknown node %q", nodeKind(s, name), name, dependency)
+			}
+		}
+	}
+	state := map[string]uint8{}
+	var visit func(string) error
+	visit = func(name string) error {
+		if state[name] == 1 {
+			return fmt.Errorf("dependency graph contains a cycle at %q", name)
+		}
+		if state[name] == 2 {
+			return nil
+		}
+		state[name] = 1
+		for _, dependency := range deps[name] {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		state[name] = 2
+		return nil
+	}
+	for name := range deps {
+		if err := visit(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nodeKind(s *Stack, name string) string {
+	if _, ok := s.Jobs[name]; ok {
+		return "job"
+	}
+	return "service"
+}
+
+func (s *Stack) validateServiceRuntime() error {
 	for name, service := range s.Services {
 		if err := validateReadyProbe(name, service.Ready); err != nil {
 			return err
+		}
+		if service.StopGracePeriod != "" {
+			duration, err := time.ParseDuration(service.StopGracePeriod)
+			if err != nil || duration <= 0 {
+				return fmt.Errorf("service %q: stop_grace_period must be a positive duration", name)
+			}
 		}
 	}
 	return nil

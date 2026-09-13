@@ -175,10 +175,28 @@ Jobs:
 
 ```http
 GET  /jobs
+GET  /jobs/{name}/run-preview?chained_restart=true
 POST /jobs/{name}/run
+GET  /job-runs/{id}
+GET  /job-runs/latest
 ```
 
-Job output is returned by `POST /jobs/{name}/run`.
+`POST /jobs/{name}/run` accepts an optional JSON body containing `inputs` and
+`chained_restart`. It returns `202 Accepted` with a job-run receipt immediately;
+the operation continues under the operator daemon after the initiating HTTP
+request disconnects. Poll `GET /job-runs/{id}` for its operation status, current
+step, per-node outcomes, terminal root-job output, and error. The `latest` route
+returns the most recently started receipt or JSON `null` when this daemon has not
+started one.
+
+The preview route returns the jobs and services affected by the requested run
+without starting it. With `chained_restart`, a successful root job is followed by
+its downstream jobs and services in dependency order; failed prerequisites block
+their descendants.
+
+Receipts are retained in bounded daemon memory so clients can reconnect and keep
+polling. They are not written to disk: restarting or stopping the operator loses
+the retained receipts, and stopping the daemon cancels an active operation.
 
 Sources:
 

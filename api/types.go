@@ -69,7 +69,43 @@ type JobState struct {
 }
 
 type JobRunRequest struct {
-	Inputs map[string]string `json:"inputs,omitempty"`
+	Inputs         map[string]string `json:"inputs,omitempty"`
+	ChainedRestart bool              `json:"chained_restart,omitempty"`
+}
+
+type JobRunStatus string
+
+const (
+	JobRunPending   JobRunStatus = "pending"
+	JobRunRunning   JobRunStatus = "running"
+	JobRunSucceeded JobRunStatus = "succeeded"
+	JobRunFailed    JobRunStatus = "failed"
+	JobRunBlocked   JobRunStatus = "blocked"
+)
+
+type JobRunNode struct {
+	Name    string       `json:"name"`
+	Kind    string       `json:"kind"`
+	Status  JobRunStatus `json:"status"`
+	Message string       `json:"message,omitempty"`
+}
+
+type JobRunOperation struct {
+	ID             string       `json:"id"`
+	RootJob        string       `json:"root_job"`
+	ChainedRestart bool         `json:"chained_restart"`
+	Status         JobRunStatus `json:"status"`
+	CurrentStep    string       `json:"current_step,omitempty"`
+	StartedAt      time.Time    `json:"started_at"`
+	EndedAt        *time.Time   `json:"ended_at,omitempty"`
+	Nodes          []JobRunNode `json:"nodes"`
+	Output         string       `json:"output,omitempty"`
+	Error          string       `json:"error,omitempty"`
+}
+
+type JobRunPreview struct {
+	Jobs     []string `json:"jobs"`
+	Services []string `json:"services"`
 }
 
 type WorkspaceRef struct {

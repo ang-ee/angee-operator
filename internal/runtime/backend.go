@@ -24,6 +24,9 @@ type Target struct {
 	// in the foreground (process-compose).
 	Attached    bool
 	ControlPort int
+	// Configuration is a request-scoped complete runtime document. Backends use
+	// it instead of generated disk state for input-bearing job operations.
+	Configuration []byte
 }
 
 type LogsRequest struct {
@@ -49,8 +52,9 @@ type StatusRequest struct {
 	// EnvFile is the stack env file whose current values the backend exports
 	// to the status command, so `docker compose ps` interpolates the compose
 	// file from the same fresh values as every other compose invocation.
-	EnvFile     string
-	ControlPort int
+	EnvFile       string
+	ControlPort   int
+	Configuration []byte
 }
 
 type ServiceStatus struct {
@@ -60,7 +64,10 @@ type ServiceStatus struct {
 	// Health mirrors docker's healthcheck verdict (`healthy`,
 	// `unhealthy`, `starting`). Empty when the container has no
 	// healthcheck declared or when the backend doesn't expose one.
-	Health string `json:"health,omitempty"`
+	Health     string `json:"health,omitempty"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	PID        int    `json:"pid,omitempty"`
+	Generation string `json:"generation,omitempty"`
 }
 
 type Backend interface {
@@ -78,4 +85,21 @@ type Backend interface {
 	// and per-service log sockets; Logs remains the bounded-read path.
 	StreamLogs(ctx context.Context, req LogsRequest) (<-chan string, error)
 	Status(ctx context.Context, req StatusRequest) ([]ServiceStatus, error)
+}
+
+// JobBackend executes a declared one-shot workload as a runtime-managed
+// instance, preserving terminal state for native dependency conditions.
+type JobBackend interface {
+	RunJob(ctx context.Context, target Target, job JobSpec) ([]byte, error)
+}
+
+type JobSpec struct {
+	Name          string
+	Configuration []byte
+}
+
+// ApplyBackend recreates selected services from the current generated runtime
+// document without traversing dependencies already ordered by the caller.
+type ApplyBackend interface {
+	Apply(ctx context.Context, target Target) error
 }

@@ -3,21 +3,26 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
-	mountx "github.com/ang-ee/angee-operator/internal/mount"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
-	"github.com/ang-ee/angee-operator/internal/secrets"
-	"github.com/ang-ee/angee-operator/internal/substitute"
+	"github.com/ang-ee/angee-operator/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/runtime/compose"
+	"github.com/ang-ee/angee-operator/internal/runtime/proccompose"
 )
 
 func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, int, error) {
@@ -36,64 +41,605 @@ func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, i
 	return page, total, nil
 }
 
-func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {
+var jobRunSequence atomic.Uint64
+
+func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[string]string, chainedRestart bool) (api.JobRunOperation, error) {
+	ctx, release, err := p.beginMutation(ctx, "job")
+	if err != nil {
+		return api.JobRunOperation{}, err
+	}
+	jobInputs := map[string]map[string]string(nil)
+	if len(inputs) != 0 {
+		jobInputs = map[string]map[string]string{name: inputs}
+	}
+	compiled, err := p.stackPrepare(ctx, jobInputs, false, name, chainedRestart, true)
+	if err != nil {
+		release()
+		return api.JobRunOperation{}, err
+	}
 	stack, err := p.LoadStack()
+	if err != nil {
+		release()
+		return api.JobRunOperation{}, err
+	}
+	if _, ok := stack.Jobs[name]; !ok {
+		release()
+		return api.JobRunOperation{}, &NotFoundError{Kind: "job", Name: name}
+	}
+	p.jobRunsMu.Lock()
+	if p.activeJobRun {
+		p.jobRunsMu.Unlock()
+		release()
+		return api.JobRunOperation{}, &InvalidInputError{Field: "job", Reason: "another job operation is active"}
+	}
+	p.activeJobRun = true
+	id := strconv.FormatInt(time.Now().UnixMilli(), 36) + "-" + strconv.FormatUint(jobRunSequence.Add(1), 36)
+	nodes, err := jobRunNodes(stack, name, chainedRestart)
+	if err != nil {
+		p.activeJobRun = false
+		p.jobRunsMu.Unlock()
+		release()
+		return api.JobRunOperation{}, err
+	}
+	op := api.JobRunOperation{ID: id, RootJob: name, ChainedRestart: chainedRestart, Status: api.JobRunPending, StartedAt: time.Now().UTC(), Nodes: nodes}
+	p.jobRuns[id] = op
+	p.jobRunStacks[id] = stack
+	p.jobRunCompiled[id] = compiled
+	p.jobRunOrder = append(p.jobRunOrder, id)
+	if len(p.jobRunOrder) > 64 {
+		expired := p.jobRunOrder[0]
+		p.jobRunOrder = p.jobRunOrder[1:]
+		delete(p.jobRuns, expired)
+		delete(p.jobRunStacks, expired)
+		delete(p.jobRunCompiled, expired)
+	}
+	p.latestJobRun = id
+	// Snapshot the receipt while still holding the lock. Returning it after the
+	// executor goroutine spawns would race the executor's setNode writes, which
+	// mutate the stored record's Nodes backing array (WARNING: DATA RACE).
+	receipt := cloneJobRun(op)
+	p.jobRunsMu.Unlock()
+	operationContext := ctx
+	if p.detachedContext != nil {
+		operationContext = p.detachedContext
+	}
+	go p.executeJobRun(operationContext, id, release)
+	return receipt, nil
+}
+
+// JobRun preserves the synchronous local API while the operator transports use
+// JobRunStart to obtain a durable receipt immediately.
+func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {
+	op, err := p.JobRunStart(ctx, name, inputs, false)
 	if err != nil {
 		return nil, err
 	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for op.Status == api.JobRunPending || op.Status == api.JobRunRunning {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			op, err = p.JobRunGet(ctx, op.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if op.Status == api.JobRunFailed {
+		return []byte(op.Output), errors.New(op.Error)
+	}
+	return []byte(op.Output), nil
+}
+
+func (p *Platform) JobRunGet(_ context.Context, id string) (api.JobRunOperation, error) {
+	p.jobRunsMu.RLock()
+	defer p.jobRunsMu.RUnlock()
+	op, ok := p.jobRuns[id]
+	if !ok {
+		return api.JobRunOperation{}, &NotFoundError{Kind: "job run", Name: id}
+	}
+	return cloneJobRun(op), nil
+}
+
+func (p *Platform) LatestJobRun(_ context.Context) (*api.JobRunOperation, error) {
+	p.jobRunsMu.RLock()
+	defer p.jobRunsMu.RUnlock()
+	if p.latestJobRun == "" {
+		return nil, nil
+	}
+	op := cloneJobRun(p.jobRuns[p.latestJobRun])
+	return &op, nil
+}
+
+func cloneJobRun(op api.JobRunOperation) api.JobRunOperation {
+	op.Nodes = append([]api.JobRunNode(nil), op.Nodes...)
+	return op
+}
+
+func (p *Platform) JobRunPreview(_ context.Context, name string, chained bool) (api.JobRunPreview, error) {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return api.JobRunPreview{}, err
+	}
+	nodes, err := jobRunNodes(stack, name, chained)
+	if err != nil {
+		return api.JobRunPreview{}, err
+	}
+	var result api.JobRunPreview
+	for _, n := range nodes {
+		if n.Kind == "job" {
+			result.Jobs = append(result.Jobs, n.Name)
+		} else {
+			result.Services = append(result.Services, n.Name)
+		}
+	}
+	return result, nil
+}
+
+func jobRunNodes(stack *manifest.Stack, root string, chained bool) ([]api.JobRunNode, error) {
+	if _, ok := stack.Jobs[root]; !ok {
+		return nil, &NotFoundError{Kind: "job", Name: root}
+	}
+	seen := map[string]bool{root: true}
+	if chained {
+		changed := true
+		for changed {
+			changed = false
+			for name, j := range stack.Jobs {
+				for _, d := range j.DependsOn {
+					if seen[d] && !seen[name] {
+						seen[name] = true
+						changed = true
+					}
+				}
+			}
+			for name, s := range stack.Services {
+				for _, d := range append(s.After, s.DependsOn...) {
+					if seen[d] && !seen[name] {
+						seen[name] = true
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	nodes := make([]api.JobRunNode, 0, len(names))
+	for _, n := range names {
+		kind := "service"
+		if _, ok := stack.Jobs[n]; ok {
+			kind = "job"
+		}
+		nodes = append(nodes, api.JobRunNode{Name: n, Kind: kind, Status: api.JobRunPending})
+	}
+	return nodes, nil
+}
+
+// jobOperationStack returns the complete runtime graph needed by one operation:
+// its existing run/restart nodes plus every transitive prerequisite. The view is
+// compiler-only; stack declarations and generated runtime documents stay whole.
+func jobOperationStack(stack *manifest.Stack, root string, chained bool) (*manifest.Stack, error) {
+	nodes, err := jobRunNodes(stack, root, chained)
+	if err != nil {
+		return nil, err
+	}
+	included := make(map[string]bool, len(nodes))
+	queue := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		included[node.Name] = true
+		queue = append(queue, node.Name)
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		for _, dependency := range stackNodeDependencies(stack, name) {
+			if included[dependency] {
+				continue
+			}
+			if _, isJob := stack.Jobs[dependency]; !isJob {
+				if _, isService := stack.Services[dependency]; !isService {
+					continue
+				}
+			}
+			included[dependency] = true
+			queue = append(queue, dependency)
+		}
+	}
+	projected := *stack
+	// The edge is a stack-wide generated service, not an operation prerequisite.
+	projected.Ingress = manifest.Ingress{}
+	projected.Jobs = make(map[string]manifest.Job)
+	for name, job := range stack.Jobs {
+		if included[name] {
+			projected.Jobs[name] = job
+		}
+	}
+	projected.Services = make(map[string]manifest.Service)
+	for name, service := range stack.Services {
+		if included[name] {
+			projected.Services[name] = service
+		}
+	}
+	return &projected, nil
+}
+
+func stackNodeDependencies(stack *manifest.Stack, name string) []string {
+	if job, ok := stack.Jobs[name]; ok {
+		return job.DependsOn
+	}
+	if service, ok := stack.Services[name]; ok {
+		return append(append([]string(nil), service.After...), service.DependsOn...)
+	}
+	return nil
+}
+
+func (p *Platform) updateJobRun(id string, fn func(*api.JobRunOperation)) {
+	p.jobRunsMu.Lock()
+	op := p.jobRuns[id]
+	// Copy-on-write the Nodes slice so a mutation never writes through to a
+	// backing array that a previously returned snapshot may still alias. The
+	// stored record then never shares its Nodes array with any escaped clone.
+	op.Nodes = append([]api.JobRunNode(nil), op.Nodes...)
+	fn(&op)
+	p.jobRuns[id] = op
+	p.jobRunsMu.Unlock()
+}
+
+const (
+	jobRunTimeoutEnv     = "ANGEE_JOB_TIMEOUT"
+	defaultJobRunTimeout = 30 * time.Minute
+)
+
+// jobRunTimeout resolves the wall-clock bound applied to a detached job run.
+// It mirrors the ANGEE_GIT_TIMEOUT convention: a package default overridable
+// by an env var holding a Go duration. A value of 0 (or a malformed/negative
+// value) disables the bound, matching the git timeout's escape hatch.
+func jobRunTimeout() time.Duration {
+	raw, ok := os.LookupEnv(jobRunTimeoutEnv)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return defaultJobRunTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout < 0 {
+		return defaultJobRunTimeout
+	}
+	return timeout
+}
+
+// jobRunContext derives the execution context for a detached job run. A
+// positive timeout yields a context that expires after it; a zero timeout
+// leaves the parent unbounded. The returned cancel func must always be called
+// (defer) to release the timer and avoid a context leak.
+func jobRunContext(parent context.Context) (context.Context, context.CancelFunc, time.Duration) {
+	timeout := jobRunTimeout()
+	if timeout <= 0 {
+		return parent, func() {}, 0
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, timeout
+}
+
+func (p *Platform) executeJobRun(ctx context.Context, id string, release func()) {
+	defer release()
+	defer func() { p.jobRunsMu.Lock(); p.activeJobRun = false; p.jobRunsMu.Unlock() }()
+	// executeJobRun runs under the daemon-lifetime detachedContext and holds the
+	// single-slot mutation lease until it returns. A container job blocks on
+	// `docker compose wait` with no timeout, so a job whose container never
+	// exits would hold the lease (and activeJobRun) forever, rejecting every
+	// other lifecycle mutation until the daemon restarts. Bound the execution.
+	ctx, cancel, timeout := jobRunContext(ctx)
+	defer cancel()
+	p.jobRunsMu.RLock()
+	stack := p.jobRunStacks[id]
+	compiled := p.jobRunCompiled[id]
+	p.jobRunsMu.RUnlock()
+	if stack == nil || compiled == nil {
+		p.finishJobRun(id, errors.New("job operation runtime snapshot is unavailable"))
+		return
+	}
+	err := p.runJobGraph(ctx, id, stack, compiled)
+	if timeout > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		p.finishTimedOutJobRun(id, timeout)
+		return
+	}
+	p.finishJobRun(id, err)
+}
+
+// runJobGraph drives the operation's node graph to completion, marking node
+// states as it goes, and returns a non-nil error if the run failed. It never
+// finalizes the operation itself: the caller owns finishJobRun so a timeout can
+// override the outcome with a clear message.
+func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.Stack, compiled *CompiledStack) error {
+	op, _ := p.JobRunGet(ctx, id)
+	done := map[string]bool{}
+	failed := map[string]bool{}
+	p.updateJobRun(id, func(o *api.JobRunOperation) { o.Status = api.JobRunRunning })
+	remaining := len(op.Nodes)
+	for remaining > 0 {
+		progressed := false
+		for i, n := range op.Nodes {
+			if done[n.Name] || failed[n.Name] {
+				continue
+			}
+			deps := stackNodeDependencies(stack, n.Name)
+			blocked := false
+			blockedMessage := "dependency failed"
+			ready := true
+			for _, d := range deps {
+				if failed[d] {
+					blocked = true
+				}
+				if containsOperationNode(op.Nodes, d) && !done[d] {
+					ready = false
+				} else if !containsOperationNode(op.Nodes, d) {
+					satisfied, dependencyErr := p.dependencySatisfied(ctx, stack, compiled, d)
+					if dependencyErr != nil || !satisfied {
+						blocked = true
+						blockedMessage = "declared prerequisite is not ready in the current runtime"
+					}
+				}
+			}
+			if blocked {
+				failed[n.Name] = true
+				remaining--
+				progressed = true
+				p.setNode(id, i, api.JobRunBlocked, blockedMessage)
+				continue
+			}
+			if !ready {
+				continue
+			}
+			p.setNode(id, i, api.JobRunRunning, "")
+			p.updateJobRun(id, func(o *api.JobRunOperation) { o.CurrentStep = n.Name })
+			var out []byte
+			var err error
+			if n.Kind == "job" {
+				out, err = p.runJob(ctx, stack, compiled, n.Name)
+			} else {
+				err = p.applyService(ctx, stack, compiled, n.Name)
+			}
+			if err != nil {
+				failed[n.Name] = true
+				p.setNode(id, i, api.JobRunFailed, err.Error())
+			} else {
+				done[n.Name] = true
+				p.setNode(id, i, api.JobRunSucceeded, "")
+			}
+			if n.Name == op.RootJob {
+				p.updateJobRun(id, func(o *api.JobRunOperation) { o.Output = boundedJobOutput(out) })
+				if err != nil {
+					for pendingIndex, pending := range op.Nodes {
+						if pending.Name != n.Name && !done[pending.Name] && !failed[pending.Name] {
+							failed[pending.Name] = true
+							p.setNode(id, pendingIndex, api.JobRunBlocked, "root job failed")
+						}
+					}
+					return err
+				}
+			}
+			remaining--
+			progressed = true
+		}
+		if !progressed {
+			return fmt.Errorf("job dependency graph cannot make progress")
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("one or more dependents failed")
+	}
+	return nil
+}
+
+func (p *Platform) dependencySatisfied(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) (bool, error) {
+	if service, ok := stack.Services[name]; ok {
+		backend, request, err := p.operationRuntime(stack, compiled, service.Runtime)
+		if err != nil {
+			return false, err
+		}
+		statuses, err := backend.Status(ctx, request)
+		if err != nil {
+			return false, err
+		}
+		for _, state := range statuses {
+			if state.Name == name {
+				return strings.EqualFold(state.State, "running") && (service.Ready == nil || state.Health == "healthy"), nil
+			}
+		}
+		return false, nil
+	}
+	job, ok := stack.Jobs[name]
+	if !ok {
+		return false, nil
+	}
+	backend := p.composeBackend
+	request := runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}
+	if job.Runtime == manifest.RuntimeLocal {
+		backend = p.procBackend
+		request.ControlPort = processComposeControlPort(stack)
+	}
+	configuration, err := p.compiledRuntimeConfiguration(compiled, job.Runtime)
+	if err != nil {
+		return false, err
+	}
+	request.Configuration = configuration
+	statuses, err := backend.Status(ctx, request)
+	if err != nil {
+		return false, err
+	}
+	for _, status := range statuses {
+		state := strings.ToLower(strings.TrimSpace(status.State))
+		terminal := state == "exited" || state == "completed" || state == "completed successfully"
+		if status.Name == name && terminal && status.ExitCode != nil && *status.ExitCode == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+const maxPersistedJobOutput = 1 << 20
+const maxPersistedJobError = 4 << 10
+
+func boundedJobOutput(output []byte) string {
+	if len(output) <= maxPersistedJobOutput {
+		return string(output)
+	}
+	return string(output[len(output)-maxPersistedJobOutput:])
+}
+func boundedJobError(message string) string {
+	if len(message) <= maxPersistedJobError {
+		return message
+	}
+	return message[:maxPersistedJobError]
+}
+func containsOperationNode(ns []api.JobRunNode, name string) bool {
+	for _, n := range ns {
+		if n.Name == name {
+			return true
+		}
+	}
+	return false
+}
+func (p *Platform) setNode(id string, i int, status api.JobRunStatus, msg string) {
+	p.updateJobRun(id, func(o *api.JobRunOperation) { o.Nodes[i].Status = status; o.Nodes[i].Message = boundedJobError(msg) })
+}
+func (p *Platform) finishJobRun(id string, err error) {
+	now := time.Now().UTC()
+	p.updateJobRun(id, func(o *api.JobRunOperation) {
+		o.EndedAt = &now
+		o.CurrentStep = ""
+		if err != nil {
+			o.Status = api.JobRunFailed
+			o.Error = boundedJobError(err.Error())
+		} else {
+			o.Status = api.JobRunSucceeded
+		}
+	})
+	p.jobRunsMu.Lock()
+	delete(p.jobRunStacks, id)
+	delete(p.jobRunCompiled, id)
+	p.jobRunsMu.Unlock()
+}
+
+// finishTimedOutJobRun finalizes a run whose execution context hit its
+// deadline. It records a clear timeout error and marks every node that had not
+// already reached a terminal state (running -> failed, pending -> blocked), so
+// no node dangles as pending or running. The lease is released by the caller's
+// deferred release in executeJobRun.
+func (p *Platform) finishTimedOutJobRun(id string, timeout time.Duration) {
+	now := time.Now().UTC()
+	message := fmt.Sprintf("job run timed out after %s (raise %s, or set it to 0, to allow longer runs)", timeout, jobRunTimeoutEnv)
+	p.updateJobRun(id, func(o *api.JobRunOperation) {
+		o.EndedAt = &now
+		o.CurrentStep = ""
+		o.Status = api.JobRunFailed
+		o.Error = boundedJobError(message)
+		for i := range o.Nodes {
+			switch o.Nodes[i].Status {
+			case api.JobRunRunning:
+				o.Nodes[i].Status = api.JobRunFailed
+				o.Nodes[i].Message = boundedJobError(message)
+			case api.JobRunPending:
+				o.Nodes[i].Status = api.JobRunBlocked
+				o.Nodes[i].Message = boundedJobError("job run timed out before this node started")
+			}
+		}
+	})
+	p.jobRunsMu.Lock()
+	delete(p.jobRunStacks, id)
+	delete(p.jobRunCompiled, id)
+	p.jobRunsMu.Unlock()
+}
+func (p *Platform) applyService(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) error {
+	s := stack.Services[name]
+	target := runtime.Target{Root: p.root, Services: []string{name}, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
+	backend := p.composeBackend
+	if s.Runtime == manifest.RuntimeLocal {
+		backend = p.procBackend
+	}
+	if err := p.applyRuntimeConfiguration(ctx, compiled, s.Runtime, backend, target); err != nil {
+		return fmt.Errorf("apply service %s: %w", name, err)
+	}
+	return p.waitServiceReady(ctx, stack, compiled, name)
+}
+func (p *Platform) waitServiceReady(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) error {
+	wait := 30 * time.Second
+	if probe := stack.Services[name].Ready; probe != nil {
+		normalized := probe.Normalized()
+		startPeriod, _ := time.ParseDuration(normalized.StartPeriod)
+		interval, _ := time.ParseDuration(normalized.Interval)
+		timeout, _ := time.ParseDuration(normalized.Timeout)
+		wait = startPeriod + time.Duration(*normalized.Retries)*interval + timeout
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("service %s did not become ready", name)
+		case <-tick.C:
+			backend, request, err := p.operationRuntime(stack, compiled, stack.Services[name].Runtime)
+			if err != nil {
+				continue
+			}
+			statuses, err := backend.Status(ctx, request)
+			if err == nil {
+				for _, s := range statuses {
+					if s.Name == name && strings.EqualFold(s.State, "running") && (stack.Services[name].Ready == nil || s.Health == "healthy") {
+						return nil
+					}
+				}
+			}
+		}
+	}
+}
+
+func (p *Platform) compiledRuntimeConfiguration(compiled *CompiledStack, target manifest.Runtime) ([]byte, error) {
+	if target == manifest.RuntimeLocal {
+		return proccompose.Marshal(compiled.ProcessCompose)
+	}
+	return compose.Marshal(compiled.Compose)
+}
+
+func (p *Platform) operationRuntime(stack *manifest.Stack, compiled *CompiledStack, target manifest.Runtime) (runtime.Backend, runtime.StatusRequest, error) {
+	configuration, err := p.compiledRuntimeConfiguration(compiled, target)
+	request := runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), Configuration: configuration}
+	backend := p.composeBackend
+	if target == manifest.RuntimeLocal {
+		backend = p.procBackend
+		request.ControlPort = processComposeControlPort(stack)
+	}
+	return backend, request, err
+}
+
+func (p *Platform) runJob(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) ([]byte, error) {
 	job, ok := stack.Jobs[name]
 	if !ok {
 		return nil, &NotFoundError{Kind: "job", Name: name}
 	}
-	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
-	if err != nil {
-		return nil, err
-	}
-	resolvedSecrets, err := secrets.ResolveDeclarations(ctx, backend, stack.Secrets, os.LookupEnv)
-	if err != nil {
-		return nil, err
-	}
-	subCtx := baseSubstitutionContext(stack, p.root, resolvedSecrets, nil)
-	subCtx.Inputs = inputs
-	subCtx.Name = name
-	command, err := substitute.ResolveSlice(job.Command, subCtx)
-	if err != nil {
-		return nil, err
-	}
-	env, err := substitute.ResolveMap(job.Env, subCtx)
-	if err != nil {
-		return nil, err
-	}
-	workdir, err := substitute.Resolve(job.Workdir, subCtx)
-	if err != nil {
-		return nil, err
-	}
-	mounts, err := substitute.ResolveSlice([]string(job.Mounts), subCtx)
-	if err != nil {
-		return nil, err
-	}
-	resolver := resourceResolver(stack, p.root)
 	if job.Runtime == manifest.RuntimeLocal {
-		localEnv, err := localMountEnv(mounts, resolver)
+		configuration, err := proccompose.Marshal(compiled.ProcessCompose)
 		if err != nil {
 			return nil, err
 		}
-		if env == nil {
-			env = map[string]string{}
-		}
-		for key, value := range localEnv {
-			env[key] = value
-		}
-		workdir, err = mountx.ResolveWorkdir(workdir, resolver)
-		if err != nil {
-			return nil, err
-		}
-		if workdir != "" && !filepath.IsAbs(workdir) {
-			workdir = filepath.Join(p.root, workdir)
-		}
+		spec := runtime.JobSpec{Name: name, Configuration: configuration}
+		target := runtime.Target{Root: p.root, Services: []string{name}, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
 		p.jobOutput.status(name, "running")
 		finish := logctx.Step(ctx, "running job "+name)
-		out, err := runLocalCommand(ctx, workdir, command, env, p.jobOutput)
+		runner, ok := p.procBackend.(runtime.JobBackend)
+		if !ok {
+			return nil, fmt.Errorf("local job execution is unavailable from the configured process-compose backend")
+		}
+		out, err := runner.RunJob(ctx, target, spec)
 		finish(err)
 		if err != nil {
 			p.jobOutput.status(name, "failed")
@@ -103,23 +649,22 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 		return out, err
 	}
 	if job.Runtime == manifest.RuntimeContainer {
-		args := []string{"run", "--rm"}
-		for key, value := range env {
-			args = append(args, "-e", key+"="+value)
+		configuration, err := compose.Marshal(compiled.Compose)
+		if err != nil {
+			return nil, err
 		}
-		args = append(args, job.Image)
-		args = append(args, command...)
-		cmd := exec.CommandContext(ctx, "docker", args...)
-		cmd.Dir = p.root
+		spec := runtime.JobSpec{Name: name, Configuration: configuration}
 		p.jobOutput.status(name, "running")
 		finish := logctx.Step(ctx, "running job "+name)
-		trace := logctx.TraceExec(ctx, "docker", args, p.root)
-		out, err := runCommand(cmd, p.jobOutput)
-		trace(out, err)
+		runner, ok := p.composeBackend.(runtime.JobBackend)
+		if !ok {
+			return nil, fmt.Errorf("container job execution is unavailable from the configured compose backend")
+		}
+		out, err := runner.RunJob(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}, spec)
 		finish(err)
 		if err != nil {
 			p.jobOutput.status(name, "failed")
-			return out, fmt.Errorf("job container command failed: %w: %s", err, out)
+			return out, fmt.Errorf("job container command failed: %w", err)
 		}
 		p.jobOutput.status(name, "finished")
 		return out, nil

@@ -202,7 +202,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
 	cmd.AddCommand(initCmd)
 	var updateTemplate, updateDryRun, updateOverwrite, updateInteractive bool
-	var updateInputs []string
+	var updateInputs, updateSkip []string
 	updateCmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update generated runtime files (with --template, re-render angee.yaml from its stack template first)",
@@ -225,6 +225,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if updateOverwrite && !updateTemplate {
 				return fmt.Errorf("--overwrite only applies with --template")
 			}
+			if len(updateSkip) != 0 && !updateTemplate {
+				return fmt.Errorf("--skip only applies with --template")
+			}
 			if updateTemplate {
 				if operatorURL != nil && *operatorURL != "" {
 					return fmt.Errorf("--template re-renders the local stack template and is not supported with --operator")
@@ -245,7 +248,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{Inputs: inputs, DryRun: updateDryRun, Overwrite: updateOverwrite})
+				res, err := platform.StackUpdateFromTemplate(cmd.Context(), service.StackUpdateTemplateOptions{Inputs: inputs, DryRun: updateDryRun, Overwrite: updateOverwrite, Skip: updateSkip})
 				if err != nil {
 					return err
 				}
@@ -290,6 +293,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	updateCmd.Flags().BoolVar(&updateTemplate, "template", false, "re-render all stack template output before regenerating runtime files")
 	updateCmd.Flags().BoolVar(&updateDryRun, "dry-run", false, "with --template, print changes without writing")
 	updateCmd.Flags().BoolVar(&updateOverwrite, "overwrite", false, "with --template, replace conflicting locally modified files")
+	updateCmd.Flags().StringArrayVar(&updateSkip, "skip", nil, "with --template, leave matching existing ordinary files untouched (repeatable)")
 	updateCmd.Flags().BoolVarP(&updateInteractive, "interactive", "i", false, "with --template, review recorded template inputs before re-rendering")
 	updateCmd.Flags().StringArrayVar(&updateInputs, "input", nil, "with --template, override template input K=V")
 	updateCmd.Flags().StringArray("answers", nil, "with --template, load template answers YAML (repeatable)")
@@ -405,7 +409,9 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 		Short: "Run the local development stack",
 		Long: "Run the local development stack, streaming logs from every service\n" +
 			"regardless of runtime (container and local) into one foreground stream.\n\n" +
-			"Press Ctrl-C to stop the whole stack. To restart or stop a single service\n" +
+			"Press Ctrl-C to stop local-process services and log streaming; container\n" +
+			"services remain running. Use `angee down` for a full shutdown. To restart or\n" +
+			"stop a single service\n" +
 			"while it runs, use `angee restart <name>` or `angee stop <name>` from\n" +
 			"another shell.\n\n" +
 			"Examples:\n" +
@@ -565,6 +571,7 @@ func jobListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 
 func jobRunCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var inputValues []string
+	var chainedRestart bool
 	cmd := &cobra.Command{
 		Use:   "run <name>",
 		Short: "Run a job",
@@ -578,16 +585,34 @@ func jobRunCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out, err := platform.JobRun(cmd.Context(), args[0], inputs)
-			if len(out) > 0 {
-				if _, writeErr := stdout.Write(out); writeErr != nil {
+			op, err := platform.JobRunStart(cmd.Context(), args[0], inputs, chainedRestart)
+			if err != nil {
+				return err
+			}
+			for op.Status == api.JobRunPending || op.Status == api.JobRunRunning {
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(200 * time.Millisecond):
+				}
+				op, err = platform.JobRunGet(cmd.Context(), op.ID)
+				if err != nil {
+					return err
+				}
+			}
+			if len(op.Output) > 0 {
+				if _, writeErr := io.WriteString(stdout, op.Output); writeErr != nil {
 					return writeErr
 				}
 			}
-			return err
+			if op.Status == api.JobRunFailed {
+				return errors.New(op.Error)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "job input K=V")
+	cmd.Flags().BoolVar(&chainedRestart, "chained-restart", false, "restart all downstream jobs and services after success")
 	return cmd
 }
 

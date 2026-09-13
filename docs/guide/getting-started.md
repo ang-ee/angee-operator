@@ -63,6 +63,12 @@ angee up           # start container Services
 angee dev          # start container + local Services together
 ```
 
+`angee dev` starts container services detached and follows their recent logs
+alongside the local processes, replaying only the recent backlog and re-attaching
+if a container is recreated while it runs. Ctrl-C stops the local processes and
+foreground log stream while container services remain running. Use `angee down`
+to stop the whole stack.
+
 To bootstrap a fresh stack from a Stack template:
 
 ```sh

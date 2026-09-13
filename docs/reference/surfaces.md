@@ -38,7 +38,11 @@ helper used by adapters or tests and should not be exposed directly.
 | `ServiceRestart` | Yes | Yes | Yes | - |
 | `IngressStatus` | No | Yes | Yes | REST `GET /ingress/status`; GraphQL `ingressStatus` route summary. |
 | `JobList` | Yes | Yes | Yes | - |
-| `JobRun` | Yes | Yes | Yes | - |
+| `JobRun` | Internal | Internal | Internal | Synchronous compatibility wrapper; CLI and transports start and poll receipts. |
+| `JobRunStart` | Yes | Yes | Yes | Starts an operation; `job run --chained-restart` applies downstream jobs and services after the root succeeds. |
+| `JobRunPreview` | No | Yes | Yes | Returns the manifest-derived affected jobs and services before a chained run. |
+| `JobRunGet` | Internal | Yes | Yes | CLI polls internally; remote clients query progress and terminal node outcomes by receipt ID. |
+| `LatestJobRun` | No | Yes | Yes | Returns the most recent daemon-owned receipt across client reconnects. |
 | `SourceList` | Yes | Yes | Yes | - |
 | `SourceFetch` | Yes | Yes | Yes | - |
 | `SourceStatus` | Yes | Yes | Yes | - |

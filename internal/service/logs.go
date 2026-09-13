@@ -30,10 +30,6 @@ func (p *Platform) StreamServiceLogs(ctx context.Context, service string, tail i
 	if !ok {
 		return nil, fmt.Errorf("service %q not found", service)
 	}
-	if _, err := p.StackPrepare(ctx); err != nil {
-		return nil, err
-	}
-
 	req := runtime.LogsRequest{
 		Root:     p.root,
 		Services: []string{service},

@@ -126,6 +126,11 @@ func (p *Platform) SecretValue(ctx context.Context, name string) (api.SecretValu
 // (declared or not). Empty values are rejected — use SecretDelete to
 // remove instead.
 func (p *Platform) SecretSet(ctx context.Context, name, value string) (api.SecretRef, error) {
+	ctx, release, err := p.beginMutation(ctx, "secret")
+	if err != nil {
+		return api.SecretRef{}, err
+	}
+	defer release()
 	if err := validateSecretName(name); err != nil {
 		return api.SecretRef{}, err
 	}
@@ -153,6 +158,11 @@ func (p *Platform) SecretSet(ctx context.Context, name, value string) (api.Secre
 // deleting a non-existent name returns nil. The declared manifest
 // entry (if any) is left alone — only the backend value is removed.
 func (p *Platform) SecretDelete(ctx context.Context, name string) error {
+	ctx, release, err := p.beginMutation(ctx, "secret")
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := validateSecretName(name); err != nil {
 		return err
 	}

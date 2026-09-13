@@ -42,6 +42,11 @@ func servicePortOwner(serviceName, pool string) string {
 // Returns the resulting api.ServiceState. On failure, allocated port
 // leases are released so the next attempt sees clean state.
 func (p *Platform) ServiceCreate(ctx context.Context, req api.ServiceCreateRequest) (api.ServiceState, error) {
+	ctx, release, err := p.beginMutation(ctx, "service")
+	if err != nil {
+		return api.ServiceState{}, err
+	}
+	defer release()
 	if req.Template == "" {
 		return api.ServiceState{}, &InvalidInputError{Field: "template", Reason: "service template is required"}
 	}

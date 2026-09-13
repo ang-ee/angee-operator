@@ -1,16 +1,20 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
 )
 
 func TestRequestDTOJSONRoundTrip(t *testing.T) {
-	job := JobRunRequest{Inputs: map[string]string{"env": "dev"}}
+	job := JobRunRequest{Inputs: map[string]string{"env": "dev"}, ChainedRestart: true}
 	jobData, err := json.Marshal(job)
 	if err != nil {
 		t.Fatalf("Marshal(JobRunRequest) error = %v", err)
+	}
+	if !bytes.Contains(jobData, []byte(`"chained_restart":true`)) {
+		t.Fatalf("JobRunRequest JSON = %s, want snake_case chained_restart", jobData)
 	}
 	var decodedJob JobRunRequest
 	if err := json.Unmarshal(jobData, &decodedJob); err != nil {

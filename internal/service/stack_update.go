@@ -32,6 +32,9 @@ type StackUpdateTemplateOptions struct {
 	// Overwrite replaces conflicting rendered files and permits deletion of
 	// locally modified files that the template no longer renders.
 	Overwrite bool
+	// Skip leaves matching existing ordinary template files untouched. It does
+	// not apply to stack documents, answers, or reconciliation state.
+	Skip []string
 }
 
 // StackUpdateTemplateResult reports what a template re-render changed.
@@ -50,6 +53,11 @@ type StackUpdateTemplateResult struct {
 // `workspaces`, `port_leases`) and keeps allocated `ports` values, while
 // refreshing template-origin sections and keeping user-added keys.
 func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdateTemplateOptions) (StackUpdateTemplateResult, error) {
+	ctx, release, err := p.beginMutation(ctx, "stack")
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	defer release()
 	if err := ctx.Err(); err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
@@ -98,8 +106,12 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	}
 	plan.StateRoot = p.root
 	plan.TargetRoot = renderTarget
+	reconcileSkip, err := stackUpdateSkipPatterns(renderTarget, p.root, opts.Skip)
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
 	prepared, err := copierx.PrepareReconcile(ctx, plan, copierx.ReconcileOptions{
-		Mode: copierx.ReconcileUpdate, DryRun: opts.DryRun, Overwrite: opts.Overwrite,
+		Mode: copierx.ReconcileUpdate, DryRun: opts.DryRun, Overwrite: opts.Overwrite, Skip: reconcileSkip,
 	})
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
@@ -256,6 +268,35 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	}
 	if err := prepared.SaveState(ctx); err != nil {
 		return StackUpdateTemplateResult{}, joinRollbackErrors(err, rollbackRuntime, rollbackDocuments, rollbackFiles, rollbackResources)
+	}
+	return result, nil
+}
+
+func stackUpdateSkipPatterns(renderTarget, stackRoot string, patterns []string) ([]string, error) {
+	prefix, err := filepath.Rel(renderTarget, stackRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve stack skip paths: %w", err)
+	}
+	prefix = filepath.Clean(prefix)
+	if prefix == ".." || strings.HasPrefix(filepath.ToSlash(prefix), "../") {
+		return nil, fmt.Errorf("stack root %q is outside template render target %q", stackRoot, renderTarget)
+	}
+	result := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern == "" {
+			return nil, &InvalidInputError{Field: "skip", Reason: "pattern is empty"}
+		}
+		if filepath.IsAbs(pattern) {
+			return nil, &InvalidInputError{Field: "skip", Reason: fmt.Sprintf("pattern %q must be relative to the stack root", pattern)}
+		}
+		clean := filepath.Clean(pattern)
+		if clean == ".." || strings.HasPrefix(filepath.ToSlash(clean), "../") {
+			return nil, &InvalidInputError{Field: "skip", Reason: fmt.Sprintf("pattern %q escapes the stack root", pattern)}
+		}
+		if prefix != "." {
+			clean = filepath.Join(prefix, clean)
+		}
+		result = append(result, filepath.ToSlash(clean))
 	}
 	return result, nil
 }
