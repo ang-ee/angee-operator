@@ -13,6 +13,7 @@ once their design is captured in the code, the published docs, and
 
 | Proposal | Gist |
 |---|---|
+| [jj-native-operator](./jj-native-operator.md) | Drive sources and workspace slots with Jujutsu behind a per-stack `vcs` switch: a `vcs.Driver` seam with git and jj implementations, colocated jj workspaces as slots, jj rebase and first-class conflicts replacing the merge/rebase state machine, lazy bookmarks and publish-only-diverged, an op-heads watch for topology events. Git-era prerequisites (credential passthrough, remotes with roles, `link` slot mode, optional slot branch) land first. Gated on jj shipping colocated secondary workspaces. |
 | [global-source-registry](./global-source-registry.md) | A global source registry (`POST /sources` register-by-id, `POST /sources/{id}/destroy`) plus per-render workspace materialization via an `inputs.sources` render input. Only the pre-existing clone/cache machinery exists today. |
 | [ephemeral-workspace-pool](./ephemeral-workspace-pool.md) | Leased/reaped/recycled workspaces: a `WorkspaceLease` model + `/lease` endpoints, a TTL+lease reaper sweep, and a warm pool (`operator.workspace_pool.<template>` + `acquire`). Only the pre-existing TTL/`expired` computation exists today. |
 | [local-platform-instance](./local-platform-instance.md) | A central local operator that hosts workspaces and agents: a `stacks/local` platform template, containerized workspace dev stacks, per-workspace agent services, and the develop→reconcile loop. Largely cross-repo; depends on the entries below. |
