@@ -215,6 +215,11 @@ func parseConflictedPaths(lsFilesOutput string) []string {
 // `workspaceSourcePublish` against any non-`file://` remote.
 func gitOpEnv() []string {
 	inherit := []string{"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_SSH_COMMAND", "LANG", "LC_ALL"}
+	// HTTPS credential helpers such as `gh auth git-credential` read their
+	// token and config from the environment; without these a push over HTTPS
+	// fails with "could not read Username" on machines that authenticate gh
+	// through GH_TOKEN. Only key names are traced, never values.
+	inherit = append(inherit, "GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GIT_ASKPASS")
 	env := make([]string, 0, len(inherit)+5)
 	for _, key := range inherit {
 		if v, ok := os.LookupEnv(key); ok {
