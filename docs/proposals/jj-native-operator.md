@@ -1,6 +1,6 @@
 # Proposal: drive sources and workspace slots with Jujutsu (jj)
 
-**Status:** Draft · **Area:** sources, workspaces, gitops · **Surfaces:** CLI + REST + GraphQL (operator), stack and workspace templates (angee-django)
+**Status:** Draft (revised 2026-09-30 after the first hand-built jj workspace) · **Area:** sources, workspaces, gitops · **Surfaces:** CLI + REST + GraphQL (operator), stack and workspace templates (angee-django)
 
 ## Summary
 
@@ -16,8 +16,10 @@ in a `MERGING` or `REBASING` state an agent cannot recover from.
 The operator keeps owning everything jj does not know about: which slots form
 one Angee workspace, the base ref per source, branch namespaces, remote roles,
 publish policy, and the cross-repo topology. jj is driven through its CLI with
-operator-owned JSON templates behind a `vcs` interface; git remains the
-default until the switch is opted into per stack. GitHub, CI, `gh`, Copier,
+operator-owned JSON templates behind a `vcs` interface. The switch is a slot
+mode, `mode: jj`, beside `worktree` and `clone`, with a stack-level `vcs`
+default; git remains the default everywhere until a slot opts in, and one stack
+may mix git and jj slots. GitHub, CI, `gh`, Copier,
 uv, and pnpm keep seeing plain git.
 
 The research behind this proposal (jj capability audit, integration options,
@@ -72,6 +74,37 @@ prior art, tooling survey) is recorded in the private work-state under
 - `manifest.Source` carries one `Repo` URL; `manifest.WorkspaceSource` has
   `Mode` (`worktree` or `clone`) and a required `Branch` for worktrees.
 
+## Field evidence (2026-09-30)
+
+The `dev-alexis` stack now runs one workspace, `dev-merge`, whose three source
+slots and `.work` were converted by hand to colocated jj workspaces:
+`angee ws create` cut git worktrees, then each was removed and replaced with
+`jj -R <cache> workspace add --colocate --name angee--dev-merge -r <branch>
+<slot>`. What that showed:
+
+- **Mixed stacks are the real shape.** The other eight workspaces of the same
+  stack stay on git worktrees. A stack-wide switch cannot describe this; a
+  per-slot mode can (section 2).
+- **The operator misreads jj slots.** `angee ws git dev-merge` reports every
+  slot as `branch-mismatch`, because a colocated jj workspace keeps git `HEAD`
+  detached and carries the branch as a bookmark. `ws push`, `ws sync-base` and
+  `ws source` verbs assume a checked-out branch and must not run on such slots
+  until the jj driver exists.
+- **`.work` is materialized wrongly.** With `work_state_source` set, `ws
+  create` renders the `kind: local` work-state source as a symlink into the
+  shared store, which the work-state protocol forbids (every `.work` must be
+  its own jj workspace). Stacks work around it with `work_state_source: ""` and
+  attach `.work` by hand.
+- **The migration verb is exactly the manual recipe.** Refuse a dirty slot,
+  `git worktree remove` (keeping the branch), `jj git import`, `jj workspace
+  add --colocate`; nothing else was needed, and the slot keeps a working
+  `.git`.
+- **Colocated secondary workspaces are usable today** on a jj built from HEAD
+  (Homebrew `--HEAD`, which still reports `0.45.1-<sha>`); stable 0.45.1 lacks
+  `--colocate`.
+- **Tools that infer the repository from `HEAD` need help** in a detached jj
+  slot: `gh pr create` needed `-R <owner>/<repo>`.
+
 ## Ownership (the load-bearing decision)
 
 | Concern | Owner after this proposal |
@@ -87,8 +120,13 @@ prior art, tooling survey) is recorded in the private work-state under
 
 An Angee workspace and a jj workspace are different levels: one Angee workspace
 is N jj workspaces, one per slot, each on a different repository's primary.
-The operator names them `<stack>/<workspace>/<slot>` so `jj workspace list` on
-any repository reads as the list of Angee workspaces across all stacks.
+The operator names them `<stack>--<workspace>` (appending `--<slot>` only when
+one Angee workspace holds two slots of the same repository), so `jj workspace
+list` on any repository reads as the list of Angee workspaces across all
+stacks. This is the convention the shared work-state already uses for its 29
+workspaces; it is shell- and path-safe, and jj names the colocated git
+worktree's admin directory after the slot path, not after the workspace name,
+so nothing else depends on it.
 
 ## Proposal
 
@@ -97,9 +135,10 @@ any repository reads as the list of Angee workspaces across all stacks.
 These land first and are worthwhile on git alone.
 
 1. **Credential passthrough.** `gitOpEnv()` inherits `GH_TOKEN`,
-   `GITHUB_TOKEN`, and `GIT_ASKPASS` in addition to the current list. Without
-   this neither `ws source publish` nor the future `jj git push` can
-   authenticate through the `gh` helper.
+   `GITHUB_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME` and
+   `GIT_ASKPASS` in addition to the current list. Without this neither `ws
+   source publish` nor the future `jj git push` can authenticate through the
+   `gh` helper. *(PR #89.)*
 2. **Remotes with roles.** `manifest.Source` gains `remotes: map[name]url`
    and `push_default: name`; the single `repo` form stays as a shorthand for
    `remotes: {origin: repo}`. The operator renders `remote.pushDefault` and,
@@ -110,7 +149,13 @@ These land first and are worthwhile on git alone.
    checkout itself (`mode: link`), for the shared work-state whose one `main`
    working copy every workspace binds. Today that shape is only expressible
    as a `kind: local` source, which loses drift reporting.
-4. **Optional `branch` on worktree slots.** A slot without a branch is cut
+4. **Watcher ignore for `.jj` (angee-django).** Every Vite dev server and
+   Vitest watch run must ignore `**/.jj/**`, or watching jj's store slows
+   Vitest, times out `jj` commands and corrupts `working_copy.lock`. The
+   framework owns those defaults in `@angee/app` (`config/vite.ts`,
+   `config/vitest.ts`), so the fix lands there once. *(ang-ee/angee-django
+   PR #151.)*
+5. **Optional `branch` on worktree slots.** A slot without a branch is cut
    detached on its base; the branch is created on first commit. This is the
    git-era version of lazy bookmarks and lets `workspacePush` and publish skip
    slots with no commits beyond base, which they should do regardless of VCS.
@@ -145,16 +190,22 @@ date. When it ships, the same `Driver` interface re-points at it.
 
 ### 2. Slot materialization
 
-For a stack with `vcs: jj` (stack-level switch, default `git`):
+A slot is a jj workspace when its `mode` is `jj`, or when the mode is omitted
+and the stack sets `vcs: jj` (default `git`). The mode applies to any source
+whose cache or path is a jj repository — a `kind: git` cache colocated by the
+operator, or a `kind: local` path such as the shared work-state store, which
+gives `.work` the same treatment as a code slot and retires the symlink
+rendering described above. For a jj slot:
 
 - The source cache is initialized colocated: `jj git init --colocate` on the
   existing clone, `.jj/` added to `.git/info/exclude`. The primary stays
   parked on `main`; the operator never runs a mutation in it.
-- A worktree slot becomes `jj workspace add --colocate --name
-  <stack>/<workspace>/<slot> -r <base> <path>`. The `--colocate` flag is
-  merged on jj main and expected in the release after 0.45; on 0.45.1 a
-  secondary workspace has no `.git` and git tooling fails inside it, which is
-  why the switch is opt-in and gated in `doctor`.
+- The slot becomes `jj workspace add --colocate --name <stack>--<workspace>
+  -r <base> <path>`. The `--colocate` flag is on jj main and expected in the
+  release after 0.45; on stable 0.45.1 a secondary workspace has no `.git` and
+  git tooling fails inside it. `doctor` therefore probes the capability (does
+  `jj workspace add --help` list `--colocate`?) rather than comparing version
+  strings, because a HEAD build still reports `0.45.1-<sha>`.
 - `WorktreeRemove` and `WorktreePrune` become `jj workspace forget` plus the
   directory removal the operator already does.
 - `ws create --sync` reconciliation reads `jj workspace list` instead of
@@ -178,17 +229,20 @@ For a stack with `vcs: jj` (stack-level switch, default `git`):
   validation error rather than overriding.
 - `workspaceSourceMerge` maps to `jj new <slot>@ <ref>` for the rare explicit
   merge; `MergeAbort`, `RebaseAbort`, and `RebaseContinue` are removed from the
-  jj path and rejected with a clear error on a jj stack.
+  jj path and rejected with a clear error on a jj slot.
 
 ### 4. Status, conflicts, and events
 
+- On a jj slot, status reads the bookmark and `@-` instead of git `HEAD`, so
+  a detached `HEAD` is the normal state and never `branch-mismatch`; git verbs
+  that need a checked-out branch refuse the slot with a structured error.
 - `WorkspaceSourceStatus` gains `conflicted: Boolean!` and
   `conflict_paths: [String!]!`, read from the `conflicts()` revset scoped to
   the slot, and `change_id` beside `current_ref`. `ahead`/`behind` come from
   `<base>..<slot>@-` and the reverse.
 - `GitOpsTopology` reports every jj workspace of every primary, including ones
   another stack owns, so the console matrix and lightjj agree on what exists.
-- The event hub replaces `pollTopology` for jj stacks with an fsnotify watch
+- The event hub replaces `pollTopology` for jj slots with an fsnotify watch
   on `<primary>/.jj/repo/op_heads/heads`, debounced, falling back to the
   op-log poll. This is the pattern jj's own FAQ documents and the one lightjj
   uses; it turns the topology subscription into push.
@@ -204,12 +258,13 @@ workspace rewritten from another workspace repairs itself.
 
 ## Design options
 
-### A. Opt-in per stack behind a `vcs` switch, staged (recommended)
+### A. Opt-in per slot, with a stack default, staged (recommended)
 
-Prerequisites first on git, then the driver and jj slots for stacks that set
-`vcs: jj`, then removal of the git state machine once no stack needs it.
-Existing stacks are untouched until they opt in. Rollback per stack is
-`vcs: git` plus re-cutting slots.
+Prerequisites first on git, then the driver and `mode: jj` slots, then removal
+of the git state machine once no slot needs it. Existing slots are untouched
+until they opt in, and one stack may run both kinds while it migrates.
+Rollback per slot is `ws source migrate` in reverse (forget the jj workspace,
+re-cut a worktree on the same branch).
 
 ### B. Big-bang replacement of the git layer
 
@@ -232,18 +287,18 @@ current baseline, not the destination.
   does exactly that and refuses on a dirty slot.
 - The primaries are already shared and jj-colocated on the reference machine;
   the manifest `cache_path` and stack template `sources_home` express that.
-- The angee-django templates need `**/.jj/**` in every Vite and vitest watcher
-  ignore list before jj runs inside a slot: Vite watching `.jj` corrupts the
-  working-copy lock and hangs vitest. This is a cross-repo prerequisite.
+- The `.jj` watcher ignore (prerequisite 4) must be in the framework a stack
+  runs before jj runs inside any of its slots.
 - The `change-id` commit header jj writes by default since 0.30 is invisible
   to git and GitHub; `git.write-change-id-header = false` is available if
   byte-identical commits ever matter.
 
 ## Backward compatibility
 
-- `vcs` defaults to `git`; every current verb, output field, and manifest
-  shape is unchanged for git stacks.
-- On a jj stack, `workspaceSourceMergeAbort`, `RebaseAbort`, and
+- An omitted slot `mode` still means `worktree` unless the stack sets
+  `vcs: jj`, and `vcs` defaults to `git`; every current verb, output field, and
+  manifest shape is unchanged for git slots.
+- On a jj slot, `workspaceSourceMergeAbort`, `RebaseAbort`, and
   `RebaseContinue` return a structured error naming the reason. Clients that
   call them only after a conflict never reach them, because a jj rebase never
   leaves an in-progress state.
@@ -270,11 +325,15 @@ not used for that isolation.
 
 ## Acceptance
 
-- `doctor` reports jj and git versions against the floors and refuses
-  `vcs: jj` below them.
-- On a `vcs: jj` stack, `ws create` yields one colocated jj workspace per git
-  slot, with a working `.git` inside, `git rev-parse` succeeding there, and no
-  branch until the first publish.
+- `doctor` reports jj and git versions against the floors, probes for
+  colocated secondary workspaces, and refuses `mode: jj` without them.
+- One stack runs git worktree slots and jj slots side by side; `ws git`
+  reports neither as `branch-mismatch`.
+- A `kind: local` work-state source with `mode: jj` materializes `.work` as a
+  colocated jj workspace, and `ws destroy` forgets it.
+- For `mode: jj` slots (or a `vcs: jj` stack default), `ws create` yields one
+  colocated jj workspace per slot, with a working `.git` inside, `git
+  rev-parse` succeeding there, and no branch until the first publish.
 - A base move followed by sync-base rebases every slot; a conflicting slot is
   reported with its paths in `WorkspaceSourceStatus`, the workspace stays
   usable, and no verb is required to continue.
