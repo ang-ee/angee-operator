@@ -6,6 +6,15 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **Workspace publish over HTTPS with the `gh` credential helper.** The
+  stripped environment of workspace git operations (`ws source publish`, merge
+  and rebase) now passes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`,
+  `GH_CONFIG_DIR`, `XDG_CONFIG_HOME` and `GIT_ASKPASS`, so a push no longer
+  fails with "could not read Username" when gh authenticates from the
+  environment. Other variables are still not inherited.
+
 ## v0.15.0 — 2026-09-13
 
 ### Added

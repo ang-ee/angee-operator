@@ -38,6 +38,31 @@ func TestGitOpEnvDisablesPromptsAndPreservesSSHCommand(t *testing.T) {
 	})
 }
 
+func TestGitOpEnvPassesCredentialHelperEnvironment(t *testing.T) {
+	passed := map[string]string{
+		"GH_TOKEN":        "gh-token",
+		"GITHUB_TOKEN":    "github-token",
+		"GH_HOST":         "github.example.com",
+		"GH_CONFIG_DIR":   "/tmp/gh-config",
+		"XDG_CONFIG_HOME": "/tmp/xdg-config",
+		"GIT_ASKPASS":     "/usr/local/bin/askpass",
+	}
+	for key, value := range passed {
+		t.Setenv(key, value)
+	}
+	t.Setenv("ANGEE_UNRELATED_SECRET", "must-not-leak")
+
+	env := envMap(gitOpEnv())
+	for key, value := range passed {
+		if env[key] != value {
+			t.Fatalf("gitOpEnv()[%s] = %q, want %q", key, env[key], value)
+		}
+	}
+	if _, ok := env["ANGEE_UNRELATED_SECRET"]; ok {
+		t.Fatalf("gitOpEnv() leaked an unlisted variable: %#v", env)
+	}
+}
+
 func envMap(env []string) map[string]string {
 	result := make(map[string]string, len(env))
 	for _, entry := range env {
