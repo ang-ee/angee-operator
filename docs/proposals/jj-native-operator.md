@@ -169,8 +169,9 @@ Extract the nineteen methods the service layer uses from `git.Client` into
 
 - shells out to the `jj` binary on `PATH` the way the git client shells out to
   git, with `--ignore-working-copy --no-pager --color never` injected on every
-  read and `-m` forced on every mutation so nothing can open an editor or
-  pager;
+  read, and with `-m` passed to every command that takes a message (it is a
+  per-command option, not a global one) plus a no-op editor in the
+  environment, so nothing can open an editor or pager;
 - owns NDJSON templates (`json(self)` and explicit field templates) for
   `jj log`, `jj workspace list`, `jj bookmark list --all-remotes`, and
   `jj op log -n 1`, decoded with `encoding/json`, frozen by golden tests
@@ -200,11 +201,14 @@ and the stack sets `vcs: jj` (default `git`). The mode applies to any source
 whose cache or path is a jj repository — a `kind: git` cache colocated by the
 operator, or a `kind: local` path such as the shared work-state store, which
 gives `.work` the same treatment as a code slot and retires the symlink
-rendering described above. For a jj slot:
+rendering described above. A `kind: local` path must already be a jj
+repository: the operator never initializes one, and `mode: jj` on a local
+source whose path has no `.jj/` is refused before anything is materialized.
+For a jj slot:
 
-- The source cache is initialized colocated: `jj git init --colocate` on the
-  existing clone, `.jj/` added to `.git/info/exclude`. The primary stays
-  parked on `main`; the operator never runs a mutation in it.
+- A `kind: git` source cache is initialized colocated: `jj git init
+  --colocate` on the existing clone, `.jj/` added to `.git/info/exclude`. The
+  primary stays parked on `main`; the operator never runs a mutation in it.
 - The slot becomes `jj workspace add --colocate --name <stack>--<workspace>
   -r <base> <path>`. The `--colocate` flag is on jj main and not in stable
   0.45.1, where a secondary workspace has no `.git` and git tooling fails
@@ -289,9 +293,10 @@ current baseline, not the destination.
 ## Migration
 
 - Existing git worktree slots cannot be adopted by `jj workspace add`; a slot
-  is migrated by committing its work, removing the worktree, and cutting a jj
-  workspace on the same branch. A `ws source migrate <workspace> <slot>` verb
-  does exactly that and refuses on a dirty slot.
+  is migrated by removing the worktree and cutting a jj workspace on the same
+  branch. A `ws source migrate <workspace> <slot>` verb does exactly that. It
+  never commits on the user's behalf: it refuses a dirty slot, so the slot's
+  work is committed before migrating.
 - The primaries are already shared and jj-colocated on the reference machine;
   the manifest `cache_path` and stack template `sources_home` express that.
 - The `.jj` watcher ignore (prerequisite 4) must be in the framework a stack
