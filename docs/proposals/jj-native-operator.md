@@ -1,6 +1,6 @@
 # Proposal: drive sources and workspace slots with Jujutsu (jj)
 
-**Status:** Draft (revised 2026-09-30 after the first hand-built jj workspace) · **Area:** sources, workspaces, gitops · **Surfaces:** CLI + REST + GraphQL (operator), stack and workspace templates (angee-django)
+**Status:** Draft (revised 2026-09-30 after the first hand-built jj workspace; 2026-10-01: the jj baseline is the latest build, with no release gate) · **Area:** sources, workspaces, gitops · **Surfaces:** CLI + REST + GraphQL (operator), stack and workspace templates (angee-django)
 
 ## Summary
 
@@ -59,12 +59,13 @@ prior art, tooling survey) is recorded in the private work-state under
   already resolves the git triangular precedence (`branch.<b>.pushRemote`,
   `remote.pushDefault`, tracking remote, `origin`), and `SyncBaseRef()`
   already prefers `origin/<ref>`.
-- `internal/service/gitops_merge.go` (232 lines): the merge/rebase verbs, the
+- `internal/service/gitops_merge.go`: the merge/rebase verbs, the
   `ls-files -u` conflict enumeration, and `gitOpEnv()`, which hands git a
-  stripped environment. That environment drops `GH_TOKEN`, so on a machine
-  whose GitHub credentials come from the `gh` credential helper, every
-  operator-driven push fails with "could not read Username". Fetch and clone
-  in `git.Client.Run` inherit the full environment and work.
+  stripped environment. Until PR #89 that environment dropped `GH_TOKEN`, so
+  on a machine whose GitHub credentials come from the `gh` credential helper
+  every operator-driven push failed with "could not read Username"; it now
+  inherits the `gh` credential variables (prerequisite 1). Fetch and clone in
+  `git.Client.Run` inherit the full environment.
 - `internal/service/sources.go`: `materializeSource` clones or fetches the
   cache (`fetch --all --prune`), best-effort on bring-up.
 - `internal/service/commits.go` and read-only go-git calls in `git.go`:
@@ -166,18 +167,22 @@ Extract the nineteen methods the service layer uses from `git.Client` into
 `internal/vcs.Driver`, keep the git implementation as is, and add
 `internal/vcs/jj`. The jj driver:
 
-- shells out to the pinned `jj` binary the way the git client shells out to
+- shells out to the `jj` binary on `PATH` the way the git client shells out to
   git, with `--ignore-working-copy --no-pager --color never` injected on every
   read and `-m` forced on every mutation so nothing can open an editor or
   pager;
 - owns NDJSON templates (`json(self)` and explicit field templates) for
   `jj log`, `jj workspace list`, `jj bookmark list --all-remotes`, and
   `jj op log -n 1`, decoded with `encoding/json`, frozen by golden tests
-  against the pinned jj version, because jj documents its serialized field
-  names as usually stable but not guaranteed;
-- enforces a floor in `doctor`: jj 0.44 or newer for serializable maps,
-  workspace roots in templates, and `--no-integrate-operation`; git 2.42 or
-  newer for orphan worktrees, which colocated secondary workspaces use;
+  against the latest jj, because jj documents its serialized field names as
+  usually stable but not guaranteed;
+- takes the latest jj as its baseline rather than the last stable release:
+  stacks that opt in run a current build (Homebrew `--HEAD` today), so the
+  driver may rely on serializable maps, workspace roots in templates,
+  `--no-integrate-operation` and colocated secondary workspaces without
+  waiting for a release. `doctor` checks capabilities, not version strings,
+  and requires git 2.42 or newer for orphan worktrees, which colocated
+  secondary workspaces use;
 - treats stderr as opaque and keys decisions on exit status, since jj has no
   structured error contract;
 - keeps go-git for raw blob and tree reads on the colocated `.git`, and never
@@ -201,11 +206,13 @@ rendering described above. For a jj slot:
   existing clone, `.jj/` added to `.git/info/exclude`. The primary stays
   parked on `main`; the operator never runs a mutation in it.
 - The slot becomes `jj workspace add --colocate --name <stack>--<workspace>
-  -r <base> <path>`. The `--colocate` flag is on jj main and expected in the
-  release after 0.45; on stable 0.45.1 a secondary workspace has no `.git` and
-  git tooling fails inside it. `doctor` therefore probes the capability (does
+  -r <base> <path>`. The `--colocate` flag is on jj main and not in stable
+  0.45.1, where a secondary workspace has no `.git` and git tooling fails
+  inside it. The proposal does not wait for the release that carries it: the
+  baseline is the latest jj. `doctor` probes the capability (does
   `jj workspace add --help` list `--colocate`?) rather than comparing version
-  strings, because a HEAD build still reports `0.45.1-<sha>`.
+  strings, because a HEAD build still reports `0.45.1-<sha>`, and `mode: jj`
+  is refused with a pointer to the upgrade when the probe fails.
 - `WorktreeRemove` and `WorktreePrune` become `jj workspace forget` plus the
   directory removal the operator already does.
 - `ws create --sync` reconciliation reads `jj workspace list` instead of
@@ -268,8 +275,8 @@ re-cut a worktree on the same branch).
 
 ### B. Big-bang replacement of the git layer
 
-Smaller end state, but it forces every stack through the migration at once
-and depends on a jj release not yet published. Rejected for timing.
+Smaller end state, but it forces every stack through the migration at once,
+and the field evidence shows mixed stacks are the real shape. Rejected.
 
 ### C. Colocate per developer only, operator stays on git
 
