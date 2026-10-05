@@ -159,21 +159,22 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	if err := b.applyProcess(ctx, target, name, updates); err != nil {
 		return nil, err
 	}
-	// Two triggers spawn the re-run (applyProcess uses exactly one of them), and
+	// Two triggers spawn the re-run (applyProcess decides which), and
 	// process-compose leaves each in a very different state:
 	//   * an update the supervisor applies (compiled config changed) does
 	//     removeProcess + addProcessAndRun, which builds a FRESH ProcessState via
 	//     types.NewProcessState (end time nil, pid 0), so the completion carries
 	//     a brand-new end time.
-	//   * Restart (nothing changed, or the supervisor discarded the update) does
-	//     doRestart -> runProcess, which REUSES
-	//     the existing ProcessState (GetProcessState/withProcState). process-compose
+	//   * Restart (nothing changed, or the update did not relaunch the job) does
+	//     doRestart -> runProcess, which as of v1.120.0 REUSES the existing
+	//     ProcessState (GetProcessState/withProcState). process-compose
 	//     sets ProcessEndTime/ProcessStartTime only while they are nil and never
 	//     resets them (src/app/process.go:154-156, :570-572), and increments
 	//     Restarts only under the restart policy, not on a manual restart — so the
 	//     re-run's completion keeps the PREVIOUS run's end time. Pid, by contrast,
 	//     is assigned unconditionally on every launch (process.go:153), so the
-	//     re-run always gets a new pid.
+	//     re-run always gets a new pid. (v1.122.0 builds a fresh state for every
+	//     incarnation, so there a restart reads like the update path.)
 	// A terminal sample therefore counts as this run's completion only when one of
 	// three signals confirms it is fresh (see below); otherwise it is a leftover
 	// of the previous run and we keep polling.
@@ -270,7 +271,7 @@ func sameInstant(a, b *time.Time) bool {
 }
 
 // applyProcess brings one process to its compiled definition and leaves it
-// running as a new incarnation, restarting it exactly once.
+// running as a new incarnation, without bouncing a running process twice.
 //
 // A posted update is not proof of a restart. process-compose compares the
 // posted document with its own typed copy (ProcessConfig.Compare) and answers
@@ -282,8 +283,8 @@ func sameInstant(a, b *time.Time) bool {
 // response is the same either way, which leaves the supervisor's process state
 // as the only evidence of what it did: an applied update replaces the process
 // (removeProcess + addProcessAndRun), a discarded one leaves it as it was. The
-// process is restarted explicitly in that second case, as it is when nothing
-// was posted.
+// process is restarted explicitly unless that state shows the update relaunched
+// it, as it is when nothing was posted.
 func (b Backend) applyProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) error {
 	before, err := b.processState(ctx, target, name)
 	if err != nil {
@@ -296,33 +297,43 @@ func (b Backend) applyProcess(ctx context.Context, target runtime.Target, name s
 	if posted {
 		after, err := b.processState(ctx, target, name)
 		if err != nil {
-			return err
+			return fmt.Errorf("confirm update of process %s: %w", name, err)
 		}
-		if processReplaced(before, after) {
+		if processRelaunched(before, after) {
 			return nil
 		}
-		logctx.From(ctx).DebugContext(ctx, "process-compose accepted the update without replacing the process; restarting it", "process", name)
+		logctx.From(ctx).DebugContext(ctx, "process-compose accepted the update without relaunching the process; restarting it", "process", name)
 	}
 	target.Services = []string{name}
 	return b.Restart(ctx, target)
 }
 
-// processReplaced reports whether the supervisor put a new incarnation of the
-// process in place between two state samples. A replacement starts from a blank
-// native state (types.NewProcessState: Pending, pid 0, no start time) and gets
-// a new pid and start time when it launches, so it differs from a process that
-// had been launched before in pid, start time or both, and from one that sat in
-// a terminal state without ever launching (Skipped) in having left that state.
-// A process the supervisor left alone keeps all three: its pid and start time
-// survive even its own exit. A process that was absent before counts as
-// replaced once it is registered.
+// processRelaunched reports whether, between two state samples, the supervisor
+// replaced the process with a new incarnation that is running or due to launch.
 //
-// The one pair this cannot tell apart is a never-launched Pending process and
-// its equally blank replacement. That reads as not replaced, so the caller
-// restarts it: relaunching a process that had not run yet is the cheaper error
-// than reporting a restart that did not happen.
-func processReplaced(before, after *processListEntry) bool {
+// A replacement starts from a blank native state (types.NewProcessState:
+// Pending, pid 0, no start time) and gets a new pid and start time when it
+// launches. It therefore differs from a process that had been launched before
+// in pid, start time or both, and from one that sat in a terminal state without
+// ever launching (Skipped) in having left that state. A process the supervisor
+// left alone keeps its pid and start time even across its own exit. When they
+// change without an update (a Pending process reaching its launch, a restart
+// policy), the incarnation still postdates the first sample, which is all the
+// caller needs. A process that was absent before counts once it is registered.
+//
+// Two replacements do not count, and the caller restarts both. A Disabled one
+// is never launched by the supervisor: an applied update keeps the stored
+// `disabled` flag, which `up <process>...` sets on every process it leaves out,
+// so it stops such a process and leaves it down, whereas `process restart`
+// launches it regardless. And a never-launched Pending process cannot be told
+// apart from its equally blank replacement: relaunching a process that had not
+// run yet is a cheaper error than reporting a restart that did not happen.
+func processRelaunched(before, after *processListEntry) bool {
 	if after == nil {
+		return false
+	}
+	afterStatus := strings.ToLower(strings.TrimSpace(after.Status))
+	if afterStatus == "disabled" {
 		return false
 	}
 	if before == nil {
@@ -331,8 +342,7 @@ func processReplaced(before, after *processListEntry) bool {
 	if after.PID != before.PID || !sameInstant(after.ProcessStartTime, before.ProcessStartTime) {
 		return true
 	}
-	return isTerminalState(strings.ToLower(strings.TrimSpace(before.Status))) &&
-		!isTerminalState(strings.ToLower(strings.TrimSpace(after.Status)))
+	return isTerminalState(strings.ToLower(strings.TrimSpace(before.Status))) && !isTerminalState(afterStatus)
 }
 
 // processState returns the supervisor's live state of one process, or nil when
@@ -475,26 +485,12 @@ func nativeShutdownTimeout(value any) int {
 }
 
 func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Target, name string) (bool, error) {
-	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/"+url.PathEscape(name), nil)
+	state, err := b.processState(ctx, target, name)
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(req, target.EnvFile)
-	resp, err := controlPlaneClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return false, fmt.Errorf("get process state: %s", resp.Status)
-	}
-	var state struct {
-		IsRunning bool   `json:"is_running"`
-		Status    string `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		return false, err
+	if state == nil {
+		return false, fmt.Errorf("get process state: no such process: %s", name)
 	}
 	if state.IsRunning {
 		return false, nil

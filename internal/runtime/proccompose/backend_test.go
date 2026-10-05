@@ -658,12 +658,14 @@ func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
 // A supervisor that judges a posted update equal to the config it already holds
 // answers 200 and runs nothing. RunJob used to take the accepted POST for the
 // re-run and then wait out its deadline for a completion that never came; it
-// must notice that the job was not replaced and restart it instead.
+// must notice that the job was not relaunched and restart it instead.
 func TestRunJobRestartsJobWhenSupervisorDiscardsUpdate(t *testing.T) {
 	ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
 	supervisor := &fakeSupervisor{
-		name:   "job",
-		config: `{"name":"job","command":"old"}`,
+		name: "job",
+		// The command is the compiled one. The update is posted all the same,
+		// because the supervisor omits the job's empty workingDir.
+		config: `{"name":"job","command":"run"}`,
 		state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ProcessEndTime: &ended},
 		logs:   []byte("job log line\n"),
 	}
@@ -698,12 +700,15 @@ func TestRunJobRestartsJobWhenSupervisorDiscardsUpdate(t *testing.T) {
 // supervisor does whether or not it acts on the update: it then either replaces
 // the process, leaving afterUpdate as its state, or, when afterUpdate is nil,
 // leaves it untouched — what process-compose does when its own comparison finds
-// the posted config equal to the one it holds. As a Runner it relaunches the
-// process on `process restart`, reusing the native state under a new pid, and
-// serves that state to `list -o json`.
+// the posted config equal to the one it holds. While missing is set the process
+// is unknown, answered with the real supervisor's 400 bodies, until POST
+// /project registers it. As a Runner it relaunches the process on `process
+// restart`, reusing the native state under a new pid, and serves that state to
+// `list -o json`.
 type fakeSupervisor struct {
 	mu          sync.Mutex
 	name        string
+	missing     bool
 	config      string
 	state       processListEntry
 	afterUpdate *processListEntry
@@ -716,6 +721,24 @@ func (s *fakeSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
+	case s.missing && r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
+		http.Error(w, `{"error":"no such process: `+s.name+`"}`, http.StatusBadRequest)
+	case s.missing && r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
+		http.Error(w, `{"error":"can't get state of process `+s.name+`: no such process"}`, http.StatusBadRequest)
+	case r.Method == http.MethodGet && r.URL.Path == "/processes":
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	case r.Method == http.MethodPost && r.URL.Path == "/project":
+		var project struct {
+			Processes map[string]json.RawMessage `json:"processes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.missing = false
+		s.config = string(project.Processes[s.name])
+		s.state = processListEntry{Name: s.name, Status: "Disabled"}
+		_, _ = io.WriteString(w, `{}`)
 	case r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
 		_, _ = io.WriteString(w, s.config)
 	case r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
@@ -833,7 +856,7 @@ func TestApplyRestartsProcessWhenSupervisorDiscardsUpdate(t *testing.T) {
 // When the supervisor applies a posted update it replaces the process itself, so
 // a Restart on top of it would bounce the service twice. The replacement is
 // recognised whether or not it has launched by the time its state is read.
-func TestApplyDoesNotRestartProcessReplacedByUpdate(t *testing.T) {
+func TestApplyDoesNotRestartProcessRelaunchedByUpdate(t *testing.T) {
 	started := time.Date(2026, 10, 5, 12, 0, 22, 0, time.UTC)
 	relaunched := started.Add(time.Minute)
 	running := processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started}
@@ -877,9 +900,65 @@ func TestApplyDoesNotRestartProcessReplacedByUpdate(t *testing.T) {
 				t.Fatalf("posted commands = %v, want the compiled command once: %v", got, want)
 			}
 			if _, restarts, _ := supervisor.observed(); restarts != 0 {
-				t.Fatalf("process restarted %d times after the supervisor replaced it; want 0", restarts)
+				t.Fatalf("process restarted %d times after the supervisor relaunched it; want 0", restarts)
 			}
 		})
+	}
+}
+
+// process-compose marks every process left out of an `up <process>...` selection
+// disabled, and an applied update keeps that flag: it stops a running process
+// and installs a replacement the supervisor never launches. Taking that
+// replacement for the restart would report success with the service down.
+func TestApplyRestartsProcessTheUpdateLeftDisabled(t *testing.T) {
+	started := time.Date(2026, 10, 5, 12, 0, 22, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:        "web",
+		config:      strings.Replace(nativeWebConfig("old"), `{"name":"web",`, `{"name":"web","disabled":true,`, 1),
+		state:       processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started},
+		afterUpdate: &processListEntry{Name: "web", Status: "Disabled"},
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	err := backend.Apply(t.Context(), runtime.Target{
+		ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if got, want := supervisor.postedCommands(), []any{"serve"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("posted commands = %v, want the compiled command once: %v", got, want)
+	}
+	if _, restarts, _ := supervisor.observed(); restarts != 1 {
+		t.Fatalf("process restarted %d times after the update left it disabled; want 1", restarts)
+	}
+}
+
+// A process the supervisor does not know yet is registered and activated by the
+// update itself, which launches it: there is nothing to restart on top.
+func TestApplyRegistersMissingProcessWithoutRestartingIt(t *testing.T) {
+	supervisor := &fakeSupervisor{
+		name:        "web",
+		missing:     true,
+		afterUpdate: &processListEntry{Name: "web", Status: "Pending"},
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	err := backend.Apply(t.Context(), runtime.Target{
+		ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if got, want := supervisor.postedCommands(), []any{"serve"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("posted commands = %v, want one activation of the compiled command: %v", got, want)
+	}
+	if _, restarts, _ := supervisor.observed(); restarts != 0 {
+		t.Fatalf("process restarted %d times after being registered and activated; want 0", restarts)
 	}
 }
 
@@ -908,7 +987,7 @@ func TestApplyRestartsProcessWithUnchangedDefinition(t *testing.T) {
 	}
 }
 
-func TestProcessReplaced(t *testing.T) {
+func TestProcessRelaunched(t *testing.T) {
 	started := time.Date(2026, 10, 5, 12, 0, 22, 0, time.UTC)
 	relaunched := started.Add(time.Minute)
 	running := &processListEntry{Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started}
@@ -926,17 +1005,21 @@ func TestProcessReplaced(t *testing.T) {
 		{"relaunched replacement", running, &processListEntry{Status: "Running", IsRunning: true, PID: 200, ProcessStartTime: &relaunched}, true},
 		// process-compose v1.120.0 keeps the start time across a restart.
 		{"new pid under the old start time", running, &processListEntry{Status: "Running", IsRunning: true, PID: 200, ProcessStartTime: &started}, true},
+		{"old pid under a new start time", running, &processListEntry{Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &relaunched}, true},
+		// The replacement of a process whose config is disabled never launches.
+		{"stopped and left disabled", running, &processListEntry{Status: "Disabled"}, false},
 		{"skipped then pending", &processListEntry{Status: "Skipped"}, &processListEntry{Status: "Pending"}, true},
 		{"skipped and still skipped", &processListEntry{Status: "Skipped"}, &processListEntry{Status: "Skipped"}, false},
 		{"pending and still pending", &processListEntry{Status: "Pending"}, &processListEntry{Status: "Pending"}, false},
 		{"newly registered", nil, &processListEntry{Status: "Pending"}, true},
+		{"registered but left disabled", nil, &processListEntry{Status: "Disabled"}, false},
 		{"unknown after the update", running, nil, false},
 		{"never known", nil, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := processReplaced(tt.before, tt.after); got != tt.want {
-				t.Fatalf("processReplaced() = %v, want %v", got, tt.want)
+			if got := processRelaunched(tt.before, tt.after); got != tt.want {
+				t.Fatalf("processRelaunched() = %v, want %v", got, tt.want)
 			}
 		})
 	}
