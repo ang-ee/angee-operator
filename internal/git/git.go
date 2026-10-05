@@ -235,8 +235,25 @@ func (c Client) WorktreeAdd(ctx context.Context, repoDir, dest, ref string) erro
 	return err
 }
 
-func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, ref string) error {
+// WorktreeAddDetached adds a worktree at dest on a detached HEAD at ref, so no
+// branch is created or checked out. An empty ref detaches at repoDir's HEAD.
+func (c Client) WorktreeAddDetached(ctx context.Context, repoDir, dest, ref string) error {
+	args := []string{"worktree", "add", "--detach", dest}
+	if ref != "" {
+		args = append(args, ref)
+	}
+	_, err := c.Run(ctx, repoDir, args...)
+	return err
+}
+
+// WorktreeAddBranch adds a worktree at dest on a new branch cut from ref. With
+// track false the new branch gets no upstream even when ref is a
+// remote-tracking branch, which git would otherwise set.
+func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, ref string, track bool) error {
 	args := []string{"worktree", "add"}
+	if !track {
+		args = append(args, "--no-track")
+	}
 	if branch != "" {
 		args = append(args, "-b", branch)
 	}
@@ -473,6 +490,17 @@ func (c Client) Upstream(ctx context.Context, dir string) (string, bool, error) 
 	}
 	mergeShort := strings.TrimPrefix(string(br.Merge), "refs/heads/")
 	return br.Remote + "/" + mergeShort, true, nil
+}
+
+// CountNotOn counts the commits reachable from HEAD in dir that none of bases
+// reach.
+func (c Client) CountNotOn(ctx context.Context, dir string, bases ...string) (int, error) {
+	args := append([]string{"rev-list", "--count", "HEAD", "--not"}, bases...)
+	out, err := c.runText(ctx, dir, args...)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(out))
 }
 
 func (c Client) AheadCount(ctx context.Context, dir, base string) (int, error) {

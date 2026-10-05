@@ -92,7 +92,7 @@ func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits in
 		for _, source := range status.Sources {
 			link := gitOpsLinkFromWorkspaceSource(status.Name, source)
 			topology.Links = append(topology.Links, link)
-			if link.Kind == "git" && link.Mode == "worktree" {
+			if link.Kind == "git" && link.Mode == manifest.WorkspaceSourceModeWorktree {
 				topology.Summary.Worktrees++
 			}
 			countGitOpsState(&topology.Summary, link.State, link.Pushed)
@@ -226,26 +226,7 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 	if dirty {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q has uncommitted changes", workspaceName, slot)
 	}
-	pushRef := ref
-	if pushRef == "" {
-		pushRef = wsSource.Branch
-	}
-	if ref == "" {
-		_, hasUpstream, upstreamErr := client.Upstream(ctx, path)
-		if upstreamErr != nil {
-			return api.WorkspaceSourceStatus{}, upstreamErr
-		}
-		if hasUpstream {
-			err = client.Push(ctx, path, "")
-		} else if pushRef != "" && wsSource.Branch != "" {
-			err = client.PushSetUpstream(ctx, path, pushRef)
-		} else {
-			err = client.Push(ctx, path, pushRef)
-		}
-	} else {
-		err = client.Push(ctx, path, pushRef)
-	}
-	if err != nil {
+	if err := pushWorkspaceGitSource(ctx, client, workspaceName, slot, path, source, wsSource, ref); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil

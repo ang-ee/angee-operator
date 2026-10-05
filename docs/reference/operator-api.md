@@ -669,7 +669,7 @@ Operations:
 | `workspaceSourceMergeAbort(workspace, slot)` | `git merge --abort`. |
 | `workspaceSourceRebaseAbort(workspace, slot)` | `git rebase --abort`. |
 | `workspaceSourceRebaseContinue(workspace, slot)` | `git rebase --continue` with `core.editor=true` so it never opens an editor. |
-| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to `origin`; `branch` defaults to the workspace source's manifest branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. |
+| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to `origin`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). |
 
 Conflict files come from `git ls-files -u`, so the list is exact and
 reflects only paths the index reports as conflicted. The

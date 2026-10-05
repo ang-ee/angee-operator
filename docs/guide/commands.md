@@ -431,6 +431,22 @@ workspace status includes `sources[].branch`, `sources[].current_ref` /
 source is on the wrong branch. The operator also exposes `POST
 /workspaces/{name}/sync-base` and GraphQL `workspaceSyncBase`.
 
+`workspace push` and `workspace source push` without `--ref` leave alone a
+source that has no upstream and no commits of its own beyond its base, so an
+untouched source does not leave an empty branch on the remote. A worktree
+source cut without a branch starts on a detached HEAD at its base; once it
+has commits, push refuses it, because there is no branch to push. Publish it
+instead with `angee workspace source publish <workspace> <slot> --branch
+<name>`, which creates that branch at the current commit and pushes it with
+upstream tracking. Publish without `--branch` also reports `nothing to
+publish` for a source with no upstream and no commits beyond its base.
+
+"Commits of its own" are commits that neither the base ref nor its remote
+counterpart (`origin/<ref>`) holds, so commits a source gained from
+`sync-base` do not count. `workspace destroy` uses the same measure, and for
+a source on a detached HEAD it refuses only commits that no branch, remote
+branch or tag holds.
+
 ### Update scopes
 
 "Update" has three scopes, all in the same family of git operation:

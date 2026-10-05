@@ -195,11 +195,33 @@ type Workspace struct {
 }
 
 type WorkspaceSource struct {
-	Source  string `yaml:"source" json:"source" validate:"required" jsonschema:"required"`
-	Mode    string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Source string `yaml:"source" json:"source" validate:"required" jsonschema:"required"`
+	// Mode selects how a git source is materialized: a worktree of the shared
+	// cache or a standalone clone. Omitted, a git source is cloned and a local
+	// source is linked; a local source is linked whatever the mode says.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone"`
+	// Branch is the branch a worktree slot is cut on. Omitted, the worktree
+	// starts on a detached HEAD at Ref and gets a branch when it is published.
 	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
 	Ref     string `yaml:"ref,omitempty" json:"ref,omitempty"`
 	Subpath string `yaml:"subpath,omitempty" json:"subpath,omitempty"`
+}
+
+// Workspace source modes. The empty mode is also valid and keeps the source
+// kind's default.
+const (
+	WorkspaceSourceModeWorktree = "worktree"
+	WorkspaceSourceModeClone    = "clone"
+)
+
+// ValidateWorkspaceSourceMode rejects a workspace source mode the operator
+// does not implement, so a typo fails loudly instead of quietly cloning.
+func ValidateWorkspaceSourceMode(mode string) error {
+	switch mode {
+	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone:
+		return nil
+	}
+	return fmt.Errorf("mode %q is not supported; use %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone)
 }
 
 type WorkspaceResolved struct {
@@ -607,6 +629,15 @@ func (s *Stack) ValidateExtended() error {
 	for name, job := range s.Jobs {
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
 			return err
+		}
+	}
+	for name, workspace := range s.Workspaces {
+		for slot, source := range workspace.Sources {
+			if err := ValidateWorkspaceSourceMode(source.Mode); err != nil {
+				// Before modes were validated, an unknown mode on a git source
+				// was materialized as a clone, which is what is on disk now.
+				return fmt.Errorf("workspace %q source %q: %w (an existing workspace with this mode was cloned: set mode: clone or remove the line to keep it as it is)", name, slot, err)
+			}
 		}
 	}
 	return nil

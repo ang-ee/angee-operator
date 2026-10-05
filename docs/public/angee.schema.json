@@ -709,7 +709,11 @@
           "type": "string"
         },
         "mode": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "worktree",
+            "clone"
+          ]
         },
         "branch": {
           "type": "string"

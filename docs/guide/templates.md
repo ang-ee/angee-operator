@@ -189,6 +189,13 @@ listed Source is materialized (a git worktree, a local mount, etc.) on
 the configured branch. `chain:` is the deployment half — the workspace
 optionally renders a Stack template that runs against those Sources.
 
+A source's `mode`, `branch`, `ref` and `subpath` accept `${...}`
+substitution, so a stack can choose them through inputs without forking
+the template (for example `mode: "${inputs.slot_mode}"`). The resolved
+`mode` must be `worktree`, `clone` or empty; anything else fails the
+create before any source is materialized. A worktree source whose
+`branch` resolves to empty starts on a detached HEAD at `ref`.
+
 Stack templates use the same Copier rendering path and must produce an
 `angee.yaml` under the initialized stack root. They are typically much
 simpler — just `_angee.kind: stack` plus the Jinja-templated
