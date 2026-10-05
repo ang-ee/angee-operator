@@ -8,6 +8,17 @@ latest tag.
 
 ### Fixed
 
+- **`angee restart` and chained restarts restart process-compose services
+  again.** process-compose answers success to a definition update without
+  restarting anything when it judges the definition unchanged, and Angee took
+  that answer for the restart: `angee restart <name>` and the service steps of
+  `angee job run --chained-restart` reported success with the old process still
+  running, typically for every service with a `ready` probe. Angee now compares
+  the supervisor's process state before and after an update and restarts the
+  process itself unless the update relaunched it. That also covers a service
+  left out of an `angee service up <name>` selection, which a restart with a
+  changed definition used to stop and leave down, and a local job re-run, which
+  no longer waits out `ANGEE_JOB_TIMEOUT` without running the job (#91).
 - **Workspace publish over HTTPS with the `gh` credential helper.** The
   stripped environment of workspace git operations (`ws source publish`, merge
   and rebase) now passes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`,
