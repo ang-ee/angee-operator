@@ -327,11 +327,27 @@ workspaces:
     template: workspaces/pr
     inputs:
       branch: fix-123
+    sources:
+      app:
+        source: app
+        mode: worktree
+        branch: fix-123
+        ref: main
+        subpath: app
     ttl: 24h
     ttl_expires_at: 2026-05-10T12:00:00Z
 ```
 
 TTL values are stored and surfaced by status commands.
+
+Each entry under a workspace's `sources` records how one source was
+materialized into the workspace. `mode` is `worktree` (a git worktree of the
+source's shared cache) or `clone` (a standalone clone). Omitted, a git source
+is cloned and a local source is linked; a local source is linked whatever the
+mode says. Any other value is rejected when the manifest is loaded. A worktree
+source is cut on `branch`. Without a branch it starts on a detached HEAD at
+`ref` and gets its branch when it is published (see
+[workspace commands](./commands.md)).
 
 ### Workspace defaults
 

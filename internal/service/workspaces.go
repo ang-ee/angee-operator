@@ -594,7 +594,7 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 }
 
 func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
-	return wsSource.Mode == "worktree" && wsSource.Branch != ""
+	return wsSource.Mode == manifest.WorkspaceSourceModeWorktree && wsSource.Branch != ""
 }
 
 func workspaceGitBranchMismatchReason(currentRef string, wsSource manifest.WorkspaceSource) string {
@@ -648,9 +648,31 @@ func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, pa
 	if dirty {
 		return "uncommitted changes", nil
 	}
+	// Commits on a detached HEAD are held only by the worktree, so purging it
+	// loses whatever no branch, remote branch or tag also holds.
+	if _, onBranch, err := client.CurrentBranch(ctx, path); err != nil {
+		return "", err
+	} else if !onBranch {
+		held, err := client.CountNotOn(ctx, path, "--branches", "--remotes", "--tags")
+		if err != nil {
+			return "", err
+		}
+		if held > 0 {
+			return fmt.Sprintf("%d commit(s) on a detached HEAD that no branch holds", held), nil
+		}
+		return "", nil
+	}
 	base, hasUpstream, err := client.Upstream(ctx, path)
 	if err != nil {
 		return "", err
+	}
+	if !hasUpstream {
+		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known {
+			if ahead == 0 {
+				return "", nil
+			}
+			return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
+		}
 	}
 	if base == "" {
 		base = wsSource.Ref
@@ -1162,7 +1184,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 	states := []api.SourceState{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
-		if wsSource.Mode != "worktree" && wsSource.Mode != "clone" {
+		if wsSource.Mode != manifest.WorkspaceSourceModeWorktree && wsSource.Mode != manifest.WorkspaceSourceModeClone {
 			continue
 		}
 		source, ok := stack.Sources[wsSource.Source]
@@ -1180,26 +1202,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 		if dirty {
 			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, slot)
 		}
-		pushRef := ref
-		if pushRef == "" {
-			pushRef = wsSource.Branch
-		}
-		if ref == "" {
-			_, hasUpstream, upstreamErr := client.Upstream(ctx, path)
-			if upstreamErr != nil {
-				return nil, upstreamErr
-			}
-			if hasUpstream {
-				err = client.Push(ctx, path, "")
-			} else if pushRef != "" && wsSource.Branch != "" {
-				err = client.PushSetUpstream(ctx, path, pushRef)
-			} else {
-				err = client.Push(ctx, path, pushRef)
-			}
-		} else {
-			err = client.Push(ctx, path, pushRef)
-		}
-		if err != nil {
+		if err := pushWorkspaceGitSource(ctx, client, name, slot, path, source, wsSource, ref); err != nil {
 			return nil, err
 		}
 		state, err := p.workspaceSourceState(ctx, name, slot, stack, wsSource)
@@ -1209,6 +1212,71 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 		states = append(states, state)
 	}
 	return states, nil
+}
+
+// pushWorkspaceGitSource pushes one clean git slot. An explicit ref is pushed
+// as given. Otherwise the slot pushes to its upstream, or sets one on its
+// branch; a slot with no upstream and no commits beyond its base is left
+// alone, since the push would only create a remote branch with no work on it.
+func pushWorkspaceGitSource(ctx context.Context, client git.Client, workspaceName, slot, path string, source manifest.Source, wsSource manifest.WorkspaceSource, ref string) error {
+	if ref != "" {
+		return client.Push(ctx, path, ref)
+	}
+	current, onBranch, err := client.CurrentBranch(ctx, path)
+	if err != nil {
+		return err
+	}
+	_, hasUpstream, err := client.Upstream(ctx, path)
+	if err != nil {
+		return err
+	}
+	if hasUpstream {
+		return client.Push(ctx, path, "")
+	}
+	// The count is of HEAD, so it only speaks for the push when HEAD is what
+	// would be pushed.
+	if !onBranch || wsSource.Branch == "" || current == wsSource.Branch {
+		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known && ahead == 0 {
+			logctx.From(ctx).Warn(fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, base))
+			return nil
+		}
+	}
+	if !onBranch {
+		return &ConflictError{Kind: "workspace source", Name: workspaceName + ":" + slot, Reason: fmt.Sprintf("it is on a detached HEAD, so there is no branch to push; publish it with `angee workspace source publish %s %s --branch <name>`", workspaceName, slot)}
+	}
+	if wsSource.Branch != "" {
+		return client.PushSetUpstream(ctx, path, wsSource.Branch)
+	}
+	return client.Push(ctx, path, "")
+}
+
+// workspaceGitSourceCommitsBeyondBase counts the slot's own commits: those
+// reachable from HEAD but from neither its base ref nor that ref's remote
+// counterpart (origin/<ref>). The cache's local base only moves on `source
+// pull`, while sync-base moves a slot to the remote one, so counting against
+// either alone would take the remote's commits for the slot's work. known is
+// false when the slot names no base or the count cannot be read; callers then
+// keep their previous behaviour.
+func workspaceGitSourceCommitsBeyondBase(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (ahead int, base string, known bool) {
+	base = workspaceSourceBaseRef(source, wsSource)
+	if base == "" {
+		return 0, "", false
+	}
+	var bases []string
+	if client.RefExists(ctx, path, base) {
+		bases = append(bases, base)
+	}
+	if remote, err := client.SyncBaseRef(ctx, path, base); err == nil && remote != base {
+		bases = append(bases, remote)
+	}
+	if len(bases) == 0 {
+		return 0, base, false
+	}
+	ahead, err := client.CountNotOn(ctx, path, bases...)
+	if err != nil {
+		return 0, base, false
+	}
+	return ahead, base, true
 }
 
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) ([]api.SourceState, error) {
@@ -1236,7 +1304,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	states := []api.SourceState{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
-		if wsSource.Mode != "worktree" {
+		if wsSource.Mode != manifest.WorkspaceSourceModeWorktree {
 			continue
 		}
 		source, ok := stack.Sources[wsSource.Source]
@@ -1418,7 +1486,13 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		}
 		resolved, err := p.resolveWorkspaceSource(spec, sourceName, inputs, workspaceName, alloc)
 		if err != nil {
-			return nil, cleanup, err
+			return nil, cleanup, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		// A worktree without a branch is detached at its base. With no base it
+		// would detach at whatever the cache has checked out, and nothing would
+		// record where its work starts.
+		if source.Kind == "git" && resolved.Mode == manifest.WorkspaceSourceModeWorktree && resolved.Branch == "" && resolved.Ref == "" && source.DefaultRef == "" {
+			return nil, cleanup, fmt.Errorf("workspace %q source %q: a worktree without a branch needs a ref or the source's default_ref to start from", workspaceName, slot)
 		}
 		if resolved.Subpath == "" {
 			resolved.Subpath = slot
@@ -1475,7 +1549,7 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 			subpath = slot
 		}
 		item := materializedSource{dest: filepath.Join(workspacePath, filepath.FromSlash(subpath))}
-		if source, ok := stack.Sources[ws.Source]; ok && source.Kind == "git" && ws.Mode == "worktree" {
+		if source, ok := stack.Sources[ws.Source]; ok && source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree {
 			item.cachePath = p.sourcePath(ws.Source, source)
 		}
 		materialized = append(materialized, item)
@@ -1564,7 +1638,17 @@ func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceNam
 	if err != nil {
 		return manifest.WorkspaceSource{}, err
 	}
-	return manifest.WorkspaceSource{Source: sourceName, Mode: spec.Mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
+	// The mode is substitutable so a stack can choose it through an input
+	// without forking the template; it is validated once resolved, before any
+	// slot is materialized.
+	mode, err := substitute.Resolve(spec.Mode, ctx)
+	if err != nil {
+		return manifest.WorkspaceSource{}, err
+	}
+	if err := manifest.ValidateWorkspaceSourceMode(mode); err != nil {
+		return manifest.WorkspaceSource{}, err
+	}
+	return manifest.WorkspaceSource{Source: sourceName, Mode: mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
 }
 
 func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool) (*workspaceSourceCleanupEntry, error) {
@@ -1601,13 +1685,13 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		destEmpty = empty
 		// A non-empty leftover only blocks the create when we are not asked to
 		// reconcile it; with sync, a worktree source reclaims the path below.
-		if !empty && (!sync || ws.Mode != "worktree") {
+		if !empty && (!sync || ws.Mode != manifest.WorkspaceSourceModeWorktree) {
 			return nil, fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
 		}
 	}
 	switch source.Kind {
 	case "git":
-		if ws.Mode == "worktree" {
+		if ws.Mode == manifest.WorkspaceSourceModeWorktree {
 			cachePath := p.sourcePath(sourceName, source)
 			insideDest, err := sameOrNestedPath(dest, cachePath)
 			if err != nil {
@@ -1670,11 +1754,31 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			if useExisting {
 				logctx.From(ctx).Warn(fmt.Sprintf("branch %q already exists in %s; checking it out into worktree without creating a new branch", ws.Branch, cachePath))
 			}
-			addWorktree := func() error {
-				if useExisting {
-					return client.WorktreeAdd(ctx, cachePath, stage, ws.Branch)
+			// The cache is cloned on its default ref only, so another base may
+			// exist only as origin/<ref>. Start from that explicitly: given the
+			// bare name, git creates and checks out a local tracking branch of
+			// that name (even with -b), and --detach refuses it.
+			start, startIsRemote := ref, false
+			if ref != "" && !client.RefExists(ctx, cachePath, ref) {
+				if remote, err := client.SyncBaseRef(ctx, cachePath, ref); err == nil && remote != ref {
+					start, startIsRemote = remote, true
 				}
-				return client.WorktreeAddBranch(ctx, cachePath, stage, ws.Branch, ref)
+			}
+			addWorktree := func() error {
+				switch {
+				case ws.Branch == "":
+					// A slot without a branch starts detached at its base, so an
+					// untouched slot never leaves a branch behind; publish
+					// creates the branch. Without --detach git would check out
+					// ref itself, failing when the cache has it checked out.
+					return client.WorktreeAddDetached(ctx, cachePath, stage, start)
+				case useExisting:
+					return client.WorktreeAdd(ctx, cachePath, stage, ws.Branch)
+				default:
+					// A branch cut from a remote-tracking ref would track it, and
+					// a push would then aim at the base branch.
+					return client.WorktreeAddBranch(ctx, cachePath, stage, ws.Branch, start, !startIsRemote)
+				}
 			}
 			if err := addWorktree(); err != nil {
 				return nil, err

@@ -6,6 +6,40 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **Worktree sources without a branch.** A workspace source with
+  `mode: worktree` and an empty `branch` is cut on a detached HEAD at its
+  base instead of failing (or quietly creating a tracking branch) when the
+  source cache has that ref checked out. It needs a `ref` or the source's
+  `default_ref` to start from; without one, create fails before anything is
+  materialized. `angee workspace source publish --branch <name>` creates the
+  branch at the current commit and pushes it with upstream tracking.
+- **Substitutable source mode.** A workspace template's source `mode`
+  accepts `${...}` substitution like `branch` and `ref`, so a stack can pick
+  it through an input.
+
+### Changed
+
+- **Unknown workspace source modes are rejected.** A workspace source `mode`
+  other than `worktree`, `clone` or empty fails manifest loading and
+  workspace create, naming the workspace and source. Previously any other
+  value on a git source silently produced a full clone, so an existing
+  workspace with such a mode is a clone: set `mode: clone` or remove the line.
+- **Push leaves untouched sources alone.** `angee workspace push` and
+  `angee workspace source push` without `--ref` skip a source that has no
+  upstream and no commits of its own beyond its base, instead of creating an
+  empty branch on the remote, and log a warning naming it. A source on a
+  detached HEAD is refused (HTTP 409) with a pointer to `source publish
+  --branch`. `source publish` without `--branch` reports `nothing to publish`
+  for such a source.
+- **"Unpushed" ignores commits that came from the base.** Push, publish and
+  the `workspace destroy` guard count a source's own commits as those that
+  neither its base ref nor `origin/<ref>` holds. A source that `sync-base`
+  moved past the cache's local base no longer looks unpushed, so destroy no
+  longer blocks on it. For a source on a detached HEAD, destroy refuses
+  commits that no branch, remote branch or tag holds.
+
 ### Fixed
 
 - **`angee restart` and chained restarts restart process-compose services
@@ -19,6 +53,11 @@ latest tag.
   left out of an `angee service up <name>` selection, which a restart with a
   changed definition used to stop and leave down, and a local job re-run, which
   no longer waits out `ANGEE_JOB_TIMEOUT` without running the job (#91).
+- **Worktree sources on a base that exists only on the remote.** A worktree
+  source whose `ref` exists in the cache only as `origin/<ref>` now starts
+  from that commit. Previously git created and checked out a local branch
+  named after the base instead of the source's branch, which then showed as
+  a branch mismatch. The new branch does not track the base.
 - **Workspace publish over HTTPS with the `gh` credential helper.** The
   stripped environment of workspace git operations (`ws source publish`, merge
   and rebase) now passes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`,

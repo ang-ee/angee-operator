@@ -454,3 +454,58 @@ func TestReadyProbeNormalizedHTTPPathGetsLeadingSlash(t *testing.T) {
 		t.Fatal("Normalized must not mutate the probe")
 	}
 }
+
+func TestValidateWorkspaceSourceMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode    string
+		wantErr bool
+	}{
+		{mode: ""},
+		{mode: WorkspaceSourceModeWorktree},
+		{mode: WorkspaceSourceModeClone},
+		{mode: "worktre", wantErr: true},
+		{mode: "Worktree", wantErr: true},
+		{mode: "jj", wantErr: true},
+	} {
+		stack := &Stack{
+			Version: VersionCurrent,
+			Kind:    KindStack,
+			Name:    "modes",
+			Sources: map[string]Source{"app": {Kind: "git", Repo: "https://example.invalid/app.git"}},
+			Workspaces: map[string]Workspace{
+				"feature": {
+					Template: "workspaces/pr",
+					Sources:  map[string]WorkspaceSource{"app": {Source: "app", Mode: tc.mode}},
+				},
+			},
+		}
+		err := stack.Validate()
+		if tc.wantErr {
+			want := `workspace "feature" source "app": mode "` + tc.mode + `" is not supported`
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("Validate() with mode %q error = %v, want unsupported-mode rejection naming the slot", tc.mode, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("Validate() with mode %q error = %v, want nil", tc.mode, err)
+		}
+	}
+
+	// A local source is linked whatever its mode says: a template sets the
+	// mode without knowing which kind the stack declares, so this is valid.
+	for _, mode := range []string{WorkspaceSourceModeWorktree, WorkspaceSourceModeClone} {
+		stack := &Stack{
+			Version: VersionCurrent,
+			Kind:    KindStack,
+			Name:    "modes",
+			Sources: map[string]Source{"app": {Kind: "local", Path: "../app"}},
+			Workspaces: map[string]Workspace{
+				"feature": {Template: "workspaces/pr", Sources: map[string]WorkspaceSource{"app": {Source: "app", Mode: mode}}},
+			},
+		}
+		if err := stack.Validate(); err != nil {
+			t.Errorf("Validate() of a local source with mode %q error = %v, want nil", mode, err)
+		}
+	}
+}

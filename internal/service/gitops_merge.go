@@ -58,35 +58,66 @@ func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace,
 // setting upstream tracking if not already configured. Useful for
 // publishing a workspace branch for the first time so an external
 // reviewer can open a PR against it.
+//
+// For a git source, two cases differ from a plain push. Without an explicit
+// branch, a slot with no upstream and no commits beyond its base has nothing
+// to publish and is left alone (naming the branch publishes it anyway). A slot
+// on a detached HEAD gets the named branch created at HEAD first; if the push
+// then fails, the slot stays on that branch and a retry pushes it.
 func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error) {
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
 	defer release()
-	stack, wsSource, _, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
+	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
-	_ = stack
 	if remote == "" {
 		remote = "origin"
 	}
+	client := p.gitClient()
+	currentBranch, onBranch, err := client.CurrentBranch(ctx, path)
+	if err != nil {
+		return api.GitOpResult{}, fmt.Errorf("resolve HEAD branch in %s: %w", path, err)
+	}
+	explicit := branch != ""
 	if branch == "" {
 		branch = wsSource.Branch
 	}
-	if branch == "" {
-		// Fall back to whatever HEAD currently points at.
-		out, err := runGitCapture(ctx, path, "rev-parse", "--abbrev-ref", "HEAD")
+	if branch == "" && onBranch {
+		branch = currentBranch
+	}
+	isGit := source.Kind == "git"
+	// The count is of HEAD, so it only speaks for the push when HEAD is what
+	// would be pushed.
+	if isGit && !explicit && (!onBranch || branch == currentBranch) {
+		_, hasUpstream, err := client.Upstream(ctx, path)
 		if err != nil {
-			return api.GitOpResult{}, fmt.Errorf("resolve HEAD branch in %s: %w", path, err)
+			return api.GitOpResult{}, err
 		}
-		branch = strings.TrimSpace(out)
-		// Detached HEAD: rev-parse returns the literal string "HEAD", which
-		// would publish to refs/heads/HEAD on the remote — never the intent.
-		// Force the caller to pass an explicit branch.
-		if branch == "HEAD" {
-			return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
+		if !hasUpstream {
+			if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known && ahead == 0 {
+				return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: fmt.Sprintf("nothing to publish: no commits beyond %s; pass a branch to publish anyway", base)}, nil
+			}
+		}
+	}
+	if branch == "" {
+		// Detached HEAD has no branch name to fall back on, and publishing
+		// it as "HEAD" would create refs/heads/HEAD on the remote, so the
+		// caller must name the branch.
+		return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
+	}
+	if isGit && !onBranch {
+		// A slot cut without a branch starts detached; publishing names its
+		// branch, so create it at HEAD for the push below to track. An
+		// existing branch of that name is not reused: it may point elsewhere.
+		if client.RefExists(ctx, path, "refs/heads/"+branch) {
+			return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("worktree is in detached HEAD and branch %q already exists; switch to it or pass another branch", branch)}
+		}
+		if _, err := client.Run(ctx, path, "switch", "-c", branch); err != nil {
+			return api.GitOpResult{}, fmt.Errorf("create branch %q in %s: %w", branch, path, err)
 		}
 	}
 	// The push is a network operation like any other: bound it with
