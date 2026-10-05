@@ -6,6 +6,18 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **Template lookup says why the template registry failed.** When no local
+  template matched, a failure to fetch the template registry was reported as
+  `template "stacks/dev" was not found locally or in the template registry`,
+  so a machine without git (a fresh Ubuntu install, for example) looked like a
+  missing template. A missing git is now named outright; any other fetch
+  failure (no network, an unwritable cache) shows git's error, with
+  credentials in an `ANGEE_TEMPLATE_REGISTRY` URL masked. "Not found" is kept
+  for a registry that was fetched but has no such template, and now names the
+  registry.
+
 ## v0.16.0 — 2026-10-05
 
 ### Added

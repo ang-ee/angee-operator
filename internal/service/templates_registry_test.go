@@ -77,6 +77,45 @@ func TestResolveTemplateFallsBackToTheRegistry(t *testing.T) {
 	}
 }
 
+// When no local template answers, the error says why the registry did not
+// either: the template is absent, git is missing, or the registry could not
+// be fetched. Credentials in a registry override never reach the message.
+func TestResolveTemplateExplainsRegistryFailures(t *testing.T) {
+	registry := writeRegistryRepo(t)
+	for _, tc := range []struct {
+		name     string
+		registry string
+		ref      string
+		noGit    bool
+		want     string
+		mustNot  string
+	}{
+		{name: "template absent", registry: registry, ref: "nope", want: `template "nope" was not found locally or in the template registry ` + registry},
+		{name: "git missing", registry: registry, ref: "dev", noGit: true, want: `template "dev" was not found locally, and fetching it from the template registry needs git, which is not installed or not on PATH`},
+		{name: "registry unreachable", registry: filepath.Join(t.TempDir(), "missing"), ref: "dev", want: `template "dev" was not found locally, and the template registry could not be fetched: `},
+		{name: "credentials redacted", registry: "https://angee:hunter22@127.0.0.1:1/registry.git", ref: "dev", want: "could not be fetched", mustNot: "hunter22"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(templateRegistryEnv, tc.registry)
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			if tc.noGit {
+				t.Setenv("PATH", t.TempDir())
+			}
+			platform, err := New(t.TempDir())
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, _, err = platform.resolveTemplate(context.Background(), tc.ref, "stack")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("resolveTemplate(%s) error = %v, want it to contain %q", tc.ref, err, tc.want)
+			}
+			if tc.mustNot != "" && strings.Contains(err.Error(), tc.mustNot) {
+				t.Fatalf("resolveTemplate(%s) error = %v, want %q redacted", tc.ref, err, tc.mustNot)
+			}
+		})
+	}
+}
+
 func TestSplitTemplateRefPin(t *testing.T) {
 	cases := []struct{ ref, base, pin string }{
 		{"dev", "dev", ""},
