@@ -156,22 +156,17 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	if err != nil {
 		return nil, err
 	}
-	changed, err := b.updateProcess(ctx, target, name, updates)
-	if err != nil {
+	if err := b.applyProcess(ctx, target, name, updates); err != nil {
 		return nil, err
 	}
-	if !changed {
-		if err := b.Restart(ctx, target); err != nil {
-			return nil, err
-		}
-	}
-	// Two triggers spawn the re-run, and process-compose leaves each in a very
-	// different state:
-	//   * updateProcess (compiled config changed) does removeProcess +
-	//     addProcessAndRun, which builds a FRESH ProcessState via
+	// Two triggers spawn the re-run (applyProcess uses exactly one of them), and
+	// process-compose leaves each in a very different state:
+	//   * an update the supervisor applies (compiled config changed) does
+	//     removeProcess + addProcessAndRun, which builds a FRESH ProcessState via
 	//     types.NewProcessState (end time nil, pid 0), so the completion carries
 	//     a brand-new end time.
-	//   * Restart (nothing changed) does doRestart -> runProcess, which REUSES
+	//   * Restart (nothing changed, or the supervisor discarded the update) does
+	//     doRestart -> runProcess, which REUSES
 	//     the existing ProcessState (GetProcessState/withProcState). process-compose
 	//     sets ProcessEndTime/ProcessStartTime only while they are nil and never
 	//     resets them (src/app/process.go:154-156, :570-572), and increments
@@ -274,6 +269,112 @@ func sameInstant(a, b *time.Time) bool {
 	return a.Equal(*b)
 }
 
+// applyProcess brings one process to its compiled definition and leaves it
+// running as a new incarnation, restarting it exactly once.
+//
+// A posted update is not proof of a restart. process-compose compares the
+// posted document with its own typed copy (ProcessConfig.Compare) and answers
+// 200 without touching the process when it finds them equal. updateProcess
+// compares field by field against the config the supervisor serves, which omits
+// every zero value (a probe's initialDelay 0, an empty workingDir) and carries
+// defaults of its own (a probe's numPort and statusCode), so an unchanged
+// definition can look changed here, be posted, and be discarded there. The
+// response is the same either way, which leaves the supervisor's process state
+// as the only evidence of what it did: an applied update replaces the process
+// (removeProcess + addProcessAndRun), a discarded one leaves it as it was. The
+// process is restarted explicitly in that second case, as it is when nothing
+// was posted.
+func (b Backend) applyProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) error {
+	before, err := b.processState(ctx, target, name)
+	if err != nil {
+		return err
+	}
+	posted, err := b.updateProcess(ctx, target, name, updates)
+	if err != nil {
+		return err
+	}
+	if posted {
+		after, err := b.processState(ctx, target, name)
+		if err != nil {
+			return err
+		}
+		if processReplaced(before, after) {
+			return nil
+		}
+		logctx.From(ctx).DebugContext(ctx, "process-compose accepted the update without replacing the process; restarting it", "process", name)
+	}
+	target.Services = []string{name}
+	return b.Restart(ctx, target)
+}
+
+// processReplaced reports whether the supervisor put a new incarnation of the
+// process in place between two state samples. A replacement starts from a blank
+// native state (types.NewProcessState: Pending, pid 0, no start time) and gets
+// a new pid and start time when it launches, so it differs from a process that
+// had been launched before in pid, start time or both, and from one that sat in
+// a terminal state without ever launching (Skipped) in having left that state.
+// A process the supervisor left alone keeps all three: its pid and start time
+// survive even its own exit. A process that was absent before counts as
+// replaced once it is registered.
+//
+// The one pair this cannot tell apart is a never-launched Pending process and
+// its equally blank replacement. That reads as not replaced, so the caller
+// restarts it: relaunching a process that had not run yet is the cheaper error
+// than reporting a restart that did not happen.
+func processReplaced(before, after *processListEntry) bool {
+	if after == nil {
+		return false
+	}
+	if before == nil {
+		return true
+	}
+	if after.PID != before.PID || !sameInstant(after.ProcessStartTime, before.ProcessStartTime) {
+		return true
+	}
+	return isTerminalState(strings.ToLower(strings.TrimSpace(before.Status))) &&
+		!isTerminalState(strings.ToLower(strings.TrimSpace(after.Status)))
+}
+
+// processState returns the supervisor's live state of one process, or nil when
+// it has no process of that name. The endpoint serves the same native document
+// as one `process-compose list -o json` entry.
+func (b Backend) processState(ctx context.Context, target runtime.Target, name string) (*processListEntry, error) {
+	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/"+url.PathEscape(name), nil)
+	if err != nil {
+		return nil, err
+	}
+	setProcessToken(req, target.EnvFile)
+	resp, err := controlPlaneClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if processMissing(resp.StatusCode, body) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get process state: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var state processListEntry
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return nil, fmt.Errorf("decode process state: %w", err)
+	}
+	return &state, nil
+}
+
+// processMissing reports whether a control-plane error response means the
+// supervisor has no process of the requested name.
+func processMissing(status int, body []byte) bool {
+	message := strings.ToLower(string(body))
+	return status == http.StatusNotFound || (status == http.StatusBadRequest && (strings.Contains(message, "no such process") || strings.Contains(message, "not found")))
+}
+
+// updateProcess posts the compiled definition of a process to the supervisor
+// when it differs from the native config the supervisor serves, registering the
+// process first when it is missing. The result reports whether an update was
+// posted. It does not say what the supervisor did with it: see applyProcess.
 func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
 	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/info/"+url.PathEscape(name), nil)
@@ -288,9 +389,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		message := strings.ToLower(string(body))
-		missing := resp.StatusCode == http.StatusNotFound || (resp.StatusCode == http.StatusBadRequest && (strings.Contains(message, "no such process") || strings.Contains(message, "not found")))
-		if missing {
+		if processMissing(resp.StatusCode, body) {
 			return b.addMissingProcess(ctx, target, name, updates)
 		}
 		return false, fmt.Errorf("get process config: %s: %s", resp.Status, strings.TrimSpace(string(body)))
@@ -557,16 +656,8 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 		if err != nil {
 			return err
 		}
-		changed, err := b.updateProcess(ctx, target, name, updates)
-		if err != nil {
+		if err := b.applyProcess(ctx, target, name, updates); err != nil {
 			return err
-		}
-		if !changed {
-			named := target
-			named.Services = []string{name}
-			if err := b.Restart(ctx, named); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

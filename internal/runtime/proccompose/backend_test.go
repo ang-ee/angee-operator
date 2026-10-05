@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -381,11 +383,13 @@ func TestBackendStatusPropagatesErrors(t *testing.T) {
 
 // scriptedJobRunner replays a fixed sequence of `list -o json` payloads (one per
 // poll) and a canned log body, so a RunJob test can walk a process through its
-// launch lifecycle without a live supervisor.
+// launch lifecycle without a live supervisor. It counts `process restart`
+// invocations so a test can tell which trigger spawned the re-run.
 type scriptedJobRunner struct {
-	lists   [][]byte
-	logs    []byte
-	listIdx int
+	lists    [][]byte
+	logs     []byte
+	listIdx  int
+	restarts int
 }
 
 func (r *scriptedJobRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
@@ -398,6 +402,9 @@ func (r *scriptedJobRunner) Run(_ context.Context, _ string, _ []string, _ strin
 			r.listIdx++
 		}
 		return out, nil
+	}
+	if hasArg(args, "restart") {
+		r.restarts++
 	}
 	return nil, nil
 }
@@ -418,22 +425,9 @@ func hasArg(args []string, want string) bool {
 // window returned exit 0 with stale logs. RunJob must instead wait for a genuine
 // terminal state (Completed/Error/Skipped) whose end time is fresh.
 func TestRunJobReportsCompletionNotLaunchWindow(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
-			_, _ = io.WriteString(w, `{"name":"job","command":"old"}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/process":
-			_, _ = io.WriteString(w, `{}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
+	server := replacingJobServer(t)
 	defer server.Close()
-	_, portText, err := net.SplitHostPort(server.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, _ := strconv.Atoi(portText)
+	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
 		logs: []byte("job log line\n"),
@@ -471,6 +465,37 @@ func TestRunJobReportsCompletionNotLaunchWindow(t *testing.T) {
 	if runner.listIdx < len(runner.lists)-1 {
 		t.Fatalf("RunJob() consumed %d list samples; want it to poll past the launch window", runner.listIdx)
 	}
+	if runner.restarts != 0 {
+		t.Fatalf("RunJob() restarted the job %d times; want the applied update to be its only trigger", runner.restarts)
+	}
+}
+
+// replacingJobServer stands in for a supervisor whose stored config differs from
+// the compiled updates for `command: run` and which applies the posted update
+// the way process-compose does, by replacing the process: its state shows the
+// previous run until the POST and a blank, not yet launched incarnation after
+// it. RunJob therefore re-runs the job through the update path, and a Restart on
+// top of it would run the job twice.
+func replacingJobServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var replaced atomic.Bool
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
+			_, _ = io.WriteString(w, `{"name":"job","command":"old"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/process/job":
+			if replaced.Load() {
+				_, _ = io.WriteString(w, `{"name":"job","status":"Pending","pid":0}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"name":"job","status":"Completed","pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			replaced.Store(true)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 }
 
 // restartFallbackServer stands in for a supervisor whose stored config already
@@ -591,18 +616,9 @@ func TestRunJobDetectsFastRestartCompletionByPid(t *testing.T) {
 // transitional state, is a stale leftover of the previous run and must be skipped.
 // Only a sample bearing a genuinely new end time (the update path, here) counts.
 func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		// command differs from the compiled "run", so updateProcess reports a
-		// change and the re-run goes through the update path (a fresh end time).
-		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
-			_, _ = io.WriteString(w, `{"name":"job","command":"old"}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/process":
-			_, _ = io.WriteString(w, `{}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
+	// The stored command differs from the compiled "run", so updateProcess posts
+	// an update and the re-run goes through the update path (a fresh end time).
+	server := replacingJobServer(t)
 	defer server.Close()
 	port := serverPort(t, server)
 
@@ -633,6 +649,296 @@ func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
 	}
 	if runner.listIdx < len(runner.lists)-1 {
 		t.Fatalf("RunJob() consumed %d list samples; want the stale sample skipped", runner.listIdx)
+	}
+	if runner.restarts != 0 {
+		t.Fatalf("RunJob() restarted the job %d times; want the applied update to be its only trigger", runner.restarts)
+	}
+}
+
+// A supervisor that judges a posted update equal to the config it already holds
+// answers 200 and runs nothing. RunJob used to take the accepted POST for the
+// re-run and then wait out its deadline for a completion that never came; it
+// must notice that the job was not replaced and restart it instead.
+func TestRunJobRestartsJobWhenSupervisorDiscardsUpdate(t *testing.T) {
+	ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:   "job",
+		config: `{"name":"job","command":"old"}`,
+		state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ProcessEndTime: &ended},
+		logs:   []byte("job log line\n"),
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := backend.RunJob(ctx, runtime.Target{ControlPort: serverPort(t, server)}, runtime.JobSpec{
+		Name:          "job",
+		Configuration: jobConfiguration,
+	})
+	if err != nil {
+		t.Fatalf("RunJob() error = %v, want the re-run's completion; out=%q", err, out)
+	}
+	if got := string(out); !strings.Contains(got, "job log line") {
+		t.Fatalf("RunJob() logs = %q, want captured job logs", got)
+	}
+	posts, restarts, pid := supervisor.observed()
+	if posts != 1 {
+		t.Fatalf("posted %d updates; want 1, or the fixture no longer exercises a discarded update", posts)
+	}
+	if restarts != 1 || pid == 100 {
+		t.Fatalf("job restarted %d times and has pid %d; want exactly one re-run with a new pid", restarts, pid)
+	}
+}
+
+// fakeSupervisor stands in for the process-compose control plane and CLI of one
+// process. GET /process/info/<name> serves its native config and GET
+// /process/<name> its live state. POST /process always answers 200, as the real
+// supervisor does whether or not it acts on the update: it then either replaces
+// the process, leaving afterUpdate as its state, or, when afterUpdate is nil,
+// leaves it untouched — what process-compose does when its own comparison finds
+// the posted config equal to the one it holds. As a Runner it relaunches the
+// process on `process restart`, reusing the native state under a new pid, and
+// serves that state to `list -o json`.
+type fakeSupervisor struct {
+	mu          sync.Mutex
+	name        string
+	config      string
+	state       processListEntry
+	afterUpdate *processListEntry
+	logs        []byte
+	posted      []map[string]any
+	restarts    int
+}
+
+func (s *fakeSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
+		_, _ = io.WriteString(w, s.config)
+	case r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
+		_ = json.NewEncoder(w).Encode(s.state)
+	case r.Method == http.MethodPost && r.URL.Path == "/process":
+		var config map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.posted = append(s.posted, config)
+		if s.afterUpdate != nil {
+			s.state = *s.afterUpdate
+		}
+		_, _ = io.WriteString(w, `{}`)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *fakeSupervisor) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case hasArg(args, "logs"):
+		return s.logs, nil
+	case hasArg(args, "list"):
+		return json.Marshal([]processListEntry{s.state})
+	case hasArg(args, "restart"):
+		s.restarts++
+		s.state.PID += 1000
+	}
+	return nil, nil
+}
+
+// observed returns how many updates were posted, how many restarts were issued
+// and the pid the process ended up with.
+func (s *fakeSupervisor) observed() (posts, restarts, pid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.posted), s.restarts, s.state.PID
+}
+
+// postedCommands returns the command of every posted update, in order.
+func (s *fakeSupervisor) postedCommands() []any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	commands := make([]any, 0, len(s.posted))
+	for _, config := range s.posted {
+		commands = append(commands, config["command"])
+	}
+	return commands
+}
+
+// webConfiguration is the compiled definition of a probed service.
+const webConfiguration = `version: "0.5"
+processes:
+  web:
+    command: serve
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: "8000"
+        path: /
+        scheme: http
+      initial_delay_seconds: 0
+      period_seconds: 5
+      timeout_seconds: 3
+      failure_threshold: 12
+    shutdown:
+      timeout_seconds: 10
+      signal: 15
+`
+
+// nativeWebConfig is the config process-compose v1.122.0 serves for
+// webConfiguration running the given command. Zero values are gone
+// (initialDelay, workingDir) and the probe carries the supervisor's own defaults
+// (numPort, statusCode), so even with the compiled command it never compares
+// equal to the compiled definition field by field.
+func nativeWebConfig(command string) string {
+	return `{"name":"web","command":"` + command + `","restartPolicy":{},"readinessProbe":{"httpGet":{"host":"127.0.0.1","path":"/","scheme":"http","port":"8000","numPort":8000,"statusCode":200},"periodSeconds":5,"timeoutSeconds":3,"successThreshold":1,"failureThreshold":12},"shutDownParams":{"shutDownTimeout":10,"signal":15},"namespace":"default","replicas":1,"vars":{"PC_REPLICA_NUM":0},"launchTimeout":5,"replicaName":"web","executable":"bash","args":["-c","` + command + `"]}`
+}
+
+// Regression test for #91. An unchanged probed service is posted on every
+// restart because its native config never equals the compiled one field by
+// field; process-compose then finds the posted config equal to its own and
+// answers 200 without restarting anything. Apply used to take the accepted POST
+// for the restart and report success with the old process still running.
+func TestApplyRestartsProcessWhenSupervisorDiscardsUpdate(t *testing.T) {
+	started := time.Date(2026, 10, 5, 12, 0, 22, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:   "web",
+		config: nativeWebConfig("serve"),
+		state:  processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started},
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	err := backend.Apply(t.Context(), runtime.Target{
+		ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	posts, restarts, pid := supervisor.observed()
+	if posts != 1 {
+		t.Fatalf("posted %d updates; want 1, or the fixture no longer exercises a discarded update", posts)
+	}
+	if restarts != 1 || pid == 100 {
+		t.Fatalf("process restarted %d times and has pid %d; want exactly one restart with a new pid", restarts, pid)
+	}
+}
+
+// When the supervisor applies a posted update it replaces the process itself, so
+// a Restart on top of it would bounce the service twice. The replacement is
+// recognised whether or not it has launched by the time its state is read.
+func TestApplyDoesNotRestartProcessReplacedByUpdate(t *testing.T) {
+	started := time.Date(2026, 10, 5, 12, 0, 22, 0, time.UTC)
+	relaunched := started.Add(time.Minute)
+	running := processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started}
+	tests := []struct {
+		name        string
+		state       processListEntry
+		afterUpdate processListEntry
+	}{
+		{
+			name:        "replacement not launched yet",
+			state:       running,
+			afterUpdate: processListEntry{Name: "web", Status: "Pending"},
+		},
+		{
+			name:        "replacement already running",
+			state:       running,
+			afterUpdate: processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 200, ProcessStartTime: &relaunched},
+		},
+		{
+			// Skipped at boot: no pid or start time to compare, so only leaving
+			// the terminal state shows that the update relaunched it.
+			name:        "skipped process relaunched",
+			state:       processListEntry{Name: "web", Status: "Skipped", ExitCode: 1, ProcessEndTime: &started},
+			afterUpdate: processListEntry{Name: "web", Status: "Pending"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			supervisor := &fakeSupervisor{name: "web", config: nativeWebConfig("old"), state: tt.state, afterUpdate: &tt.afterUpdate}
+			server := httptest.NewServer(supervisor)
+			defer server.Close()
+			backend := Backend{Runner: supervisor}
+
+			err := backend.Apply(t.Context(), runtime.Target{
+				ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration),
+			})
+			if err != nil {
+				t.Fatalf("Apply() error = %v", err)
+			}
+			if got, want := supervisor.postedCommands(), []any{"serve"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("posted commands = %v, want the compiled command once: %v", got, want)
+			}
+			if _, restarts, _ := supervisor.observed(); restarts != 0 {
+				t.Fatalf("process restarted %d times after the supervisor replaced it; want 0", restarts)
+			}
+		})
+	}
+}
+
+// A definition that already equals the supervisor's config is not posted at all,
+// so the restart has to be issued explicitly.
+func TestApplyRestartsProcessWithUnchangedDefinition(t *testing.T) {
+	supervisor := &fakeSupervisor{
+		name:   "web",
+		config: `{"name":"web","command":"serve","workingDir":"/srv"}`,
+		state:  processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100},
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	err := backend.Apply(t.Context(), runtime.Target{
+		ControlPort: serverPort(t, server), Services: []string{"web"},
+		Configuration: []byte("version: \"0.5\"\nprocesses:\n  web:\n    command: serve\n    working_dir: /srv\n"),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	posts, restarts, _ := supervisor.observed()
+	if posts != 0 || restarts != 1 {
+		t.Fatalf("posted %d updates and restarted %d times; want no update and exactly one restart", posts, restarts)
+	}
+}
+
+func TestProcessReplaced(t *testing.T) {
+	started := time.Date(2026, 10, 5, 12, 0, 22, 0, time.UTC)
+	relaunched := started.Add(time.Minute)
+	running := &processListEntry{Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started}
+	tests := []struct {
+		name   string
+		before *processListEntry
+		after  *processListEntry
+		want   bool
+	}{
+		{"left alone", running, &processListEntry{Status: "Running", IsRunning: true, PID: 100, ProcessStartTime: &started}, false},
+		// A crash between the samples keeps the pid and start time: the process
+		// still needs its restart.
+		{"exited on its own", running, &processListEntry{Status: "Completed", PID: 100, ProcessStartTime: &started}, false},
+		{"blank replacement", running, &processListEntry{Status: "Pending"}, true},
+		{"relaunched replacement", running, &processListEntry{Status: "Running", IsRunning: true, PID: 200, ProcessStartTime: &relaunched}, true},
+		// process-compose v1.120.0 keeps the start time across a restart.
+		{"new pid under the old start time", running, &processListEntry{Status: "Running", IsRunning: true, PID: 200, ProcessStartTime: &started}, true},
+		{"skipped then pending", &processListEntry{Status: "Skipped"}, &processListEntry{Status: "Pending"}, true},
+		{"skipped and still skipped", &processListEntry{Status: "Skipped"}, &processListEntry{Status: "Skipped"}, false},
+		{"pending and still pending", &processListEntry{Status: "Pending"}, &processListEntry{Status: "Pending"}, false},
+		{"newly registered", nil, &processListEntry{Status: "Pending"}, true},
+		{"unknown after the update", running, nil, false},
+		{"never known", nil, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := processReplaced(tt.before, tt.after); got != tt.want {
+				t.Fatalf("processReplaced() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
