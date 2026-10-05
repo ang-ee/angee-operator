@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.16.0 — 2026-10-05
+
 ### Added
 
 - **Worktree sources without a branch.** A workspace source with
