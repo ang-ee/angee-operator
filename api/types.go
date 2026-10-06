@@ -545,6 +545,45 @@ type WorkspaceSyncBaseRequest struct {
 	Method string `json:"method,omitempty"`
 }
 
+// Outcomes of `workspace repair` for one source slot.
+const (
+	// WorkspaceRepairCreated means the slot was missing and repair
+	// materialized it.
+	WorkspaceRepairCreated = "created"
+	// WorkspaceRepairOK means the slot is on disk in a state repair accepts.
+	WorkspaceRepairOK = "ok"
+	// WorkspaceRepairNeedsAttention means something is at the slot's path but
+	// the slot is dirty, diverged, on the wrong branch or unreadable, or the
+	// path holds something other than the slot. Repair left it untouched.
+	WorkspaceRepairNeedsAttention = "needs-attention"
+	// WorkspaceRepairFailed means repair could not materialize the slot (or
+	// did not attempt it); nothing it started is left at the slot's path.
+	WorkspaceRepairFailed = "failed"
+)
+
+// WorkspaceRepairResult is the outcome of `workspace repair`: one entry per
+// source slot the manifest declares for the workspace, in slot order. OK is
+// false when any slot failed to materialize.
+type WorkspaceRepairResult struct {
+	Workspace string                `yaml:"workspace" json:"workspace"`
+	Path      string                `yaml:"path" json:"path"`
+	OK        bool                  `yaml:"ok" json:"ok"`
+	Slots     []WorkspaceRepairSlot `yaml:"slots" json:"slots"`
+}
+
+// WorkspaceRepairSlot reports what repair did with one source slot. Action is
+// one of the WorkspaceRepair* constants and Reason, a single line, says why.
+// Status is the slot's state after the repair, present when the slot is on
+// disk or repair tried to create it.
+type WorkspaceRepairSlot struct {
+	Slot   string                 `yaml:"slot" json:"slot"`
+	Source string                 `yaml:"source" json:"source"`
+	Path   string                 `yaml:"path" json:"path"`
+	Action string                 `yaml:"action" json:"action"`
+	Reason string                 `yaml:"reason,omitempty" json:"reason,omitempty"`
+	Status *WorkspaceSourceStatus `yaml:"status,omitempty" json:"status,omitempty"`
+}
+
 type SourceState struct {
 	Name           string      `json:"name"`
 	Slot           string      `json:"slot,omitempty"`

@@ -112,6 +112,9 @@ type WorkspaceAPI interface {
 	WorkspaceGitStatus(ctx context.Context, name string) ([]api.SourceState, error)
 	WorkspacePush(ctx context.Context, name, ref string) ([]api.SourceState, error)
 	WorkspaceSyncBase(ctx context.Context, name, method string) ([]api.SourceState, error)
+	// WorkspaceRepair returns its result even when it also returns a
+	// *WorkspaceRepairError for slots it could not materialize.
+	WorkspaceRepair(ctx context.Context, name string) (api.WorkspaceRepairResult, error)
 }
 
 // SourceAPI covers top-level source materialization and git inspection.

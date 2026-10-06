@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -163,9 +162,6 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
-	if _, err := os.Stat(path); err != nil {
-		return api.WorkspaceSourceStatus{}, err
-	}
 	if err := p.gitClient().Fetch(ctx, path); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
@@ -255,6 +251,9 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, workspaceName, slo
 	_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 	if err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+	}
+	if err := requireWorkspaceSlotsOnDisk(workspaceName, []workspaceSlotPath{{slot: slot, path: path, source: source}}); err != nil {
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
 	}
 	return stack, wsSource, source, path, nil
 }

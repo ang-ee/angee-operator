@@ -18,6 +18,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/logctx"
+	"github.com/ang-ee/angee-operator/internal/service"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -243,6 +244,52 @@ func TestServiceUpdateFromTemplateUsesDedicatedRoute(t *testing.T) {
 	}
 	if result.Name != "agent/one" || !result.Changed {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+// The operator answers 200 for a repair that ran, failed slots included; the
+// client rebuilds the error from the result so a remote repair fails like a
+// local one, and passes a repair that could not run through as an error.
+func TestWorkspaceRepairRebuildsFailureFromResult(t *testing.T) {
+	result := api.WorkspaceRepairResult{Workspace: "feature/one", OK: true, Slots: []api.WorkspaceRepairSlot{
+		{Slot: "app", Action: api.WorkspaceRepairOK, Reason: "clean"},
+	}}
+	status := http.StatusOK
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost || req.URL.EscapedPath() != "/workspaces/feature%2Fone/repair" {
+			t.Fatalf("request = %s %s, want POST /workspaces/feature%%2Fone/repair", req.Method, req.URL.EscapedPath())
+		}
+		w.WriteHeader(status)
+		if status != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Kind: "workspace", Name: "feature/one", Error: `workspace "feature/one" is not declared`})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	})
+	client := New("http://operator.test")
+	client.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		return recorder.Result(), nil
+	})
+
+	got, err := client.WorkspaceRepair(t.Context(), "feature/one")
+	if err != nil || !reflect.DeepEqual(got, result) {
+		t.Fatalf("WorkspaceRepair() = %+v, %v; want %+v", got, err, result)
+	}
+
+	result.OK = false
+	result.Slots = append(result.Slots, api.WorkspaceRepairSlot{Slot: "lib", Action: api.WorkspaceRepairFailed, Reason: "clone failed"})
+	got, err = client.WorkspaceRepair(t.Context(), "feature/one")
+	var repairErr *service.WorkspaceRepairError
+	if !errors.As(err, &repairErr) || len(repairErr.Failed) != 1 || repairErr.Failed[0].Slot != "lib" || !reflect.DeepEqual(got, result) {
+		t.Fatalf("WorkspaceRepair() with a failed slot = %+v, %v; want the result and a *WorkspaceRepairError for lib", got, err)
+	}
+
+	status = http.StatusNotFound
+	var notFound *RemoteNotFound
+	if got, err := client.WorkspaceRepair(t.Context(), "feature/one"); !errors.As(err, &notFound) || len(got.Slots) != 0 {
+		t.Fatalf("WorkspaceRepair() of an undeclared workspace = %+v, %v; want RemoteNotFound and no result", got, err)
 	}
 }
 

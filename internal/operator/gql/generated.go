@@ -242,6 +242,7 @@ type ComplexityRoot struct {
 		UpdateWorkspacesByPk          func(childComplexity int, pkColumns model.WorkspacesPkColumnsInput, set model.WorkspacesSetInput) int
 		WorkspaceCreatePreflight      func(childComplexity int, input model.WorkspaceCreateInput) int
 		WorkspacePush                 func(childComplexity int, name string, ref *string) int
+		WorkspaceRepair               func(childComplexity int, name string) int
 		WorkspaceSourceFetch          func(childComplexity int, workspace string, slot string) int
 		WorkspaceSourceMerge          func(childComplexity int, workspace string, slot string, ref string) int
 		WorkspaceSourceMergeAbort     func(childComplexity int, workspace string, slot string) int
@@ -507,6 +508,22 @@ type ComplexityRoot struct {
 		Template           func(childComplexity int) int
 	}
 
+	WorkspaceRepairResult struct {
+		OK        func(childComplexity int) int
+		Path      func(childComplexity int) int
+		Slots     func(childComplexity int) int
+		Workspace func(childComplexity int) int
+	}
+
+	WorkspaceRepairSlot struct {
+		Action func(childComplexity int) int
+		Path   func(childComplexity int) int
+		Reason func(childComplexity int) int
+		Slot   func(childComplexity int) int
+		Source func(childComplexity int) int
+		Status func(childComplexity int) int
+	}
+
 	WorkspaceSourceStatus struct {
 		Ahead          func(childComplexity int) int
 		Behind         func(childComplexity int) int
@@ -678,6 +695,7 @@ type MutationResolver interface {
 	DeleteWorkspacesByPk(ctx context.Context, id string) (*api.WorkspaceRef, error)
 	WorkspacePush(ctx context.Context, name string, ref *string) ([]*api.SourceState, error)
 	WorkspaceSyncBase(ctx context.Context, name string, method *string) ([]*api.SourceState, error)
+	WorkspaceRepair(ctx context.Context, name string) (*api.WorkspaceRepairResult, error)
 	WorkspaceSourceFetch(ctx context.Context, workspace string, slot string) (*api.WorkspaceSourceStatus, error)
 	WorkspaceSourcePull(ctx context.Context, workspace string, slot string) (*api.WorkspaceSourceStatus, error)
 	WorkspaceSourcePush(ctx context.Context, workspace string, slot string, ref *string) (*api.WorkspaceSourceStatus, error)
@@ -1783,6 +1801,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.WorkspacePush(childComplexity, args["name"].(string), args["ref"].(*string)), true
+	case "Mutation.workspaceRepair":
+		if e.ComplexityRoot.Mutation.WorkspaceRepair == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceRepair_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceRepair(childComplexity, args["name"].(string)), true
 	case "Mutation.workspaceSourceFetch":
 		if e.ComplexityRoot.Mutation.WorkspaceSourceFetch == nil {
 			break
@@ -3208,6 +3237,68 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.WorkspaceRef.Template(childComplexity), true
 
+	case "WorkspaceRepairResult.ok":
+		if e.ComplexityRoot.WorkspaceRepairResult.OK == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairResult.OK(childComplexity), true
+	case "WorkspaceRepairResult.path":
+		if e.ComplexityRoot.WorkspaceRepairResult.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairResult.Path(childComplexity), true
+	case "WorkspaceRepairResult.slots":
+		if e.ComplexityRoot.WorkspaceRepairResult.Slots == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairResult.Slots(childComplexity), true
+	case "WorkspaceRepairResult.workspace":
+		if e.ComplexityRoot.WorkspaceRepairResult.Workspace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairResult.Workspace(childComplexity), true
+
+	case "WorkspaceRepairSlot.action":
+		if e.ComplexityRoot.WorkspaceRepairSlot.Action == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairSlot.Action(childComplexity), true
+	case "WorkspaceRepairSlot.path":
+		if e.ComplexityRoot.WorkspaceRepairSlot.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairSlot.Path(childComplexity), true
+	case "WorkspaceRepairSlot.reason":
+		if e.ComplexityRoot.WorkspaceRepairSlot.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairSlot.Reason(childComplexity), true
+	case "WorkspaceRepairSlot.slot":
+		if e.ComplexityRoot.WorkspaceRepairSlot.Slot == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairSlot.Slot(childComplexity), true
+	case "WorkspaceRepairSlot.source":
+		if e.ComplexityRoot.WorkspaceRepairSlot.Source == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairSlot.Source(childComplexity), true
+	case "WorkspaceRepairSlot.status":
+		if e.ComplexityRoot.WorkspaceRepairSlot.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRepairSlot.Status(childComplexity), true
+
 	case "WorkspaceSourceStatus.ahead":
 		if e.ComplexityRoot.WorkspaceSourceStatus.Ahead == nil {
 			break
@@ -3995,6 +4086,30 @@ type WorkspaceSourceStatus {
   error: String
 }
 
+"""
+What workspaceRepair did with one source slot. action is created, ok,
+needs-attention or failed; status is the slot's state after the repair.
+"""
+type WorkspaceRepairSlot {
+  slot: String!
+  source: String!
+  path: String!
+  action: String!
+  reason: String
+  status: WorkspaceSourceStatus
+}
+
+"""
+The outcome of workspaceRepair, one entry per declared slot. ok is false when
+any slot failed to materialize; the mutation then also reports an error.
+"""
+type WorkspaceRepairResult {
+  workspace: String!
+  path: String!
+  ok: Boolean!
+  slots: [WorkspaceRepairSlot!]!
+}
+
 type WorkspaceMountRef {
   kind: String!
   name: String!
@@ -4697,6 +4812,7 @@ type Mutation {
   delete_workspaces_by_pk(id: String!): WorkspaceRef
   workspacePush(name: String!, ref: String): [SourceState!]!
   workspaceSyncBase(name: String!, method: String): [SourceState!]!
+  workspaceRepair(name: String!): WorkspaceRepairResult!
   workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
   workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
@@ -5547,6 +5663,38 @@ func (ec *executionContext) childFields_WorkspaceRef(ctx context.Context, field 
 		return ec.fieldContext_WorkspaceRef_ttlExpiresAt(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type WorkspaceRef", field.Name)
+}
+
+func (ec *executionContext) childFields_WorkspaceRepairResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "workspace":
+		return ec.fieldContext_WorkspaceRepairResult_workspace(ctx, field)
+	case "path":
+		return ec.fieldContext_WorkspaceRepairResult_path(ctx, field)
+	case "ok":
+		return ec.fieldContext_WorkspaceRepairResult_ok(ctx, field)
+	case "slots":
+		return ec.fieldContext_WorkspaceRepairResult_slots(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorkspaceRepairResult", field.Name)
+}
+
+func (ec *executionContext) childFields_WorkspaceRepairSlot(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "slot":
+		return ec.fieldContext_WorkspaceRepairSlot_slot(ctx, field)
+	case "source":
+		return ec.fieldContext_WorkspaceRepairSlot_source(ctx, field)
+	case "path":
+		return ec.fieldContext_WorkspaceRepairSlot_path(ctx, field)
+	case "action":
+		return ec.fieldContext_WorkspaceRepairSlot_action(ctx, field)
+	case "reason":
+		return ec.fieldContext_WorkspaceRepairSlot_reason(ctx, field)
+	case "status":
+		return ec.fieldContext_WorkspaceRepairSlot_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WorkspaceRepairSlot", field.Name)
 }
 
 func (ec *executionContext) childFields_WorkspaceSourceStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -6456,6 +6604,20 @@ func (ec *executionContext) field_Mutation_workspacePush_args(ctx context.Contex
 		return nil, err
 	}
 	args["ref"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceRepair_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
 	return args, nil
 }
 
@@ -11608,6 +11770,50 @@ func (ec *executionContext) fieldContext_Mutation_workspaceSyncBase(ctx context.
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_workspaceSyncBase_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceRepair(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceRepair(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceRepair(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceRepairResult) graphql.Marshaler {
+			return ec.marshalNWorkspaceRepairResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceRepair(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceRepairResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceRepair_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -17636,6 +17842,254 @@ func (ec *executionContext) _WorkspaceRef_ttlExpiresAt(ctx context.Context, fiel
 }
 func (ec *executionContext) fieldContext_WorkspaceRef_ttlExpiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("WorkspaceRef", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairResult_workspace(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairResult_workspace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Workspace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairResult_workspace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairResult_path(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairResult_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairResult_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairResult_ok(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairResult_ok(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OK, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairResult_ok(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairResult_slots(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairResult_slots(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Slots, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []api.WorkspaceRepairSlot) graphql.Marshaler {
+			return ec.marshalNWorkspaceRepairSlot2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairSlotᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairResult_slots(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceRepairResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceRepairSlot(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WorkspaceRepairSlot_slot(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairSlot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairSlot_slot(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Slot, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairSlot_slot(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairSlot", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairSlot_source(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairSlot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairSlot_source(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Source, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairSlot_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairSlot", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairSlot_path(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairSlot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairSlot_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairSlot_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairSlot", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairSlot_action(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairSlot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairSlot_action(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Action, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairSlot_action(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairSlot", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairSlot_reason(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairSlot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairSlot_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairSlot_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRepairSlot", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRepairSlot_status(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRepairSlot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRepairSlot_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.WorkspaceSourceStatus) graphql.Marshaler {
+			return ec.marshalOWorkspaceSourceStatus2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRepairSlot_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WorkspaceRepairSlot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WorkspaceSourceStatus(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _WorkspaceSourceStatus_slot(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceSourceStatus) (ret graphql.Marshaler) {
@@ -24480,6 +24934,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "workspaceRepair":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceRepair(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "workspaceSourceFetch":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_workspaceSourceFetch(ctx, field)
@@ -27152,6 +27613,118 @@ func (ec *executionContext) _WorkspaceRef(ctx context.Context, sel ast.Selection
 	return out
 }
 
+var workspaceRepairResultImplementors = []string{"WorkspaceRepairResult"}
+
+func (ec *executionContext) _WorkspaceRepairResult(ctx context.Context, sel ast.SelectionSet, obj *api.WorkspaceRepairResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, workspaceRepairResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorkspaceRepairResult")
+		case "workspace":
+			out.Values[i] = ec._WorkspaceRepairResult_workspace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "path":
+			out.Values[i] = ec._WorkspaceRepairResult_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ok":
+			out.Values[i] = ec._WorkspaceRepairResult_ok(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "slots":
+			out.Values[i] = ec._WorkspaceRepairResult_slots(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var workspaceRepairSlotImplementors = []string{"WorkspaceRepairSlot"}
+
+func (ec *executionContext) _WorkspaceRepairSlot(ctx context.Context, sel ast.SelectionSet, obj *api.WorkspaceRepairSlot) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, workspaceRepairSlotImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WorkspaceRepairSlot")
+		case "slot":
+			out.Values[i] = ec._WorkspaceRepairSlot_slot(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "source":
+			out.Values[i] = ec._WorkspaceRepairSlot_source(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "path":
+			out.Values[i] = ec._WorkspaceRepairSlot_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "action":
+			out.Values[i] = ec._WorkspaceRepairSlot_action(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._WorkspaceRepairSlot_reason(ctx, field, obj)
+		case "status":
+			out.Values[i] = ec._WorkspaceRepairSlot_status(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var workspaceSourceStatusImplementors = []string{"WorkspaceSourceStatus"}
 
 func (ec *executionContext) _WorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, obj *api.WorkspaceSourceStatus) graphql.Marshaler {
@@ -29430,6 +30003,40 @@ func (ec *executionContext) marshalNWorkspaceRef2ᚖgithubᚗcomᚋangᚑeeᚋan
 		return graphql.Null
 	}
 	return ec._WorkspaceRef(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorkspaceRepairResult2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairResult(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceRepairResult) graphql.Marshaler {
+	return ec._WorkspaceRepairResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorkspaceRepairResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairResult(ctx context.Context, sel ast.SelectionSet, v *api.WorkspaceRepairResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WorkspaceRepairResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWorkspaceRepairSlot2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairSlot(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceRepairSlot) graphql.Marshaler {
+	return ec._WorkspaceRepairSlot(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNWorkspaceRepairSlot2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairSlotᚄ(ctx context.Context, sel ast.SelectionSet, v []api.WorkspaceRepairSlot) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWorkspaceRepairSlot2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceRepairSlot(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNWorkspaceSourceStatus2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐWorkspaceSourceStatus(ctx context.Context, sel ast.SelectionSet, v api.WorkspaceSourceStatus) graphql.Marshaler {

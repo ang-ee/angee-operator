@@ -49,6 +49,7 @@ name: test
 		{http.MethodPost, "/workspaces/x/sources/y/rebase-abort", ""},
 		{http.MethodPost, "/workspaces/x/sources/y/rebase-continue", ""},
 		{http.MethodPost, "/workspaces/x/sources/y/publish", `{"remote":"origin"}`},
+		{http.MethodPost, "/workspaces/x/repair", ""},
 		{http.MethodGet, "/stack/template-inputs", ""},
 		{http.MethodGet, "/workspaces/x/template-inputs", ""},
 		{http.MethodGet, "/services/x/template-inputs", ""},

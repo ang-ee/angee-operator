@@ -369,6 +369,7 @@ angee workspace logs <name> [--follow]
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
 angee workspace sync-base [name] [--merge|--rebase]
+angee workspace repair [name]
 angee workspace open <name> [--editor vscode|idea|gh-desktop]
 angee workspace destroy <name> [--purge]
 ```
@@ -419,7 +420,8 @@ angee operator --root workspaces/<name>/.angee --port 9100
 ```
 
 When run from inside `$ANGEE_ROOT/workspaces/<name>/...`,
-`angee workspace status` and `angee workspace sync-base` may omit the name.
+`angee workspace status`, `angee workspace sync-base` and
+`angee workspace repair` may omit the name.
 
 For git worktree sources, the branch recorded in the workspace manifest is the
 workspace identity. `sync-base` updates that branch from its base ref (normally
@@ -446,6 +448,46 @@ counterpart (`origin/<ref>`) holds, so commits a source gained from
 `sync-base` do not count. `workspace destroy` uses the same measure, and for
 a source on a detached HEAD it refuses only commits that no branch, remote
 branch or tag holds.
+
+### Repairing missing source slots
+
+Sources are materialized when a workspace is created. A source slot added
+later to `workspaces.<name>.sources` in `angee.yaml` is not created by
+`workspace update` or by lifecycle commands, so it is missing on disk.
+`workspace status` and `workspace git` report such a slot with state
+`missing`. `sync-base`, `push` and the `workspace source` verbs refuse to run
+(HTTP 409) before touching any slot when a slot they act on is missing, is a
+dangling link, or (for a git slot) is a directory that is not its own
+checkout, naming the slot and pointing at `workspace repair`.
+
+`angee workspace repair [name]` brings the workspace's slots in line with the
+manifest:
+
+- A slot whose path is missing (or, for a git slot, holds an empty directory)
+  is materialized the way `workspace create` cuts it: a worktree of the source
+  cache on the slot branch (or detached at its base when it has no branch), a
+  clone, or a link for a `local` source, honouring `mode`, `ref` /
+  `default_ref` and `subpath`, after the same source-cache refresh. A slot
+  deleted from disk is cut again on its existing branch.
+- Anything else at a slot's path is never changed. A slot is reported `ok`,
+  or `needs-attention` when it is dirty, diverged, on the wrong branch or
+  cannot be read, or when its path holds a dangling link or a directory that
+  is not the slot's checkout.
+- A slot that cannot be materialized is reported `failed` and nothing is left
+  at its path (a branch the attempt created in the source cache stays); the
+  other slots are still repaired.
+
+Each line of output is `slot`, action (`created`, `ok`, `needs-attention`,
+`failed`), reason and path; `--json` prints the full result, including each
+slot's post-repair status. The command exits non-zero when any slot failed.
+Repairing a repaired workspace changes nothing. Repair refuses a workspace
+whose directory does not exist: materialize that with `workspace create`
+instead.
+
+```text
+app	ok	clean	/srv/stack/workspaces/feature-a/app
+lib	created	worktree on branch "feature-a", base main	/srv/stack/workspaces/feature-a/lib
+```
 
 ### Update scopes
 

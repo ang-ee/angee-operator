@@ -55,6 +55,12 @@ models:
   WorkspaceSourceStatus:
     model:
       - github.com/ang-ee/angee-operator/api.WorkspaceSourceStatus
+  WorkspaceRepairSlot:
+    model:
+      - github.com/ang-ee/angee-operator/api.WorkspaceRepairSlot
+  WorkspaceRepairResult:
+    model:
+      - github.com/ang-ee/angee-operator/api.WorkspaceRepairResult
   WorkspaceMountRef:
     model:
       - github.com/ang-ee/angee-operator/api.WorkspaceMountRef
