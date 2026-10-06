@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -144,7 +146,37 @@ func (p *Platform) resolveRegistryTemplate(ctx context.Context, ref, kind string
 			return templatePath, activeRef, nil
 		}
 	}
-	return "", "", fmt.Errorf("template %q was not found in the template registry %s", ref, repoURL)
+	return "", "", &registryTemplateMissingError{ref: ref, repoURL: repoURL}
+}
+
+// registryTemplateMissingError reports a template registry that was fetched
+// but holds no template at any candidate path.
+type registryTemplateMissingError struct {
+	ref     string
+	repoURL string
+}
+
+func (e *registryTemplateMissingError) Error() string {
+	return fmt.Sprintf("template %q was not found in the template registry %s", e.ref, logctx.RedactURL(e.repoURL))
+}
+
+// registryFallbackError explains why a template that no local candidate
+// answered could not come from the template registry either. Only a fetched
+// registry without the template means "not found"; a registry that could not
+// be fetched (no git, no network, an unwritable cache) says so, or a clean
+// machine would read a missing git as a missing template.
+func registryFallbackError(ref string, err error) error {
+	var missing *registryTemplateMissingError
+	switch {
+	case errors.As(err, &missing):
+		return fmt.Errorf("template %q was not found locally or in the template registry %s", ref, logctx.RedactURL(missing.repoURL))
+	case errors.Is(err, exec.ErrNotFound):
+		return fmt.Errorf("template %q was not found locally, and fetching it from the template registry needs git, which is not installed or not on PATH", ref)
+	default:
+		// git's error carries the clone URL, to which an ANGEE_TEMPLATE_REGISTRY
+		// override may add credentials.
+		return fmt.Errorf("template %q was not found locally, and the template registry could not be fetched: %s", ref, strings.TrimSpace(logctx.RedactText(err.Error())))
+	}
 }
 
 // splitTemplateRefPin splits a trailing `@<gitref>` pin off a name-shaped

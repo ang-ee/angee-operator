@@ -2261,10 +2261,11 @@ func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (path,
 	}
 	// Every local candidate missed: fall through to the template registry so a
 	// clean machine resolves the conventional names remotely.
-	if path, activeRef, err := p.resolveRegistryTemplate(ctx, ref, kind); err == nil {
-		return path, activeRef, nil
+	path, activeRef, err := p.resolveRegistryTemplate(ctx, ref, kind)
+	if err != nil {
+		return "", "", registryFallbackError(ref, err)
 	}
-	return "", "", fmt.Errorf("template %q was not found locally or in the template registry", ref)
+	return path, activeRef, nil
 }
 
 // ancestorTemplatePaths walks up from start (exclusive) and returns
