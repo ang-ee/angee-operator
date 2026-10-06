@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.18.0 — 2026-10-06
+
 ### Added
 
 - **Job status in `angee job list`.** Each job shows the latest run the
