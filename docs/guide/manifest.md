@@ -317,6 +317,17 @@ sources:
 
 Git commands use the host git environment.
 
+A git source's `repo` is cloned into its cache once. When the cache
+already exists, `angee source fetch` and `angee source pull` first set the
+cache's `origin` remote to the declared `repo` (adding `origin` if it is
+missing) and log a warning when that changes it, so an edited `repo` takes
+effect; a remote with several URLs is refused rather than rewritten. Stack
+bring-up, `angee workspace create` and `angee workspace repair` leave
+`origin` alone and only warn when it differs: a `cache_path` can be shared
+by several stacks or be your own clone. Worktree slots share the cache's
+remotes. Remotes other than `origin` are never changed, and a relative
+`repo` path is not compared.
+
 ## Workspaces
 
 Workspace records are usually written by `angee workspace create`.

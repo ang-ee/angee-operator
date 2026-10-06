@@ -82,6 +82,18 @@ latest tag.
   same forms, the templates guide documents each with an example, and the
   `angee service create` examples no longer use a relative path, which is not
   a template ref (#54).
+- **`angee source fetch` and `source pull` follow the `repo` in `angee.yaml`.**
+  A git source's `repo` was used only for the first clone; afterwards fetch
+  and pull used the cache's own `origin`, so a cache cloned from another URL
+  (for example the HTTPS URL a stack template rendered) kept using it after
+  `repo` was changed to an SSH host alias with a deploy key, and `angee source
+  pull` failed with `Permission denied (publickey)`. The two verbs now set the
+  cache's `origin` to `repo` first (adding `origin` if it is missing) and log
+  a warning naming the source when that changes it. Stack bring-up,
+  `workspace create` and `workspace repair` only warn about a mismatch, since
+  a cache can be shared by several stacks or be your own clone. Worktree
+  slots share the cache's remotes; other remotes are left alone. Git errors
+  returned to CLI and API clients now mask credentials in remote URLs.
 
 ## v0.16.0 — 2026-10-05
 

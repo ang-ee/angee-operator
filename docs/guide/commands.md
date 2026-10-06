@@ -349,7 +349,9 @@ angee source push <name> [--ref ref]
 
 Implemented source materialization is `git` and `local`. `source pull` is
 the top-level "update from upstream" operation: it fetches and
-fast-forwards the cached source's tracking ref.
+fast-forwards the cached source's tracking ref. `source fetch` and
+`source pull` first point the cache's `origin` at the source's `repo` in
+`angee.yaml` (see [Sources](/cli/manifest#sources)).
 
 The per-source `diff` and per-slot convergence operations (`merge`,
 `rebase`, `merge-abort`, `rebase-abort`, `rebase-continue`, `publish`)
