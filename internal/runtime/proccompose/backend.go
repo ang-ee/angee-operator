@@ -10,12 +10,14 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +38,19 @@ const controlPlaneTimeout = 30 * time.Second
 // http.DefaultClient, which has no timeout and can hang a job or status call
 // indefinitely against a stuck supervisor.
 var controlPlaneClient = &http.Client{Timeout: controlPlaneTimeout}
+
+// supervisorProbeTimeout bounds one liveness probe of the control port. The
+// probe is a trivial loopback request, so a listener that takes longer is not a
+// supervisor Up can work with.
+const supervisorProbeTimeout = 2 * time.Second
+
+// defaultSupervisorReadyTimeout bounds how long Up waits for a supervisor it
+// launched to answer. process-compose v1.120.0 already waits up to 5s for its
+// daemon before `up -D` returns; older releases return at once.
+const defaultSupervisorReadyTimeout = 10 * time.Second
+
+// supervisorPollInterval spaces the liveness probes while Up waits.
+const supervisorPollInterval = 100 * time.Millisecond
 
 type Runner interface {
 	Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
@@ -66,6 +81,10 @@ type Backend struct {
 	LookupPath            func(string) (string, error)
 	GoBinPath             func(context.Context) (string, error)
 	InstallProcessCompose func(context.Context, io.Writer, io.Writer) error
+	// SupervisorReadyTimeout bounds how long Up waits for the supervisor it
+	// launched to answer on the control port. Zero means
+	// defaultSupervisorReadyTimeout.
+	SupervisorReadyTimeout time.Duration
 }
 
 func NewBackend() Backend {
@@ -76,9 +95,29 @@ func (b Backend) Build(context.Context, runtime.Target) error {
 	return nil
 }
 
+// Up brings the target's processes up under a detached supervisor. A supervisor
+// already serving the control port owns the project, so Up starts the processes
+// through it (see upThroughSupervisor); otherwise it launches one and waits until
+// it answers.
 func (b Backend) Up(ctx context.Context, target runtime.Target) error {
-	_, err := b.run(ctx, target.Root, target.EnvFile, b.upArgs(target, true)...)
-	return err
+	target.ControlPort = effectiveControlPort(target.ControlPort)
+	serving, err := b.supervisorServing(ctx, target)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("process-compose control port 127.0.0.1:%d is in use, but no process-compose supervisor answers on it: %w", target.ControlPort, err)
+	}
+	if serving {
+		if err := b.checkSupervisorProject(ctx, target); err != nil {
+			return err
+		}
+		return b.upThroughSupervisor(ctx, target)
+	}
+	if _, err := b.run(ctx, target.Root, target.EnvFile, b.upArgs(target, true)...); err != nil {
+		return err
+	}
+	return b.awaitSupervisor(ctx, target)
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
@@ -141,6 +180,268 @@ func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
+}
+
+// upThroughSupervisor brings processes up through the supervisor that already
+// serves the control port, as a fresh `up` would have: the named processes and
+// the compiled dependencies they wait for, or every compiled process when none
+// is named, each after its dependencies, because a process started before a
+// dependency does not wait for it.
+//
+// A second `up -D` cannot do this. It forks a daemon that dies on the taken port
+// while the parent, finding the running supervisor alive, exits 0, so nothing
+// starts. `process start` launches a process the supervisor has never run
+// (Disabled: left out of an earlier `up <process>...`) or one that has stopped,
+// and refuses one that is running.
+//
+// A process the stack defined after the supervisor started is unknown to it, and
+// Up refuses it before starting anything. Registering it means posting the whole
+// project (see addMissingProcess), and process-compose v1.120.0 replaces every
+// process its file loader created on the first such post, restarting the ones
+// that run: the loader stores PC_REPLICA_NUM as an int, which the JSON round
+// trip turns into a float64, so its own comparison never finds them equal.
+func (b Backend) upThroughSupervisor(ctx context.Context, target runtime.Target) error {
+	logctx.From(ctx).DebugContext(ctx, "process-compose supervisor already serves the control port; starting processes through it", "port", target.ControlPort, "services", target.Services)
+	document, err := compiledFile(target)
+	if err != nil {
+		return err
+	}
+	order, err := upOrder(document, target.Services)
+	if err != nil {
+		return err
+	}
+	states := make(map[string]*processListEntry, len(order))
+	var unknown []string
+	for _, name := range order {
+		state, err := b.processState(ctx, target, name)
+		if err != nil {
+			return fmt.Errorf("get state of process %s: %w", name, err)
+		}
+		if state == nil {
+			unknown = append(unknown, name)
+		}
+		states[name] = state
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("process-compose supervisor on 127.0.0.1:%d has not loaded %s, which the stack defined after it started; adding processes through its API restarts processes it runs, so restart the supervisor to load them", target.ControlPort, strings.Join(unknown, ", "))
+	}
+	for _, name := range order {
+		updates, err := processUpdates(document.Processes[name])
+		if err != nil {
+			return err
+		}
+		if err := b.upProcess(ctx, target, name, updates, states[name], slices.Contains(target.Services, name)); err != nil {
+			return fmt.Errorf("bring up process %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// upOrder lists the processes Up brings up through a running supervisor, each
+// after the compiled dependencies it waits for: the named processes and their
+// dependencies, or every compiled process when none is named. Dependencies on
+// container services are left to the compose backend.
+func upOrder(document File, names []string) ([]string, error) {
+	roots := names
+	if len(roots) == 0 {
+		roots = slices.Sorted(maps.Keys(document.Processes))
+	}
+	order := make([]string, 0, len(document.Processes))
+	visited := make(map[string]bool, len(document.Processes))
+	var visit func(string)
+	visit = func(name string) {
+		if visited[name] {
+			return
+		}
+		visited[name] = true
+		for _, dependency := range slices.Sorted(maps.Keys(document.Processes[name].DependsOn)) {
+			if _, ok := document.Processes[dependency]; ok {
+				visit(dependency)
+			}
+		}
+		order = append(order, name)
+	}
+	for _, name := range roots {
+		if _, ok := document.Processes[name]; !ok {
+			return nil, fmt.Errorf("process %s is absent from the generated process-compose config", name)
+		}
+		visit(name)
+	}
+	return order, nil
+}
+
+// upProcess makes one process the supervisor knows run, given its state before,
+// without restarting it when it already runs: `up` means "make it run", not
+// "restart".
+//
+// A process the supervisor is running, launching or waiting to launch is left
+// alone. One it has never run (Disabled) is started. One that has run and
+// stopped (Completed, Error, Skipped) is started again only when it was named:
+// as a dependency, or under an `up` that names no process, it has had the single
+// run a fresh `up` gives it, and its result stands.
+//
+// A process that is started gets its compiled definition first, so it runs what
+// a fresh `up` would. The update relaunches it when the supervisor applies it,
+// except a Disabled process, whose replacement keeps the flag and stays down;
+// otherwise the process is started explicitly, as applyProcess restarts it.
+func (b Backend) upProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any, before *processListEntry, named bool) error {
+	if !upStarts(before.Status, named) {
+		return nil
+	}
+	posted, err := b.updateProcess(ctx, target, name, updates)
+	if err != nil {
+		return err
+	}
+	if posted {
+		after, err := b.processState(ctx, target, name)
+		if err != nil {
+			return fmt.Errorf("confirm update of process %s: %w", name, err)
+		}
+		// A replacement that is already on its way to running, relaunched or
+		// not, is what `up` asked for; `process start` would refuse it.
+		if processRelaunched(before, after) || (after != nil && !upStarts(after.Status, true)) {
+			return nil
+		}
+	}
+	target.Services = []string{name}
+	return b.Start(ctx, target)
+}
+
+// upStarts reports whether Up starts a process the supervisor knows, given its
+// native status and whether it was named; see upProcess. Every status besides
+// Disabled and the terminal ones is a process that is running, launching,
+// waiting to launch or stopping, which `process start` would refuse.
+func upStarts(status string, named bool) bool {
+	switch state := strings.ToLower(strings.TrimSpace(status)); {
+	case state == "disabled":
+		return true
+	case isTerminalState(state):
+		return named
+	default:
+		return false
+	}
+}
+
+// supervisorServing reports whether a process-compose supervisor answers on the
+// target's control port. A connection that cannot be opened (refused, in
+// practice) means nothing listens there. Any other failure, or an answer that is
+// not process-compose's liveness reply, is returned as an error: something holds
+// the port that Up can neither drive nor bind a new supervisor to.
+func (b Backend) supervisorServing(ctx context.Context, target runtime.Target) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, supervisorProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(target.ControlPort)+"/live", nil)
+	if err != nil {
+		return false, err
+	}
+	setProcessToken(req, target.EnvFile)
+	resp, err := controlPlaneClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		// Matching the dial step rather than ECONNREFUSED keeps this portable:
+		// Windows reports a refusal as WSAECONNREFUSED, which syscall's
+		// ECONNREFUSED does not match there.
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return false, nil
+		}
+		return false, err
+	}
+	defer resp.Body.Close()
+	var live struct {
+		Status string `json:"status"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&live) != nil || live.Status != "alive" {
+		return false, fmt.Errorf("GET /live answered %s, not process-compose's liveness reply", resp.Status)
+	}
+	return true, nil
+}
+
+// checkSupervisorProject returns an error when the supervisor answering on the
+// control port was started on another stack's configuration, as when two stacks
+// share a control port: Up would otherwise post this stack's definitions into
+// it and take its processes for this stack's. The supervisor reports the config
+// files it was started with exactly as passed to -f, which baseArgs builds from
+// the root; a path that names the same file another way also matches. A
+// supervisor without the project state endpoint cannot be checked.
+func (b Backend) checkSupervisorProject(ctx context.Context, target runtime.Target) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(target.ControlPort)+"/project/state", nil)
+	if err != nil {
+		return err
+	}
+	setProcessToken(req, target.EnvFile)
+	resp, err := controlPlaneClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("get supervisor project state: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("get supervisor project state: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var state struct {
+		FileNames []string `json:"fileNames"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return fmt.Errorf("decode supervisor project state: %w", err)
+	}
+	want := filepath.Join(target.Root, "process-compose.yaml")
+	if len(state.FileNames) == 0 || slices.Contains(state.FileNames, want) {
+		return nil
+	}
+	if wantInfo, err := os.Stat(want); err == nil {
+		for _, name := range state.FileNames {
+			if info, err := os.Stat(name); err == nil && os.SameFile(info, wantInfo) {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("process-compose supervisor on 127.0.0.1:%d runs %s, not this stack's %s; each stack needs its own process-compose control port", target.ControlPort, strings.Join(state.FileNames, ", "), want)
+}
+
+// awaitSupervisor waits until the supervisor `up -D` launched answers on the
+// control port. The daemon reports nothing back: it can die after the parent
+// has exited 0, on a taken port for one, so its answer is the only evidence that
+// it runs. The answering supervisor must be this stack's, since another one that
+// took the port meanwhile would answer just the same.
+func (b Backend) awaitSupervisor(ctx context.Context, target runtime.Target) error {
+	timeout := b.SupervisorReadyTimeout
+	if timeout <= 0 {
+		timeout = defaultSupervisorReadyTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(supervisorPollInterval)
+	defer ticker.Stop()
+	for {
+		serving, err := b.supervisorServing(ctx, target)
+		if serving {
+			return b.checkSupervisorProject(ctx, target)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !time.Now().Before(deadline) {
+			reason := "nothing is listening on it"
+			if err != nil {
+				reason = err.Error()
+			}
+			logHint := "the process-compose log (--log-file, PC_LOG_FILE)"
+			if path := processComposeSetting(target.EnvFile, "PC_LOG_FILE"); path != "" {
+				logHint = "the process-compose log " + path
+			}
+			return fmt.Errorf("process-compose supervisor launched by `up -D` did not answer on 127.0.0.1:%d within %s (%s); see %s for why it did not start", target.ControlPort, timeout, reason, logHint)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
@@ -623,16 +924,23 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 	return true, nil
 }
 func setProcessToken(req *http.Request, envFile string) {
-	env, _ := runtime.ReadEnvFile(envFile)
-	for _, entry := range env {
-		if strings.HasPrefix(entry, "PC_API_TOKEN=") {
-			req.Header.Set("X-PC-Token-Key", strings.TrimPrefix(entry, "PC_API_TOKEN="))
-			return
-		}
-	}
-	if token := os.Getenv("PC_API_TOKEN"); token != "" {
+	if token := processComposeSetting(envFile, "PC_API_TOKEN"); token != "" {
 		req.Header.Set("X-PC-Token-Key", token)
 	}
+}
+
+// processComposeSetting returns a process-compose environment setting as the
+// supervisor sees it: from the stack's env file, which the backend layers over
+// the inherited environment for every process-compose command, or else from
+// that environment.
+func processComposeSetting(envFile string, key string) string {
+	env, _ := runtime.ReadEnvFile(envFile)
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, key+"="); ok {
+			return value
+		}
+	}
+	return os.Getenv(key)
 }
 func jsonValue(value any) (any, error) {
 	data, err := json.Marshal(value)
@@ -647,17 +955,9 @@ func jsonValue(value any) (any, error) {
 }
 
 func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
-	data := target.Configuration
-	if len(data) == 0 {
-		var err error
-		data, err = os.ReadFile(filepath.Join(target.Root, "process-compose.yaml"))
-		if err != nil {
-			return err
-		}
-	}
-	var document File
-	if err := yaml.Unmarshal(data, &document); err != nil {
-		return fmt.Errorf("read generated process-compose config: %w", err)
+	document, err := compiledFile(target)
+	if err != nil {
+		return err
 	}
 	for _, name := range target.Services {
 		process, ok := document.Processes[name]
@@ -673,6 +973,25 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 		}
 	}
 	return nil
+}
+
+// compiledFile decodes the compiled process-compose configuration: the
+// request-scoped document when the target carries one, else the generated
+// process-compose.yaml.
+func compiledFile(target runtime.Target) (File, error) {
+	data := target.Configuration
+	if len(data) == 0 {
+		var err error
+		data, err = os.ReadFile(filepath.Join(target.Root, "process-compose.yaml"))
+		if err != nil {
+			return File{}, err
+		}
+	}
+	var document File
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return File{}, fmt.Errorf("read generated process-compose config: %w", err)
+	}
+	return document, nil
 }
 
 func processUpdates(process Process) (map[string]any, error) {
@@ -1150,8 +1469,14 @@ func (b Backend) baseArgs(root string, controlPort int) []string {
 }
 
 func (b Backend) clientArgs(controlPort int) []string {
+	return []string{"--address", "127.0.0.1", "--port", strconv.Itoa(effectiveControlPort(controlPort))}
+}
+
+// effectiveControlPort returns the control port process-compose commands use:
+// the configured one, or process-compose's own default when none is set.
+func effectiveControlPort(controlPort int) int {
 	if controlPort <= 0 {
-		controlPort = 8080
+		return 8080
 	}
-	return []string{"--address", "127.0.0.1", "--port", strconv.Itoa(controlPort)}
+	return controlPort
 }
