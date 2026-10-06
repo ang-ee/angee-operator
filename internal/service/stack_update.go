@@ -417,6 +417,9 @@ func mergeStackFromTemplate(ours, theirs *manifest.Stack, authoritativePorts boo
 	if theirs.Template != nil { // refresh template metadata; keep ours if the render omitted it
 		merged.Template = theirs.Template
 	}
+	// Sources: one declared by hand since the last render (absent from
+	// theirs) is kept as is, and one the template renders takes the
+	// template's definition, replacing local edits to it.
 	merged.Sources = overlayMap(ours.Sources, theirs.Sources)
 	// workspace_defaults is template-origin (the dev stack renders it from its
 	// work_state_source answer); workspaces themselves stay ours — they are

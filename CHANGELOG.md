@@ -95,6 +95,14 @@ latest tag.
   slots share the cache's remotes; other remotes are left alone. Git errors
   returned to CLI and API clients now mask credentials in remote URLs.
 
+### Documentation
+
+- **How `stack update --template` merges `sources`.** A source declared by
+  hand since the last render survives a re-render; a source the template also
+  renders takes the template's definition, replacing local edits to it. The
+  stack update docs say so, and a merge test pins both cases and the change
+  summary (#60).
+
 ## v0.16.0 — 2026-10-05
 
 ### Added

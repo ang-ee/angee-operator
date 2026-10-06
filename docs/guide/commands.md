@@ -171,6 +171,8 @@ With `--template` it first re-renders the complete stack template and its chain,
 including files such as `AGENTS.md`, then structurally merges `angee.yaml` and
 regenerates runtime files. User-added manifest keys and operator-managed state
 (`operator`, `workspaces`, `port_leases`, and allocated port values) survive.
+A source declared by hand survives, while a source the template also renders
+takes the template's definition, replacing local edits to it.
 Rendered files are tracked: unchanged template files update or delete
 automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
