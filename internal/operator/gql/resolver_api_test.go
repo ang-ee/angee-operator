@@ -23,6 +23,12 @@ type fakeAPI struct {
 	secrets    []api.SecretRef
 	workspaces []api.WorkspaceRef
 	files      map[string]api.FileContent // keyed by source+"/"+path
+	jobs       []api.JobState
+}
+
+func (f fakeAPI) JobList(_ context.Context, q query.Args) ([]api.JobState, int, error) {
+	page, total := query.Apply(f.jobs, q, queryfields.Job)
+	return page, total, nil
 }
 
 // ServiceList / SourceList / SecretsList apply the real engine so resolver tests
@@ -105,6 +111,33 @@ func TestServicesListFilter(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "web" {
 		t.Fatalf("Services(status _eq running) = %#v, want [web]", got)
+	}
+}
+
+// TestJobsFilterAndSortByStatus drives the jobs status where and order_by
+// bindings, so a failed job can be found where a client would look for it.
+func TestJobsFilterAndSortByStatus(t *testing.T) {
+	failedExit := 1
+	r := &Resolver{Platform: fakeAPI{jobs: []api.JobState{
+		{Name: "deps", Runtime: "local", Status: api.JobFailed, ExitCode: &failedExit},
+		{Name: "codegen", Runtime: "local", Status: api.JobSkipped, Reason: "job deps failed (exit 1)"},
+		{Name: "seed", Runtime: "container", Status: api.JobNeverRun},
+	}}}
+	failed := api.JobFailed
+	got, err := r.Query().Jobs(context.Background(), &model.JobsBoolExp{Status: &model.StringComparisonExp{Eq: &failed}}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Jobs() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "deps" || got[0].ExitCode == nil || *got[0].ExitCode != 1 {
+		t.Fatalf("Jobs(status _eq failed) = %#v, want [deps exit 1]", got)
+	}
+	asc := model.OrderByAsc
+	got, err = r.Query().Jobs(context.Background(), nil, []*model.JobsOrderBy{{Status: &asc}}, nil, nil)
+	if err != nil {
+		t.Fatalf("Jobs(order_by status) error = %v", err)
+	}
+	if len(got) != 3 || got[0].Status != api.JobFailed || got[1].Status != api.JobNeverRun || got[2].Status != api.JobSkipped {
+		t.Fatalf("Jobs(order_by status asc) = %#v, want failed, never-run, skipped", got)
 	}
 }
 

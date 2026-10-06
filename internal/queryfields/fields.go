@@ -34,6 +34,7 @@ var Job = query.FieldMap[api.JobState]{
 	"id":      func(j api.JobState) query.Value { return query.Str(j.Name) },
 	"name":    func(j api.JobState) query.Value { return query.Str(j.Name) },
 	"runtime": func(j api.JobState) query.Value { return query.Str(j.Runtime) },
+	"status":  func(j api.JobState) query.Value { return query.Str(j.Status) },
 }
 
 // Source is the field set for api.SourceState.

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -415,10 +416,14 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 			"stop a single service\n" +
 			"while it runs, use `angee restart <name>` or `angee stop <name>` from\n" +
 			"another shell.\n\n" +
+			"When a job fails, or the runtime skips services or jobs because a\n" +
+			"dependency failed, dev prints a summary once the jobs finish and exits\n" +
+			"non-zero. With -d it waits for the jobs before returning, up to\n" +
+			"ANGEE_JOB_TIMEOUT (default 30m); the stack keeps running either way.\n\n" +
 			"Examples:\n" +
 			"  angee dev            # bring everything up and stream all logs\n" +
 			"  angee dev --build    # rebuild container images first, then stream\n" +
-			"  angee dev -d         # start the stack in the background and return",
+			"  angee dev -d         # start the stack in the background, wait for its jobs",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
@@ -429,8 +434,10 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 				if err := platform.StackDev(cmd.Context(), devBuild); err != nil {
 					return err
 				}
-				_, err := fmt.Fprintln(stdout, "dev stack started in background")
-				return err
+				if _, err := fmt.Fprintln(stdout, "dev stack started in background"); err != nil {
+					return err
+				}
+				return service.CheckDevJobs(cmd.Context(), platform, cmd.ErrOrStderr())
 			}
 			return platform.StackDevForeground(cmd.Context(), devBuild, stdout, cmd.ErrOrStderr())
 		},
@@ -531,14 +538,37 @@ func jobCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *
 	cmd := &cobra.Command{Use: "job", Short: "Manage jobs"}
 	cmd.AddCommand(jobListCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(jobRunCommand(stdout, root, operatorURL))
-	cmd.AddCommand(&cobra.Command{
+	cmd.AddCommand(jobLogsCommand(stdout, root, operatorURL))
+	return cmd
+}
+
+func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
+	var follow bool
+	cmd := &cobra.Command{
 		Use:   "logs <name>",
-		Short: "Show job logs",
-		Args:  cobra.ExactArgs(1),
+		Short: "Show the output of a job's last run",
+		Long: "Show the output of a job's last run, as the runtime holds it: the\n" +
+			"process-compose log buffer for a local job, the exited container for a\n" +
+			"container job. The output lasts until the stack goes down.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("job logs are returned by job run")
+			platform, err := localPlatform(root, operatorURL)
+			if err != nil {
+				return err
+			}
+			logs, err := platform.StackLogs(cmd.Context(), args, follow)
+			if err != nil {
+				return err
+			}
+			for line := range logs {
+				if _, err := fmt.Fprint(stdout, line); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
-	})
+	}
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
 	return cmd
 }
 
@@ -561,13 +591,32 @@ func jobListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 				return writeJSON(stdout, jobs)
 			}
 			for _, job := range jobs {
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\n", job.Name, job.Runtime); err != nil {
+				if _, err := fmt.Fprintln(stdout, listRow(job.Name, job.Runtime, jobStatusText(job), job.Reason)); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
+}
+
+// jobStatusText renders a job's status with the exit status of a finished run,
+// such as `failed (exit 1)`.
+func jobStatusText(job api.JobState) string {
+	if job.ExitCode == nil {
+		return job.Status
+	}
+	return fmt.Sprintf("%s (exit %d)", job.Status, *job.ExitCode)
+}
+
+// listRow joins the tab-separated columns of a list line, leaving out empty
+// trailing columns: a missing reason, or a status an older operator does not
+// report.
+func listRow(columns ...string) string {
+	for len(columns) > 0 && columns[len(columns)-1] == "" {
+		columns = columns[:len(columns)-1]
+	}
+	return strings.Join(columns, "\t")
 }
 
 func jobRunCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
@@ -785,7 +834,7 @@ func serviceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput 
 				return writeJSON(stdout, services)
 			}
 			for _, service := range services {
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\n", service.Name, service.Runtime, service.Status); err != nil {
+				if _, err := fmt.Fprintln(stdout, listRow(service.Name, service.Runtime, service.Status, service.Reason)); err != nil {
 					return err
 				}
 			}
@@ -1615,10 +1664,34 @@ func statusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool
 			if *jsonOutput {
 				return writeJSON(stdout, status)
 			}
-			_, err = fmt.Fprintf(stdout, "%s\nroot: %s\nservices: %d\njobs: %d\nworkspaces: %d\n", status.Name, status.Root, len(status.Services), len(status.Jobs), len(status.Workspaces))
+			_, err = fmt.Fprintf(stdout, "%s\nroot: %s\nservices: %s\njobs: %s\nworkspaces: %d\n", status.Name, status.Root,
+				statusCountsText(len(status.Services), status.Summary.Services), statusCountsText(len(status.Jobs), status.Summary.Jobs), len(status.Workspaces))
 			return err
 		},
 	}
+}
+
+// statusCountsText renders a declared count with its non-zero outcome counts,
+// such as `8 (5 running, 3 skipped)`.
+func statusCountsText(total int, counts api.StatusCounts) string {
+	var outcomes []string
+	for _, outcome := range []struct {
+		label string
+		count int
+	}{
+		{"running", counts.Running},
+		{"completed", counts.Completed},
+		{"failed", counts.Failed},
+		{"skipped", counts.Skipped},
+	} {
+		if outcome.count > 0 {
+			outcomes = append(outcomes, fmt.Sprintf("%d %s", outcome.count, outcome.label))
+		}
+	}
+	if len(outcomes) == 0 {
+		return strconv.Itoa(total)
+	}
+	return fmt.Sprintf("%d (%s)", total, strings.Join(outcomes, ", "))
 }
 
 func internalCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {

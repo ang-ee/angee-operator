@@ -256,7 +256,14 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 	defer cancel()
 
 	var wg sync.WaitGroup
-	var devErr error
+	var devErr, jobsErr error
+	if len(stack.Jobs) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			jobsErr = p.watchDevJobs(runCtx, stack, hasLocal, se)
+		}()
+	}
 	if hasContainers {
 		wg.Add(1)
 		go func() {
@@ -268,15 +275,61 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// The supervisor is the dev command's foreground process. When it
-			// returns — Ctrl-C, or the local processes all exiting — cancel the
-			// detached follower so it stops re-attaching and the command ends.
+			// The supervisor is the dev command's foreground process. It outlives
+			// its processes (--keep-project), so it returns on Ctrl-C, `angee
+			// down` or a supervisor failure; cancel the detached follower then so
+			// it stops re-attaching and the command ends.
 			defer cancel()
 			devErr = p.procBackend.UpForeground(runCtx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, so, se)
 		}()
 	}
 	wg.Wait()
-	return devErr
+	if devErr != nil {
+		return devErr
+	}
+	return jobsErr
+}
+
+// watchDevJobs waits for the jobs `angee dev` started to finish and reports what
+// they left broken. As soon as they finish, a failed job or a skipped service or
+// job is printed to stderr while the rest of the stack keeps running, and the
+// *StackFailureError is returned so the command exits non-zero when it ends. It
+// returns nil for a healthy bring-up, and when ctx ends first (Ctrl-C, `angee
+// down`, or the supervisor failing) because the runtime is then shutting down
+// and its states no longer describe the bring-up.
+func (p *Platform) watchDevJobs(ctx context.Context, stack *manifest.Stack, hasLocal bool, stderr io.Writer) error {
+	// The foreground supervisor starts concurrently with this watch. Until it
+	// answers, its jobs read as never run, which awaitJobs counts as finished,
+	// so wait for it first. Once it answers it has registered every process.
+	if hasLocal && !p.awaitSupervisor(ctx, stack) {
+		return nil
+	}
+	status, err := awaitJobs(ctx, p, 0, nil)
+	if err != nil || ctx.Err() != nil {
+		return nil
+	}
+	failure := stackFailure(status)
+	if failure != nil {
+		fmt.Fprintf(stderr, "angee dev: %v\n", failure)
+	}
+	return failure
+}
+
+// awaitSupervisor polls the process-compose supervisor until it answers a
+// status query, and reports false when ctx ends first.
+func (p *Platform) awaitSupervisor(ctx context.Context, stack *manifest.Stack) bool {
+	ticker := time.NewTicker(awaitJobsInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := p.procBackend.Status(ctx, runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}); err == nil {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // followDevContainerLogs tails detached container logs for `angee dev`, writing
@@ -402,7 +455,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 			}
 		}
 	} else {
-		container, local, err = splitRuntimeServices(stack, services)
+		container, local, err = splitRuntimeLogTargets(stack, services)
 		if err != nil {
 			return nil, err
 		}
@@ -577,21 +630,44 @@ func processComposeControlPort(stack *manifest.Stack) int {
 }
 
 func splitRuntimeServices(stack *manifest.Stack, names []string) ([]string, []string, error) {
+	return splitByRuntime(names, "service", func(name string) (manifest.Runtime, bool) {
+		service, ok := stack.Services[name]
+		return service.Runtime, ok
+	})
+}
+
+// splitRuntimeLogTargets is splitRuntimeServices for log reads, which also
+// accept job names: a job's last run keeps its output in the runtime (the
+// process-compose log buffer or the exited container) until the stack goes
+// down.
+func splitRuntimeLogTargets(stack *manifest.Stack, names []string) ([]string, []string, error) {
+	return splitByRuntime(names, "service or job", func(name string) (manifest.Runtime, bool) {
+		if service, ok := stack.Services[name]; ok {
+			return service.Runtime, true
+		}
+		job, ok := stack.Jobs[name]
+		return job.Runtime, ok
+	})
+}
+
+// splitByRuntime splits names into container and local ones by the runtime
+// runtimeOf reports, failing for a name it does not know as a kind.
+func splitByRuntime(names []string, kind string, runtimeOf func(string) (manifest.Runtime, bool)) ([]string, []string, error) {
 	container := []string{}
 	local := []string{}
 	for _, name := range names {
 		name = strings.TrimSpace(name)
-		service, ok := stack.Services[name]
+		runtimeKind, ok := runtimeOf(name)
 		if !ok {
-			return nil, nil, &NotFoundError{Kind: "service", Name: name}
+			return nil, nil, &NotFoundError{Kind: kind, Name: name}
 		}
-		switch service.Runtime {
+		switch runtimeKind {
 		case manifest.RuntimeContainer:
 			container = append(container, name)
 		case manifest.RuntimeLocal:
 			local = append(local, name)
 		default:
-			return nil, nil, fmt.Errorf("service %q has unsupported runtime %q", name, service.Runtime)
+			return nil, nil, fmt.Errorf("%s %q has unsupported runtime %q", kind, name, runtimeKind)
 		}
 	}
 	return container, local, nil

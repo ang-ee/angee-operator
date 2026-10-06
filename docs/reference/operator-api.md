@@ -181,6 +181,16 @@ GET  /job-runs/{id}
 GET  /job-runs/latest
 ```
 
+`GET /jobs` returns each job's latest run as the runtime holds it: `status` is
+`never-run`, `pending`, `running`, `completed`, `failed`, `skipped` (a dependency
+failed) or `unknown`, with `exit_code` for a finished run and `reason` for a
+skipped job or a command that could not start. `GET /services` adds a `reason`
+to a skipped service, and `GET /stack/status` counts both under `summary`
+(`total`, `running`, `completed`, `failed`, `skipped` for services and for
+jobs). GraphQL exposes the same fields on `JobState`, `ServiceState` and
+`StackStatus.summary`, and `jobs(where:, order_by:)` accept `status`.
+`GET /stack/logs?service=` also takes a job name.
+
 `POST /jobs/{name}/run` accepts an optional JSON body containing `inputs` and
 `chained_restart`. It returns `202 Accepted` with a job-run receipt immediately;
 the operation continues under the operator daemon after the initiating HTTP

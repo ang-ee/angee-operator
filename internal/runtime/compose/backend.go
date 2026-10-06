@@ -249,6 +249,9 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 		args = configurationArgs(req.EnvFile)
 	}
 	args = append(args, "ps", "--format", "json")
+	if req.All {
+		args = append(args, "--all")
+	}
 	var out []byte
 	var err error
 	if len(req.Configuration) != 0 {

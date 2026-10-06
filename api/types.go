@@ -50,6 +50,28 @@ type StackStatusResponse struct {
 	Services   map[string]ServiceState `json:"services,omitempty"`
 	Jobs       map[string]JobState     `json:"jobs,omitempty"`
 	Workspaces map[string]WorkspaceRef `json:"workspaces,omitempty"`
+	// Summary counts the services and jobs above by observed outcome.
+	Summary StackSummary `json:"summary"`
+}
+
+// StackSummary counts a stack's services and jobs by the outcome its runtime
+// backends report.
+type StackSummary struct {
+	Services StatusCounts `json:"services"`
+	Jobs     StatusCounts `json:"jobs"`
+}
+
+// StatusCounts counts declared entries by outcome. Total counts every declared
+// entry; pending, stopped, never-run and unobserved entries count only there.
+// Failed counts entries that exited non-zero or could not start; a service
+// stopped by a signal (`angee stop`, Ctrl-C) is stopped, not failed. Skipped
+// counts entries the runtime skipped because a dependency failed.
+type StatusCounts struct {
+	Total     int `json:"total"`
+	Running   int `json:"running"`
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Skipped   int `json:"skipped"`
 }
 
 type ServiceState struct {
@@ -61,11 +83,40 @@ type ServiceState struct {
 	// Empty when no healthcheck is declared, the service has not been
 	// brought up, or the local-runtime backend doesn't expose one.
 	Health string `json:"health,omitempty"`
+	// Reason explains a skipped service: the failed job or service its
+	// dependency chain stopped at, such as `job deps failed (exit 1)`.
+	Reason string `json:"reason,omitempty"`
 }
+
+// Job status values. They describe the latest run the runtime backend holds,
+// which lasts as long as its process-compose supervisor or compose container.
+const (
+	// JobNeverRun means the runtime holds no run: the stack is down, or the
+	// job has not run since the runtime came up.
+	JobNeverRun  = "never-run"
+	JobPending   = "pending"
+	JobRunning   = "running"
+	JobCompleted = "completed"
+	// JobFailed means the job exited non-zero or its command could not start.
+	JobFailed = "failed"
+	// JobSkipped means the runtime did not run the job because a dependency
+	// failed.
+	JobSkipped = "skipped"
+	// JobUnknown means the runtime backend could not be queried.
+	JobUnknown = "unknown"
+)
 
 type JobState struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
+	// Status is one of the Job* status values.
+	Status string `json:"status"`
+	// ExitCode is the exit status of a completed or failed run, when the
+	// runtime reports one.
+	ExitCode *int `json:"exit_code,omitempty"`
+	// Reason explains a failed or skipped job, such as `job deps failed (exit
+	// 1)` for a job skipped because deps failed.
+	Reason string `json:"reason,omitempty"`
 }
 
 type JobRunRequest struct {

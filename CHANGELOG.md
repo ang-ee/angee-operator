@@ -6,6 +6,56 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **Job status in `angee job list`.** Each job shows the latest run the
+  runtime holds: `never-run`, `pending`, `running`, `completed (exit 0)`,
+  `failed (exit 1)`, `skipped` or `unknown`, so a failed job no longer looks
+  like one that never ran. A skipped job, or one whose command could not start,
+  gets a reason column. `--json`, REST `GET /jobs` and GraphQL `jobs` carry
+  `status`, `exit_code` (`exitCode`) and `reason`, and GraphQL `jobs` filters
+  and sorts on `status` (#86).
+- **Outcome counts in `angee status`.** The service and job counts list how
+  many are running, completed, failed and skipped, such as
+  `services: 8 (5 running, 3 skipped)`. A service stopped by `angee stop` or
+  Ctrl-C counts as stopped, not failed. `--json`, REST `GET /stack/status` and
+  GraphQL `stackStatus` carry the counts as `summary` (#86).
+- **`angee job logs <name>`** shows the output of a job's last run for as long
+  as the runtime keeps it, and `angee logs` and `GET /stack/logs?service=`
+  accept job names. `job logs` used to fail with "job logs are returned by job
+  run" (#86).
+
+### Changed
+
+- **Stopped containers show in `service list` and `status`.** The status query
+  uses `docker compose ps --all`, so a container job that finished reports its
+  exit, and a container service that exited or was never started shows
+  `exited` or `created` instead of `declared` (#86).
+- **The process-compose supervisor outlives its processes.** It is started
+  with `--keep-project`, so it stays up after every local process has ended,
+  until `angee down` (or Ctrl-C for a foreground `angee dev`). It used to exit
+  on its own at that point and take every process state and log with it, so a
+  failed job whose dependents were all skipped left nothing for `job list`,
+  `job logs` or `angee dev` to report, and `angee job run` and `angee restart`
+  had no supervisor to talk to (#86).
+
+### Fixed
+
+- **`angee dev` reports a failed job instead of exiting 0.** When a job exits
+  non-zero, or the runtime skips services and jobs because a dependency
+  failed, dev prints one line once the jobs have finished, such as
+  ``job "deps" failed (exit 1); 3 skipped: codegen, frontend, storybook; see `angee job logs deps` ``,
+  and exits non-zero. In the foreground the line appears while the rest of the
+  stack keeps running, and again when dev ends. `angee dev -d` now waits for
+  the stack's jobs before returning, bounded by `ANGEE_JOB_TIMEOUT` (default
+  `30m`), and names any job not finished when the bound runs out. A healthy
+  bring-up prints nothing new and exits 0 (#86).
+- **Skipped services say why.** `service list` adds the failed job or service
+  a skipped service's dependency chain stopped at, such as
+  `job deps failed (exit 1)`, and `--json`, REST and GraphQL carry it as
+  `reason`. process-compose skips a process only when a dependency fails; a
+  process left out by configuration shows as `disabled` (#86).
+
 ## v0.17.0 — 2026-10-06
 
 ### Added

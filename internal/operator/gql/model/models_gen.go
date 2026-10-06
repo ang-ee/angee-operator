@@ -292,12 +292,14 @@ type JobsBoolExp struct {
 	ID      *StringComparisonExp `json:"id,omitempty"`
 	Name    *StringComparisonExp `json:"name,omitempty"`
 	Runtime *StringComparisonExp `json:"runtime,omitempty"`
+	Status  *StringComparisonExp `json:"status,omitempty"`
 }
 
 type JobsOrderBy struct {
 	ID      *OrderBy `json:"id,omitempty"`
 	Name    *OrderBy `json:"name,omitempty"`
 	Runtime *OrderBy `json:"runtime,omitempty"`
+	Status  *OrderBy `json:"status,omitempty"`
 }
 
 type SecretsAggregate struct {

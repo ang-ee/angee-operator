@@ -196,6 +196,9 @@ func bindJobsWhere(w *model.JobsBoolExp) query.Filter {
 	if w.Runtime != nil {
 		out.Fields["runtime"] = stringCmp(w.Runtime)
 	}
+	if w.Status != nil {
+		out.Fields["status"] = stringCmp(w.Status)
+	}
 	for _, sub := range w.And {
 		out.And = append(out.And, bindJobsWhere(sub))
 	}
@@ -359,6 +362,7 @@ func bindJobsOrderBy(in []*model.JobsOrderBy) []query.Sort {
 		appendSort(&out, "id", ob.ID)
 		appendSort(&out, "name", ob.Name)
 		appendSort(&out, "runtime", ob.Runtime)
+		appendSort(&out, "status", ob.Status)
 	}
 	return out
 }

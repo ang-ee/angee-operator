@@ -77,24 +77,35 @@ func (b Backend) Build(context.Context, runtime.Target) error {
 }
 
 func (b Backend) Up(ctx context.Context, target runtime.Target) error {
-	args := b.baseArgs(target.Root, target.ControlPort)
-	// `-D` (`--detached`) daemonises; lowercase `-d` is `--hide-disabled`
-	// and would leave the supervisor in the foreground. `--tui=false`
-	// prevents the supervisor from trying to attach a TUI on a process
-	// that has no controlling terminal (which is the normal case for
-	// `angee stack up --root ...` against a workspace's inner stack from a
-	// non-interactive shell or under another supervisor).
-	args = append(args, "up", "-D", "--tui=false")
-	args = append(args, target.Services...)
-	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
+	_, err := b.run(ctx, target.Root, target.EnvFile, b.upArgs(target, true)...)
 	return err
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
+	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, b.upArgs(target, false)...)
+}
+
+// upArgs returns the `process-compose up` arguments for a detached or a
+// foreground supervisor.
+func (b Backend) upArgs(target runtime.Target, detached bool) []string {
 	args := b.baseArgs(target.Root, target.ControlPort)
-	args = append(args, "up", "--tui=false")
-	args = append(args, target.Services...)
-	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, args...)
+	args = append(args, "up")
+	if detached {
+		// `-D` (`--detached`) daemonises; lowercase `-d` is `--hide-disabled`
+		// and would leave the supervisor in the foreground.
+		args = append(args, "-D")
+	}
+	// `--keep-project` keeps the supervisor up after its last process ends.
+	// Without it, a stack whose processes have all completed or been skipped
+	// loses the supervisor, and with it every process state and log, such as
+	// the failed job `angee dev` and `angee job list` report; `angee down`
+	// and Ctrl-C still stop it. `--tui=false` prevents the supervisor from
+	// trying to attach a TUI on a process that has no controlling terminal
+	// (which is the normal case for `angee stack up --root ...` against a
+	// workspace's inner stack from a non-interactive shell or under another
+	// supervisor).
+	args = append(args, "--keep-project", "--tui=false")
+	return append(args, target.Services...)
 }
 
 func (b Backend) Down(ctx context.Context, target runtime.Target) error {

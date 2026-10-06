@@ -116,6 +116,51 @@ services:
 	}
 }
 
+func TestGraphQLStackStatusSummaryAndJobStates(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+services:
+  api:
+    runtime: container
+    image: nginx:latest
+jobs:
+  migrate:
+    runtime: container
+    image: app:latest
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{ stackStatus {
+			summary { services { total running completed failed skipped } jobs { total running completed failed skipped } }
+			services { name status reason }
+			jobs { name status exitCode reason }
+		} }`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL errors = %#v", resp.Errors)
+	}
+	status := resp.Data["stackStatus"].(map[string]any)
+	summary := status["summary"].(map[string]any)
+	for _, kind := range []string{"services", "jobs"} {
+		counts := summary[kind].(map[string]any)
+		if counts["total"] != float64(1) || counts["running"] != float64(0) || counts["failed"] != float64(0) {
+			t.Fatalf("summary.%s = %#v, want one declared entry and no outcomes", kind, counts)
+		}
+	}
+	job := status["jobs"].([]any)[0].(map[string]any)
+	if job["name"] != "migrate" || job["status"] != "never-run" || job["exitCode"] != nil || job["reason"] != "" {
+		t.Fatalf("job = %#v, want migrate never-run", job)
+	}
+	if service := status["services"].([]any)[0].(map[string]any); service["reason"] != "" {
+		t.Fatalf("service = %#v, want no reason", service)
+	}
+}
+
 func TestGraphQLWorkspaceStatus(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1

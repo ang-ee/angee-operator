@@ -561,6 +561,7 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		Workspaces: map[string]api.WorkspaceRef{},
 	}
 	runtimeStates := p.runtimeServiceStates(ctx, stack)
+	outcomes := stackOutcomes(stack, runtimeStates)
 	for _, name := range sortedKeys(stack.Services) {
 		service := stack.Services[name]
 		observed := runtimeStates[name]
@@ -568,11 +569,27 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		if status == "" {
 			status = "declared"
 		}
-		resp.Services[name] = api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Health: observed.Health}
+		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Health: observed.Health}
+		if outcomes[name] == api.JobSkipped {
+			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		}
+		resp.Services[name] = state
+		countOutcome(&resp.Summary.Services, outcomes[name])
 	}
 	for _, name := range sortedKeys(stack.Jobs) {
 		job := stack.Jobs[name]
-		resp.Jobs[name] = api.JobState{Name: name, Runtime: string(job.Runtime)}
+		observed := runtimeStates[name]
+		state := api.JobState{Name: name, Runtime: string(job.Runtime), Status: outcomes[name], ExitCode: runtimeExitCode(observed)}
+		switch state.Status {
+		case api.JobSkipped:
+			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		case api.JobFailed:
+			if startFailed(observed) {
+				state.Reason = couldNotStart
+			}
+		}
+		resp.Jobs[name] = state
+		countOutcome(&resp.Summary.Jobs, outcomes[name])
 	}
 	for _, name := range sortedKeys(stack.Workspaces) {
 		workspace := stack.Workspaces[name]
@@ -587,18 +604,21 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 	return resp, nil
 }
 
-// runtimeServiceStates returns the observed runtime state of each service keyed
-// by manifest name, merged across the container and local backends. A missing
-// process-compose supervisor is the normal stopped-stack state and remains
-// silent; other query failures are warned and represented as unknown.
+// runtimeServiceStates returns the observed runtime state of each service and
+// job keyed by manifest name, merged across the container and local backends.
+// Stopped containers are included so a finished container job and a crashed
+// container service report their exit. A missing process-compose supervisor is
+// the normal stopped-stack state and remains silent, as does a query that
+// failed because ctx ended (Ctrl-C reaches the query too); other query
+// failures are warned and represented as unknown.
 func (p *Platform) runtimeServiceStates(ctx context.Context, stack *manifest.Stack) map[string]runtime.ServiceStatus {
 	states := map[string]runtime.ServiceStatus{}
 	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) {
-		if statuses, err := p.composeBackend.Status(ctx, runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err == nil {
+		if statuses, err := p.composeBackend.Status(ctx, runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), All: true}); err == nil {
 			for _, s := range statuses {
 				states[s.Name] = s
 			}
-		} else {
+		} else if ctx.Err() == nil {
 			logctx.From(ctx).Warn("could not query docker compose status: " + err.Error())
 			markRuntimeUnknown(states, stack, manifest.RuntimeContainer)
 		}
@@ -609,7 +629,7 @@ func (p *Platform) runtimeServiceStates(ctx context.Context, stack *manifest.Sta
 			for _, s := range statuses {
 				states[s.Name] = s
 			}
-		} else if !processComposeNotRunning(err) {
+		} else if !processComposeNotRunning(err) && ctx.Err() == nil {
 			logctx.From(ctx).Warn("could not query process-compose status: " + err.Error())
 			markRuntimeUnknown(states, stack, manifest.RuntimeLocal)
 		}
@@ -630,6 +650,11 @@ func processComposeNotRunning(err error) bool {
 func markRuntimeUnknown(states map[string]runtime.ServiceStatus, stack *manifest.Stack, target manifest.Runtime) {
 	for name, service := range stack.Services {
 		if service.Runtime == target {
+			states[name] = runtime.ServiceStatus{Name: name, Runtime: string(target), State: "unknown"}
+		}
+	}
+	for name, job := range stack.Jobs {
+		if job.Runtime == target {
 			states[name] = runtime.ServiceStatus{Name: name, Runtime: string(target), State: "unknown"}
 		}
 	}

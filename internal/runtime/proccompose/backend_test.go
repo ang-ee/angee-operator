@@ -124,9 +124,20 @@ func TestBackendUpCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--tui=false", "web"}
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--keep-project", "--tui=false", "web"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
+	}
+}
+
+// The foreground supervisor of `angee dev` also outlives its processes, so a
+// stack whose processes all completed or were skipped keeps the states `angee
+// dev` reports.
+func TestBackendUpForegroundKeepsProject(t *testing.T) {
+	got := Backend{}.upArgs(runtime.Target{Root: "/stack", ControlPort: 10002}, false)
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "--keep-project", "--tui=false"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("foreground up args = %v, want %v", got, want)
 	}
 }
 
