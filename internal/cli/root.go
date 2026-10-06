@@ -119,7 +119,8 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 		Use:   "init [path]",
 		Short: "Initialize a stack",
 		Long: "Initialize a stack from a template. The default `dev` template renders the\n" +
-			"framework-dev stack from the template registry (ang-ee/angee-templates):\n" +
+			"framework-dev stack from the template registry (ang-ee/angee-django, or\n" +
+			"ANGEE_TEMPLATE_REGISTRY; fetching it needs git):\n" +
 			"a project host at the stack root whose manifest declares the framework\n" +
 			"repos as sources — `angee dev` then materializes and boots everything.\n\n" +
 			"Review template inputs in a single-screen form before rendering.\n" +
