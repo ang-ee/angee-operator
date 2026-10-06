@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	slashpath "path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1177,41 +1179,178 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 	if !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
+	// Check the slots are materialized first: the branch check reads git in
+	// each slot's path and would read an enclosing repository's branch.
+	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeClone)
+	if err != nil {
+		return nil, err
+	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
 	}
 	client := p.gitClient()
 	states := []api.SourceState{}
-	for _, slot := range sortedKeys(workspace.Sources) {
-		wsSource := workspace.Sources[slot]
-		if wsSource.Mode != manifest.WorkspaceSourceModeWorktree && wsSource.Mode != manifest.WorkspaceSourceModeClone {
-			continue
-		}
-		source, ok := stack.Sources[wsSource.Source]
-		if !ok || source.Kind != "git" {
-			continue
-		}
-		_, path, err := p.workspaceSourcePath(name, slot, wsSource)
-		if err != nil {
-			return nil, fmt.Errorf("workspace %q source %q: %w", name, slot, err)
-		}
-		dirty, err := client.Dirty(ctx, path)
+	for _, target := range targets {
+		dirty, err := client.Dirty(ctx, target.path)
 		if err != nil {
 			return nil, err
 		}
 		if dirty {
-			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, slot)
+			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, target.slot)
 		}
-		if err := pushWorkspaceGitSource(ctx, client, name, slot, path, source, wsSource, ref); err != nil {
+		if err := pushWorkspaceGitSource(ctx, client, name, target.slot, target.path, target.source, target.wsSource, ref); err != nil {
 			return nil, err
 		}
-		state, err := p.workspaceSourceState(ctx, name, slot, stack, wsSource)
+		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {
 			return nil, err
 		}
 		states = append(states, state)
 	}
 	return states, nil
+}
+
+// workspaceSlotPath names a workspace source slot, where it lives on disk and
+// the source it materializes.
+type workspaceSlotPath struct {
+	slot   string
+	path   string
+	source manifest.Source
+}
+
+// workspaceGitSlot is a git slot an aggregate workspace verb acts on.
+type workspaceGitSlot struct {
+	workspaceSlotPath
+	wsSource manifest.WorkspaceSource
+}
+
+// workspaceGitSlots returns the workspace's git slots whose mode is one of
+// modes, in slot order. Every one of them must be materialized: the verb fails
+// before touching any slot when one is not.
+func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Workspace, stack *manifest.Stack, modes ...string) ([]workspaceGitSlot, error) {
+	var targets []workspaceGitSlot
+	var paths []workspaceSlotPath
+	for _, slot := range sortedKeys(workspace.Sources) {
+		wsSource := workspace.Sources[slot]
+		if !slices.Contains(modes, wsSource.Mode) {
+			continue
+		}
+		source, ok := stack.Sources[wsSource.Source]
+		if !ok || source.Kind != "git" {
+			continue
+		}
+		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		target := workspaceGitSlot{workspaceSlotPath: workspaceSlotPath{slot: slot, path: path, source: source}, wsSource: wsSource}
+		targets = append(targets, target)
+		paths = append(paths, target.workspaceSlotPath)
+	}
+	if err := requireWorkspaceSlotsOnDisk(workspaceName, paths); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+// workspaceSlotDisk is what a slot's path holds.
+type workspaceSlotDisk int
+
+const (
+	// workspaceSlotAbsent: nothing is at the path, or an empty directory is
+	// where a git checkout belongs. Repair materializes the slot there.
+	workspaceSlotAbsent workspaceSlotDisk = iota
+	// workspaceSlotMaterialized: the slot is on disk.
+	workspaceSlotMaterialized
+	// workspaceSlotDangling: the path is a link whose target is gone.
+	workspaceSlotDangling
+	// workspaceSlotNotCheckout: a git slot's path holds something that is not
+	// its own checkout. Git run there would act on an enclosing repository,
+	// such as the project an ANGEE_ROOT lives in.
+	workspaceSlotNotCheckout
+)
+
+// inspectWorkspaceSlot reports what is at a slot's path.
+func inspectWorkspaceSlot(path string, source manifest.Source) (workspaceSlotDisk, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return workspaceSlotAbsent, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	isLink := info.Mode()&os.ModeSymlink != 0
+	if isLink {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return workspaceSlotDangling, nil
+		} else if err != nil {
+			return 0, err
+		}
+	}
+	if source.Kind != "git" {
+		return workspaceSlotMaterialized, nil
+	}
+	if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+		return workspaceSlotMaterialized, nil
+	} else if !os.IsNotExist(err) {
+		return 0, err
+	}
+	if !isLink && info.IsDir() {
+		empty, err := emptyDirectory(path)
+		if err != nil {
+			return 0, err
+		}
+		if empty {
+			return workspaceSlotAbsent, nil
+		}
+	}
+	return workspaceSlotNotCheckout, nil
+}
+
+func emptyDirectory(path string) (bool, error) {
+	dir, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = dir.Close() }()
+	if _, err := dir.Readdirnames(1); errors.Is(err, io.EOF) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// requireWorkspaceSlotsOnDisk is the check every slot verb makes before it
+// touches a slot. A slot declared in the manifest but not materialized (one
+// added to an existing workspace, say) fails the verb with a message naming it
+// and pointing at `workspace repair`, rather than as a raw git chdir error or,
+// for a directory that is not the slot's checkout, a git command run in an
+// enclosing repository.
+func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath) error {
+	var problems []string
+	for _, slot := range slots {
+		disk, err := inspectWorkspaceSlot(slot.path, slot.source)
+		if err != nil {
+			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot.slot, err)
+		}
+		switch disk {
+		case workspaceSlotAbsent:
+			problems = append(problems, fmt.Sprintf("source slot %q is missing at %s", slot.slot, slot.path))
+		case workspaceSlotDangling:
+			problems = append(problems, fmt.Sprintf("source slot %q at %s is a link whose target is missing; remove it", slot.slot, slot.path))
+		case workspaceSlotNotCheckout:
+			problems = append(problems, fmt.Sprintf("source slot %q at %s is not a git checkout; move it aside", slot.slot, slot.path))
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	pronoun := "it"
+	if len(problems) > 1 {
+		pronoun = "them"
+	}
+	return &ConflictError{Kind: "workspace", Name: workspaceName, Reason: fmt.Sprintf("%s; run `angee workspace repair %s` to materialize %s", strings.Join(problems, "; "), workspaceName, pronoun)}
 }
 
 // pushWorkspaceGitSource pushes one clean git slot. An explicit ref is pushed
@@ -1297,34 +1436,29 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if method == "" {
 		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", workspaceSyncBaseMerge, workspaceSyncBaseRebase)}
 	}
+	// Check the slots are materialized first: the branch check reads git in
+	// each slot's path and would read an enclosing repository's branch.
+	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree)
+	if err != nil {
+		return nil, err
+	}
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
 	}
 	client := p.gitClient()
 	states := []api.SourceState{}
-	for _, slot := range sortedKeys(workspace.Sources) {
-		wsSource := workspace.Sources[slot]
-		if wsSource.Mode != manifest.WorkspaceSourceModeWorktree {
-			continue
-		}
-		source, ok := stack.Sources[wsSource.Source]
-		if !ok || source.Kind != "git" {
-			continue
-		}
-		_, path, err := p.workspaceSourcePath(name, slot, wsSource)
-		if err != nil {
-			return nil, fmt.Errorf("workspace %q source %q: %w", name, slot, err)
-		}
+	for _, target := range targets {
+		path := target.path
 		dirty, err := client.Dirty(ctx, path)
 		if err != nil {
 			return nil, err
 		}
 		if dirty {
-			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, slot)
+			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, target.slot)
 		}
-		baseRef := workspaceSourceBaseRef(source, wsSource)
+		baseRef := workspaceSourceBaseRef(target.source, target.wsSource)
 		if baseRef == "" {
-			return nil, fmt.Errorf("workspace %q source %q has no base ref", name, slot)
+			return nil, fmt.Errorf("workspace %q source %q has no base ref", name, target.slot)
 		}
 		if err := client.Fetch(ctx, path); err != nil {
 			return nil, err
@@ -1342,7 +1476,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 		if err != nil {
 			return nil, err
 		}
-		state, err := p.workspaceSourceState(ctx, name, slot, stack, wsSource)
+		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {
 			return nil, err
 		}
@@ -1488,11 +1622,8 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
-		// A worktree without a branch is detached at its base. With no base it
-		// would detach at whatever the cache has checked out, and nothing would
-		// record where its work starts.
-		if source.Kind == "git" && resolved.Mode == manifest.WorkspaceSourceModeWorktree && resolved.Branch == "" && resolved.Ref == "" && source.DefaultRef == "" {
-			return nil, cleanup, fmt.Errorf("workspace %q source %q: a worktree without a branch needs a ref or the source's default_ref to start from", workspaceName, slot)
+		if err := checkWorkspaceSlotBase(workspaceName, slot, source, resolved); err != nil {
+			return nil, cleanup, err
 		}
 		if resolved.Subpath == "" {
 			resolved.Subpath = slot
@@ -1516,8 +1647,7 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	for _, item := range orderedItems {
 		dest := filepath.Join(workspacePath, filepath.FromSlash(item.resolved.Subpath))
 		finish := logctx.Step(ctx, "materializing source "+item.sourceName)
-		materialized, err := p.materializeWorkspaceSource(ctx, item.sourceName, item.source, item.resolved, dest, sync)
-		if err != nil {
+		if err := p.materializeWorkspaceSlot(ctx, cleanup, item.source, item.resolved, dest, sync); err != nil {
 			if item.optional {
 				// An optional source that cannot be materialized is skipped by
 				// design, so the phase completes normally rather than as a failure.
@@ -1531,10 +1661,34 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			return result, cleanup, err
 		}
 		finish(nil)
-		cleanup.entries = append(cleanup.entries, *materialized)
 		result[item.slot] = item.resolved
 	}
 	return result, cleanup, nil
+}
+
+// checkWorkspaceSlotBase rejects a slot that has nothing to start from, before
+// anything is materialized. A worktree without a branch is detached at its
+// base; with no base it would detach at whatever the cache has checked out,
+// and nothing would record where its work starts.
+func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource) error {
+	if source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree && ws.Branch == "" && ws.Ref == "" && source.DefaultRef == "" {
+		return fmt.Errorf("workspace %q source %q: a worktree without a branch needs a ref or the source's default_ref to start from", workspaceName, slot)
+	}
+	return nil
+}
+
+// materializeWorkspaceSlot cuts one source slot at dest and records what it
+// created in cleanup, so the caller can roll it back with the rest of its
+// work. It is the one step that materializes a slot, for WorkspaceCreate and
+// WorkspaceRepair alike. On failure it records nothing; materializeWorkspaceSource
+// removes what it staged or installed at dest before returning.
+func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *workspaceSourceCleanup, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool) error {
+	entry, err := p.materializeWorkspaceSource(ctx, ws.Source, source, ws, dest, sync)
+	if err != nil {
+		return err
+	}
+	cleanup.entries = append(cleanup.entries, *entry)
+	return nil
 }
 
 // removeWorkspaceSources removes only source destinations materialized for the

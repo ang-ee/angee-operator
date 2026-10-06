@@ -532,6 +532,18 @@ func (p *RemoteClient) WorkspaceSyncBase(ctx context.Context, name string, metho
 	return states, nil
 }
 
+// WorkspaceRepair posts to the operator's repair route. A repair that ran
+// answers 200 with every slot's outcome, failed slots included, so the error
+// for those is rebuilt from the result and a remote repair fails like a local
+// one.
+func (p *RemoteClient) WorkspaceRepair(ctx context.Context, name string) (api.WorkspaceRepairResult, error) {
+	var result api.WorkspaceRepairResult
+	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/repair", nil, nil, &result); err != nil {
+		return api.WorkspaceRepairResult{}, err
+	}
+	return result, service.WorkspaceRepairFailure(result)
+}
+
 func (p *RemoteClient) SecretsList(ctx context.Context, q query.Args) ([]api.SecretRef, int, error) {
 	var resp api.SecretListResponse
 	if err := p.doJSON(ctx, http.MethodGet, "/secrets", listQueryValues(q), nil, &resp); err != nil {

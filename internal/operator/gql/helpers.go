@@ -1,15 +1,35 @@
 package gql
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/operator/gql/model"
+	"github.com/ang-ee/angee-operator/internal/service"
 	"gopkg.in/yaml.v3"
 )
+
+// workspaceRepairResponse shapes a repair for the workspaceRepair mutation. A
+// repair that ran returns every slot's outcome as data even when some slots
+// failed; the *service.WorkspaceRepairError naming them is reported beside it
+// as a field error, so a client gets both. Any other error means the repair
+// did not run and is returned as is.
+func workspaceRepairResponse(ctx context.Context, result api.WorkspaceRepairResult, err error) (*api.WorkspaceRepairResult, error) {
+	var repairErr *service.WorkspaceRepairError
+	if err != nil && !errors.As(err, &repairErr) {
+		return nil, err
+	}
+	if err != nil {
+		graphql.AddError(ctx, err)
+	}
+	return &result, nil
+}
 
 func actionResult(status string) *model.MutationResult {
 	return &model.MutationResult{Status: status}

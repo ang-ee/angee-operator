@@ -59,6 +59,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceGitStatus` | Yes | Yes | Yes | - |
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |
+| `WorkspaceRepair` | Yes | Yes | Yes | `angee workspace repair [name]`; REST `POST /workspaces/{name}/repair`; GraphQL `workspaceRepair`. |
 | `GitOpsTopology` | Yes | Yes | Yes | `angee gitops topology`; REST `GET /gitops/topology`. |
 | `GitOpsTopologyWithCommits` | Yes | Yes | Yes | `angee gitops topology --with-commits N`; REST `GET /gitops/topology?with_commits=N`. |
 | `SourceDiff` | Yes | Yes | Yes | `angee source diff <name>`; REST `GET /sources/{name}/diff?ref=...`. |

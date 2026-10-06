@@ -6,6 +6,23 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **`angee workspace repair [name]`.** Materializes the source slots declared
+  for an existing workspace whose paths are missing, such as a slot added to
+  `workspaces.<name>.sources` after the workspace was created (which neither
+  `workspace update` nor lifecycle commands create) or one deleted from disk.
+  Each missing slot is cut the way `workspace create` cuts it (mode, branch,
+  `ref` / `default_ref`, subpath, cache refresh). Anything else at a slot's
+  path is never changed: a slot is reported as `ok`, or as `needs-attention`
+  when it is dirty, diverged or on the wrong branch, or its path holds
+  something that is not the slot. A slot that cannot be materialized is
+  reported as `failed`, with nothing left at its path, while the others are
+  still repaired, and the command then exits non-zero. Repairing a repaired
+  workspace changes nothing. Also exposed as REST
+  `POST /workspaces/{name}/repair` (200 with per-slot outcomes, `ok: false`
+  when a slot failed) and GraphQL `workspaceRepair(name:)` (#95).
+
 ### Fixed
 
 - **Template lookup says why the template registry failed.** When no local
@@ -17,6 +34,16 @@ latest tag.
   credentials in an `ANGEE_TEMPLATE_REGISTRY` URL masked. "Not found" is kept
   for a registry that was fetched but has no such template, and now names the
   registry.
+- **Unmaterialized workspace source slots fail with a clear message.** `angee
+  workspace sync-base`, `workspace push` and the `workspace source` verbs
+  (`fetch`, `pull`, `push`, `diff`, `merge`, `rebase`, the aborts and
+  `publish`) on a workspace with a declared slot that is missing on disk now
+  fail before touching any slot, naming the slot and pointing at `angee
+  workspace repair <name>` (HTTP 409), instead of with a raw git
+  `chdir ... no such file or directory` error. The same applies to a slot
+  that is a dangling link or, for a git slot, a directory that is not its own
+  checkout, where git would otherwise have acted on an enclosing repository.
+  `workspace status` keeps reporting a missing slot as `missing` (#95).
 
 ## v0.16.0 — 2026-10-05
 

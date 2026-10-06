@@ -233,6 +233,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
 	mux.Handle("POST /workspaces/{name}/sync-base", s.auth(http.HandlerFunc(s.workspaceSyncBase)))
+	mux.Handle("POST /workspaces/{name}/repair", s.auth(http.HandlerFunc(s.workspaceRepair)))
 	// REST parity for GraphQL-only operations. Every route here is auth()-wrapped
 	// just like the rest of the operator surface.
 	mux.Handle("GET /gitops/topology", s.auth(http.HandlerFunc(s.gitOpsTopology)))
@@ -982,6 +983,19 @@ func (s *Server) workspaceSyncBase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, states)
+}
+
+// workspaceRepair answers 200 with every slot's outcome whenever the repair
+// ran, including when some slots failed (the result's `ok` is then false).
+// Only a repair that could not run is an error response.
+func (s *Server) workspaceRepair(w http.ResponseWriter, r *http.Request) {
+	result, err := s.platform.WorkspaceRepair(r.Context(), r.PathValue("name"))
+	var repairErr *service.WorkspaceRepairError
+	if err != nil && !errors.As(err, &repairErr) {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {

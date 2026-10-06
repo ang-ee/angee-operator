@@ -284,6 +284,12 @@ func (r *mutationResolver) WorkspaceSyncBase(ctx context.Context, name string, m
 	return ptrSlice(states), err
 }
 
+// WorkspaceRepair is the resolver for the workspaceRepair field.
+func (r *mutationResolver) WorkspaceRepair(ctx context.Context, name string) (*api.WorkspaceRepairResult, error) {
+	result, err := r.Platform.WorkspaceRepair(ctx, name)
+	return workspaceRepairResponse(ctx, result, err)
+}
+
 // WorkspaceSourceFetch is the resolver for the workspaceSourceFetch field.
 func (r *mutationResolver) WorkspaceSourceFetch(ctx context.Context, workspace string, slot string) (*api.WorkspaceSourceStatus, error) {
 	status, err := r.Platform.WorkspaceSourceFetch(ctx, workspace, slot)

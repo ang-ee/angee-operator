@@ -228,6 +228,7 @@ POST  /workspaces/{name}/destroy?purge=true
 GET   /workspaces/{name}/git
 POST  /workspaces/{name}/push
 POST  /workspaces/{name}/sync-base
+POST  /workspaces/{name}/repair
 ```
 
 Workspaces are a pure file primitive — `POST /workspaces` renders Copier
@@ -243,6 +244,42 @@ worktrees. Each status source includes the manifest `branch`, actual
 on its manifest branch, and the workspace top-level state is `discrepancy`.
 `sync-base` updates each workspace branch from its base ref without switching
 branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
+
+A source slot declared in the manifest but not materialized (one added to an
+existing workspace, a dangling link, or for a git slot a directory that is not
+its own checkout) makes `sync-base`, `push` and the per-slot routes under
+`/workspaces/{name}/sources/{slot}/` fail with `409` before any slot is
+touched. The error names the slot and points at `repair`; status reports a
+missing slot with `state: "missing"`.
+
+`repair` (no body) materializes each declared slot whose path is missing (for
+a git slot, also an empty directory), the way workspace create cuts it, and
+leaves anything else at a slot's path untouched. A repair that ran answers
+`200` with one entry per slot, even when some slots failed; `ok` is `false`
+then. A repair that cannot run answers with the usual error mapping: `404` for
+an undeclared workspace, `409` when the workspace directory does not exist or
+is not a directory, `400` while another stack mutation is active.
+
+```json
+{
+  "workspace": "feature-a",
+  "path": "/srv/stack/workspaces/feature-a",
+  "ok": true,
+  "slots": [
+    {"slot": "app", "source": "app", "path": "/srv/stack/workspaces/feature-a/app",
+     "action": "ok", "reason": "clean", "status": {"slot": "app", "state": "clean", "...": "..."}},
+    {"slot": "lib", "source": "lib", "path": "/srv/stack/workspaces/feature-a/lib",
+     "action": "created", "reason": "worktree on branch \"feature-a\", base main", "status": {"...": "..."}}
+  ]
+}
+```
+
+`action` is `created`, `ok`, `needs-attention` (dirty, diverged, on the wrong
+branch or unreadable, or the path holds something other than the slot; left
+untouched) or `failed` (nothing the attempt created is left at the path).
+`reason` is a single line. `status` is the slot's workspace source status
+after the repair, present when the slot is on disk or repair tried to create
+it.
 
 ### Update scopes
 
@@ -461,6 +498,10 @@ The GraphQL schema exposes stack, service, job, source, workspace, log snapshot,
 and mutation fields corresponding to the REST operations. Workspace source types
 use the same branch-identity fields as REST (`branch`, `currentRef`, `state`),
 and `workspaceSyncBase(name:, method:)` mirrors the REST `sync-base` endpoint.
+`workspaceRepair(name:)` mirrors REST `repair` and returns a
+`WorkspaceRepairResult { workspace path ok slots { slot source path action
+reason status { ... } } }`. When some slots failed, the response carries the
+result as `data` and also an entry in `errors` naming the failed slots.
 
 The schema source lives at `internal/operator/schema.graphql`; generated gqlgen
 runtime files live under `internal/operator/gql/`.

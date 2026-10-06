@@ -1070,6 +1070,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspaceGitCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspacePushCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceSyncBaseCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceRepairCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceOpenCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspacePreflightCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceSourceCommand(stdout, root, operatorURL, jsonOutput))
@@ -1258,6 +1259,50 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each workspace branch (default)")
 	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each workspace branch onto its base ref")
 	return cmd
+}
+
+func workspaceRepairCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "repair [name]",
+		Short: "Materialize declared source slots missing from a workspace",
+		Long: "Materialize each source slot declared for the workspace in angee.yaml whose\n" +
+			"path is missing, the way `workspace create` cuts it. Slots already on disk\n" +
+			"are left untouched and reported as ok, or as needs-attention when they are\n" +
+			"dirty, diverged or on the wrong branch. Prints one line per slot:\n" +
+			"slot, action (created, ok, needs-attention, failed), reason, path.\n" +
+			"Exits non-zero when a slot could not be materialized.",
+		Example: "  angee workspace repair feature-a\n  angee --json workspace repair feature-a",
+		Args:    cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			platform, name, err := workspaceTarget(args, root, operatorURL, "repair")
+			if err != nil {
+				return err
+			}
+			// A repair that ran returns its result alongside the error naming
+			// failed slots: print the result, then return the error.
+			result, err := platform.WorkspaceRepair(cmd.Context(), name)
+			var repairErr *service.WorkspaceRepairError
+			if err != nil && !errors.As(err, &repairErr) {
+				return err
+			}
+			if *jsonOutput {
+				if writeErr := writeJSON(stdout, result); writeErr != nil {
+					return writeErr
+				}
+				return err
+			}
+			if len(result.Slots) == 0 {
+				_, writeErr := fmt.Fprintf(stdout, "workspace %s declares no source slots\n", result.Workspace)
+				return writeErr
+			}
+			for _, slot := range result.Slots {
+				if _, writeErr := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", slot.Slot, slot.Action, slot.Reason, slot.Path); writeErr != nil {
+					return writeErr
+				}
+			}
+			return err
+		},
+	}
 }
 
 func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
