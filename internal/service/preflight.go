@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -53,7 +54,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 	var stackDefaults map[string]string
 	if stack, err := p.LoadStack(); err == nil {
 		stackDefaults = stackWorkspaceDefaults(stack, templateRef)
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return api.WorkspaceCreatePreflightResponse{}, err
 	}
 	provided := mergeStringMaps(stackDefaults, req.Inputs)

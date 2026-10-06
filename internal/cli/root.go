@@ -119,7 +119,8 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 		Use:   "init [path]",
 		Short: "Initialize a stack",
 		Long: "Initialize a stack from a template. The default `dev` template renders the\n" +
-			"framework-dev stack from the template registry (ang-ee/angee-templates):\n" +
+			"framework-dev stack from the template registry (ang-ee/angee-django, or\n" +
+			"ANGEE_TEMPLATE_REGISTRY; fetching it needs git):\n" +
 			"a project host at the stack root whose manifest declares the framework\n" +
 			"repos as sources — `angee dev` then materializes and boots everything.\n\n" +
 			"Review template inputs in a single-screen form before rendering.\n" +
@@ -151,7 +152,7 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 			return err
 		},
 	}
-	cmd.Flags().StringVarP(&template, "template", "t", "dev", "stack template (name, name@ref, owner/repo//path, URL, or local path)")
+	cmd.Flags().StringVarP(&template, "template", "t", "dev", "stack template (name, name@ref, owner/repo//path, GitHub URL, or absolute path)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
@@ -1354,7 +1355,7 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "review all template inputs in the form (requires a terminal)")
-	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "template ref, URL, or path")
+	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "workspace template (name, name@ref, owner/repo//path, GitHub URL, or absolute path)")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
 	cmd.Flags().BoolVar(&req.Sync, "sync", false, "reconcile leftover worktree state from a failed create instead of failing")
 	return cmd

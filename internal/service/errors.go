@@ -7,6 +7,21 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 )
 
+// NoManifestError reports that a root holds no angee.yaml. It unwraps to the
+// open error, which matches os.ErrNotExist, so callers that branch on the
+// missing-manifest case keep working; check it with errors.Is, since
+// os.IsNotExist does not unwrap.
+type NoManifestError struct {
+	Root string
+	Err  error
+}
+
+func (e *NoManifestError) Error() string {
+	return fmt.Sprintf("no angee.yaml found in %s: run `angee init` to create a stack here, or pass --root with the ANGEE_ROOT that owns this checkout", e.Root)
+}
+
+func (e *NoManifestError) Unwrap() error { return e.Err }
+
 type NotFoundError struct {
 	Kind string
 	Name string

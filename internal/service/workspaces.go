@@ -2387,7 +2387,7 @@ func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (path,
 		kindRef = family + "/" + ref
 	}
 	if !strings.HasPrefix(kindRef, family+"/") {
-		return "", "", fmt.Errorf("template %q does not match kind %q", ref, kind)
+		return "", "", templateKindError(ref, kind)
 	}
 	candidates := []string{
 		filepath.Join(p.root, ".templates", kindRef),

@@ -257,6 +257,116 @@ func TestPushRemoteUsesNativeGitConfigFallbacks(t *testing.T) {
 	})
 }
 
+func TestEnsureRemoteURL(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repo)
+	client := New()
+	const declared = "https://github.com/acme/app.git"
+
+	// No origin yet: it is added, with the default fetch refspec.
+	previous, changed, err := client.EnsureRemoteURL(ctx, repo, "origin", declared)
+	if err != nil || !changed || previous != "" {
+		t.Fatalf("EnsureRemoteURL(add) = (%q, %v, %v), want (\"\", true, nil)", previous, changed, err)
+	}
+	if got := configValue(t, repo, "remote.origin.fetch"); got != "+refs/heads/*:refs/remotes/origin/*" {
+		t.Fatalf("remote.origin.fetch = %q, want the default refspec", got)
+	}
+
+	// An insteadOf rewrite makes `git remote get-url` differ from the declared
+	// URL; the configured value still matches, so nothing changes.
+	runGit(t, repo, "config", "url.git@github.com:.insteadOf", "https://github.com/")
+	if previous, changed, err := client.EnsureRemoteURL(ctx, repo, "origin", declared); err != nil || changed || previous != declared {
+		t.Fatalf("EnsureRemoteURL(same, rewritten) = (%q, %v, %v), want (%q, false, nil)", previous, changed, err, declared)
+	}
+
+	// A different URL replaces origin's and leaves other remotes alone.
+	runGit(t, repo, "remote", "add", "upstream", "https://example.com/upstream.git")
+	const moved = "git@github-deploy:acme/app.git"
+	if previous, changed, err := client.EnsureRemoteURL(ctx, repo, "origin", moved); err != nil || !changed || previous != declared {
+		t.Fatalf("EnsureRemoteURL(set) = (%q, %v, %v), want (%q, true, nil)", previous, changed, err, declared)
+	}
+	if got := configValue(t, repo, "remote.origin.url"); got != moved {
+		t.Fatalf("remote.origin.url = %q, want %q", got, moved)
+	}
+	if got := configValue(t, repo, "remote.upstream.url"); got != "https://example.com/upstream.git" {
+		t.Fatalf("remote.upstream.url = %q, want it unchanged", got)
+	}
+}
+
+// A missing remote URL is not an error, but an unreadable config is: it must
+// not pass for "no origin" and lead to a misleading `git remote add` failure.
+func TestRemoteURLDistinguishesMissingFromUnreadable(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repo)
+	client := New()
+
+	if value, ok, err := client.RemoteURL(ctx, repo, "origin"); err != nil || ok || value != "" {
+		t.Fatalf("RemoteURL(missing) = (%q, %v, %v), want (\"\", false, nil)", value, ok, err)
+	}
+	mustWriteFile(t, filepath.Join(repo, ".git", "config"), "[core\nnot a config\n")
+	if _, _, err := client.RemoteURL(ctx, repo, "origin"); err == nil {
+		t.Fatal("RemoteURL(unreadable config) error = nil, want an error")
+	}
+}
+
+// Run's error reaches CLI and API clients, so credentials in a URL argument
+// or in git's output must not appear in it.
+func TestClientRunErrorRedactsCredentials(t *testing.T) {
+	// A stand-in git that echoes its arguments to stderr and fails, so both
+	// the argument list and the output carry the credential.
+	fakeGit := filepath.Join(t.TempDir(), "git")
+	mustWriteFile(t, fakeGit, "#!/bin/sh\necho \"fatal: $*\" >&2\nexit 128\n")
+	if err := os.Chmod(fakeGit, 0o755); err != nil {
+		t.Fatalf("Chmod(fake git) error = %v", err)
+	}
+	_, err := Client{Bin: fakeGit}.Run(context.Background(), t.TempDir(), "remote", "add", "--", "origin", "https://angee:hunter22@example.com/app.git")
+	if err == nil {
+		t.Fatal("Run() error = nil")
+	}
+	if strings.Contains(err.Error(), "hunter22") {
+		t.Fatalf("Run() error = %q, want the credential redacted", err)
+	}
+	if strings.Count(err.Error(), "https://***@example.com/app.git") != 2 {
+		t.Fatalf("Run() error = %q, want the redacted URL in both the arguments and the output", err)
+	}
+}
+
+// git fetches from a remote's first URL while `git config --get` returns the
+// last; RemoteURL reports the first, and EnsureRemoteURL refuses to rewrite a
+// remote with several URLs unless the first already matches.
+func TestRemoteWithSeveralURLs(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repo)
+	runGit(t, repo, "remote", "add", "origin", "https://example.com/first.git")
+	runGit(t, repo, "config", "--add", "remote.origin.url", "https://example.com/second.git")
+	client := New()
+
+	if value, ok, err := client.RemoteURL(ctx, repo, "origin"); err != nil || !ok || value != "https://example.com/first.git" {
+		t.Fatalf("RemoteURL() = (%q, %v, %v), want the first URL", value, ok, err)
+	}
+	if _, changed, err := client.EnsureRemoteURL(ctx, repo, "origin", "https://example.com/first.git"); err != nil || changed {
+		t.Fatalf("EnsureRemoteURL(first) = (changed %v, %v), want an unchanged no-op", changed, err)
+	}
+	if _, _, err := client.EnsureRemoteURL(ctx, repo, "origin", "https://example.com/other.git"); err == nil || !strings.Contains(err.Error(), "has 2 URLs") {
+		t.Fatalf("EnsureRemoteURL(other) error = %v, want a refusal naming the URL count", err)
+	}
+}
+
+func configValue(t *testing.T, dir, key string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
+	if err != nil {
+		t.Fatalf("git config --get %s error = %v", key, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func isolateGitConfig(t *testing.T) {
 	t.Helper()
 	globalConfig := filepath.Join(t.TempDir(), "global.gitconfig")

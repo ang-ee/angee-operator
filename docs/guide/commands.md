@@ -65,9 +65,11 @@ angee status
 
 `angee init` renders the `dev` stack template by default. `--template` takes a
 name (`dev`), a pinned name (`dev@v1.2`), an `owner/repo//subpath` reference,
-a URL, or a local path; names resolve from the local template search paths
-first and fall back to the template registry (ang-ee/angee-django, or
-`ANGEE_TEMPLATE_REGISTRY`).
+a GitHub URL, or an absolute path; names resolve from the local template
+search paths first and fall back to the template registry (ang-ee/angee-django,
+or `ANGEE_TEMPLATE_REGISTRY`). See
+[Template References](/cli/templates#template-references) for an example of
+each form.
 
 ### Template answers files
 
@@ -169,6 +171,8 @@ With `--template` it first re-renders the complete stack template and its chain,
 including files such as `AGENTS.md`, then structurally merges `angee.yaml` and
 regenerates runtime files. User-added manifest keys and operator-managed state
 (`operator`, `workspaces`, `port_leases`, and allocated port values) survive.
+A source declared by hand survives, while a source the template also renders
+takes the template's definition, replacing local edits to it.
 Rendered files are tracked: unchanged template files update or delete
 automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
@@ -347,7 +351,9 @@ angee source push <name> [--ref ref]
 
 Implemented source materialization is `git` and `local`. `source pull` is
 the top-level "update from upstream" operation: it fetches and
-fast-forwards the cached source's tracking ref.
+fast-forwards the cached source's tracking ref. `source fetch` and
+`source pull` first point the cache's `origin` at the source's `repo` in
+`angee.yaml` (see [Sources](/cli/manifest#sources)).
 
 The per-source `diff` and per-slot convergence operations (`merge`,
 `rebase`, `merge-abort`, `rebase-abort`, `rebase-continue`, `publish`)

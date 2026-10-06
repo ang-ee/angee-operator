@@ -83,6 +83,24 @@ func TestVersionCommandJSON(t *testing.T) {
 	}
 }
 
+// Running a stack command outside a stack is the ordinary first-run mistake;
+// the error should name the next step rather than a raw open error.
+func TestStatusWithoutManifestNamesNextStep(t *testing.T) {
+	t.Setenv("ANGEE_OPERATOR_URL", "")
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--root", root, "status"})
+	err := cmd.Execute()
+	var noManifest *service.NoManifestError
+	if !errors.As(err, &noManifest) {
+		t.Fatalf("Execute() error = %v, want *service.NoManifestError", err)
+	}
+	if !strings.Contains(err.Error(), "angee init") {
+		t.Fatalf("error = %q, want it to suggest `angee init`", err)
+	}
+}
+
 func TestVerboseFlagInstallsDebugLogger(t *testing.T) {
 	t.Setenv("ANGEE_VERBOSE", "0")
 	assertLoggerLevel(t, []string{"-vv", "logger-level-test"}, slog.LevelDebug)
@@ -706,6 +724,29 @@ func TestInitTemplateFlagInitializesNamedRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "angee-notes", ".angee", "angee.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected nested .angee manifest err = %v", err)
+	}
+}
+
+// The ref from #54: a reasonable guess must fail with the accepted forms, not
+// with a bare kind mismatch or a clone of a URL that cannot exist.
+func TestInitRejectsUnknownTemplateRefWithAcceptedForms(t *testing.T) {
+	t.Setenv("ANGEE_OPERATOR_URL", "")
+	t.Setenv("ANGEE_TEMPLATE_REGISTRY", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	t.Chdir(root)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"init", "--template", "gh:ang-ee/angee-django//templates/stacks/dev", "probe", "--yes"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error is nil")
+	}
+	for _, want := range []string{"is not a template ref", "stacks/<name>", "<owner>/<repo>//<path>", "@<ref>", "https://github.com/"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("init error = %q, want it to contain %q", err, want)
+		}
 	}
 }
 

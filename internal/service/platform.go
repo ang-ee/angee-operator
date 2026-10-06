@@ -139,7 +139,16 @@ func (p *Platform) gitClient() gitx.Client {
 }
 
 func (p *Platform) LoadStack() (*manifest.Stack, error) {
-	return manifest.LoadFile(manifest.Path(p.root))
+	stack, err := manifest.LoadFile(manifest.Path(p.root))
+	if err != nil {
+		// A missing manifest is the normal "you are not in a stack yet" case,
+		// so answer with the next step instead of a raw open error.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, &NoManifestError{Root: p.root, Err: err}
+		}
+		return nil, err
+	}
+	return stack, nil
 }
 
 func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {

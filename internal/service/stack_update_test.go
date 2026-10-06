@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,6 +96,53 @@ func TestMergeStackFromTemplatePreservesRuntimeAndRefreshesTemplate(t *testing.T
 	}
 }
 
+// Sources are what users add by hand between renders (#60): a re-render must
+// keep a source the template does not emit, refresh one it does, and report
+// both through the change summary.
+func TestMergeStackFromTemplateKeepsUserSourcesAndRefreshesTemplateSources(t *testing.T) {
+	ours := &manifest.Stack{
+		Version: 1, Kind: "stack", Name: "demo",
+		Sources: map[string]manifest.Source{
+			"app":      {Kind: "git", Repo: "https://github.com/acme/app.git", DefaultRef: "main", CachePath: "/shared/app"}, // template-known, CachePath set by hand
+			"site":     {Kind: "local", Path: "../site"},                                                                     // template-known, unchanged
+			"user-lib": {Kind: "git", Repo: "git@github.com:me/lib.git", CachePath: "sources/lib"},                           // user-added, preserved
+		},
+	}
+	theirs := &manifest.Stack{
+		Version: 1, Kind: "stack", Name: "demo",
+		Sources: map[string]manifest.Source{
+			"app":  {Kind: "git", Repo: "https://github.com/acme/app.git", DefaultRef: "develop"},
+			"site": {Kind: "local", Path: "../site"},
+			"docs": {Kind: "local", Path: "../docs"}, // new in the template
+		},
+	}
+
+	merged := mergeStackFromTemplate(ours, theirs, false)
+
+	if got, want := merged.Sources["user-lib"], ours.Sources["user-lib"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("user-added source = %+v, want it preserved as %+v", got, want)
+	}
+	// The template's definition replaces ours whole: the hand-set CachePath,
+	// which the template does not render, is gone too.
+	if got, want := merged.Sources["app"], theirs.Sources["app"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("template source app = %+v, want the template's %+v", got, want)
+	}
+	if got, want := merged.Sources["docs"], theirs.Sources["docs"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("new template source docs = %+v, want %+v", got, want)
+	}
+	if len(merged.Sources) != 4 {
+		t.Fatalf("merged sources = %v, want app, docs, site and user-lib", sortedKeys(merged.Sources))
+	}
+	if ours.Sources["app"].DefaultRef != "main" {
+		t.Fatal("merge mutated ours.Sources")
+	}
+
+	// The summary reports sources through reportKeyChanges("sources", ...).
+	if changes, want := summarizeStackChanges(ours, merged), []string{"~ sources/app", "+ sources/docs"}; !reflect.DeepEqual(changes, want) {
+		t.Fatalf("source changes = %v, want %v", changes, want)
+	}
+}
+
 func TestSummarizeStackChangesReportsAddedAndModified(t *testing.T) {
 	ours := &manifest.Stack{Services: map[string]manifest.Service{
 		"web":  {Image: "nginx:1.0"},
@@ -125,6 +173,27 @@ func TestSummarizeStackChangesReportsAddedAndModified(t *testing.T) {
 		if !want[c] {
 			t.Fatalf("unexpected change %q (changes=%v)", c, changes)
 		}
+	}
+}
+
+// A stack under <dir>/workspaces/<name>/ with no manifest at <dir> is not a
+// managed workspace inner stack. LoadStack reports that as NoManifestError, so
+// the check must still see os.ErrNotExist and not fail the update.
+func TestWorkspacePortInputsIgnoresMissingParentManifest(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspaces", "feature", "stack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	p, err := New(root)
+	if err != nil {
+		t.Fatalf("New(root) error = %v", err)
+	}
+	inputs, err := p.workspacePortInputs(context.Background())
+	if err != nil {
+		t.Fatalf("workspacePortInputs() error = %v, want nil for a missing parent manifest", err)
+	}
+	if inputs != nil {
+		t.Fatalf("workspacePortInputs() = %v, want nil", inputs)
 	}
 }
 

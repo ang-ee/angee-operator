@@ -47,6 +47,10 @@ func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = runtime.ChildEnviron(env)
+	// `up -D` forks the supervisor and exits. Should a daemon ever keep the
+	// output pipe open, stop waiting for it shortly after the command exits
+	// (Wait then reports exec.ErrWaitDelay) instead of blocking for its life.
+	cmd.WaitDelay = time.Second
 	trace := logctx.TraceExec(ctx, name, args, dir, slog.Any("env", logctx.EnvKeys(env)))
 	out, err := cmd.CombinedOutput()
 	trace(out, err)
@@ -74,12 +78,13 @@ func (b Backend) Build(context.Context, runtime.Target) error {
 
 func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 	args := b.baseArgs(target.Root, target.ControlPort)
-	// `-d` daemonises; `--tui=false` prevents the supervisor from trying
-	// to attach a TUI on a process that has no controlling terminal
-	// (which is the normal case for `angee stack up --root ...` against
-	// a workspace's inner stack from a non-interactive shell or under
-	// another supervisor).
-	args = append(args, "up", "-d", "--tui=false")
+	// `-D` (`--detached`) daemonises; lowercase `-d` is `--hide-disabled`
+	// and would leave the supervisor in the foreground. `--tui=false`
+	// prevents the supervisor from trying to attach a TUI on a process
+	// that has no controlling terminal (which is the normal case for
+	// `angee stack up --root ...` against a workspace's inner stack from a
+	// non-interactive shell or under another supervisor).
+	args = append(args, "up", "-D", "--tui=false")
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err

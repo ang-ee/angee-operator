@@ -29,7 +29,7 @@ Use --yes to accept defaults without prompting. Piped stdin uses line prompts
 for missing required inputs.
 
 Example:
-  angee service create --template ./templates/agents/claude-code \
+  angee service create --template services/claude-code \
     --workspace my-pa --input auth_mode=api_key`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,7 +53,7 @@ Example:
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&req.Template, "template", "", "template ref or path (required)")
+	cmd.Flags().StringVar(&req.Template, "template", "", "service template (name, name@ref, owner/repo//path, GitHub URL, or absolute path; required)")
 	cmd.Flags().StringVar(&req.Workspace, "workspace", "", "target workspace name (required)")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "template input K=V (repeatable)")
 	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")

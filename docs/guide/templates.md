@@ -57,6 +57,28 @@ _angee:
 `angee workspace create <name> --template <template>` resolves workspace
 templates.
 
+## Template References
+
+A template reference (`angee init --template`, `angee stack init
+<template>`, `angee workspace create --template`, `angee service create
+--template`) takes one of these forms. The examples are stack refs; a
+workspace ref uses `workspaces/` and a service ref `services/`.
+
+| Form | Example | Resolves to |
+| --- | --- | --- |
+| `<name>` | `dev` | `stacks/dev`, from the [local search paths](#local-resolution), then the template registry. |
+| `<kind>/<name>` | `stacks/dev` | The same, with the kind spelled out. The kind must be the one the command renders: `angee init --template workspaces/dev-pr` is refused. |
+| `<owner>/<repo>//<path>` | `ang-ee/angee-django//templates/stacks/dev` | The template at `<path>` in that GitHub repository. The double slash separates the repository from the path. |
+| any of the above + `@<ref>` | `dev@main` | The same template at a branch or tag of the registry (or of `<owner>/<repo>`). A pinned ref skips the local search. |
+| Absolute path | `/home/me/templates/stacks/dev` | That template directory, used as is. |
+| GitHub URL | `https://github.com/ang-ee/angee-django/tree/main/templates/stacks/dev` | The template path in that repository, at the branch in `/tree/<ref>/` or `?ref=<ref>`, or the default branch when neither is given. |
+
+A relative path such as `./templates/stacks/dev` is not a template
+reference: name the template (`stacks/dev`) or pass an absolute path. An
+`@<ref>` pin cannot contain `/`; for a branch such as `feature/x`, use a
+GitHub URL with `?ref=feature/x`. A reference that matches none of these
+forms, or names another kind, fails with a message listing them.
+
 ## Local Resolution
 
 For a short name like `dev`, stack resolution looks for `stacks/dev`. Workspace
@@ -75,13 +97,13 @@ $PWD/templates/<kind>/<name>
 ancestor-of-PWD/.templates/<kind>/<name>
 ```
 
-`<kind>` is `stacks` or `workspaces`.
+`<kind>` is `stacks`, `workspaces`, or `services`.
 
 `angee init` resolves `stacks/dev` from the local search paths first, then
 from the template registry —
 [`ang-ee/angee-django`](https://github.com/ang-ee/angee-django) by
 default; `ANGEE_TEMPLATE_REGISTRY` overrides it with another repository
-(URL, `owner/repo`, or a local path).
+(URL, `owner/repo`, or an absolute local path).
 
 ## Remote Resolution
 
@@ -347,7 +369,7 @@ Run with:
 
 ```sh
 angee service create \
-  --template ./templates/services/my-agent \
+  --template services/my-agent \
   --workspace my-pa \
   --input api_key=sk-...
 ```

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	gitx "github.com/ang-ee/angee-operator/internal/git"
@@ -123,7 +124,7 @@ func (p *Platform) resolveRegistryTemplate(ctx context.Context, ref, kind string
 			kindRef = family + "/" + base
 		}
 		if !strings.HasPrefix(kindRef, family+"/") {
-			return "", "", fmt.Errorf("template %q does not match kind %q", ref, kind)
+			return "", "", templateKindError(ref, kind)
 		}
 		activeRef = kindRef
 		candidates = []string{
@@ -190,6 +191,15 @@ func splitTemplateRefPin(ref string) (string, string) {
 	return ref[:at], ref[at+1:]
 }
 
+// gitHubOwnerRE and gitHubRepoRE match GitHub owner and repository names (a
+// repository may start with a dot, as `.github` does). They keep refs such as
+// `gh:owner/repo//path` out of the owner/repo form, so those get the
+// template-kind error listing the accepted forms instead of a failed clone.
+var (
+	gitHubOwnerRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+	gitHubRepoRE  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+)
+
 // splitOwnerRepoTemplateRef recognizes the explicit `owner/repo//subpath`
 // cross-repository form. The double slash is required — a plain two-segment
 // ref is always a kind-qualified name, never a repository.
@@ -199,10 +209,24 @@ func splitOwnerRepoTemplateRef(ref string) (owner, repo, subpath string, ok bool
 		return "", "", "", false
 	}
 	parts := strings.Split(strings.Trim(head, "/"), "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 || !gitHubOwnerRE.MatchString(parts[0]) ||
+		!gitHubRepoRE.MatchString(parts[1]) || parts[1] == "." || parts[1] == ".." {
 		return "", "", "", false
 	}
 	return parts[0], strings.TrimSuffix(parts[1], ".git"), strings.Trim(tail, "/"), true
+}
+
+// templateKindError reports a ref that does not name a template of kind, and
+// lists the forms resolveTemplate accepts. Template() passes an empty kind for
+// a ref without a kind prefix and rejects absolute paths before resolving, so
+// that message names the kind prefixes and leaves out paths.
+func templateKindError(ref, kind string) error {
+	const ownerRepo = "<owner>/<repo>//<path> (a template in a GitHub repository), each optionally pinned with @<ref>"
+	const gitHubURL = "a GitHub URL such as https://github.com/<owner>/<repo>/tree/<ref>/<path>"
+	if kind == "" {
+		return fmt.Errorf("template %q is not a template ref: expected stacks/<name>, workspaces/<name> or services/<name>, or %s; or %s", ref, ownerRepo, gitHubURL)
+	}
+	return fmt.Errorf("template %q is not a %s template ref: expected <name> or %ss/<name>, %s; an absolute path; or %s", ref, kind, kind, ownerRepo, gitHubURL)
 }
 
 func parseGitHubTemplateRef(ref string) (repoURL string, branch string, subpath string, err error) {

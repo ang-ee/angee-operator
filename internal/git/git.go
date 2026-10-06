@@ -75,7 +75,9 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 	out, err := cmd.CombinedOutput()
 	trace(out, err)
 	if err != nil {
-		return out, fmt.Errorf("git %v: %w: %s", args, err, out)
+		// Callers return this error to CLI and API clients, so keep
+		// credentials in a remote URL out of it.
+		return out, fmt.Errorf("git %v: %w: %s", logctx.RedactArgs(args), err, logctx.RedactText(string(out)))
 	}
 	return out, nil
 }
@@ -522,6 +524,66 @@ func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, e
 		return "", false, nil
 	}
 	return value, true, nil
+}
+
+// RemoteURL returns the URL remote fetches from in the repository at dir (the
+// first of its configured URLs), and false when it has none. It reads the
+// configured value rather than `git remote get-url`, which applies
+// url.<base>.insteadOf rewrites and so would not match a declared URL under
+// such a rewrite.
+func (c Client) RemoteURL(ctx context.Context, dir, remote string) (string, bool, error) {
+	urls, err := c.remoteURLs(ctx, dir, remote)
+	if err != nil || len(urls) == 0 {
+		return "", false, err
+	}
+	return urls[0], true, nil
+}
+
+func (c Client) remoteURLs(ctx context.Context, dir, remote string) ([]string, error) {
+	value, err := c.runText(ctx, dir, "config", "--get-all", "remote."+remote+".url")
+	if err != nil {
+		// `git config` exits 1 for a missing key; anything else (an
+		// unreadable config, a cancelled context) is an error.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && ctx.Err() == nil {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read remote.%s.url: %w", remote, err)
+	}
+	if value == "" {
+		return nil, nil
+	}
+	return strings.Split(value, "\n"), nil
+}
+
+// EnsureRemoteURL makes rawURL the URL remote fetches from in the repository
+// at dir, adding the remote when it has no URL. It returns remote's URL before
+// the call (empty when it had none) and whether it changed anything. A remote
+// with several URLs is refused rather than rewritten.
+func (c Client) EnsureRemoteURL(ctx context.Context, dir, remote, rawURL string) (string, bool, error) {
+	urls, err := c.remoteURLs(ctx, dir, remote)
+	if err != nil {
+		return "", false, err
+	}
+	current := ""
+	if len(urls) > 0 {
+		current = urls[0]
+	}
+	ok := current != ""
+	if ok && current == rawURL {
+		return current, false, nil
+	}
+	if len(urls) > 1 {
+		return current, false, fmt.Errorf("remote %s has %d URLs; set the one to fetch from with `git remote set-url`", remote, len(urls))
+	}
+	verb := "add"
+	if ok {
+		verb = "set-url"
+	}
+	if _, err := c.Run(ctx, dir, "remote", verb, "--", remote, rawURL); err != nil {
+		return current, false, fmt.Errorf("set remote.%s.url: %w", remote, err)
+	}
+	return current, true, nil
 }
 
 func (c Client) Remotes(ctx context.Context, dir string) ([]string, error) {

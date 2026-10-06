@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.17.0 — 2026-10-06
+
 ### Added
 
 - **`angee workspace repair [name]`.** Materializes the source slots declared
@@ -44,6 +46,66 @@ latest tag.
   that is a dangling link or, for a git slot, a directory that is not its own
   checkout, where git would otherwise have acted on an enclosing repository.
   `workspace status` keeps reporting a missing slot as `missing` (#95).
+- **`angee doctor` probes process-compose correctly.** It called
+  `process-compose --version`, a flag process-compose rejects, so a working
+  install was always reported as `version check failed: exit status 1`. The
+  probe now runs the `version` subcommand and reports the first line carrying
+  a version number, skipping the banner and structured debug records
+  process-compose writes around it (#50). Carried over from #57 by
+  @JesseWilsonUSC.
+- **`angee doctor` waits long enough for Node tools.** Each probe had 2s, which
+  a cold Node start regularly exceeds: `pnpm` was reported as `context
+  deadline exceeded` while answering fine by hand. The budget is now 10s
+  (#51). Carried over from #57 by @JesseWilsonUSC.
+- **`angee doctor` checks the `docker compose` plugin.** It checked the
+  `docker` binary but never `docker compose`, the separate CLI plugin the
+  compose backend shells out to, so doctor passed clean on installs where
+  `angee up` then failed with `unknown shorthand flag: 'f' in -f`. The plugin
+  is now its own `tool.docker-compose` check, with a distinct hint when
+  `docker` itself is missing, and a failed probe reports its stderr instead of
+  only the exit status (#55). Carried over from #57 by @JesseWilsonUSC.
+- **A missing manifest names the next step.** Commands that need a manifest
+  reported `open /path/angee.yaml: no such file or directory` when run outside
+  a stack. They now report that no `angee.yaml` was found and suggest
+  `angee init` or `--root` (#52). Carried over from #57 by @JesseWilsonUSC.
+- **`angee up` detaches the process-compose supervisor.** The process-compose
+  backend started the supervisor with `up -d`, but process-compose's `-d` is
+  `--hide-disabled`; detached mode is `-D`. So `angee up` and `angee service
+  up` for local services ran the supervisor in the foreground and blocked
+  until every process exited. They now pass `-D`. Carried over from #44 by
+  @litnimax.
+- **A template ref of the wrong kind or shape says what was expected.**
+  `template "…" does not match kind "stack"` named neither the accepted
+  syntax nor the kind. The error now lists the forms a ref of that kind
+  takes: `<name>` or `stacks/<name>`, `<owner>/<repo>//<path>`, each
+  optionally pinned with `@<ref>`, an absolute path, or a GitHub URL. A guess
+  such as `gh:owner/repo//path` gets that message instead of a failed clone of
+  `https://github.com/gh:owner/repo.git`. The `--template` flag help names the
+  same forms, the templates guide documents each with an example, and the
+  `angee service create` examples no longer use a relative path, which is not
+  a template ref (#54).
+- **`angee source fetch` and `source pull` follow the `repo` in `angee.yaml`.**
+  A git source's `repo` was used only for the first clone; afterwards fetch
+  and pull used the cache's own `origin`, so a cache cloned from another URL
+  (for example the HTTPS URL a stack template rendered) kept using it after
+  `repo` was changed to an SSH host alias with a deploy key, and `angee source
+  pull` failed with `Permission denied (publickey)`. The two verbs now set the
+  cache's `origin` to `repo` first (adding `origin` if it is missing) and log
+  a warning naming the source when that changes it. Stack bring-up,
+  `workspace create` and `workspace repair` only warn about a mismatch, since
+  a cache can be shared by several stacks or be your own clone. Worktree
+  slots share the cache's remotes; other remotes are left alone. Git errors
+  returned to CLI and API clients now mask credentials in remote URLs.
+
+### Documentation
+
+- **How `stack update --template` merges `sources`.** A source declared by
+  hand since the last render survives a re-render; a source the template also
+  renders takes the template's definition, replacing local edits to it. The
+  stack update docs say so, and a merge test pins both cases and the change
+  summary (#60).
+- **`angee init --help` names the real template registry**, `ang-ee/angee-django`
+  (or `ANGEE_TEMPLATE_REGISTRY`), and that fetching it needs git.
 
 ## v0.16.0 — 2026-10-05
 

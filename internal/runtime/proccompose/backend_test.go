@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
 	"strconv"
 	"strings"
@@ -101,6 +102,21 @@ func (r *recordingRunner) Run(_ context.Context, _ string, _ []string, name stri
 	return nil, nil
 }
 
+// A command that leaves a background child holding its output pipe, as a
+// daemonising `up -D` could, must not block Run for the child's lifetime.
+func TestExecRunnerDoesNotWaitForDaemonPipes(t *testing.T) {
+	started := time.Now()
+	_, err := (ExecRunner{}).Run(t.Context(), "", nil, "sh", "-c", "sleep 8 & echo started")
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("Run() returned after %s, want it bounded by WaitDelay", elapsed)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("Run() error = %v, want exec.ErrWaitDelay", err)
+	}
+}
+
+// process-compose detaches with `-D`; `-d` is `--hide-disabled` and leaves the
+// supervisor in the foreground, so Up would block.
 func TestBackendUpCommand(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}
@@ -108,7 +124,7 @@ func TestBackendUpCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-d", "--tui=false", "web"}
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--tui=false", "web"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
 	}
