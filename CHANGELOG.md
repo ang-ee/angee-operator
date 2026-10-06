@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.17.0 — 2026-10-06
+
 ### Added
 
 - **`angee workspace repair [name]`.** Materializes the source slots declared
@@ -102,6 +104,8 @@ latest tag.
   renders takes the template's definition, replacing local edits to it. The
   stack update docs say so, and a merge test pins both cases and the change
   summary (#60).
+- **`angee init --help` names the real template registry**, `ang-ee/angee-django`
+  (or `ANGEE_TEMPLATE_REGISTRY`), and that fetching it needs git.
 
 ## v0.16.0 — 2026-10-05
 
