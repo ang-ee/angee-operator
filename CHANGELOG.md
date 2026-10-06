@@ -55,6 +55,27 @@ latest tag.
   `job deps failed (exit 1)`, and `--json`, REST and GraphQL carry it as
   `reason`. process-compose skips a process only when a dependency fails; a
   process left out by configuration shows as `disabled` (#86).
+- **`angee service up` starts local services under a running supervisor.**
+  v0.17.0 detached the process-compose supervisor with `up -D`, which fixed
+  `up` hanging when no supervisor was running but broke the usual case where
+  one already serves the control port, such as during `angee dev`: the second
+  `up -D` forked a daemon that died on the taken port while the parent exited
+  0, so `angee service up <local service>` (and a second `angee dev -d`)
+  reported success and the services stayed `Disabled`. Before v0.17.0 the same
+  call failed outright. A running supervisor now owns the project: `up` starts
+  the named services through it, each after any local dependency it has never
+  run, starts a stopped named service again and leaves running ones alone. An
+  `up` that names no service starts what that supervisor has never run, such
+  as the services an earlier `angee service up` left out. A service added to
+  the manifest after the supervisor started is reported, with nothing started,
+  as needing a supervisor restart, because adding it through the
+  process-compose API restarts the processes the supervisor runs. A fresh
+  `up -D` now waits for the new supervisor to answer, and fails, naming the
+  port and the process-compose log when `PC_LOG_FILE` sets it, if the daemon
+  never does. A control port held by something that is not a process-compose
+  supervisor fails before any launch, and one served by another stack's
+  supervisor (two stacks sharing a `process_compose` port) is refused instead
+  of driven.
 
 ## v0.17.0 — 2026-10-06
 
