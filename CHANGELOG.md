@@ -72,6 +72,16 @@ latest tag.
   up` for local services ran the supervisor in the foreground and blocked
   until every process exited. They now pass `-D`. Carried over from #44 by
   @litnimax.
+- **A template ref of the wrong kind or shape says what was expected.**
+  `template "…" does not match kind "stack"` named neither the accepted
+  syntax nor the kind. The error now lists the forms a ref of that kind
+  takes: `<name>` or `stacks/<name>`, `<owner>/<repo>//<path>`, each
+  optionally pinned with `@<ref>`, an absolute path, or a GitHub URL. A guess
+  such as `gh:owner/repo//path` gets that message instead of a failed clone of
+  `https://github.com/gh:owner/repo.git`. The `--template` flag help names the
+  same forms, the templates guide documents each with an example, and the
+  `angee service create` examples no longer use a relative path, which is not
+  a template ref (#54).
 
 ## v0.16.0 — 2026-10-05
 

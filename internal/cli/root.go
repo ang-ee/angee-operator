@@ -151,7 +151,7 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 			return err
 		},
 	}
-	cmd.Flags().StringVarP(&template, "template", "t", "dev", "stack template (name, name@ref, owner/repo//path, URL, or local path)")
+	cmd.Flags().StringVarP(&template, "template", "t", "dev", "stack template (name, name@ref, owner/repo//path, GitHub URL, or absolute path)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
@@ -1354,7 +1354,7 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "review all template inputs in the form (requires a terminal)")
-	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "template ref, URL, or path")
+	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "workspace template (name, name@ref, owner/repo//path, GitHub URL, or absolute path)")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
 	cmd.Flags().BoolVar(&req.Sync, "sync", false, "reconcile leftover worktree state from a failed create instead of failing")
 	return cmd

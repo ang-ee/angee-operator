@@ -65,9 +65,11 @@ angee status
 
 `angee init` renders the `dev` stack template by default. `--template` takes a
 name (`dev`), a pinned name (`dev@v1.2`), an `owner/repo//subpath` reference,
-a URL, or a local path; names resolve from the local template search paths
-first and fall back to the template registry (ang-ee/angee-django, or
-`ANGEE_TEMPLATE_REGISTRY`).
+a GitHub URL, or an absolute path; names resolve from the local template
+search paths first and fall back to the template registry (ang-ee/angee-django,
+or `ANGEE_TEMPLATE_REGISTRY`). See
+[Template References](/cli/templates#template-references) for an example of
+each form.
 
 ### Template answers files
 

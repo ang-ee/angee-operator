@@ -727,6 +727,29 @@ func TestInitTemplateFlagInitializesNamedRoot(t *testing.T) {
 	}
 }
 
+// The ref from #54: a reasonable guess must fail with the accepted forms, not
+// with a bare kind mismatch or a clone of a URL that cannot exist.
+func TestInitRejectsUnknownTemplateRefWithAcceptedForms(t *testing.T) {
+	t.Setenv("ANGEE_OPERATOR_URL", "")
+	t.Setenv("ANGEE_TEMPLATE_REGISTRY", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	t.Chdir(root)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"init", "--template", "gh:ang-ee/angee-django//templates/stacks/dev", "probe", "--yes"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error is nil")
+	}
+	for _, want := range []string{"is not a template ref", "stacks/<name>", "<owner>/<repo>//<path>", "@<ref>", "https://github.com/"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("init error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
 func TestOperatorCommandForwardsDaemonFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd := NewRoot(&stdout, &stderr)

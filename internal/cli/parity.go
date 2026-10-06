@@ -269,7 +269,7 @@ func workspacePreflightCommand(stdout io.Writer, root, operatorURL *string, json
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&req.Template, "template", "", "template ref or path (required)")
+	cmd.Flags().StringVar(&req.Template, "template", "", "workspace template (name, name@ref, owner/repo//path, GitHub URL, or absolute path; required)")
 	cmd.Flags().StringVar(&req.Name, "name", "", "workspace name override")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
 	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "template input K=V (repeatable)")

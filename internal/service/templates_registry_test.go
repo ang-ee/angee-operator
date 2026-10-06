@@ -138,9 +138,63 @@ func TestSplitOwnerRepoTemplateRef(t *testing.T) {
 	if !ok || owner != "acme" || repo != "tpl" || subpath != "templates/stacks/dev" {
 		t.Fatalf("splitOwnerRepoTemplateRef = (%q,%q,%q,%v)", owner, repo, subpath, ok)
 	}
-	for _, ref := range []string{"stacks/dev", "dev", "acme/tpl", "//x", "a/b/c//"} {
+	// An org-wide `.github` repository is a common home for templates.
+	if _, repo, _, ok := splitOwnerRepoTemplateRef("acme/.github//templates/stacks/dev"); !ok || repo != ".github" {
+		t.Fatalf("splitOwnerRepoTemplateRef(acme/.github//...) = (%q, %v), want (.github, true)", repo, ok)
+	}
+	for _, ref := range []string{"stacks/dev", "dev", "acme/tpl", "//x", "a/b/c//", "gh:acme/tpl//templates/stacks/dev", "../tpl//x", "acme/..//x"} {
 		if _, _, _, ok := splitOwnerRepoTemplateRef(ref); ok {
 			t.Fatalf("splitOwnerRepoTemplateRef(%q) unexpectedly matched", ref)
 		}
+	}
+}
+
+// A ref of the wrong shape or kind must say what a ref of that kind looks
+// like (#54). None of these reach the network: the kind check runs before any
+// registry clone.
+func TestResolveTemplateKindMismatchNamesAcceptedForms(t *testing.T) {
+	t.Setenv(templateRegistryEnv, t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	platform, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, ref := range []string{
+		"workspaces/dev-pr",                            // another kind's name
+		"workspaces/dev-pr@main",                       // pinned: checked by the registry resolver
+		"./templates/stacks/dev",                       // a relative path is not a ref
+		"gh:ang-ee/angee-django//templates/stacks/dev", // the guess from #54
+	} {
+		_, _, err := platform.resolveTemplate(context.Background(), ref, "stack")
+		if err == nil {
+			t.Fatalf("resolveTemplate(%q) error is nil", ref)
+		}
+		for _, want := range []string{
+			`template "` + ref + `" is not a stack template ref`,
+			"<name> or stacks/<name>",
+			"<owner>/<repo>//<path>",
+			"@<ref>",
+			"an absolute path",
+			"https://github.com/<owner>/<repo>/tree/<ref>/<path>",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("resolveTemplate(%q) error = %q, want it to contain %q", ref, err, want)
+			}
+		}
+	}
+
+	// Template() infers the kind from the ref's prefix and refuses absolute
+	// paths, so a ref with no kind prefix lists the prefixes instead.
+	_, err = platform.Template(context.Background(), "agents/claude")
+	if err == nil {
+		t.Fatal("Template(agents/claude) error is nil")
+	}
+	for _, want := range []string{`template "agents/claude" is not a template ref`, "stacks/<name>, workspaces/<name> or services/<name>", "<owner>/<repo>//<path>"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Template(agents/claude) error = %q, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("Template(agents/claude) error = %q, want no absolute-path form", err)
 	}
 }
