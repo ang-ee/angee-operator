@@ -43,7 +43,7 @@ sharing it, since a tool may print other data you consider sensitive.
 | `ANGEE_VERBOSE` | `0` | Default diagnostic verbosity: `0` is warnings only, `1` names phases, and `2` traces commands and requests. |
 | `ANGEE_ACCESSIBLE` | unset | Set to `1` to use scripted line prompts for template inputs instead of the interactive form. |
 | `ANGEE_GIT_TIMEOUT` | `2m` | Deadline for network git clone, fetch, pull, and push operations. Accepts a Go duration; `0` disables the deadline. |
-| `ANGEE_JOB_TIMEOUT` | `30m` | Deadline for a job run, including the downstream jobs and service restarts of `--chained-restart`. Accepts a Go duration; `0` disables the deadline. A run that hits it is recorded as failed and releases the stack for other lifecycle changes. |
+| `ANGEE_JOB_TIMEOUT` | `30m` | Deadline for a job run, including the downstream jobs and service restarts of `--chained-restart`. Also bounds how long `angee dev -d` waits for the stack's jobs to finish. Accepts a Go duration; `0` disables the deadline. A run that hits it is recorded as failed and releases the stack for other lifecycle changes. |
 | `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
 | `ANGEE_OPERATOR_TIMEOUT` | `30m` | Deadline for non-streaming requests to a remote operator. Accepts a Go duration; `0` disables the deadline. Streaming requests are not given this timeout. |
 
@@ -62,6 +62,13 @@ angee stack update [--template [-i] [--answers <file> ...] [--input key=value ..
 angee stack destroy [--purge]
 angee status
 ```
+
+`angee status` prints each declared count with what the runtime reports, for
+example `services: 8 (5 running, 3 skipped)` and
+`jobs: 4 (2 completed, 1 failed, 1 skipped)`. Failed means exited non-zero or
+could not start; a service stopped by `angee stop` or Ctrl-C is not failed.
+Skipped means the runtime did not run it because a dependency failed. `--json`
+carries the same counts under `summary`.
 
 `angee init` renders the `dev` stack template by default. `--template` takes a
 name (`dev`), a pinned name (`dev@v1.2`), an `owner/repo//subpath` reference,
@@ -227,12 +234,12 @@ without exposing the previous value.
 ```sh
 angee build [service...]
 angee up [service...] [--build]
-angee dev [--build]
+angee dev [--build] [-d]
 angee down
 angee start <service>...
 angee stop <service>...
 angee restart <service>...
-angee logs [service...] [--follow]
+angee logs [service-or-job...] [--follow]
 ```
 
 `angee up` starts container services only. `angee dev` starts container services
@@ -242,6 +249,28 @@ container is recreated while `angee dev` runs — for example by `angee restart`
 from another shell — the follower re-attaches to its logs. Ctrl-C stops the local
 processes and log stream while containers remain running; `angee down` performs a
 full shutdown. Runtime actions are routed by each service's `runtime` value.
+
+`angee dev` reports a failed bring-up. Once the jobs it started have finished,
+a job that exited non-zero, or services and jobs the runtime skipped because a
+dependency failed, produce one summary line, and the command exits non-zero:
+
+```text
+job "deps" failed (exit 1); 3 skipped: codegen, frontend, storybook; see `angee job logs deps`
+```
+
+In the foreground the line appears as soon as the jobs finish, while the rest of
+the stack keeps running, and again when dev ends. `angee dev -d` starts the stack
+in the background, then waits for its jobs before returning, up to
+`ANGEE_JOB_TIMEOUT` (default `30m`, `0` waits indefinitely). When the wait runs
+out, it names the unfinished jobs and exits non-zero; Ctrl-C stops the wait.
+The stack keeps running in every case.
+
+The process-compose supervisor for local services stays up after every local
+process has ended, until `angee down` (or Ctrl-C for a foreground `angee dev`),
+so the states and logs of finished and skipped processes remain readable and
+`angee job run` and `angee restart` keep working.
+
+`angee logs` also takes job names and shows the output of a job's last run.
 
 ## Services
 
@@ -275,6 +304,11 @@ angee service stop <service>...
 angee service restart <service>...
 angee service logs <name> [--follow]
 ```
+
+`service list` prints each service's name, runtime and status. A service the
+runtime skipped gets a fourth column naming the failed job or service its
+dependency chain stopped at, such as `job deps failed (exit 1)`; `--json`
+carries it as `reason`.
 
 `service init` builds a service from explicit flags (image, command,
 env, ports). `service create` renders a Copier template with
@@ -333,7 +367,17 @@ If `--runtime` is omitted, `--image` creates a container service and
 ```sh
 angee job list  # alias: ls
 angee job run <name> [--input key=value ...] [--chained-restart]
+angee job logs <name> [--follow]
 ```
+
+`job list` shows the latest run the runtime holds for each job: `never-run`,
+`pending`, `running`, `completed (exit 0)`, `failed (exit 1)`, `skipped` or
+`unknown`. A skipped job, or one whose command could not start, gets a reason
+column. The runtime keeps a run until the stack goes down (the process-compose
+supervisor exits, or the job's container is removed), so after `angee down`
+every job reads `never-run`. `--json` carries `status`, `exit_code` and
+`reason`. `job logs` shows the output of a job's last run for as long as the
+runtime keeps it.
 
 `job run` executes the declared job command and writes the job output to stdout.
 `--chained-restart` follows a successful run by restarting its downstream jobs

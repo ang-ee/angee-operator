@@ -191,9 +191,12 @@ type ComplexityRoot struct {
 	}
 
 	JobState struct {
-		ID      func(childComplexity int) int
-		Name    func(childComplexity int) int
-		Runtime func(childComplexity int) int
+		ExitCode func(childComplexity int) int
+		ID       func(childComplexity int) int
+		Name     func(childComplexity int) int
+		Reason   func(childComplexity int) int
+		Runtime  func(childComplexity int) int
+		Status   func(childComplexity int) int
 	}
 
 	KeyValue struct {
@@ -343,6 +346,7 @@ type ComplexityRoot struct {
 		Health  func(childComplexity int) int
 		ID      func(childComplexity int) int
 		Name    func(childComplexity int) int
+		Reason  func(childComplexity int) int
 		Runtime func(childComplexity int) int
 		Status  func(childComplexity int) int
 	}
@@ -413,7 +417,21 @@ type ComplexityRoot struct {
 		Name       func(childComplexity int) int
 		Root       func(childComplexity int) int
 		Services   func(childComplexity int) int
+		Summary    func(childComplexity int) int
 		Workspaces func(childComplexity int) int
+	}
+
+	StackSummary struct {
+		Jobs     func(childComplexity int) int
+		Services func(childComplexity int) int
+	}
+
+	StatusCounts struct {
+		Completed func(childComplexity int) int
+		Failed    func(childComplexity int) int
+		Running   func(childComplexity int) int
+		Skipped   func(childComplexity int) int
+		Total     func(childComplexity int) int
 	}
 
 	Subscription struct {
@@ -1401,6 +1419,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.JobRunPreview.Services(childComplexity), true
 
+	case "JobState.exitCode":
+		if e.ComplexityRoot.JobState.ExitCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobState.ExitCode(childComplexity), true
 	case "JobState.id":
 		if e.ComplexityRoot.JobState.ID == nil {
 			break
@@ -1413,12 +1437,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.JobState.Name(childComplexity), true
+	case "JobState.reason":
+		if e.ComplexityRoot.JobState.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobState.Reason(childComplexity), true
 	case "JobState.runtime":
 		if e.ComplexityRoot.JobState.Runtime == nil {
 			break
 		}
 
 		return e.ComplexityRoot.JobState.Runtime(childComplexity), true
+	case "JobState.status":
+		if e.ComplexityRoot.JobState.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobState.Status(childComplexity), true
 
 	case "KeyValue.key":
 		if e.ComplexityRoot.KeyValue.Key == nil {
@@ -2502,6 +2538,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServiceState.Name(childComplexity), true
+	case "ServiceState.reason":
+		if e.ComplexityRoot.ServiceState.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceState.Reason(childComplexity), true
 	case "ServiceState.runtime":
 		if e.ComplexityRoot.ServiceState.Runtime == nil {
 			break
@@ -2803,12 +2845,62 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StackStatus.Services(childComplexity), true
+	case "StackStatus.summary":
+		if e.ComplexityRoot.StackStatus.Summary == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackStatus.Summary(childComplexity), true
 	case "StackStatus.workspaces":
 		if e.ComplexityRoot.StackStatus.Workspaces == nil {
 			break
 		}
 
 		return e.ComplexityRoot.StackStatus.Workspaces(childComplexity), true
+
+	case "StackSummary.jobs":
+		if e.ComplexityRoot.StackSummary.Jobs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSummary.Jobs(childComplexity), true
+	case "StackSummary.services":
+		if e.ComplexityRoot.StackSummary.Services == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StackSummary.Services(childComplexity), true
+
+	case "StatusCounts.completed":
+		if e.ComplexityRoot.StatusCounts.Completed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusCounts.Completed(childComplexity), true
+	case "StatusCounts.failed":
+		if e.ComplexityRoot.StatusCounts.Failed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusCounts.Failed(childComplexity), true
+	case "StatusCounts.running":
+		if e.ComplexityRoot.StatusCounts.Running == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusCounts.Running(childComplexity), true
+	case "StatusCounts.skipped":
+		if e.ComplexityRoot.StatusCounts.Skipped == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusCounts.Skipped(childComplexity), true
+	case "StatusCounts.total":
+		if e.ComplexityRoot.StatusCounts.Total == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusCounts.Total(childComplexity), true
 
 	case "Subscription.jobs":
 		if e.ComplexityRoot.Subscription.Jobs == nil {
@@ -3969,6 +4061,11 @@ type ServiceState {
   runtime: String!
   status: String!
   health: String
+  """
+  Why a skipped service did not run: the failed job or service its dependency
+  chain stopped at, such as ` + "`" + `job deps failed (exit 1)` + "`" + `.
+  """
+  reason: String
 }
 
 type TemplateChange {
@@ -3993,6 +4090,16 @@ type JobState {
   id: ID!
   name: String!
   runtime: String!
+  """
+  The latest run the runtime holds: never-run, pending, running, completed,
+  failed, skipped (a dependency failed) or unknown (the runtime could not be
+  queried).
+  """
+  status: String!
+  "Exit status of a completed or failed run, when the runtime reports one."
+  exitCode: Int
+  "Why a job failed without an exit status, or was skipped."
+  reason: String
 }
 
 type WorkspaceRef {
@@ -4154,12 +4261,33 @@ type GitOpsSummary {
   unpushed: Int!
 }
 
+"""
+Counts of declared entries by observed outcome. total counts every entry;
+pending, stopped, never-run and unobserved entries count only there. failed
+counts entries that exited non-zero or could not start (a service stopped by a
+signal is not failed); skipped counts entries skipped because a dependency
+failed.
+"""
+type StatusCounts {
+  total: Int!
+  running: Int!
+  completed: Int!
+  failed: Int!
+  skipped: Int!
+}
+
+type StackSummary {
+  services: StatusCounts!
+  jobs: StatusCounts!
+}
+
 type StackStatus {
   root: String!
   name: String!
   services: [ServiceState!]!
   jobs: [JobState!]!
   workspaces: [WorkspaceRef!]!
+  summary: StackSummary!
 }
 
 type WorkspaceStatus {
@@ -4265,6 +4393,7 @@ input jobs_bool_exp {
   id: String_comparison_exp
   name: String_comparison_exp
   runtime: String_comparison_exp
+  status: String_comparison_exp
 }
 
 input sources_bool_exp {
@@ -4329,6 +4458,7 @@ input jobs_order_by {
   id: order_by
   name: order_by
   runtime: order_by
+  status: order_by
 }
 
 input sources_order_by {
@@ -5245,6 +5375,12 @@ func (ec *executionContext) childFields_JobState(ctx context.Context, field grap
 		return ec.fieldContext_JobState_name(ctx, field)
 	case "runtime":
 		return ec.fieldContext_JobState_runtime(ctx, field)
+	case "status":
+		return ec.fieldContext_JobState_status(ctx, field)
+	case "exitCode":
+		return ec.fieldContext_JobState_exitCode(ctx, field)
+	case "reason":
+		return ec.fieldContext_JobState_reason(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type JobState", field.Name)
 }
@@ -5367,6 +5503,8 @@ func (ec *executionContext) childFields_ServiceState(ctx context.Context, field 
 		return ec.fieldContext_ServiceState_status(ctx, field)
 	case "health":
 		return ec.fieldContext_ServiceState_health(ctx, field)
+	case "reason":
+		return ec.fieldContext_ServiceState_reason(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServiceState", field.Name)
 }
@@ -5505,8 +5643,36 @@ func (ec *executionContext) childFields_StackStatus(ctx context.Context, field g
 		return ec.fieldContext_StackStatus_jobs(ctx, field)
 	case "workspaces":
 		return ec.fieldContext_StackStatus_workspaces(ctx, field)
+	case "summary":
+		return ec.fieldContext_StackStatus_summary(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type StackStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_StackSummary(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "services":
+		return ec.fieldContext_StackSummary_services(ctx, field)
+	case "jobs":
+		return ec.fieldContext_StackSummary_jobs(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StackSummary", field.Name)
+}
+
+func (ec *executionContext) childFields_StatusCounts(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "total":
+		return ec.fieldContext_StatusCounts_total(ctx, field)
+	case "running":
+		return ec.fieldContext_StatusCounts_running(ctx, field)
+	case "completed":
+		return ec.fieldContext_StatusCounts_completed(ctx, field)
+	case "failed":
+		return ec.fieldContext_StatusCounts_failed(ctx, field)
+	case "skipped":
+		return ec.fieldContext_StatusCounts_skipped(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StatusCounts", field.Name)
 }
 
 func (ec *executionContext) childFields_TemplateChange(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -10463,6 +10629,75 @@ func (ec *executionContext) fieldContext_JobState_runtime(_ context.Context, fie
 	return graphql.NewScalarFieldContext("JobState", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _JobState_status(ctx context.Context, field graphql.CollectedField, obj *api.JobState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobState_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_JobState_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _JobState_exitCode(ctx context.Context, field graphql.CollectedField, obj *api.JobState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobState_exitCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExitCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_JobState_exitCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobState", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _JobState_reason(ctx context.Context, field graphql.CollectedField, obj *api.JobState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobState_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_JobState_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _KeyValue_key(ctx context.Context, field graphql.CollectedField, obj *model.KeyValue) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -14909,6 +15144,29 @@ func (ec *executionContext) fieldContext_ServiceState_health(_ context.Context, 
 	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ServiceState_reason(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceState_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceState_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _ServiceTemplateUpdateResult_name(ctx context.Context, field graphql.CollectedField, obj *api.ServiceTemplateUpdateResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16155,6 +16413,217 @@ func (ec *executionContext) fieldContext_StackStatus_workspaces(_ context.Contex
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _StackStatus_summary(ctx context.Context, field graphql.CollectedField, obj *api.StackStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackStatus_summary(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Summary, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v api.StackSummary) graphql.Marshaler {
+			return ec.marshalNStackSummary2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStackSummary(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackStatus_summary(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StackSummary(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSummary_services(ctx context.Context, field graphql.CollectedField, obj *api.StackSummary) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSummary_services(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Services, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v api.StatusCounts) graphql.Marshaler {
+			return ec.marshalNStatusCounts2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStatusCounts(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSummary_services(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSummary",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StatusCounts(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StackSummary_jobs(ctx context.Context, field graphql.CollectedField, obj *api.StackSummary) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StackSummary_jobs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Jobs, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v api.StatusCounts) graphql.Marshaler {
+			return ec.marshalNStatusCounts2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStatusCounts(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StackSummary_jobs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StackSummary",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StatusCounts(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StatusCounts_total(ctx context.Context, field graphql.CollectedField, obj *api.StatusCounts) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StatusCounts_total(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Total, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StatusCounts_total(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StatusCounts_running(ctx context.Context, field graphql.CollectedField, obj *api.StatusCounts) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StatusCounts_running(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Running, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StatusCounts_running(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StatusCounts_completed(ctx context.Context, field graphql.CollectedField, obj *api.StatusCounts) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StatusCounts_completed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Completed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StatusCounts_completed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StatusCounts_failed(ctx context.Context, field graphql.CollectedField, obj *api.StatusCounts) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StatusCounts_failed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Failed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StatusCounts_failed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StatusCounts_skipped(ctx context.Context, field graphql.CollectedField, obj *api.StatusCounts) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StatusCounts_skipped(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Skipped, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StatusCounts_skipped(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _Subscription_services(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
@@ -22403,7 +22872,7 @@ func (ec *executionContext) unmarshalInputjobs_bool_exp(ctx context.Context, obj
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "id", "name", "runtime"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "id", "name", "runtime", "status"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -22452,6 +22921,13 @@ func (ec *executionContext) unmarshalInputjobs_bool_exp(ctx context.Context, obj
 				return it, err
 			}
 			it.Runtime = data
+		case "status":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
+			data, err := ec.unmarshalOString_comparison_exp2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringComparisonExp(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Status = data
 		}
 	}
 	return it, nil
@@ -22468,7 +22944,7 @@ func (ec *executionContext) unmarshalInputjobs_order_by(ctx context.Context, obj
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "name", "runtime"}
+	fieldsInOrder := [...]string{"id", "name", "runtime", "status"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -22496,6 +22972,13 @@ func (ec *executionContext) unmarshalInputjobs_order_by(ctx context.Context, obj
 				return it, err
 			}
 			it.Runtime = data
+		case "status":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
+			data, err := ec.unmarshalOorder_by2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOrderBy(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Status = data
 		}
 	}
 	return it, nil
@@ -24672,6 +25155,15 @@ func (ec *executionContext) _JobState(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "status":
+			out.Values[i] = ec._JobState_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "exitCode":
+			out.Values[i] = ec._JobState_exitCode(ctx, field, obj)
+		case "reason":
+			out.Values[i] = ec._JobState_reason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -26343,6 +26835,8 @@ func (ec *executionContext) _ServiceState(ctx context.Context, sel ast.Selection
 			}
 		case "health":
 			out.Values[i] = ec._ServiceState_health(ctx, field, obj)
+		case "reason":
+			out.Values[i] = ec._ServiceState_reason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -26873,6 +27367,114 @@ func (ec *executionContext) _StackStatus(ctx context.Context, sel ast.SelectionS
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "summary":
+			out.Values[i] = ec._StackStatus_summary(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var stackSummaryImplementors = []string{"StackSummary"}
+
+func (ec *executionContext) _StackSummary(ctx context.Context, sel ast.SelectionSet, obj *api.StackSummary) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, stackSummaryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StackSummary")
+		case "services":
+			out.Values[i] = ec._StackSummary_services(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "jobs":
+			out.Values[i] = ec._StackSummary_jobs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var statusCountsImplementors = []string{"StatusCounts"}
+
+func (ec *executionContext) _StatusCounts(ctx context.Context, sel ast.SelectionSet, obj *api.StatusCounts) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, statusCountsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StatusCounts")
+		case "total":
+			out.Values[i] = ec._StatusCounts_total(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "running":
+			out.Values[i] = ec._StatusCounts_running(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "completed":
+			out.Values[i] = ec._StatusCounts_completed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "failed":
+			out.Values[i] = ec._StatusCounts_failed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "skipped":
+			out.Values[i] = ec._StatusCounts_skipped(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -29752,6 +30354,14 @@ func (ec *executionContext) marshalNStackSnapshot2ᚖgithubᚗcomᚋangᚑeeᚋa
 		return graphql.Null
 	}
 	return ec._StackSnapshot(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNStackSummary2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStackSummary(ctx context.Context, sel ast.SelectionSet, v api.StackSummary) graphql.Marshaler {
+	return ec._StackSummary(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNStatusCounts2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐStatusCounts(ctx context.Context, sel ast.SelectionSet, v api.StatusCounts) graphql.Marshaler {
+	return ec._StatusCounts(ctx, sel, &v)
 }
 
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {

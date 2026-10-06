@@ -121,12 +121,12 @@ angee status
 # Runtime
 angee build [service...]
 angee up [service...] [--build]
-angee dev [--build]
+angee dev [--build] [-d]
 angee down
 angee start <service>...
 angee stop <service>...
 angee restart <service>...
-angee logs [service...] [--follow]
+angee logs [service-or-job...] [--follow]
 
 # Services and jobs
 angee service init <name> [--runtime container|local] [--image image] [--command arg ...]
@@ -136,6 +136,7 @@ angee service destroy <name> [--stop=false]
 angee service list  # or: angee service ls
 angee job list      # or: angee job ls
 angee job run <name> [--input key=value ...]
+angee job logs <name> [--follow]
 
 # Sources and workspaces
 angee source list   # or: angee source ls

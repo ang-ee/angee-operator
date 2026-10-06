@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -232,6 +233,27 @@ func TestBackendStatusUsesEnvFile(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "web" || got[0].State != "running" {
 		t.Fatalf("statuses = %#v", got)
+	}
+}
+
+func TestBackendStatusAllListsStoppedContainers(t *testing.T) {
+	runner := &recordingRunner{out: []byte(`{"Service":"migrate","State":"exited","ExitCode":3}` + "\n")}
+	backend := Backend{Runner: runner}
+	if _, err := backend.Status(context.Background(), runtime.StatusRequest{Root: t.TempDir()}); err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if slices.Contains(runner.args, "--all") {
+		t.Fatalf("args = %v, want running containers only without All", runner.args)
+	}
+	got, err := backend.Status(context.Background(), runtime.StatusRequest{Root: t.TempDir(), All: true})
+	if err != nil {
+		t.Fatalf("Status(All) error = %v", err)
+	}
+	if !slices.Contains(runner.args, "--all") {
+		t.Fatalf("args = %v, want --all", runner.args)
+	}
+	if len(got) != 1 || got[0].State != "exited" || got[0].ExitCode == nil || *got[0].ExitCode != 3 {
+		t.Fatalf("statuses = %#v, want migrate exited 3", got)
 	}
 }
 

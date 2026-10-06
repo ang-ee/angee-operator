@@ -55,6 +55,10 @@ type StatusRequest struct {
 	EnvFile       string
 	ControlPort   int
 	Configuration []byte
+	// All includes stopped and never-started containers (`docker compose ps
+	// --all`), so a finished job and a crashed service report their exit
+	// instead of vanishing. process-compose always lists every process.
+	All bool
 }
 
 type ServiceStatus struct {

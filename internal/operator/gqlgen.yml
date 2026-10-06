@@ -95,6 +95,12 @@ models:
         resolver: true
       ttlExpiresAt:
         resolver: true
+  StackSummary:
+    model:
+      - github.com/ang-ee/angee-operator/api.StackSummary
+  StatusCounts:
+    model:
+      - github.com/ang-ee/angee-operator/api.StatusCounts
   StackStatus:
     model:
       - github.com/ang-ee/angee-operator/api.StackStatusResponse
