@@ -128,6 +128,27 @@ func TestSummarizeStackChangesReportsAddedAndModified(t *testing.T) {
 	}
 }
 
+// A stack under <dir>/workspaces/<name>/ with no manifest at <dir> is not a
+// managed workspace inner stack. LoadStack reports that as NoManifestError, so
+// the check must still see os.ErrNotExist and not fail the update.
+func TestWorkspacePortInputsIgnoresMissingParentManifest(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspaces", "feature", "stack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	p, err := New(root)
+	if err != nil {
+		t.Fatalf("New(root) error = %v", err)
+	}
+	inputs, err := p.workspacePortInputs(context.Background())
+	if err != nil {
+		t.Fatalf("workspacePortInputs() error = %v, want nil for a missing parent manifest", err)
+	}
+	if inputs != nil {
+		t.Fatalf("workspacePortInputs() = %v, want nil", inputs)
+	}
+}
+
 func TestStackUpdateFromTemplateRequiresAnswersFile(t *testing.T) {
 	ctx := context.Background()
 	project := t.TempDir()

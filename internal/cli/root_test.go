@@ -83,6 +83,24 @@ func TestVersionCommandJSON(t *testing.T) {
 	}
 }
 
+// Running a stack command outside a stack is the ordinary first-run mistake;
+// the error should name the next step rather than a raw open error.
+func TestStatusWithoutManifestNamesNextStep(t *testing.T) {
+	t.Setenv("ANGEE_OPERATOR_URL", "")
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"--root", root, "status"})
+	err := cmd.Execute()
+	var noManifest *service.NoManifestError
+	if !errors.As(err, &noManifest) {
+		t.Fatalf("Execute() error = %v, want *service.NoManifestError", err)
+	}
+	if !strings.Contains(err.Error(), "angee init") {
+		t.Fatalf("error = %q, want it to suggest `angee init`", err)
+	}
+}
+
 func TestVerboseFlagInstallsDebugLogger(t *testing.T) {
 	t.Setenv("ANGEE_VERBOSE", "0")
 	assertLoggerLevel(t, []string{"-vv", "logger-level-test"}, slog.LevelDebug)

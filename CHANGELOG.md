@@ -44,6 +44,28 @@ latest tag.
   that is a dangling link or, for a git slot, a directory that is not its own
   checkout, where git would otherwise have acted on an enclosing repository.
   `workspace status` keeps reporting a missing slot as `missing` (#95).
+- **`angee doctor` probes process-compose correctly.** It called
+  `process-compose --version`, a flag process-compose rejects, so a working
+  install was always reported as `version check failed: exit status 1`. The
+  probe now runs the `version` subcommand and reports the first line carrying
+  a version number, skipping the banner and structured debug records
+  process-compose writes around it (#50). Carried over from #57 by
+  @JesseWilsonUSC.
+- **`angee doctor` waits long enough for Node tools.** Each probe had 2s, which
+  a cold Node start regularly exceeds: `pnpm` was reported as `context
+  deadline exceeded` while answering fine by hand. The budget is now 10s
+  (#51). Carried over from #57 by @JesseWilsonUSC.
+- **`angee doctor` checks the `docker compose` plugin.** It checked the
+  `docker` binary but never `docker compose`, the separate CLI plugin the
+  compose backend shells out to, so doctor passed clean on installs where
+  `angee up` then failed with `unknown shorthand flag: 'f' in -f`. The plugin
+  is now its own `tool.docker-compose` check, with a distinct hint when
+  `docker` itself is missing, and a failed probe reports its stderr instead of
+  only the exit status (#55). Carried over from #57 by @JesseWilsonUSC.
+- **A missing manifest names the next step.** Commands that need a manifest
+  reported `open /path/angee.yaml: no such file or directory` when run outside
+  a stack. They now report that no `angee.yaml` was found and suggest
+  `angee init` or `--root` (#52). Carried over from #57 by @JesseWilsonUSC.
 
 ## v0.16.0 — 2026-10-05
 

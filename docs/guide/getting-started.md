@@ -44,7 +44,9 @@ to install somewhere other than `/usr/local/bin`.
 
 Requirements:
 
-- Docker, for `runtime: container` Services.
+- Docker, including the `docker compose` CLI plugin, for `runtime: container`
+  Services. The compose backend shells out to `docker compose`, which some
+  installs (for example `brew install docker` alone) do not provide.
 - `process-compose`, for `runtime: local` Services.
 - `git`, for git-kind Sources.
 - Nothing else: `angee init` resolves its templates from the template

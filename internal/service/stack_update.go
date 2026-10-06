@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -540,7 +541,9 @@ func (p *Platform) workspacePortInputs(ctx context.Context) (copierx.Inputs, err
 	}
 	hostStack, err := hostPlatform.LoadStack()
 	if err != nil {
-		if os.IsNotExist(err) {
+		// errors.Is, not os.IsNotExist: LoadStack reports a missing manifest as
+		// NoManifestError, and os.IsNotExist does not traverse Unwrap.
+		if errors.Is(err, os.ErrNotExist) {
 			// No parent stack manifest here: not a managed workspace inner stack.
 			return nil, nil
 		}
