@@ -66,6 +66,12 @@ latest tag.
   reported `open /path/angee.yaml: no such file or directory` when run outside
   a stack. They now report that no `angee.yaml` was found and suggest
   `angee init` or `--root` (#52). Carried over from #57 by @JesseWilsonUSC.
+- **`angee up` detaches the process-compose supervisor.** The process-compose
+  backend started the supervisor with `up -d`, but process-compose's `-d` is
+  `--hide-disabled`; detached mode is `-D`. So `angee up` and `angee service
+  up` for local services ran the supervisor in the foreground and blocked
+  until every process exited. They now pass `-D`. Carried over from #44 by
+  @litnimax.
 
 ## v0.16.0 — 2026-10-05
 
