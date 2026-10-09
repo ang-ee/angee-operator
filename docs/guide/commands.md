@@ -622,8 +622,9 @@ inputs
 
 Inputs may also show `multiselect`, `immutable`, and a separate `when:` line.
 Secret defaults appear as `default set`. Dynamic choices appear as
-`choices: <expression>`; `when` and `validator` expressions are informational
-and are not evaluated by these prompts. `--json` returns the complete
+`choices: <expression>`. A question whose `when` condition is false, given the
+answers before it, is not prompted and takes its default; `validator`
+expressions are not evaluated by these prompts. `--json` returns the complete
 descriptor, including labels, placeholders, and raw expressions, for clients
 building forms.
 

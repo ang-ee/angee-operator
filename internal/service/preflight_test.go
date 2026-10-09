@@ -361,3 +361,40 @@ func TestWorkspaceCreatePreflightValidatesMultiselectItems(t *testing.T) {
 		})
 	}
 }
+
+// A required question whose `when` is false is not asked, so it is neither
+// missing nor invalid.
+func TestWorkspaceCreatePreflightSkipsInactiveQuestions(t *testing.T) {
+	root := t.TempDir()
+	writePreflightTemplate(t, root, `_angee:
+  kind: workspace
+  name: dev-pr
+  inputs:
+    operator_home:
+      required: true
+runtime_mode:
+  type: str
+  default: process
+operator_home:
+  type: int
+  when: "{{ runtime_mode == 'docker' }}"
+`)
+	p, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{
+		Template: "workspaces/dev-pr",
+		Inputs:   map[string]string{"operator_home": "not-a-number"},
+	})
+	if err != nil || !resp.OK || len(resp.MissingRequired) != 0 || len(resp.InvalidInputs) != 0 {
+		t.Fatalf("process mode = %+v, %v; want OK with operator_home inactive", resp, err)
+	}
+	resp, err = p.WorkspaceCreatePreflight(context.Background(), api.WorkspaceCreateRequest{
+		Template: "workspaces/dev-pr",
+		Inputs:   map[string]string{"runtime_mode": "docker", "operator_home": "not-a-number"},
+	})
+	if err != nil || resp.OK || len(resp.InvalidInputs) != 1 || resp.InvalidInputs[0].Field != "operator_home" {
+		t.Fatalf("docker mode = %+v, %v; want operator_home invalid", resp, err)
+	}
+}

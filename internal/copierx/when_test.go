@@ -27,3 +27,24 @@ func TestInputApplies(t *testing.T) {
 		}
 	}
 }
+
+// Inputs settle in order: a condition sees the provided values and the
+// answers before it, never a later question's default, and a question that
+// does not apply settles to its default.
+func TestSettleInputs(t *testing.T) {
+	inputs := []api.TemplateInputDescriptor{
+		{Name: "early", Question: true, Default: "x", When: "{{ late == 'yes' }}"},
+		{Name: "runtime_mode", Question: true, Default: "process"},
+		{Name: "operator_home", Question: true, Default: "~", When: "{{ runtime_mode == 'docker' }}"},
+		{Name: "late", Question: true, Default: "yes"},
+	}
+	settled, active := SettleInputs(inputs, map[string]string{"operator_home": "/srv/home"}, nil)
+	if active["early"] || active["operator_home"] || settled["operator_home"] != "~" || settled["late"] != "yes" {
+		t.Fatalf("process: settled %v, active %v; want early off (late's default is not visible) and operator_home at its default", settled, active)
+	}
+	provided := map[string]string{"late": "yes", "runtime_mode": "docker", "operator_home": "/srv/home"}
+	settled, active = SettleInputs(inputs, provided, provided)
+	if !active["early"] || !active["operator_home"] || settled["operator_home"] != "/srv/home" {
+		t.Fatalf("docker: settled %v, active %v; want early on (late was provided) and operator_home answered", settled, active)
+	}
+}

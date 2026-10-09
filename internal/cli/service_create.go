@@ -10,6 +10,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/cli/inputform"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -100,7 +101,13 @@ func createServiceFromTemplate(cmd *cobra.Command, platform service.API, req api
 // the explicit inputs sent to the platform. Generated values belong to rendering.
 func templateInputProblems(inputs []api.TemplateInputDescriptor, provided map[string]string) (missing, invalid bool, err error) {
 	var failures []error
+	// A question whose `when` is false is not asked, so it is neither missing
+	// nor invalid.
+	_, active := copierx.SettleInputs(inputs, provided, provided)
 	for _, desc := range inputs {
+		if !active[desc.Name] {
+			continue
+		}
 		value, explicit := provided[desc.Name]
 		if !explicit {
 			if desc.Generated {

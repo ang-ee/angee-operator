@@ -63,9 +63,20 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 	effective := workspaceInputs(copierx.Metadata{Inputs: defs}, mergeStringMaps(questionDefaults, provided))
 	missing := []string{}
 	invalid := []api.PreflightFailure{}
+	// A question whose `when` is false is not asked, so it is neither missing
+	// nor invalid.
+	descriptor, err := templateDescriptor(templateRef, templatePath)
+	if err != nil {
+		return api.WorkspaceCreatePreflightResponse{}, err
+	}
+	_, active := copierx.SettleInputs(descriptor.Inputs, effective, provided)
+	inactive := func(name string) bool {
+		isActive, known := active[name]
+		return known && !isActive
+	}
 
 	for name, def := range defs {
-		if !def.Required {
+		if !def.Required || inactive(name) {
 			continue
 		}
 		value, ok := effective[name]
@@ -80,7 +91,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 
 	for name, value := range provided {
 		def, declared := defs[name]
-		if !declared {
+		if !declared || inactive(name) {
 			continue
 		}
 		if reason := validatePreflightInputType(def, value); reason != "" {

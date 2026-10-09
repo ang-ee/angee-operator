@@ -32,3 +32,38 @@ func InputApplies(when string, inputs []api.TemplateInputDescriptor, values map[
 	}
 	return copier.ShouldAsk(copier.QuestionDef{When: when}, copier.NewRenderer(nil, ""), answers)
 }
+
+// SettleInputs walks inputs in order, as copier asks its questions, and
+// reports which apply and the answer each settles to. A question's `when`
+// sees the explicitly provided values (copier's data, visible to every
+// question) and the settled answers of the questions before it, never a
+// later question's default. A question that applies settles to its value in
+// values, if any; one that does not settles to its default. An input that is
+// not a question keeps its value.
+func SettleInputs(inputs []api.TemplateInputDescriptor, values, provided map[string]string) (settled map[string]string, active map[string]bool) {
+	settled = make(map[string]string, len(inputs))
+	active = make(map[string]bool, len(inputs))
+	for _, desc := range inputs {
+		context := make(map[string]string, len(provided)+len(settled))
+		for key, value := range provided {
+			context[key] = value
+		}
+		for key, value := range settled {
+			context[key] = value
+		}
+		applies := !desc.Question || InputApplies(desc.When, inputs, context)
+		active[desc.Name] = applies
+		if value, ok := values[desc.Name]; ok && applies {
+			settled[desc.Name] = value
+			continue
+		}
+		if desc.Question && !desc.Generated {
+			value := desc.Default
+			if desc.Multiselect && value == "" {
+				value = "[]"
+			}
+			settled[desc.Name] = value
+		}
+	}
+	return settled, active
+}

@@ -93,11 +93,11 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if req.Err == nil {
 		req.Err = io.Discard
 	}
-	base := initialResult(req)
 	for _, desc := range req.Inputs {
-		// A question whose condition is false is not asked, and copier ignores
-		// a value given for it, so it is not validated either.
-		if !applies(req, desc, base.Values) {
+		// A conditional question's value is validated with the final answers
+		// (validateResult), once they settle whether it applies: an earlier
+		// answer may still change it.
+		if desc.When != "" {
 			continue
 		}
 		if value, ok := req.Provided[desc.Name]; ok {
@@ -164,26 +164,26 @@ func initialResult(req Request) Result {
 	return result
 }
 
-// applies reports whether desc's `when` condition holds for values, evaluated
-// by copier (copierx.InputApplies). A question whose condition is false is not
-// asked and takes its default.
+// applies reports whether desc's `when` condition holds for values, settled in
+// input order as copier asks the questions (copierx.SettleInputs). A question
+// whose condition is false is not asked and takes its default.
 func applies(req Request, desc api.TemplateInputDescriptor, values map[string]string) bool {
-	return copierx.InputApplies(desc.When, req.Inputs, values)
+	if desc.When == "" {
+		return true
+	}
+	_, active := copierx.SettleInputs(req.Inputs, values, req.Provided)
+	return active[desc.Name]
 }
 
-// settleInactive gives every question whose condition is false its default, in
-// input order, so a later condition sees an earlier question's settled value,
-// as copier answers them.
+// settleInactive gives every question whose condition is false its default, as
+// copier answers them.
 func settleInactive(req Request, result Result) {
+	settled, active := copierx.SettleInputs(req.Inputs, result.Values, req.Provided)
 	for _, desc := range req.Inputs {
-		if !desc.Question || desc.Generated || applies(req, desc, result.Values) {
+		if !desc.Question || desc.Generated || active[desc.Name] {
 			continue
 		}
-		value := desc.Default
-		if desc.Multiselect && value == "" {
-			value = "[]"
-		}
-		result.Values[desc.Name] = value
+		result.Values[desc.Name] = settled[desc.Name]
 		result.Origins[desc.Name] = OriginDefault
 	}
 }
