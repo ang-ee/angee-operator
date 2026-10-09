@@ -6,6 +6,28 @@ latest tag.
 
 ## Unreleased
 
+## v0.21.2 — 2026-10-09
+
+### Security
+
+- **Values from requests reach git as arguments only.** The workspace source
+  verbs passed a ref, branch or remote from the API to git as given, so a
+  value shaped like a git option ran as one. A rebase ref could run a command
+  as the operator's user, a push ref or publish branch could mirror the
+  remote's branches, and a diff ref could write a file on the host.
+  - Those values, and the refs, repositories and paths angee passes to the
+    same git commands from templates and the manifest, now follow
+    `--end-of-options`. Git refuses an option-shaped one as a bad revision,
+    refspec or reference.
+  - This covers merge, rebase, push, publish, diff, sync-base, worktree
+    creation, ahead/behind and commit counts, and template clone.
+  - Template refresh resolves its ref to a commit before checking it out,
+    because checkout before git 2.44 does not honour `--end-of-options`.
+  - Publish pushes its branch as `refs/heads/<branch>:refs/heads/<branch>`,
+    so a branch carrying refspec syntax, such as `:<branch>` (which would
+    delete it), is refused. A push `--ref` is still passed as a refspec.
+  - It needs git 2.24 or newer. Each form was checked on git 2.24.1 to 2.50.
+
 ## v0.21.1 — 2026-10-09
 
 ### Fixed

@@ -26,7 +26,7 @@ func (p *Platform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, re
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "merge ref is required"}
 	}
-	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("merging %s into", ref)}, workspace, slot, "merge", "--no-ff", "--no-edit", ref)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("merging %s into", ref)}, workspace, slot, "merge", "--no-ff", "--no-edit", git.EndOfOptions, ref)
 }
 
 // WorkspaceSourceRebase rebases the current branch onto `ref`. On conflict
@@ -38,7 +38,7 @@ func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, r
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "rebase ref is required"}
 	}
-	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, workspace, slot, "rebase", ref)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, workspace, slot, "rebase", git.EndOfOptions, ref)
 }
 
 // WorkspaceSourceMergeAbort aborts an in-progress merge.
@@ -134,7 +134,10 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 	// ANGEE_GIT_TIMEOUT so a stalled remote fails instead of hanging.
 	err = git.RunNetworkOperation(ctx, "git push --set-upstream "+remote+" "+branch, path, func(ctx context.Context) error {
 		var runErr error
-		result, runErr = runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
+		// A full refspec, so the branch is only ever a branch name: git refuses
+		// one that carries refspec syntax (":" deletes, "+" forces).
+		refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+		result, runErr = runGitOpAt(ctx, path, "push", "--set-upstream", git.EndOfOptions, remote, refspec)
 		return runErr
 	})
 	return result, gitFailure(err, step)

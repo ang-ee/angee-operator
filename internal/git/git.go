@@ -23,6 +23,12 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
+// EndOfOptions ends git's option parsing. Every value a request, template or
+// manifest supplies (a ref, branch, remote, repository or path) follows it, so
+// git reads the value only as an argument: a ref such as `--exec=<cmd>` is
+// refused as a bad revision instead of run as an option. It needs git 2.24.
+const EndOfOptions = "--end-of-options"
+
 type Client struct {
 	Bin            string
 	NonInteractive bool
@@ -237,7 +243,7 @@ func openRepo(dir string) (*gogit.Repository, error) {
 
 func (c Client) Clone(ctx context.Context, repo, dest string, args ...string) error {
 	cmdArgs := append([]string{"clone"}, args...)
-	cmdArgs = append(cmdArgs, repo, dest)
+	cmdArgs = append(cmdArgs, EndOfOptions, repo, dest)
 	operationArgs := append([]string{"git", "clone"}, args...)
 	operationArgs = append(operationArgs, logctx.RedactURL(repo))
 	_, err := c.runNetwork(ctx, "", dest, strings.Join(operationArgs, " "), cmdArgs...)
@@ -258,17 +264,17 @@ func (c Client) Fetch(ctx context.Context, dir string) error {
 }
 
 func (c Client) Merge(ctx context.Context, dir, ref string) error {
-	_, err := c.Run(ctx, dir, "merge", "--no-edit", ref)
+	_, err := c.Run(ctx, dir, "merge", "--no-edit", EndOfOptions, ref)
 	return err
 }
 
 func (c Client) Rebase(ctx context.Context, dir, ref string) error {
-	_, err := c.Run(ctx, dir, "rebase", ref)
+	_, err := c.Run(ctx, dir, "rebase", EndOfOptions, ref)
 	return err
 }
 
 func (c Client) WorktreeAdd(ctx context.Context, repoDir, dest, ref string) error {
-	args := []string{"worktree", "add", dest}
+	args := []string{"worktree", "add", EndOfOptions, dest}
 	if ref != "" {
 		args = append(args, ref)
 	}
@@ -279,7 +285,7 @@ func (c Client) WorktreeAdd(ctx context.Context, repoDir, dest, ref string) erro
 // WorktreeAddDetached adds a worktree at dest on a detached HEAD at ref, so no
 // branch is created or checked out. An empty ref detaches at repoDir's HEAD.
 func (c Client) WorktreeAddDetached(ctx context.Context, repoDir, dest, ref string) error {
-	args := []string{"worktree", "add", "--detach", dest}
+	args := []string{"worktree", "add", "--detach", EndOfOptions, dest}
 	if ref != "" {
 		args = append(args, ref)
 	}
@@ -298,7 +304,7 @@ func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, re
 	if branch != "" {
 		args = append(args, "-b", branch)
 	}
-	args = append(args, dest)
+	args = append(args, EndOfOptions, dest)
 	if ref != "" {
 		args = append(args, ref)
 	}
@@ -369,6 +375,19 @@ func canonicalWorktreePath(path string) (string, error) {
 	return filepath.Clean(filepath.Join(parent, filepath.Base(abs))), nil
 }
 
+// CheckoutDetached detaches the checkout at dir at ref. ref is resolved to a
+// commit first and the commit ID is checked out: before git 2.44, checkout
+// does not honour --end-of-options, so the ID is what keeps an option-shaped
+// ref from being read as an option.
+func (c Client) CheckoutDetached(ctx context.Context, dir, ref string) error {
+	commit, err := c.runText(ctx, dir, "rev-parse", "--verify", EndOfOptions, ref+"^{commit}")
+	if err != nil {
+		return err
+	}
+	_, err = c.Run(ctx, dir, "checkout", "--detach", commit)
+	return err
+}
+
 func (c Client) Pull(ctx context.Context, dir string) error {
 	_, err := c.runNetwork(ctx, dir, dir, "git pull --ff-only", "pull", "--ff-only")
 	return err
@@ -386,7 +405,7 @@ func (c Client) Push(ctx context.Context, dir string, ref string) error {
 		if err != nil {
 			return networkResult(ctx, timedCtx, "git push", dir, timeout, err)
 		}
-		args = append(args, remote, ref)
+		args = append(args, EndOfOptions, remote, ref)
 	}
 	_, err = c.Run(timedCtx, dir, args...)
 	return networkResult(ctx, timedCtx, "git "+strings.Join(args, " "), dir, timeout, err)
@@ -405,7 +424,7 @@ func (c Client) PushSetUpstream(ctx context.Context, dir string, ref string) err
 	if err != nil {
 		return networkResult(ctx, timedCtx, "git push -u", dir, timeout, err)
 	}
-	args := []string{"push", "-u", remote, ref}
+	args := []string{"push", "-u", EndOfOptions, remote, ref}
 	_, err = c.Run(timedCtx, dir, args...)
 	return networkResult(ctx, timedCtx, "git "+strings.Join(args, " "), dir, timeout, err)
 }
@@ -418,7 +437,7 @@ func (c Client) RefExists(ctx context.Context, dir, ref string) bool {
 	}
 	repo, err := openRepo(dir)
 	if err != nil {
-		_, err := c.Run(ctx, dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+		_, err := c.Run(ctx, dir, "rev-parse", "--verify", "--quiet", EndOfOptions, ref+"^{commit}")
 		return err == nil
 	}
 	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
@@ -536,8 +555,18 @@ func (c Client) Upstream(ctx context.Context, dir string) (string, bool, error) 
 // CountNotOn counts the commits reachable from HEAD in dir that none of bases
 // reach.
 func (c Client) CountNotOn(ctx context.Context, dir string, bases ...string) (int, error) {
-	args := append([]string{"rev-list", "--count", "HEAD", "--not"}, bases...)
-	out, err := c.runText(ctx, dir, args...)
+	return c.countHead(ctx, dir, append([]string{"--not", EndOfOptions}, bases...)...)
+}
+
+// CountNotOnAnyRef counts the commits reachable from HEAD in dir that no
+// branch, remote-tracking branch or tag reaches: what only a detached HEAD
+// holds.
+func (c Client) CountNotOnAnyRef(ctx context.Context, dir string) (int, error) {
+	return c.countHead(ctx, dir, "--not", "--branches", "--remotes", "--tags")
+}
+
+func (c Client) countHead(ctx context.Context, dir string, args ...string) (int, error) {
+	out, err := c.runText(ctx, dir, append([]string{"rev-list", "--count", "HEAD"}, args...)...)
 	if err != nil {
 		return 0, err
 	}
@@ -739,7 +768,7 @@ func (c Client) upstreamCLI(ctx context.Context, dir string) (string, bool, erro
 }
 
 func (c Client) aheadBehindCLI(ctx context.Context, dir, base string) (int, int, error) {
-	out, err := c.runText(ctx, dir, "rev-list", "--left-right", "--count", base+"...HEAD")
+	out, err := c.runText(ctx, dir, "rev-list", "--left-right", "--count", EndOfOptions, base+"...HEAD")
 	if err != nil {
 		return 0, 0, err
 	}

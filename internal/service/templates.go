@@ -87,8 +87,7 @@ func (p *Platform) refreshTemplateRepo(ctx context.Context, repoURL, repoDir, re
 			} else if _, err := client.Run(timeoutCtx, repoDir, "rev-parse", "--verify", "refs/remotes/origin/"+ref); err == nil {
 				target = "origin/" + ref
 			}
-			_, err := client.Run(timeoutCtx, repoDir, "checkout", "--detach", target)
-			return err
+			return client.CheckoutDetached(timeoutCtx, repoDir, target)
 		}
 		if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
 			return err

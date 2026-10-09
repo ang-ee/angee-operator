@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	gitx "github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
@@ -52,8 +53,10 @@ func runDiffAt(ctx context.Context, workdir, ref string) ([]api.DiffFile, error)
 	// into ref-to-ref output — `git diff <ref>` (single-arg) would
 	// compare the working tree against ref, which is the wrong
 	// surface for clients asking for a committed diff.
+	// The ref follows --end-of-options, so git refuses one such as
+	// `--output=<path>` as a bad revision instead of writing that file.
 	if ref != "" {
-		args = append(args, "HEAD", ref)
+		args = append(args, gitx.EndOfOptions, "HEAD", ref, "--")
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir

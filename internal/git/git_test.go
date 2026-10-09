@@ -481,3 +481,82 @@ func runGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v error = %v: %s", args, err, out)
 	}
 }
+
+// Values the client passes to git follow --end-of-options, so one shaped like
+// an option is refused as an argument instead of run: a rebase ref of
+// --exec=<cmd> would run the command for every commit replayed, a count base
+// of --output=<file> would write the file, and a worktree ref of --detach
+// would quietly change what is checked out.
+func TestClientReadsValuesAsArgumentsOnly(t *testing.T) {
+	t.Setenv("LC_ALL", "C") // git's messages are matched below
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "--bare", "--initial-branch=main", remote)
+	runGit(t, "", "clone", remote, repo)
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	runGit(t, repo, "switch", "-c", "main")
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "push", "-u", "origin", "main")
+	mustWriteFile(t, filepath.Join(repo, "change.txt"), "change\n")
+	runGit(t, repo, "add", "change.txt")
+	runGit(t, repo, "commit", "-m", "change")
+	client := New()
+
+	executed := filepath.Join(base, "executed")
+	if err := client.Rebase(ctx, repo, "--exec=touch "+executed); err == nil {
+		t.Error("Rebase() accepted an option as its ref")
+	}
+	if _, err := os.Stat(executed); !os.IsNotExist(err) {
+		t.Errorf("Rebase() ran --exec (stat error = %v)", err)
+	}
+	if err := client.Merge(ctx, repo, "--exec=x"); err == nil || !strings.Contains(err.Error(), "not something we can merge") {
+		t.Errorf("Merge() error = %v, want the option refused as a revision", err)
+	}
+	written := filepath.Join(base, "written")
+	if _, _, err := client.AheadBehind(ctx, repo, "--output="+written); err == nil {
+		t.Error("AheadBehind() accepted an option as its base")
+	}
+	if matches, _ := filepath.Glob(written + "*"); len(matches) != 0 {
+		t.Errorf("AheadBehind() wrote %v", matches)
+	}
+	if err := client.WorktreeAdd(ctx, repo, filepath.Join(base, "worktree"), "--detach"); err == nil {
+		t.Error("WorktreeAdd() accepted an option as its ref")
+	}
+	if err := client.Push(ctx, repo, "--mirror"); err == nil {
+		t.Error("Push() accepted an option as its ref")
+	}
+	if err := client.PushSetUpstream(ctx, repo, "--mirror"); err == nil {
+		t.Error("PushSetUpstream() accepted an option as its ref")
+	}
+	if err := client.WorktreeAddDetached(ctx, repo, filepath.Join(base, "detached"), "--lock"); err == nil {
+		t.Error("WorktreeAddDetached() accepted an option as its ref")
+	}
+	if err := client.WorktreeAddBranch(ctx, repo, filepath.Join(base, "branch"), "other", "--lock", false); err == nil {
+		t.Error("WorktreeAddBranch() accepted an option as its ref")
+	}
+	if _, err := client.CountNotOn(ctx, repo, "--output="+written); err == nil {
+		t.Error("CountNotOn() accepted an option as a base")
+	}
+	if matches, _ := filepath.Glob(written + "*"); len(matches) != 0 {
+		t.Errorf("CountNotOn() wrote %v", matches)
+	}
+	// checkout before git 2.44 does not honour --end-of-options, so the ref is
+	// resolved to a commit first.
+	if err := client.CheckoutDetached(ctx, repo, "--force"); err == nil {
+		t.Error("CheckoutDetached() accepted an option as its ref")
+	}
+	if err := client.CheckoutDetached(ctx, repo, "origin/main"); err != nil {
+		t.Errorf("CheckoutDetached(origin/main) error = %v", err)
+	}
+	if branch, onBranch, err := client.CurrentBranch(ctx, repo); err != nil || onBranch {
+		t.Errorf("CurrentBranch() after CheckoutDetached = %q, %v, %v, want detached", branch, onBranch, err)
+	}
+	if held, err := client.CountNotOnAnyRef(ctx, repo); err != nil || held != 0 {
+		t.Errorf("CountNotOnAnyRef() at origin/main = %d, %v, want 0", held, err)
+	}
+}

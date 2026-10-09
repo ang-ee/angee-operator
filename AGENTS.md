@@ -60,7 +60,7 @@ Run a focused test with:
 go test -v -race -run TestName ./internal/service
 ```
 
-Requirements: Go 1.25+, Docker, git, and process-compose for local-process
+Requirements: Go 1.25+, Docker, git 2.24+, and process-compose for local-process
 runtime services.
 
 ## Architecture
