@@ -156,11 +156,12 @@ seed_users:
 | `multiselect: true` | Multiple choices; the stored value is a JSON array string such as `["admin","demo"]`. |
 | `type: bool` | A Yes/No toggle; `yes`/`no`/`y`/`n`/`true`/`false` are accepted from flags and answers files. |
 | `type: int` | Validated as an integer. |
-| `type: path` | Free text; the value is rewritten relative to the stack root as described under [Local Resolution](#local-resolution). |
+| `type: path` | Free text; the value is rewritten relative to the stack root as described under [Local Resolution](#local-resolution). A leading `~` (`~` or `~/…`) expands to the home of the user running the render, and that absolute path is what the answers record, so a later render elsewhere reuses it. |
 | `secret: true` | Masked while typing and in the summary; never written to the answers file, so it is asked again on re-render. |
 | `placeholder` | Hint shown while the input is empty. |
 | `required: true` (in `_angee.inputs`) | The form refuses an empty value; non-interactive runs name the `--input` flag to pass. |
-| `when`, `validator` | Carried in the descriptor but not evaluated by the form yet; the render still applies them. |
+| `when` | A question whose condition is false, given the answers before it, is not asked: the form hides it, line prompts skip it, and it takes its default. A value passed for it is not validated, since copier ignores it too. copier-go evaluates the condition, so it means what it means at render time. |
+| `validator` | Carried in the descriptor but not evaluated by the form. |
 
 `_angee.inputs` declares metadata-only inputs (`generated`, `immutable`,
 `required`) that are not questions; they appear read-only in the form.

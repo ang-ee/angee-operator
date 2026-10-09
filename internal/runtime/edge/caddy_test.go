@@ -2,6 +2,7 @@ package edge
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	if want := []string{"443:443", "80:80"}; !reflect.DeepEqual(edge.Ports, want) {
 		t.Fatalf("edge.Ports = %#v, want %#v", edge.Ports, want)
 	}
-	if !contains(edge.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
+	if !slices.Contains(edge.Volumes, compose.ShortVolume("/var/run/docker.sock:/var/run/docker.sock:ro")) {
 		t.Fatalf("edge.Volumes = %#v, want docker socket mount", edge.Volumes)
 	}
 	if got := edge.Environment["CADDY_INGRESS_NETWORKS"]; got != "demo_edge" && !strings.HasSuffix(got, "_demo_edge") {

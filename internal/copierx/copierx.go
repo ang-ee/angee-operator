@@ -30,6 +30,9 @@ const PathInputType = "path"
 //
 // Resolution rules:
 //   - empty value → unchanged
+//   - `~` or `~/…` → the home of the user running the render (the OS's,
+//     via os.UserHomeDir), so the expanded absolute path is what is
+//     recorded and a later render elsewhere reuses it
 //   - absolute path → kept absolute (manifest.ResolvePath passes it through)
 //   - relative path → resolved against destDir (the render destination,
 //     i.e. the target stack root for `angee init` or the workspace
@@ -82,6 +85,14 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 		}
 		value := out[name]
 		if value == "" {
+			continue
+		}
+		if value == "~" || strings.HasPrefix(value, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("resolve path input %q: %w", name, err)
+			}
+			out[name] = filepath.Join(home, strings.TrimPrefix(value, "~"))
 			continue
 		}
 		if filepath.IsAbs(value) {

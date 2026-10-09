@@ -1016,21 +1016,28 @@ func escapeRuntimeInterpolation(value string) string {
 	return strings.ReplaceAll(value, "$", "$$")
 }
 
-func resolveContainerMounts(mounts []string, resolver mountx.Resolver) ([]string, error) {
+// resolveContainerMounts renders a container's mounts as compose volumes. A
+// read-only bind:// mount uses the long syntax that refuses a missing host
+// path, which Docker would otherwise create as an empty root-owned directory.
+func resolveContainerMounts(mounts []string, resolver mountx.Resolver) ([]compose.ServiceVolume, error) {
 	if len(mounts) == 0 {
 		return nil, nil
 	}
-	resolved := make([]string, 0, len(mounts))
+	resolved := make([]compose.ServiceVolume, 0, len(mounts))
 	for _, raw := range mounts {
 		if !strings.Contains(raw, "://") {
-			resolved = append(resolved, raw)
+			resolved = append(resolved, compose.ShortVolume(raw))
+			continue
+		}
+		if m, err := mountx.Parse(raw); err == nil && m.Scheme == "bind" && m.ReadOnly {
+			resolved = append(resolved, compose.ServiceVolume{Bind: &compose.ReadOnlyBind{Source: m.BindSource(), Target: m.Target}})
 			continue
 		}
 		mount, err := mountx.ResolveContainer(raw, resolver)
 		if err != nil {
 			return nil, err
 		}
-		resolved = append(resolved, mount)
+		resolved = append(resolved, compose.ShortVolume(mount))
 	}
 	return resolved, nil
 }

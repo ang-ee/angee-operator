@@ -80,6 +80,19 @@ type bindings struct {
 	confirm bool
 }
 
+// current returns the answers as the form holds them now, for evaluating the
+// `when` conditions of later fields.
+func (b *bindings) current() map[string]string {
+	values := make(map[string]string, len(b.initial.Values))
+	for key, value := range b.initial.Values {
+		values[key] = value
+	}
+	for _, field := range b.fields {
+		values[field.desc.Name] = field.value()
+	}
+	return values
+}
+
 func (b *bindings) collect() (Result, bool) {
 	result := Result{Values: make(map[string]string), Origins: make(map[string]Origin)}
 	for key, value := range b.initial.Values {
@@ -108,6 +121,10 @@ func build(req Request) (*huh.Form, *bindings) {
 func buildWithHeight(req Request, height int) (*huh.Form, *bindings) {
 	b := &bindings{initial: initialResult(req), confirm: true}
 	var fields []huh.Field
+	// conditional holds the descriptor of each field with a `when`
+	// condition, which gets a group of its own that hides while the
+	// condition is false.
+	conditional := map[huh.Field]api.TemplateInputDescriptor{}
 	var readOnly []string
 	for _, desc := range req.Inputs {
 		value := desc.Default
@@ -130,6 +147,9 @@ func buildWithHeight(req Request, height int) (*huh.Form, *bindings) {
 		binding, field := newField(desc, b.initial.Values[desc.Name], b.initial.Origins[desc.Name])
 		b.fields = append(b.fields, binding)
 		fields = append(fields, field)
+		if desc.When != "" {
+			conditional[field] = desc
+		}
 	}
 
 	intro := huh.NewNote().Title(req.Title).Description(fmt.Sprintf(
@@ -152,11 +172,26 @@ func buildWithHeight(req Request, height int) (*huh.Form, *bindings) {
 	if height > 0 && height < 15 {
 		pageSize = 5
 	}
-	for len(fields) > 0 {
-		count := min(pageSize, len(fields))
-		groups = append(groups, huh.NewGroup(fields[:count]...))
-		fields = fields[count:]
+	var page []huh.Field
+	flush := func() {
+		for len(page) > 0 {
+			count := min(pageSize, len(page))
+			groups = append(groups, huh.NewGroup(page[:count]...))
+			page = page[count:]
+		}
 	}
+	for _, field := range fields {
+		desc, ok := conditional[field]
+		if !ok {
+			page = append(page, field)
+			continue
+		}
+		flush()
+		groups = append(groups, huh.NewGroup(field).WithHideFunc(func() bool {
+			return !applies(req, desc, b.current())
+		}))
+	}
+	flush()
 	// Angee chooses accessibility itself: huh's accessible runner bypasses the
 	// supplied reader and reads os.Stdin directly.
 	form := huh.NewForm(groups...).WithAccessible(false).WithShowHelp(true).
@@ -288,6 +323,7 @@ func finishInteractive(req Request, b *bindings, runErr error) (Result, error) {
 	if !confirmed {
 		return Result{}, ErrAborted
 	}
+	settleInactive(req, result)
 	if err := validateResult(req, result); err != nil {
 		return Result{}, err
 	}

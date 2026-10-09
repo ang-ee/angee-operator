@@ -216,3 +216,39 @@ func (r failReader) Read([]byte) (int, error) {
 	r.t.Error("unexpected input read")
 	return 0, io.EOF
 }
+
+// whenInputs is a template whose operator_home is asked only for docker.
+func whenInputs() []api.TemplateInputDescriptor {
+	return []api.TemplateInputDescriptor{
+		{Name: "runtime_mode", Type: "str", Question: true, Default: "process"},
+		{Name: "operator_home", Type: "int", Question: true, Required: true, Default: "7", When: "{{ runtime_mode == 'docker' }}"},
+	}
+}
+
+// A question whose `when` is false is not validated and takes its default;
+// when it applies, its value is validated as usual.
+func TestDefaultsModeHonoursWhen(t *testing.T) {
+	result, err := Run(t.Context(), Request{Mode: ModeDefaults, Inputs: whenInputs(), Provided: map[string]string{"operator_home": "not-a-number"}})
+	if err != nil || result.Values["operator_home"] != "7" || result.Origins["operator_home"] != OriginDefault {
+		t.Fatalf("process mode = %#v, %v; want operator_home settled to its default", result, err)
+	}
+	_, err = Run(t.Context(), Request{Mode: ModeDefaults, Inputs: whenInputs(), Provided: map[string]string{"runtime_mode": "docker", "operator_home": "not-a-number"}})
+	if err == nil || !strings.Contains(err.Error(), "operator_home") {
+		t.Fatalf("docker mode error = %v, want operator_home validated", err)
+	}
+}
+
+// Scripted prompts skip a question whose condition is false given the
+// answers so far.
+func TestScriptedModeSkipsInactiveQuestions(t *testing.T) {
+	var out bytes.Buffer
+	result, err := Run(t.Context(), Request{Mode: ModeScripted, Inputs: whenInputs(), In: strings.NewReader("process\n"), Err: &out})
+	if err != nil || result.Values["operator_home"] != "7" || strings.Contains(out.String(), "operator_home") {
+		t.Fatalf("process = %#v, %v, prompts %q; want operator_home not asked", result, err, out.String())
+	}
+	out.Reset()
+	result, err = Run(t.Context(), Request{Mode: ModeScripted, Inputs: whenInputs(), In: strings.NewReader("docker\n42\n"), Err: &out})
+	if err != nil || result.Values["operator_home"] != "42" || !strings.Contains(out.String(), "operator_home") {
+		t.Fatalf("docker = %#v, %v, prompts %q; want operator_home asked", result, err, out.String())
+	}
+}

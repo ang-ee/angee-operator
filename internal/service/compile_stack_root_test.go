@@ -1,9 +1,12 @@
 package service
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	mountx "github.com/ang-ee/angee-operator/internal/mount"
+	"github.com/ang-ee/angee-operator/internal/runtime/compose"
 )
 
 // The operator service declares an identical-path bind mount: the container
@@ -40,7 +43,7 @@ func TestCompileStackRootMountAndEnv(t *testing.T) {
 	// The relative `.` source is preserved; the container target is the
 	// absolute host root. Docker resolves `.` to the compose dir (= root),
 	// making this the identical-path mount root:root at runtime.
-	if want := []string{".:" + root}; len(operator.Volumes) != 1 || operator.Volumes[0] != want[0] {
+	if want := []compose.ServiceVolume{compose.ShortVolume(".:" + root)}; !reflect.DeepEqual(operator.Volumes, want) {
 		t.Fatalf("operator.Volumes = %#v, want %#v", operator.Volumes, want)
 	}
 	if got := operator.Environment["ANGEE_ROOT"]; got != root {
@@ -89,5 +92,22 @@ func TestCompileDockerOnlyStackHasEmptyProcessCompose(t *testing.T) {
 	}
 	if _, ok := compiled.Compose.Services["web"]; !ok {
 		t.Fatal(`compiled.Compose.Services["web"] missing`)
+	}
+}
+
+// A read-only bind:// mount compiles to the long syntax that refuses a missing
+// host path; a writable one keeps the short syntax, which creates it as before.
+func TestResolveContainerMountsReadOnlyBindRefusesMissingSource(t *testing.T) {
+	got, err := resolveContainerMounts([]string{"bind:///home/deploy/.ssh:/home/deploy/.ssh:ro", "bind://./data:/data", "/var/run/docker.sock:/var/run/docker.sock"}, mountx.Resolver{})
+	if err != nil {
+		t.Fatalf("resolveContainerMounts() error = %v", err)
+	}
+	want := []compose.ServiceVolume{
+		{Bind: &compose.ReadOnlyBind{Source: "/home/deploy/.ssh", Target: "/home/deploy/.ssh"}},
+		compose.ShortVolume("./data:/data"),
+		compose.ShortVolume("/var/run/docker.sock:/var/run/docker.sock"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveContainerMounts() = %#v, want %#v", got, want)
 	}
 }

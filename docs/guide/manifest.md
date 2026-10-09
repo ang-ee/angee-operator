@@ -239,6 +239,18 @@ services:
 Container services require `image` or `build`. Local services require
 `command` and must not set `image`.
 
+A container mount is `<scheme>://<what>:<target>[:ro]`:
+- `source://<name>[/<subpath>]` mounts a source's checkout.
+- `workspace://<name>[/<subpath>]` mounts a workspace.
+- `volume://<name>` mounts a declared volume.
+- `bind://<host path>` mounts a host path. A relative path is relative to the
+  stack root.
+
+A read-only `bind://` mount (`:ro`) must exist: the container fails to start
+with `bind source path does not exist`, rather than Docker creating an empty
+root-owned directory in its place. A writable bind of a missing path is still
+created, as before.
+
 Set `stop_grace_period` to bound graceful shutdown before the runtime
 force-stops a service. The value uses Go duration syntax, such as `30s` or
 `2m`. Compose receives the duration directly; process-compose rounds it up to

@@ -340,3 +340,34 @@ func TestInteractiveSmallTerminalPaging(t *testing.T) {
 		t.Fatalf("state=%v, confirmed=%v, result=%#v", form.State, confirmed, result)
 	}
 }
+
+// The interactive form hides a field whose condition is false, so tab moves
+// straight to the confirmation; when the condition holds the field is shown.
+func TestInteractiveRunHidesInactiveField(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result, err := Run(ctx, Request{Mode: ModeInteractive, Inputs: whenInputs(), In: strings.NewReader("\t\r"), Out: io.Discard})
+	if ctx.Err() != nil || err != nil {
+		t.Fatalf("process: context=%v, err=%v; want the hidden field skipped", ctx.Err(), err)
+	}
+	if result.Values["operator_home"] != "7" || result.Origins["operator_home"] != OriginDefault {
+		t.Fatalf("process result = %#v, want operator_home at its default", result)
+	}
+
+	// Keys are driven one at a time: as a single stream, Bubble Tea would
+	// deliver them before the asynchronous move to the next group.
+	req := Request{Inputs: whenInputs(), Err: io.Discard}
+	form, b := buildWithHeight(req, 0)
+	drive(t, form,
+		tea.KeyMsg{Type: tea.KeyCtrlA}, tea.KeyMsg{Type: tea.KeyCtrlK}, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("docker")},
+		tea.KeyMsg{Type: tea.KeyTab},
+		tea.KeyMsg{Type: tea.KeyBackspace}, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("42")},
+		tea.KeyMsg{Type: tea.KeyTab}, tea.KeyMsg{Type: tea.KeyEnter})
+	result, err = finishInteractive(req, b, nil)
+	if err != nil {
+		t.Fatalf("docker: err=%v", err)
+	}
+	if result.Values["operator_home"] != "42" {
+		t.Fatalf("docker result = %#v, want operator_home 42", result)
+	}
+}

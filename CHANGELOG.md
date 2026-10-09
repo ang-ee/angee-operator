@@ -6,6 +6,24 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **`when:` in the template input form.** A question whose condition is false,
+  given the answers before it, is no longer asked: the interactive form hides
+  it, line prompts skip it, and it takes its default, as copier answers it. A
+  value passed for it is not validated. copier-go evaluates the condition.
+- **`~` in `type: path` inputs.** `~` and `~/…` expand to the home of the user
+  running the render before the value is made relative to the stack root. The
+  expanded absolute path is what the answers record.
+
+### Changed
+
+- **A read-only bind mount must exist.** A `bind://…:ro` mount compiles to
+  compose's long syntax with `create_host_path: false`, so a missing host path
+  fails the container's start (`bind source path does not exist`) instead of
+  Docker creating an empty root-owned directory, for example a `~/.ssh` that
+  would then hide a later SSH setup. Writable binds are unchanged.
+
 ## v0.20.0 — 2026-10-09
 
 ### Added
