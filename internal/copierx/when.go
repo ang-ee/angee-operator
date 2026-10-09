@@ -1,6 +1,8 @@
 package copierx
 
 import (
+	"maps"
+
 	"github.com/ang-ee/angee-operator/api"
 	copier "github.com/fyltr/copier-go"
 )
@@ -44,13 +46,9 @@ func SettleInputs(inputs []api.TemplateInputDescriptor, values, provided map[str
 	settled = make(map[string]string, len(inputs))
 	active = make(map[string]bool, len(inputs))
 	for _, desc := range inputs {
-		context := make(map[string]string, len(provided)+len(settled))
-		for key, value := range provided {
-			context[key] = value
-		}
-		for key, value := range settled {
-			context[key] = value
-		}
+		context := map[string]string{}
+		maps.Copy(context, provided)
+		maps.Copy(context, settled)
 		applies := !desc.Question || InputApplies(desc.When, inputs, context)
 		active[desc.Name] = applies
 		if value, ok := values[desc.Name]; ok && applies {
