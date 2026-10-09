@@ -366,7 +366,45 @@ func (LocalRenderer) Copy(ctx context.Context, req CopyRequest) error {
 	if err != nil {
 		return err
 	}
-	return copier.Copy(req.Template, req.Dest, copierOptions(cfg, req.Inputs)...)
+	options := copierOptions(cfg, req.Inputs)
+	includeRoot, err := TemplateIncludeRoot(req.Template, cfg.Angee.IncludeRoot)
+	if err != nil {
+		return err
+	}
+	if includeRoot != "" {
+		options = append(options, copier.WithIncludeRoot(includeRoot))
+	}
+	return copier.Copy(req.Template, req.Dest, options...)
+}
+
+// TemplateIncludeRoot resolves a template's `_angee.include_root`: the
+// ancestor directory its `{% include %}` may read from, such as `../..` for a
+// stack that includes the collection's shared files. copier-go confines
+// includes to the template's own directory unless angee widens it to this
+// root, so angee validates the declaration: it must be relative, name an
+// ancestor of the template (or the template itself), and not be the filesystem
+// root. An empty declaration returns "", leaving copier-go's default.
+func TemplateIncludeRoot(templatePath, includeRoot string) (string, error) {
+	includeRoot = strings.TrimSpace(includeRoot)
+	if includeRoot == "" || includeRoot == "." {
+		return "", nil
+	}
+	if filepath.IsAbs(includeRoot) {
+		return "", fmt.Errorf("_angee.include_root %q must be relative to the template", includeRoot)
+	}
+	template, err := filepath.Abs(templatePath)
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Clean(filepath.Join(template, includeRoot))
+	rel, err := filepath.Rel(root, template)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("_angee.include_root %q is not an ancestor of the template", includeRoot)
+	}
+	if root == filepath.Dir(root) {
+		return "", fmt.Errorf("_angee.include_root %q resolves to the filesystem root", includeRoot)
+	}
+	return root, nil
 }
 
 func copierOptions(cfg config, inputs Inputs) []copier.Option {

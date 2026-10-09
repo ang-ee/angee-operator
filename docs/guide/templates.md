@@ -245,12 +245,16 @@ ancestor is snapshotted instead:
 _angee:
   kind: stack
   name: dev
-  include_root: "../.."   # pins templates/, so ../../_shared/ resolves
+  include_root: "../.."   # pins templates/, so ../_shared/ resolves
 ```
 
 ```jinja
-{% include "../../_shared/AGENTS.md.jinja" %}
+{% include "../_shared/AGENTS.md.jinja" %}
 ```
+
+Include names resolve against the template's root, the directory holding
+`copier.yml`, as upstream Copier resolves them: from `stacks/dev`,
+`../_shared/` is `stacks/_shared/`.
 
 `include_root` is relative to the template directory, must name one of its
 ancestors, and must stay inside the workspace — pointing it at the workspace
@@ -269,10 +273,9 @@ whole checkout — `node_modules` and all. Point it at the smallest directory
 that makes your includes resolve.
 :::
 
-`include_root` only applies to templates chained from inside a workspace, which
-is where the snapshot happens. It is ignored for absolute and remote refs, and
-for renders that are not chained — those read the template in place, so their
-relative includes already resolve against the real tree.
+copier-go confines includes to the template's own root. `include_root` also
+widens that boundary for every render, chained or not, so the include may read
+the declared ancestor and nothing above it.
 
 ## How "self-building" works
 

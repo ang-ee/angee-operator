@@ -796,6 +796,41 @@ func TestVerifiedSnapshotTemplatePathRejectsSymlinkedSubpath(t *testing.T) {
 	}
 }
 
+// The render widens copier-go's include sandbox to the include_root in the
+// snapshot's own copier.yml, so a snapshot declaring more than was honoured
+// when it was taken — a copier.yml rewritten between the guarded read and
+// SnapshotDirectory — is refused rather than letting includes leave it.
+func TestVerifySnapshotIncludeRootRejectsChangedDeclaration(t *testing.T) {
+	snapshot := t.TempDir()
+	template := filepath.Join(snapshot, "stacks", "dev")
+	if err := os.MkdirAll(template, 0o755); err != nil {
+		t.Fatalf("MkdirAll(stacks/dev): %v", err)
+	}
+	write := func(includeRoot string) {
+		t.Helper()
+		config := "_angee:\n  include_root: \"" + includeRoot + "\"\n"
+		if err := os.WriteFile(filepath.Join(template, "copier.yml"), []byte(config), 0o644); err != nil {
+			t.Fatalf("WriteFile(copier.yml): %v", err)
+		}
+	}
+	write("../..")
+	if err := verifySnapshotIncludeRoot(snapshot, "stacks/dev", "../../"); err != nil {
+		t.Fatalf("verifySnapshotIncludeRoot rejected the honoured include_root: %v", err)
+	}
+	write("../../..")
+	if err := verifySnapshotIncludeRoot(snapshot, "stacks/dev", "../.."); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("verifySnapshotIncludeRoot error = %v, want a changed-declaration rejection", err)
+	}
+
+	self := t.TempDir()
+	if err := os.WriteFile(filepath.Join(self, "copier.yml"), []byte("_subdirectory: template\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(copier.yml): %v", err)
+	}
+	if err := verifySnapshotIncludeRoot(self, ".", " . "); err != nil {
+		t.Fatalf("verifySnapshotIncludeRoot rejected an undeclared include_root: %v", err)
+	}
+}
+
 // A subpath that does not name a real directory fails at resolution with a
 // pointed error rather than surfacing as an opaque copier-go failure later.
 func TestVerifiedSnapshotTemplatePathRequiresDirectory(t *testing.T) {
