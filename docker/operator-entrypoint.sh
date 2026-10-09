@@ -19,9 +19,26 @@ if [ "$(id -u)" = "0" ] && [ -n "$root" ] && [ -d "$root" ]; then
   if [ "$uid" != "0" ]; then
     getent group "$gid" >/dev/null 2>&1 || addgroup -g "$gid" angee
     group_name=$(getent group "$gid" | cut -d: -f1)
-    getent passwd "$uid" >/dev/null 2>&1 \
-      || adduser -D -H -u "$uid" -G "$group_name" -h /tmp angee
+    # The home is the OS's: the HOME the container was started with, or
+    # adduser's default (/home/<name>) when that is Docker's /root for the
+    # entrypoint. ssh finds ~ through passwd, so passwd carries it.
+    home=""
+    [ -n "${HOME:-}" ] && [ "$HOME" != "/root" ] && home="$HOME"
+    if getent passwd "$uid" >/dev/null 2>&1; then
+      # A uid the image already has keeps its name; give it a usable home,
+      # since Alpine's own (guest: /dev/null) is not one. busybox has no usermod.
+      user_name=$(getent passwd "$uid" | cut -d: -f1)
+      home="${home:-/home/$user_name}"
+      sed -i "s|^\($user_name:[^:]*:[^:]*:[^:]*:[^:]*:\)[^:]*:|\1$home:|" /etc/passwd
+      mkdir -p "$home"
+      chown "$uid:$gid" "$home"
+    elif [ -n "$home" ]; then
+      adduser -D -u "$uid" -G "$group_name" -h "$home" angee
+    else
+      adduser -D -u "$uid" -G "$group_name" angee
+    fi
     user_name=$(getent passwd "$uid" | cut -d: -f1)
+    home=$(getent passwd "$uid" | cut -d: -f6)
 
     sock=/var/run/docker.sock
     if [ -S "$sock" ]; then
@@ -36,8 +53,7 @@ if [ "$(id -u)" = "0" ] && [ -n "$root" ] && [ -d "$root" ]; then
       fi
     fi
 
-    # git wants a writable HOME for its global config lookup.
-    export HOME=/tmp
+    export HOME="$home"
     exec su-exec "$user_name" /usr/local/bin/angee-operator "$@"
   fi
 fi

@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.19.0 — 2026-10-09
+
 ### Added
 
 - **An error contract for every failed operation.** GraphQL errors carry
@@ -47,6 +49,12 @@ latest tag.
   reports which one and why, such as `service "frontend" failed: ...`,
   instead of "one or more dependents failed". The receipt carries
   `error_code` and `error_cause` (GraphQL `errorCode`, `errorCause`).
+- **Git over SSH from the operator image.** The `angee-operator` and
+  `angee-cli` images now include the OpenSSH client; before, any git source
+  with an SSH URL failed with `ssh: not found`. SSH itself stays the
+  platform's: mount the deploy user's `~/.ssh` read-only in the operator's
+  home. See
+  [Running in a container](docs/reference/operator-api.md#running-in-a-container).
 
 ### Changed
 
@@ -61,6 +69,12 @@ latest tag.
 - URLs in errors and logs have their query values masked as well as their
   user information, since a token is sometimes passed as a query
   parameter.
+- **The operator container's user has a real home.** It is the `HOME` the
+  container is started with, or `adduser`'s default `/home/<name>`; it used
+  to be `/tmp`. A stack-root uid the image already has, such as Alpine's
+  `guest` (home `/dev/null`), gets one too. The docs also show the
+  platform-native form (`user:`, `group_add:`, the host's `/etc/passwd` and
+  `/etc/group` mounted read-only), which needs no entrypoint.
 
 ### Removed
 

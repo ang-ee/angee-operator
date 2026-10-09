@@ -157,6 +157,58 @@ still answers HTTP `200`, so its record is the only trace in the log:
 level=WARN msg="graphql operation failed" req=7f3a2c19 path=workspaceSyncBase code=PRECONDITION_FAILED cause=uncommitted_changes operation=workspace.sync-base error="Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in addons/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry."
 ```
 
+## Running in a container
+
+The `ghcr.io/ang-ee/angee-operator` image runs the operator as the owner of
+the mounted stack root, so git checkouts and compose files on the bind mount
+stay owned by the host user. Its entrypoint gives that uid a user and adds
+it to the docker socket's group, then drops privileges to it. When the root
+is owned by root, the operator stays root. The image includes git, the
+OpenSSH client, and the Docker CLI with the compose plugin.
+
+The user's home is the OS's: the `HOME` the container is started with, or
+`adduser`'s default `/home/<name>` when none is given (Docker's `/root` for
+the entrypoint counts as none).
+
+The platform can do the same itself, and then the entrypoint has nothing to
+do: run the service as the deploy user, give it the socket's group, and
+mount the host's user database, from which Docker takes `HOME`:
+
+```yaml
+services:
+  operator:
+    user: "1000:1000"
+    group_add: ["<docker socket gid>"]
+    volumes:
+      - /etc/passwd:/etc/passwd:ro
+      - /etc/group:/etc/group:ro
+```
+
+### Git over SSH
+
+SSH belongs to the platform: keys, `known_hosts`, `Host` aliases and agents
+are set up and maintained by whoever runs the operator, as they are for the
+deploy user's own git. The image ships the OpenSSH client, and git runs it
+non-interactively (`BatchMode=yes`) from the operator's home. Give the
+container the deploy user's home and mount its `.ssh` there, read-only:
+
+```yaml
+services:
+  operator:
+    image: ghcr.io/ang-ee/angee-operator:0.19.0
+    environment:
+      HOME: /home/deploy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/angee:/srv/angee
+      - /home/deploy/.ssh:/home/deploy/.ssh:ro
+```
+
+When the deploy user owns the stack root, the operator runs with the same
+uid and home path, so git over SSH behaves in the container as it does for
+that user on the host. Write `HOME` as a literal path: compose run by the
+operator interpolates `${HOME}` from the operator's own environment.
+
 ## REST
 
 Health:
