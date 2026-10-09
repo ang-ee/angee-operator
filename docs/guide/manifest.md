@@ -115,6 +115,7 @@ ingress:
   routing: host          # host (default) | path
   tls: auto              # auto (default, Caddy HTTPS) | off (plain ws://)
   domain: agents.localhost  # base domain; defaults to operator.domain
+  # aliases: [ap.example.com]  # routing: path only — more hosts for the same site
   # port: 8080            # tls: off only — host port for the plain ws:// edge (default 80)
   # image:   lucaslorentz/caddy-docker-proxy:2.9   # override the edge image
   # network: <name>_edge                            # override the private network
@@ -156,6 +157,22 @@ private network.
   **strips** it before proxying, so the backend still sees `/`. Override the
   prefix per service with `route.path` (default `/<service>`). `routing: path`
   requires a domain (`ingress.domain` or `operator.domain`).
+
+With `routing: path`, `ingress.aliases` lists more host names the edge serves
+as the same site, with every route at the same path on each, and with
+`tls: auto` a certificate for each:
+
+```yaml
+ingress:
+  type: caddy
+  routing: path
+  domain: angee.example.com          # canonical: route URLs use it
+  aliases: [ap.example.com, painkiller.example.com]
+```
+
+DNS for each alias must point at the edge. Each alias must be a host name, not
+the domain, and not repeated (host names compare case-insensitively). The
+application decides what to serve per `Host`; the edge only answers for it.
 
 `route.host` and `route.path` are mutually exclusive on a single service.
 

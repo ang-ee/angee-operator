@@ -29,6 +29,12 @@
         "domain": {
           "type": "string"
         },
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "port": {
           "type": "integer",
           "maximum": 65535,

@@ -6,6 +6,16 @@ latest tag.
 
 ## Unreleased
 
+## v0.20.0 — 2026-10-09
+
+### Added
+
+- **More host names per path-routed stack.** `ingress.aliases` lists host
+  names the caddy edge serves as the same site as `ingress.domain`, each with
+  its own automatic certificate under `tls: auto`. The domain stays the
+  canonical host for route URLs. Each alias must be a host name, not the
+  domain, and unique; it needs `ingress.type: caddy` and `routing: path`.
+
 ## v0.19.0 — 2026-10-09
 
 ### Added

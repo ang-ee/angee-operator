@@ -389,3 +389,53 @@ func TestValidateAllowsBadRouteHostWhenIngressNone(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestValidateIngressAliases(t *testing.T) {
+	stackWith := func(ingress Ingress, operatorDomain string) *Stack {
+		return &Stack{
+			Version:  VersionCurrent,
+			Kind:     KindStack,
+			Name:     "aliases",
+			Operator: Operator{Domain: operatorDomain},
+			Ingress:  ingress,
+			Services: map[string]Service{"web": {Runtime: RuntimeContainer, Image: "x:latest", Route: &Route{Port: 80}}},
+		}
+	}
+	pathIngress := func(aliases ...string) Ingress {
+		return Ingress{Type: "caddy", Routing: "path", Domain: "angee.phro.gg", Aliases: aliases}
+	}
+	for _, tc := range []struct {
+		name    string
+		stack   *Stack
+		wantErr string
+	}{
+		{name: "path routing", stack: stackWith(pathIngress("ap.phro.gg", "painkiller.phro.gg"), "")},
+		{name: "operator domain when ingress has none", stack: stackWith(Ingress{Type: "caddy", Routing: "path", Aliases: []string{"ap.phro.gg"}}, "angee.phro.gg")},
+		{name: "operator domain is not the edge's", stack: stackWith(pathIngress("ops.phro.gg"), "ops.phro.gg")},
+		{name: "host routing", stack: stackWith(Ingress{Type: "caddy", Routing: "host", Domain: "angee.phro.gg", Aliases: []string{"ap.phro.gg"}}, ""), wantErr: "ingress.routing: path"},
+		{name: "no edge", stack: stackWith(Ingress{Type: "none", Aliases: []string{"ap.phro.gg"}}, ""), wantErr: "ingress.type: caddy"},
+		{name: "not a host name", stack: stackWith(pathIngress("https://ap.phro.gg"), ""), wantErr: `"https://ap.phro.gg" is not a host name`},
+		{name: "empty label", stack: stackWith(pathIngress("ap..phro.gg"), ""), wantErr: `"ap..phro.gg" is not a host name`},
+		{name: "trailing dot", stack: stackWith(pathIngress("ap.phro.gg."), ""), wantErr: "is not a host name"},
+		{name: "label starts with a hyphen", stack: stackWith(pathIngress("-ap.phro.gg"), ""), wantErr: "is not a host name"},
+		{name: "label ends with a hyphen", stack: stackWith(pathIngress("ap-.phro.gg"), ""), wantErr: "is not a host name"},
+		{name: "label too long", stack: stackWith(pathIngress(strings.Repeat("a", 64)+".phro.gg"), ""), wantErr: "is not a host name"},
+		{name: "hyphen inside a label", stack: stackWith(pathIngress("pain-killer.phro.gg"), "")},
+		{name: "the domain", stack: stackWith(pathIngress("Angee.Phro.gg"), ""), wantErr: "repeats the domain or another alias"},
+		{name: "a repeat", stack: stackWith(pathIngress("ap.phro.gg", "AP.phro.gg"), ""), wantErr: "repeats the domain or another alias"},
+		{name: "the operator domain it falls back to", stack: stackWith(Ingress{Type: "caddy", Routing: "path", Aliases: []string{"angee.phro.gg"}}, "angee.phro.gg"), wantErr: "repeats the domain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.stack.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}

@@ -22,6 +22,24 @@ const (
 var routeNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var routeHostPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 
+// dnsLabelPattern is one DNS label: 1-63 letters, digits and hyphens, not
+// starting or ending with a hyphen.
+var dnsLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// isDNSHostName reports whether name is a host name the edge can get a
+// certificate for: at most 253 characters of dot-separated DNS labels.
+func isDNSHostName(name string) bool {
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
 type Runtime string
 
 const (
@@ -90,10 +108,14 @@ type Ingress struct {
 	Routing string `yaml:"routing,omitempty" json:"routing,omitempty" validate:"omitempty,oneof=host path" jsonschema:"enum=host,enum=path"`
 	TLS     string `yaml:"tls,omitempty" json:"tls,omitempty" validate:"omitempty,oneof=auto off" jsonschema:"enum=auto,enum=off"`
 	Domain  string `yaml:"domain,omitempty" json:"domain,omitempty"`
-	Port    int    `yaml:"port,omitempty" json:"port,omitempty" validate:"omitempty,min=1,max=65535" jsonschema:"minimum=1,maximum=65535"`
-	Image   string `yaml:"image,omitempty" json:"image,omitempty"`
-	Network string `yaml:"network,omitempty" json:"network,omitempty"`
-	Verify  string `yaml:"verify,omitempty" json:"verify,omitempty"`
+	// Aliases are further host names the path-routing edge serves as the same
+	// site as Domain, each with its own automatic certificate. Domain stays the
+	// canonical host that route URLs use.
+	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Port    int      `yaml:"port,omitempty" json:"port,omitempty" validate:"omitempty,min=1,max=65535" jsonschema:"minimum=1,maximum=65535"`
+	Image   string   `yaml:"image,omitempty" json:"image,omitempty"`
+	Network string   `yaml:"network,omitempty" json:"network,omitempty"`
+	Verify  string   `yaml:"verify,omitempty" json:"verify,omitempty"`
 }
 
 // RoutingMode reports the edge routing mode, defaulting to "host" when unset.
@@ -569,6 +591,31 @@ func (s *Stack) ValidateExtended() error {
 		}
 		if s.Ingress.TLSMode() != "off" {
 			return errors.New("ingress.port requires ingress.tls: off (the tls: auto edge uses 443/80)")
+		}
+	}
+	if len(s.Ingress.Aliases) > 0 {
+		if s.Ingress.Type != "caddy" {
+			return errors.New("ingress.aliases requires ingress.type: caddy")
+		}
+		if s.Ingress.RoutingMode() != "path" {
+			return errors.New("ingress.aliases requires ingress.routing: path")
+		}
+		// The edge serves the ingress domain, or the operator's when unset.
+		domain := s.Ingress.Domain
+		if domain == "" {
+			domain = s.Operator.Domain
+		}
+		seen := map[string]bool{strings.ToLower(domain): true}
+		for _, alias := range s.Ingress.Aliases {
+			if !isDNSHostName(alias) {
+				return fmt.Errorf("ingress.aliases: %q is not a host name", alias)
+			}
+			// Host names are case-insensitive.
+			key := strings.ToLower(alias)
+			if seen[key] {
+				return fmt.Errorf("ingress.aliases: %q repeats the domain or another alias", alias)
+			}
+			seen[key] = true
 		}
 	}
 	if s.Ingress.Type == "caddy" {

@@ -355,3 +355,43 @@ func contains(items []string, want string) bool {
 	}
 	return false
 }
+
+// Path mode serves every alias as the same site as the domain: one caddy
+// address list on each routed service, so caddy-docker-proxy merges them into
+// one site with a certificate per host. tls: off prefixes each with http://.
+func TestCaddyBackend_ContributePathModeAliases(t *testing.T) {
+	for _, tc := range []struct {
+		tls  string
+		want string
+	}{
+		{tls: "auto", want: "angee.phro.gg, ap.phro.gg, painkiller.phro.gg"},
+		{tls: "off", want: "http://angee.phro.gg, http://ap.phro.gg, http://painkiller.phro.gg"},
+	} {
+		t.Run("tls "+tc.tls, func(t *testing.T) {
+			stack := &manifest.Stack{
+				Name: "phrogg",
+				Ingress: manifest.Ingress{
+					Type:    "caddy",
+					Routing: "path",
+					TLS:     tc.tls,
+					Domain:  "angee.phro.gg",
+					Aliases: []string{"ap.phro.gg", "painkiller.phro.gg"},
+				},
+				Services: map[string]manifest.Service{
+					"frontend": {Runtime: "container", Route: &manifest.Route{Port: 5173, Path: "/", Auth: "none"}},
+					"api":      {Runtime: "container", Route: &manifest.Route{Port: 8000}},
+				},
+			}
+			file := compose.File{Services: map[string]compose.Service{"frontend": {}, "api": {}}}
+
+			if err := NewCaddyBackend(stack.Ingress).Contribute(stack, &file); err != nil {
+				t.Fatalf("Contribute() error = %v", err)
+			}
+			for _, name := range []string{"frontend", "api"} {
+				if got := file.Services[name].Labels["caddy"]; got != tc.want {
+					t.Fatalf(`%s.Labels["caddy"] = %q, want %q`, name, got, tc.want)
+				}
+			}
+		})
+	}
+}
