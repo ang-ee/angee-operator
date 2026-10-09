@@ -71,6 +71,11 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	// caddy-docker-proxy merges (rather than overwrites) them; a deterministic
 	// per-service index drives caddy-docker-proxy's numeric order prefix.
 	routedIndex := routedServiceIndex(stack)
+	// The shared path-mode site answers for the domain and every alias.
+	site := addr + domain
+	for _, alias := range b.cfg.Aliases {
+		site += ", " + addr + alias
+	}
 
 	if compiled.Networks == nil {
 		compiled.Networks = map[string]compose.Network{}
@@ -138,11 +143,11 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		}
 
 		if routing == "path" {
-			// One shared site (caddy: <domain>) with a prefix-stripping
+			// One shared site (caddy: <domain>[, <alias>...]) with a prefix-stripping
 			// handle_path per service. handle_path strips the matched prefix, so
 			// the backend serving at / sees / regardless of the public prefix.
 			hp := fmt.Sprintf("caddy.%d_handle_path", routedIndex[name])
-			svc.Labels["caddy"] = addr + domain
+			svc.Labels["caddy"] = site
 			svc.Labels[hp] = route.PathPrefix(name) + "/*"
 			svc.Labels[hp+".reverse_proxy"] = fmt.Sprintf("{{upstreams %d}}", route.Port)
 			svc.Labels[hp+".reverse_proxy.flush_interval"] = "-1"
