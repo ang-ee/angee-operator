@@ -2194,7 +2194,7 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 //
 // A template that reaches outside its own directory — typically to include a
 // sibling collection entry, as `stacks/dev` does with
-// `{% include "../../_shared/AGENTS.md.jinja" %}` — declares how far it reaches
+// `{% include "../_shared/AGENTS.md.jinja" %}` — declares how far it reaches
 // via `_angee.include_root`, and that ancestor is snapshotted instead of the
 // template directory alone so the include still resolves from the pinned copy.
 // The default is the template directory, so a self-contained template pins
@@ -2269,6 +2269,44 @@ func verifiedSnapshotTemplatePath(snapshot, templateSubpath string) (string, err
 	return path, nil
 }
 
+// verifySnapshotIncludeRoot checks that a chain template snapshot's own
+// copier.yml declares the include_root the snapshot was taken for. The render
+// reads `_angee.include_root` from the snapshot and widens copier-go's include
+// sandbox to it, so a larger root written into the workspace between the
+// guarded read and SnapshotDirectory would let includes read outside the
+// snapshot. The snapshot is private once taken, so this read is the last one
+// that can differ.
+func verifySnapshotIncludeRoot(snapshot, templateSubpath, includeRoot string) error {
+	config, err := copierx.OpenGuardedPath(snapshot, snapshot, slashpath.Join(templateSubpath, "copier.yml"), nil)
+	if err != nil {
+		return err
+	}
+	data, _, exists, err := config.ReadRegularFile()
+	_ = config.Close()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("copier.yml changed while the template was being pinned")
+	}
+	metadata, err := copierx.ParseMetadata(data)
+	if err != nil {
+		return err
+	}
+	if cleanIncludeRoot(metadata.IncludeRoot) != cleanIncludeRoot(includeRoot) {
+		return fmt.Errorf("_angee.include_root changed from %q to %q while the template was being pinned", includeRoot, metadata.IncludeRoot)
+	}
+	return nil
+}
+
+func cleanIncludeRoot(includeRoot string) string {
+	includeRoot = strings.TrimSpace(includeRoot)
+	if includeRoot == "" {
+		return "."
+	}
+	return slashpath.Clean(includeRoot)
+}
+
 func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspacePath, ref string, allowedSymlinkParents map[string]*copierx.TrustedRoot) (string, string, func() error, error) {
 	if ref != "" && !filepath.IsAbs(ref) && !isRemoteTemplateRef(ref) {
 		clean, err := normalizeWorkspaceSubpath(ref)
@@ -2292,9 +2330,7 @@ func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspaceP
 			// followed anywhere on disk; these bytes came through the retained
 			// root with an entry-identity check. The tree can still change
 			// before SnapshotDirectory runs, so the snapshot's own copier.yml
-			// may declare a different include_root than the one honoured here —
-			// harmless in both directions, since a larger declared root is
-			// ignored and a smaller one only over-snapshots within the guard.
+			// is checked against the include_root honoured here below.
 			metadata, err := copierx.ParseMetadata(configData)
 			if err != nil {
 				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
@@ -2314,6 +2350,10 @@ func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspaceP
 			}
 			templatePath, err := verifiedSnapshotTemplatePath(snapshot, templateSubpath)
 			if err != nil {
+				_ = cleanup()
+				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
+			}
+			if err := verifySnapshotIncludeRoot(snapshot, templateSubpath, metadata.IncludeRoot); err != nil {
 				_ = cleanup()
 				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
 			}

@@ -6,6 +6,24 @@ latest tag.
 
 ## Unreleased
 
+## v0.21.1 — 2026-10-09
+
+### Fixed
+
+- **Templates that include files outside their directory render again.**
+  copier-go v0.1.0 (in v0.21.0) confines `{% include %}` to the template's own
+  root, so angee-django's stacks, which include the collection's `_shared`
+  files, failed with "unable to resolve template". angee now passes the
+  template's `_angee.include_root` to copier-go v0.1.1 (`WithIncludeRoot`) for
+  every render, after checking that it is a relative ancestor of the template
+  and not the filesystem root. Include names resolve against the template
+  root, as upstream Copier resolves them, so a stack includes
+  `../_shared/AGENTS.md.jinja`, not `../../_shared/…` (angee-django updates
+  its templates to match). For a workspace chain template, the pinned
+  snapshot's copier.yml must still declare the include_root it was pinned for,
+  so a declaration rewritten while pinning cannot widen the sandbox beyond the
+  snapshot.
+
 ## v0.21.0 — 2026-10-09
 
 ### Added
