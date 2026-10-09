@@ -22,6 +22,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 	"github.com/ang-ee/angee-operator/internal/runtime/compose"
+	"github.com/ang-ee/angee-operator/internal/runtime/edge"
 	"github.com/ang-ee/angee-operator/internal/runtime/proccompose"
 )
 
@@ -253,6 +254,8 @@ func jobOperationStack(stack *manifest.Stack, root string, chained bool) (*manif
 	}
 	projected := *stack
 	// The edge is a stack-wide generated service, not an operation prerequisite.
+	// Its wiring of the routed services this view keeps is added back from the
+	// whole stack after compiling (contributeOperationIngress).
 	projected.Ingress = manifest.Ingress{}
 	projected.Jobs = make(map[string]manifest.Job)
 	for name, job := range stack.Jobs {
@@ -267,6 +270,30 @@ func jobOperationStack(stack *manifest.Stack, root string, chained bool) (*manif
 		}
 	}
 	return &projected, nil
+}
+
+// contributeOperationIngress gives the routed services in an operation's
+// compiled view the ingress wiring a full compile gives them: the edge labels,
+// the edge network, and no published ports. jobOperationStack compiles without
+// the ingress so the view leaves out the stack-wide edge service, and a chained
+// restart that recreated a routed service from that view brought it back
+// without its caddy labels, so the edge served an empty config. The wiring is
+// computed from the whole stack because path routing numbers each service's
+// label keys over every routed service; numbering only the view's would collide
+// with the services left running.
+func contributeOperationIngress(stack *manifest.Stack, compiled *CompiledStack) error {
+	backend, err := edge.FromManifest(stack.Ingress)
+	if err != nil {
+		return err
+	}
+	_, hadEdge := compiled.Compose.Services["edge"]
+	if err := backend.Contribute(stack, &compiled.Compose); err != nil {
+		return err
+	}
+	if !hadEdge {
+		delete(compiled.Compose.Services, "edge")
+	}
+	return nil
 }
 
 func stackNodeDependencies(stack *manifest.Stack, name string) []string {

@@ -202,6 +202,9 @@ func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[st
 		}
 		finishCompiling := logctx.Step(ctx, "compiling stack")
 		compiledStack, resolvedSecrets, err := p.compileStackArtifactsWithJobInputs(ctx, compileStack, jobInputs, operationRoot != "")
+		if err == nil && operationRoot != "" {
+			err = contributeOperationIngress(stack, compiledStack)
+		}
 		finishCompiling(err)
 		if err != nil {
 			return err

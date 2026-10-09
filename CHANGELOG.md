@@ -6,6 +6,23 @@ latest tag.
 
 ## Unreleased
 
+## v0.18.1 — 2026-10-09
+
+### Fixed
+
+- **A chained restart keeps routed services on the edge.** `angee job run
+  <job> --chained-restart`, from the CLI or through the operator (GraphQL
+  `jobRun(chainedRestart: true)`, the console's "Restart application"),
+  recreated the routed services it reached without their caddy labels and
+  off the edge network, so caddy-docker-proxy served an empty config and the
+  site went down until each service was restarted on its own. The job run
+  compiled a view of the stack without its ingress, to leave out the
+  stack-wide edge service, and with it lost the wiring the edge gives routed
+  services. That wiring is now added to the view from the whole stack (path
+  routing numbers its label keys over every routed service), so a recreated
+  service gets the same labels, networks and ports as a full compile; the
+  edge service itself is still left out. Broken since v0.15.0.
+
 ## v0.18.0 — 2026-10-06
 
 ### Added
