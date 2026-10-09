@@ -24,7 +24,8 @@ func (p *Platform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, re
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "merge ref is required"}
 	}
-	return p.runWorkspaceGitOp(ctx, workspace, slot, "merge", "--no-ff", "--no-edit", ref)
+	op := workspaceSlotOperation("workspace.source-merge", "Merge", workspace, slot)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("merging %s into", ref)}, workspace, slot, "merge", "--no-ff", "--no-edit", ref)
 }
 
 // WorkspaceSourceRebase rebases the current branch onto `ref`. On conflict
@@ -34,23 +35,27 @@ func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, r
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "rebase ref is required"}
 	}
-	return p.runWorkspaceGitOp(ctx, workspace, slot, "rebase", ref)
+	op := workspaceSlotOperation("workspace.source-rebase", "Rebase", workspace, slot)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, workspace, slot, "rebase", ref)
 }
 
 // WorkspaceSourceMergeAbort aborts an in-progress merge.
 func (p *Platform) WorkspaceSourceMergeAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
-	return p.runWorkspaceGitOp(ctx, workspace, slot, "merge", "--abort")
+	op := workspaceSlotOperation("workspace.source-merge-abort", "Abort merge", workspace, slot)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "aborting the merge in"}, workspace, slot, "merge", "--abort")
 }
 
 // WorkspaceSourceRebaseAbort aborts an in-progress rebase.
 func (p *Platform) WorkspaceSourceRebaseAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
-	return p.runWorkspaceGitOp(ctx, workspace, slot, "rebase", "--abort")
+	op := workspaceSlotOperation("workspace.source-rebase-abort", "Abort rebase", workspace, slot)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "aborting the rebase in"}, workspace, slot, "rebase", "--abort")
 }
 
 // WorkspaceSourceRebaseContinue continues an in-progress rebase after the
 // caller has resolved conflicts in the worktree.
 func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
-	return p.runWorkspaceGitOp(ctx, workspace, slot, "-c", "core.editor=true", "rebase", "--continue")
+	op := workspaceSlotOperation("workspace.source-rebase-continue", "Continue rebase", workspace, slot)
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "continuing the rebase in"}, workspace, slot, "-c", "core.editor=true", "rebase", "--continue")
 }
 
 // WorkspaceSourcePublish pushes the worktree's branch to the named remote
@@ -64,7 +69,8 @@ func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace,
 // to publish and is left alone (naming the branch publishes it anyway). A slot
 // on a detached HEAD gets the named branch created at HEAD first; if the push
 // then fails, the slot stays on that branch and a retry pushes it.
-func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error) {
+func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (result api.GitOpResult, err error) {
+	defer workspaceSlotOperation("workspace.source-publish", "Publish", workspace, slot).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
 		return api.GitOpResult{}, err
@@ -120,28 +126,36 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 			return api.GitOpResult{}, fmt.Errorf("create branch %q in %s: %w", branch, path, err)
 		}
 	}
+	remoteURL, _, _ := client.RemoteURL(ctx, path, remote)
+	step := gitStep{action: fmt.Sprintf("pushing branch %q of", branch), object: fmt.Sprintf("source slot %q", slot), remote: remoteURL, cause: CausePushFailed, slot: slot, source: wsSource.Source}
 	// The push is a network operation like any other: bound it with
 	// ANGEE_GIT_TIMEOUT so a stalled remote fails instead of hanging.
-	var result api.GitOpResult
 	err = git.RunNetworkOperation(ctx, "git push --set-upstream "+remote+" "+branch, path, func(ctx context.Context) error {
 		var runErr error
 		result, runErr = runGitOpAt(ctx, path, "push", "--set-upstream", remote, branch)
 		return runErr
 	})
-	return result, err
+	return result, gitFailure(err, step)
 }
 
-func (p *Platform) runWorkspaceGitOp(ctx context.Context, workspace, slot string, args ...string) (api.GitOpResult, error) {
+// runWorkspaceGitOp runs a local git operation in a slot. step names the
+// action for a failure's message; its object and slot are filled in here.
+func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step gitStep, workspace, slot string, args ...string) (result api.GitOpResult, err error) {
+	defer op.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
 	defer release()
-	_, _, _, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
+	_, wsSource, _, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
-	return runGitOpAt(ctx, path, args...)
+	step.object = fmt.Sprintf("source slot %q", slot)
+	step.slot = slot
+	step.source = wsSource.Source
+	result, err = runGitOpAt(ctx, path, args...)
+	return result, gitFailure(err, step)
 }
 
 // gitOpWaitDelay bounds how long a cancelled git operation may linger in Wait.
@@ -183,8 +197,9 @@ func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpR
 	}
 	// Non-conflict failure surfaces as a typed error so callers can
 	// distinguish "merge produced conflicts" (handled) from "git refused
-	// to start the merge at all" (unexpected).
-	return result, fmt.Errorf("git %s in %s: %w", strings.Join(args, " "), workdir, runErr)
+	// to start the merge at all" (unexpected). It carries git's output so
+	// the failure can be classified and quoted.
+	return result, &git.CommandError{Args: logctx.RedactArgs(args), Output: logctx.RedactText(combined), Err: runErr}
 }
 
 func combineCapturedOutput(stdout, stderr []byte) []byte {

@@ -590,7 +590,17 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 		return err
 	}
 	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
-		return fmt.Errorf("workspace %q source %q has branch mismatch: %s at %s", workspaceName, slot, reason, path)
+		hint := fmt.Sprintf("Switch it back with `git -C %s switch %s`, then retry.", path, wsSource.Branch)
+		return &OperationError{
+			Code:      CodePreconditionFailed,
+			Cause:     CauseBranchMismatch,
+			Workspace: workspaceName,
+			Slot:      slot,
+			Source:    wsSource.Source,
+			Paths:     []string{path},
+			Hint:      hint,
+			Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, reason, path, hint),
+		}
 	}
 	return nil
 }
@@ -1165,7 +1175,8 @@ func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.S
 	return states, nil
 }
 
-func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.SourceState, error) {
+func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states []api.SourceState, err error) {
+	defer operation{name: "workspace.push", title: fmt.Sprintf("Push workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
 	if err != nil {
 		return nil, err
@@ -1189,16 +1200,18 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 		return nil, err
 	}
 	client := p.gitClient()
-	states := []api.SourceState{}
-	for _, target := range targets {
-		dirty, err := client.Dirty(ctx, target.path)
-		if err != nil {
+	plans := make([]workspaceGitPush, len(targets))
+	for i, target := range targets {
+		if err := requireCleanCheckout(ctx, client, target.path, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
 			return nil, err
 		}
-		if dirty {
-			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, target.slot)
+		if plans[i], err = planWorkspaceGitPush(ctx, client, name, target.slot, target.path, target.source, target.wsSource, ref); err != nil {
+			return nil, err
 		}
-		if err := pushWorkspaceGitSource(ctx, client, name, target.slot, target.path, target.source, target.wsSource, ref); err != nil {
+	}
+	states = []api.SourceState{}
+	for i, target := range targets {
+		if err := plans[i].run(ctx, client, target.path); err != nil {
 			return nil, err
 		}
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
@@ -1328,11 +1341,15 @@ func emptyDirectory(path string) (bool, error) {
 // for a directory that is not the slot's checkout, a git command run in an
 // enclosing repository.
 func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath) error {
-	var problems []string
+	var problems, slotNames, paths []string
 	for _, slot := range slots {
 		disk, err := inspectWorkspaceSlot(slot.path, slot.source)
 		if err != nil {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot.slot, err)
+		}
+		if disk != workspaceSlotMaterialized {
+			slotNames = append(slotNames, slot.slot)
+			paths = append(paths, slot.path)
 		}
 		switch disk {
 		case workspaceSlotAbsent:
@@ -1350,43 +1367,88 @@ func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath
 	if len(problems) > 1 {
 		pronoun = "them"
 	}
-	return &ConflictError{Kind: "workspace", Name: workspaceName, Reason: fmt.Sprintf("%s; run `angee workspace repair %s` to materialize %s", strings.Join(problems, "; "), workspaceName, pronoun)}
+	reason := fmt.Sprintf("%s; run `angee workspace repair %s` to materialize %s", strings.Join(problems, "; "), workspaceName, pronoun)
+	opErr := &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseSlotMissing,
+		Workspace: workspaceName,
+		Paths:     paths,
+		Hint:      fmt.Sprintf("Run `angee workspace repair %s`.", workspaceName),
+		Summary:   reason,
+	}
+	if len(slotNames) == 1 {
+		opErr.Slot = slotNames[0]
+	}
+	return opErr
 }
 
-// pushWorkspaceGitSource pushes one clean git slot. An explicit ref is pushed
-// as given. Otherwise the slot pushes to its upstream, or sets one on its
-// branch; a slot with no upstream and no commits beyond its base is left
-// alone, since the push would only create a remote branch with no work on it.
-func pushWorkspaceGitSource(ctx context.Context, client git.Client, workspaceName, slot, path string, source manifest.Source, wsSource manifest.WorkspaceSource, ref string) error {
+// workspaceGitPush is what a push of one clean git slot does. An explicit ref
+// is pushed as given. Otherwise the slot pushes to its upstream, or sets one
+// on its branch; a slot with no upstream and no commits beyond its base is
+// left alone (skip says why), since the push would only create a remote
+// branch with no work on it.
+type workspaceGitPush struct {
+	ref      string // an explicit ref, or "" for the upstream
+	upstream string // the branch to push and track, when it has no upstream
+	skip     string
+	step     gitStep
+}
+
+// planWorkspaceGitPush decides a slot's push without pushing, so an
+// aggregate push can refuse before any slot is pushed: a slot on a detached
+// HEAD with commits of its own has no branch to push.
+func planWorkspaceGitPush(ctx context.Context, client git.Client, workspaceName, slot, path string, source manifest.Source, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
+	plan := workspaceGitPush{ref: ref, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: pushRemoteURL(ctx, client, path), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
 	if ref != "" {
-		return client.Push(ctx, path, ref)
+		return plan, nil
 	}
 	current, onBranch, err := client.CurrentBranch(ctx, path)
 	if err != nil {
-		return err
+		return plan, err
 	}
 	_, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil {
-		return err
-	}
-	if hasUpstream {
-		return client.Push(ctx, path, "")
+	if err != nil || hasUpstream {
+		return plan, err
 	}
 	// The count is of HEAD, so it only speaks for the push when HEAD is what
 	// would be pushed.
 	if !onBranch || wsSource.Branch == "" || current == wsSource.Branch {
 		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known && ahead == 0 {
-			logctx.From(ctx).Warn(fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, base))
-			return nil
+			plan.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, base)
+			return plan, nil
 		}
 	}
 	if !onBranch {
-		return &ConflictError{Kind: "workspace source", Name: workspaceName + ":" + slot, Reason: fmt.Sprintf("it is on a detached HEAD, so there is no branch to push; publish it with `angee workspace source publish %s %s --branch <name>`", workspaceName, slot)}
+		return plan, detachedHeadPushError(workspaceName, slot, wsSource)
 	}
-	if wsSource.Branch != "" {
-		return client.PushSetUpstream(ctx, path, wsSource.Branch)
+	plan.upstream = wsSource.Branch
+	return plan, nil
+}
+
+// run carries out the push the plan decided.
+func (plan workspaceGitPush) run(ctx context.Context, client git.Client, path string) error {
+	switch {
+	case plan.skip != "":
+		logctx.From(ctx).Warn(plan.skip)
+		return nil
+	case plan.upstream != "":
+		return gitFailure(client.PushSetUpstream(ctx, path, plan.upstream), plan.step)
+	default:
+		return gitFailure(client.Push(ctx, path, plan.ref), plan.step)
 	}
-	return client.Push(ctx, path, "")
+}
+
+func detachedHeadPushError(workspaceName, slot string, wsSource manifest.WorkspaceSource) error {
+	publish := fmt.Sprintf("angee workspace source publish %s %s --branch <name>", workspaceName, slot)
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseDetachedHead,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    wsSource.Source,
+		Hint:      fmt.Sprintf("Publish it with `%s`.", publish),
+		Summary:   fmt.Sprintf("source slot %q is on a detached HEAD, so there is no branch to push; publish it with `%s`", slot, publish),
+	}
 }
 
 // workspaceGitSourceCommitsBeyondBase counts the slot's own commits: those
@@ -1418,7 +1480,8 @@ func workspaceGitSourceCommitsBeyondBase(ctx context.Context, client git.Client,
 	return ahead, base, true
 }
 
-func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) ([]api.SourceState, error) {
+func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (states []api.SourceState, err error) {
+	defer operation{name: "workspace.sync-base", title: fmt.Sprintf("Sync base for workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
 	if err != nil {
 		return nil, err
@@ -1445,36 +1508,57 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
 	}
+	// Every slot must be able to sync before any is touched, so a refusal
+	// never leaves the workspace half-synced.
 	client := p.gitClient()
-	states := []api.SourceState{}
-	for _, target := range targets {
-		path := target.path
-		dirty, err := client.Dirty(ctx, path)
+	baseRefs := make([]string, len(targets))
+	for i, target := range targets {
+		if err := requireCleanCheckout(ctx, client, target.path, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+			return nil, err
+		}
+		baseRefs[i] = workspaceSourceBaseRef(target.source, target.wsSource)
+		if baseRefs[i] == "" {
+			return nil, &OperationError{
+				Code:    CodePreconditionFailed,
+				Slot:    target.slot,
+				Source:  target.wsSource.Source,
+				Hint:    fmt.Sprintf("Set `ref` on the slot or `default_ref` on source %q.", target.wsSource.Source),
+				Summary: fmt.Sprintf("source slot %q has no base ref to sync from. Set `ref` on the slot or `default_ref` on source %q.", target.slot, target.wsSource.Source),
+			}
+		}
+	}
+	// Fetch every slot and resolve its base before merging any, so a remote
+	// that fails or lacks the base refuses the sync with no slot changed.
+	syncRefs := make([]string, len(targets))
+	for i, target := range targets {
+		fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: originURL(ctx, client, target.path), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
+		if err := client.Fetch(ctx, target.path); err != nil {
+			return nil, gitFailure(err, fetch)
+		}
+		syncRef, err := client.SyncBaseRef(ctx, target.path, baseRefs[i])
 		if err != nil {
-			return nil, err
+			var command *git.CommandError
+			if errors.As(err, &command) {
+				return nil, gitFailure(err, gitStep{action: "resolving the base of", object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source})
+			}
+			hint := fmt.Sprintf("Check the base ref %q of source slot %q.", baseRefs[i], target.slot)
+			return nil, &OperationError{Code: CodePreconditionFailed, Slot: target.slot, Source: target.wsSource.Source, Hint: hint, Summary: fmt.Sprintf("source slot %q: %v. %s", target.slot, err, hint), Err: err}
 		}
-		if dirty {
-			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, target.slot)
-		}
-		baseRef := workspaceSourceBaseRef(target.source, target.wsSource)
-		if baseRef == "" {
-			return nil, fmt.Errorf("workspace %q source %q has no base ref", name, target.slot)
-		}
-		if err := client.Fetch(ctx, path); err != nil {
-			return nil, err
-		}
-		syncRef, err := client.SyncBaseRef(ctx, path, baseRef)
-		if err != nil {
-			return nil, err
-		}
+		syncRefs[i] = syncRef
+	}
+	states = []api.SourceState{}
+	for i, target := range targets {
+		step := gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
+		var err error
 		switch method {
 		case workspaceSyncBaseRebase:
-			err = client.Rebase(ctx, path, syncRef)
+			step.action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
+			err = client.Rebase(ctx, target.path, syncRefs[i])
 		default:
-			err = client.Merge(ctx, path, syncRef)
+			err = client.Merge(ctx, target.path, syncRefs[i])
 		}
 		if err != nil {
-			return nil, err
+			return nil, syncConflictOrFailure(ctx, err, target.path, step)
 		}
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {

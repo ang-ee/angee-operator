@@ -387,7 +387,7 @@ func (p *RemoteClient) JobRun(ctx context.Context, name string, inputs map[strin
 		}
 	}
 	if op.Status == api.JobRunFailed {
-		return []byte(op.Output), errors.New(op.Error)
+		return []byte(op.Output), service.JobRunFailure(op)
 	}
 	return []byte(op.Output), nil
 }
@@ -922,13 +922,13 @@ func operatorHTTPError(status int, data []byte) error {
 	return &RemoteError{Status: status, Body: api.ErrorResponse{Error: text}}
 }
 
-// AsConflict reports whether err is a RemoteConflict and, when kind is
-// non-empty, whether its Kind matches. It is the exported successor to the
+// AsConflict reports whether err is a RemoteConflict and, when cause is
+// non-empty, whether its cause matches. It is the exported successor to the
 // CLI's former remoteConflict helper.
-func AsConflict(err error, kind string) (*RemoteConflict, bool) {
+func AsConflict(err error, cause string) (*RemoteConflict, bool) {
 	var conflict *RemoteConflict
 	if !errors.As(err, &conflict) {
 		return nil, false
 	}
-	return conflict, kind == "" || conflict.Body.Kind == kind
+	return conflict, cause == "" || conflict.Body.Cause == cause
 }

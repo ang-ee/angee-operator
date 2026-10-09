@@ -869,14 +869,17 @@ func parseKeyValues(values []string) (map[string]string, error) {
 }
 
 func stackInitError(template string, err error) error {
-	var conflict *service.ConflictError
-	if errors.As(err, &conflict) && conflict.Kind == "stack-root" {
-		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(conflict.Name))
+	var paths []string
+	var opErr *service.OperationError
+	if errors.As(err, &opErr) && opErr.Cause == service.CauseStackRootExists {
+		paths = opErr.Paths
+	} else if remote, ok := platformclient.AsConflict(err, service.CauseStackRootExists); ok {
+		paths = remote.Body.Paths
 	}
-	if remote, ok := platformclient.AsConflict(err, "stack-root"); ok {
-		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(remote.Body.Name))
+	if len(paths) != 1 {
+		return err
 	}
-	return err
+	return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(paths[0]))
 }
 
 func resolveStackTemplateInputs(cmd *cobra.Command, platform service.API, template string, provided map[string]string, yes bool) (map[string]string, error) {

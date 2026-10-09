@@ -260,11 +260,15 @@ func needsQuoting(value string) bool {
 	return false
 }
 
-// RedactURL replaces URL user information with a fixed placeholder. Invalid
-// URLs and URLs without user information are returned unchanged.
+// RedactURL replaces URL user information with a fixed placeholder. A URL
+// without user information is returned unchanged; one that does not parse is
+// masked as free text (RedactText), since it may still carry a credential.
 func RedactURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.User == nil {
+	if err != nil {
+		return RedactText(rawURL)
+	}
+	if parsed.User == nil {
 		return rawURL
 	}
 	parsed.User = nil

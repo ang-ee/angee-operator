@@ -44,7 +44,8 @@ func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, i
 
 var jobRunSequence atomic.Uint64
 
-func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[string]string, chainedRestart bool) (api.JobRunOperation, error) {
+func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[string]string, chainedRestart bool) (receipt api.JobRunOperation, err error) {
+	defer jobOperation(name, chainedRestart).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "job")
 	if err != nil {
 		return api.JobRunOperation{}, err
@@ -71,7 +72,7 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 	if p.activeJobRun {
 		p.jobRunsMu.Unlock()
 		release()
-		return api.JobRunOperation{}, &InvalidInputError{Field: "job", Reason: "another job operation is active"}
+		return api.JobRunOperation{}, mutationBusyError("another job operation is active")
 	}
 	p.activeJobRun = true
 	id := strconv.FormatInt(time.Now().UnixMilli(), 36) + "-" + strconv.FormatUint(jobRunSequence.Add(1), 36)
@@ -98,7 +99,7 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 	// Snapshot the receipt while still holding the lock. Returning it after the
 	// executor goroutine spawns would race the executor's setNode writes, which
 	// mutate the stored record's Nodes backing array (WARNING: DATA RACE).
-	receipt := cloneJobRun(op)
+	receipt = cloneJobRun(op)
 	p.jobRunsMu.Unlock()
 	operationContext := ctx
 	if p.detachedContext != nil {
@@ -110,7 +111,8 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 
 // JobRun preserves the synchronous local API while the operator transports use
 // JobRunStart to obtain a durable receipt immediately.
-func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {
+func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]string) (output []byte, err error) {
+	defer jobOperation(name, false).annotate(&err)
 	op, err := p.JobRunStart(ctx, name, inputs, false)
 	if err != nil {
 		return nil, err
@@ -129,9 +131,21 @@ func (p *Platform) JobRun(ctx context.Context, name string, inputs map[string]st
 		}
 	}
 	if op.Status == api.JobRunFailed {
-		return []byte(op.Output), errors.New(op.Error)
+		return []byte(op.Output), JobRunFailure(op)
 	}
 	return []byte(op.Output), nil
+}
+
+// JobRunFailure is the error JobRun returns for a failed run, built from its
+// receipt, so the local platform and a remote operator's client report it the
+// same way.
+func JobRunFailure(op api.JobRunOperation) error {
+	code := op.ErrorCode
+	if code == "" {
+		code = CodeJobFailed
+	}
+	run := jobOperation(op.RootJob, op.ChainedRestart)
+	return &OperationError{Code: code, Cause: op.ErrorCause, Operation: run.name, Job: op.RootJob, Title: run.title, Summary: op.Error}
 }
 
 func (p *Platform) JobRunGet(_ context.Context, id string) (api.JobRunOperation, error) {
@@ -386,6 +400,9 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 	op, _ := p.JobRunGet(ctx, id)
 	done := map[string]bool{}
 	failed := map[string]bool{}
+	// failures says why each node that failed, or was blocked by something
+	// other than a failed node, did not run, for the run's error.
+	var failures []string
 	p.updateJobRun(id, func(o *api.JobRunOperation) { o.Status = api.JobRunRunning })
 	remaining := len(op.Nodes)
 	for remaining > 0 {
@@ -417,6 +434,9 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 				remaining--
 				progressed = true
 				p.setNode(id, i, api.JobRunBlocked, blockedMessage)
+				if blockedMessage != "dependency failed" {
+					failures = append(failures, fmt.Sprintf("%s %q was blocked: %s", n.Kind, n.Name, blockedMessage))
+				}
 				continue
 			}
 			if !ready {
@@ -434,6 +454,9 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 			if err != nil {
 				failed[n.Name] = true
 				p.setNode(id, i, api.JobRunFailed, err.Error())
+				if n.Name != op.RootJob {
+					failures = append(failures, fmt.Sprintf("%s %q failed: %s", n.Kind, n.Name, firstLine(err.Error())))
+				}
 			} else {
 				done[n.Name] = true
 				p.setNode(id, i, api.JobRunSucceeded, "")
@@ -447,18 +470,27 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 							p.setNode(id, pendingIndex, api.JobRunBlocked, "root job failed")
 						}
 					}
-					return err
+					return &OperationError{Code: CodeJobFailed, Job: op.RootJob, Summary: err.Error(), Err: err}
 				}
 			}
 			remaining--
 			progressed = true
 		}
 		if !progressed {
-			return fmt.Errorf("job dependency graph cannot make progress")
+			return &OperationError{Code: CodeJobFailed, Job: op.RootJob, Summary: "job dependency graph cannot make progress"}
 		}
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("one or more dependents failed")
+		if len(failures) == 0 {
+			failures = []string{"one or more dependents failed"}
+		}
+		return &OperationError{
+			Code:    CodeJobFailed,
+			Cause:   CauseDependencyFailed,
+			Job:     op.RootJob,
+			Hint:    "Check the failed service's logs with `angee logs <service>`, then restart it.",
+			Summary: strings.Join(failures, "; "),
+		}
 	}
 	return nil
 }
@@ -543,6 +575,12 @@ func (p *Platform) finishJobRun(id string, err error) {
 		if err != nil {
 			o.Status = api.JobRunFailed
 			o.Error = boundedJobError(err.Error())
+			o.ErrorCode = CodeJobFailed
+			var opErr *OperationError
+			if errors.As(err, &opErr) {
+				o.ErrorCode = opErr.Code
+				o.ErrorCause = opErr.Cause
+			}
 		} else {
 			o.Status = api.JobRunSucceeded
 		}
@@ -566,6 +604,7 @@ func (p *Platform) finishTimedOutJobRun(id string, timeout time.Duration) {
 		o.CurrentStep = ""
 		o.Status = api.JobRunFailed
 		o.Error = boundedJobError(message)
+		o.ErrorCode = CodeTimeout
 		for i := range o.Nodes {
 			switch o.Nodes[i].Status {
 			case api.JobRunRunning:
@@ -732,4 +771,13 @@ func runCommand(cmd *exec.Cmd, sink io.Writer) ([]byte, error) {
 	err := cmd.Run()
 	out := captured.Bytes()
 	return out, err
+}
+
+// jobOperation names a job run, such as `Run job "deps" with chained restart`.
+func jobOperation(name string, chainedRestart bool) operation {
+	title := fmt.Sprintf("Run job %q", name)
+	if chainedRestart {
+		title += " with chained restart"
+	}
+	return operation{name: "job.run", title: title, job: name}
 }

@@ -300,9 +300,8 @@ func TestMutationLeaseIsReentrantAndRejectsOverlap(t *testing.T) {
 	if _, _, err := p.beginMutation(context.Background(), "service"); err == nil {
 		t.Fatal("overlapping beginMutation succeeded")
 	} else {
-		var invalid *InvalidInputError
-		if !errors.As(err, &invalid) || invalid.Field != "service" {
-			t.Fatalf("overlap error = %T %v, want service InvalidInputError", err, err)
+		if opErr := AsOperationError(err); opErr.Code != CodeConflict || !strings.Contains(err.Error(), "another stack mutation is active") {
+			t.Fatalf("overlap error = %T %v, want a CONFLICT", err, err)
 		}
 	}
 }

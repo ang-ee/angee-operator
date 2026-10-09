@@ -149,7 +149,8 @@ func countGitOpsState(summary *api.GitOpsSummary, state string, pushed bool) {
 	}
 }
 
-func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot string) (api.WorkspaceSourceStatus, error) {
+func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot string) (status api.WorkspaceSourceStatus, err error) {
+	defer workspaceSlotOperation("workspace.source-fetch", "Fetch", workspaceName, slot).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
@@ -162,13 +163,16 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
-	if err := p.gitClient().Fetch(ctx, path); err != nil {
-		return api.WorkspaceSourceStatus{}, err
+	client := p.gitClient()
+	step := gitStep{action: "fetching", object: fmt.Sprintf("source %q", wsSource.Source), remote: originURL(ctx, client, path), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
+	if err := client.Fetch(ctx, path); err != nil {
+		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
 }
 
-func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot string) (api.WorkspaceSourceStatus, error) {
+func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot string) (status api.WorkspaceSourceStatus, err error) {
+	defer workspaceSlotOperation("workspace.source-pull", "Pull", workspaceName, slot).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
@@ -185,20 +189,18 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 		return api.WorkspaceSourceStatus{}, err
 	}
 	client := p.gitClient()
-	dirty, err := client.Dirty(ctx, path)
-	if err != nil {
+	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	if dirty {
-		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q has uncommitted changes", workspaceName, slot)
-	}
+	step := gitStep{action: "pulling", object: fmt.Sprintf("source slot %q", slot), remote: originURL(ctx, client, path), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
 	if err := client.Pull(ctx, path); err != nil {
-		return api.WorkspaceSourceStatus{}, err
+		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
 }
 
-func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot, ref string) (api.WorkspaceSourceStatus, error) {
+func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot, ref string) (status api.WorkspaceSourceStatus, err error) {
+	defer workspaceSlotOperation("workspace.source-push", "Push", workspaceName, slot).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
@@ -215,14 +217,14 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 		return api.WorkspaceSourceStatus{}, err
 	}
 	client := p.gitClient()
-	dirty, err := client.Dirty(ctx, path)
+	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	plan, err := planWorkspaceGitPush(ctx, client, workspaceName, slot, path, source, wsSource, ref)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	if dirty {
-		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q has uncommitted changes", workspaceName, slot)
-	}
-	if err := pushWorkspaceGitSource(ctx, client, workspaceName, slot, path, source, wsSource, ref); err != nil {
+	if err := plan.run(ctx, client, path); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
@@ -256,4 +258,10 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, workspaceName, slo
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
 	}
 	return stack, wsSource, source, path, nil
+}
+
+// workspaceSlotOperation names a verb on one workspace source slot, such as
+// `Pull for workspace "src" slot "app"`.
+func workspaceSlotOperation(name, verb, workspace, slot string) operation {
+	return operation{name: name, title: fmt.Sprintf("%s for workspace %q slot %q", verb, workspace, slot), workspace: workspace, slot: slot}
 }

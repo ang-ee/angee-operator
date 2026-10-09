@@ -48,10 +48,13 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 			return StackInitResult{}, err
 		}
 		if nonEmpty {
-			return StackInitResult{}, &ConflictError{
-				Kind:   "stack-root",
-				Name:   preparedRoot,
-				Reason: "already exists and is non-empty; use --force to overwrite or `angee stack update` to update",
+			hint := "Use --force to overwrite, or `angee stack update` to update it."
+			return StackInitResult{}, &OperationError{
+				Code:    CodeConflict,
+				Cause:   CauseStackRootExists,
+				Paths:   []string{preparedRoot},
+				Hint:    hint,
+				Summary: fmt.Sprintf("%s already exists and is not empty. %s", preparedRoot, hint),
 			}
 		}
 	}

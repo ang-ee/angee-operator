@@ -167,6 +167,7 @@ func TestRedactURL(t *testing.T) {
 		{name: "username", in: "ssh://git@example.com/repo", want: "ssh://***@example.com/repo"},
 		{name: "no userinfo", in: "https://example.com/repo", want: "https://example.com/repo"},
 		{name: "invalid", in: "://%", want: "://%"},
+		{name: "invalid with credential", in: "https://user:p%zzword@example.com/x.git", want: "https://***@example.com/x.git"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

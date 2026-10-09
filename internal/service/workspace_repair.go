@@ -166,9 +166,18 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 
 // repairReason renders an error as a slot outcome's reason: on one line, with
 // credentials in remote URLs redacted, since git errors quote both their
-// command line and its output.
+// command line and its output. An operation error gives what failed and git's
+// line, without the operation's title, which the repair result already names.
 func repairReason(err error) string {
-	return strings.Join(strings.Fields(logctx.RedactText(err.Error())), " ")
+	text := err.Error()
+	var opErr *OperationError
+	if errors.As(err, &opErr) && opErr != nil && opErr.Summary != "" {
+		text = opErr.Summary
+		if opErr.GitLine != "" {
+			text += " git: " + opErr.GitLine
+		}
+	}
+	return strings.Join(strings.Fields(logctx.RedactText(text)), " ")
 }
 
 // repairMissingWorkspaceSlot materializes one declared slot whose path is

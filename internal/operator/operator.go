@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -368,8 +369,10 @@ func (s *Server) requestLogging(next http.Handler) http.Handler {
 	logger := s.logger()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		requestLogger := logger.With("req", newRequestID())
-		ctx := logctx.With(r.Context(), requestLogger)
+		requestID := requestIDFrom(r)
+		w.Header().Set(requestIDHeader, requestID)
+		requestLogger := logger.With("req", requestID)
+		ctx := withRequestID(logctx.With(r.Context(), requestLogger), requestID)
 		r = r.WithContext(ctx)
 		requestLogger.LogAttrs(ctx, slog.LevelDebug, "request started",
 			slog.String("method", r.Method),
@@ -379,6 +382,13 @@ func (s *Server) requestLogging(next http.Handler) http.Handler {
 
 		wrapped, status := wrapStatusResponseWriter(w)
 		next.ServeHTTP(wrapped, r)
+
+		if failure := status.failure; failure != nil {
+			requestLogger.LogAttrs(ctx, failure.logLevel(), "operation failed", append([]slog.Attr{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+			}, failure.logAttrs()...)...)
+		}
 
 		level := slog.LevelInfo
 		if r.URL.Path == "/healthz" {
@@ -394,6 +404,33 @@ func (s *Server) requestLogging(next http.Handler) http.Handler {
 	})
 }
 
+// requestIDHeader carries a request's ID: honoured on the request when it is a
+// short token, and always set on the response.
+const requestIDHeader = "X-Request-ID"
+
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// requestIDFrom returns the request's X-Request-ID when it is safe to log and
+// echo, or a new ID.
+func requestIDFrom(r *http.Request) string {
+	if id := r.Header.Get(requestIDHeader); requestIDPattern.MatchString(id) {
+		return id
+	}
+	return newRequestID()
+}
+
+type requestIDKey struct{}
+
+func withRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// requestIDFromContext returns the ID of the request ctx belongs to, or "".
+func requestIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
+}
+
 func newRequestID() string {
 	var id [4]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -404,7 +441,16 @@ func newRequestID() string {
 
 type statusResponseWriter struct {
 	http.ResponseWriter
-	status int
+	status  int
+	failure *classifiedError
+}
+
+// recordFailure keeps the failure a handler responded with, for the request
+// log; the first one recorded wins.
+func (w *statusResponseWriter) recordFailure(c classifiedError) {
+	if w.failure == nil {
+		w.failure = &c
+	}
 }
 
 func (w *statusResponseWriter) WriteHeader(status int) {
@@ -1154,6 +1200,14 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	// Every error body carries a code and the request's ID.
+	if body, ok := value.(api.ErrorResponse); ok {
+		if body.Code == "" {
+			body.Code = codeForStatus(status)
+		}
+		body.RequestID = w.Header().Get(requestIDHeader)
+		value = body
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)

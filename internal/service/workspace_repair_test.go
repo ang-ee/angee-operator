@@ -291,8 +291,7 @@ func TestWorkspaceRepairRequiresMaterializedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("beginMutation() error = %v", err)
 	}
-	var invalid *InvalidInputError
-	if _, err := platform.WorkspaceRepair(ctx, "src"); !errors.As(err, &invalid) || !strings.Contains(err.Error(), "another stack mutation is active") {
+	if _, err := platform.WorkspaceRepair(ctx, "src"); AsOperationError(err).Code != CodeConflict || !strings.Contains(err.Error(), "another stack mutation is active") {
 		t.Fatalf("WorkspaceRepair() under a held lease error = %v, want the lease refusal", err)
 	}
 	release()
@@ -557,13 +556,14 @@ func assertRepairActions(t *testing.T, result api.WorkspaceRepairResult, want ma
 	}
 }
 
-// assertMissingSlotError checks err is the missing-slot refusal: a conflict
-// that points at workspace repair and contains each of parts, not a git error.
+// assertMissingSlotError checks err is the missing-slot refusal: a
+// PRECONDITION_FAILED slot_missing error that points at workspace repair and
+// contains each of parts, not a git error.
 func assertMissingSlotError(t *testing.T, err error, workspaceName string, parts ...string) {
 	t.Helper()
-	var conflict *ConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("error = %v (%T), want a missing-slot ConflictError", err, err)
+	opErr := AsOperationError(err)
+	if opErr == nil || opErr.Code != CodePreconditionFailed || opErr.Cause != CauseSlotMissing {
+		t.Fatalf("error = %v (%+v), want a slot_missing precondition", err, opErr)
 	}
 	message := err.Error()
 	if !strings.Contains(message, "; run `angee workspace repair "+workspaceName+"` to materialize ") || strings.Contains(message, "chdir") {

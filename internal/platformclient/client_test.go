@@ -198,9 +198,9 @@ func TestStreamTraceCompletesWhenConsumerCancels(t *testing.T) {
 
 func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {
 	body, err := json.Marshal(api.ErrorResponse{
-		Kind:  "workspace",
-		Name:  "missing",
-		Error: `workspace "missing" is not declared`,
+		Error:     `workspace "missing" is not declared`,
+		Code:      "NOT_FOUND",
+		Workspace: "missing",
 	})
 	if err != nil {
 		t.Fatalf("Marshal(ErrorResponse) error = %v", err)
@@ -211,7 +211,7 @@ func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {
 	if !errors.As(err, &notFound) {
 		t.Fatalf("operatorHTTPError() = %T, want RemoteNotFound", err)
 	}
-	if notFound.Status != http.StatusNotFound || notFound.Body.Kind != "workspace" || notFound.Body.Name != "missing" {
+	if notFound.Status != http.StatusNotFound || notFound.Body.Code != "NOT_FOUND" || notFound.Body.Workspace != "missing" {
 		t.Fatalf("RemoteNotFound = %#v", notFound)
 	}
 	if got := err.Error(); !strings.Contains(got, "HTTP 404") || !strings.Contains(got, `workspace "missing" is not declared`) {
@@ -261,7 +261,7 @@ func TestWorkspaceRepairRebuildsFailureFromResult(t *testing.T) {
 		}
 		w.WriteHeader(status)
 		if status != http.StatusOK {
-			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Kind: "workspace", Name: "feature/one", Error: `workspace "feature/one" is not declared`})
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "NOT_FOUND", Workspace: "feature/one", Error: `workspace "feature/one" is not declared`})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(result)

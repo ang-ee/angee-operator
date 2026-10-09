@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -524,6 +525,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 }
 
 func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, names []string) (retErr error) {
+	defer serviceOperation(action, names).annotate(&retErr)
 	ctx, release, err := p.beginMutation(ctx, "service")
 	if err != nil {
 		return err
@@ -696,4 +698,24 @@ func selectRuntimeServices(stack *manifest.Stack, names []string, runtimeKind ma
 		selected = append(selected, name)
 	}
 	return selected, nil
+}
+
+// serviceOperation names a service action, such as `Restart service "web"`.
+func serviceOperation(action string, names []string) operation {
+	verb := strings.ToUpper(action[:1]) + action[1:]
+	op := operation{name: "service." + action}
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = strconv.Quote(name)
+	}
+	switch len(names) {
+	case 0:
+		op.title = verb + " services"
+	case 1:
+		op.title = fmt.Sprintf("%s service %s", verb, quoted[0])
+		op.service = names[0]
+	default:
+		op.title = fmt.Sprintf("%s services %s", verb, strings.Join(quoted, ", "))
+	}
+	return op
 }

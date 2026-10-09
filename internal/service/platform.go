@@ -110,7 +110,7 @@ func (p *Platform) beginMutation(ctx context.Context, field string) (context.Con
 	case <-p.mutationLease:
 		return context.WithValue(ctx, mutationLeaseContextKey{}, p), func() { p.mutationLease <- struct{}{} }, nil
 	default:
-		return ctx, nil, &InvalidInputError{Field: field, Reason: "another stack mutation is active"}
+		return ctx, nil, mutationBusyError("another stack mutation is active")
 	}
 }
 

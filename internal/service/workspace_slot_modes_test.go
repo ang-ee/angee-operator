@@ -66,11 +66,10 @@ func TestBranchlessWorktreeSlotIsDetachedUntilPublished(t *testing.T) {
 
 	commitFile(t, slotPath, "change.txt")
 
-	var conflict *ConflictError
-	if _, err := platform.WorkspacePush(ctx, "feature-a", ""); !errors.As(err, &conflict) || !strings.Contains(err.Error(), "detached HEAD") {
+	if _, err := platform.WorkspacePush(ctx, "feature-a", ""); AsOperationError(err).Cause != CauseDetachedHead || !strings.Contains(err.Error(), "detached HEAD") {
 		t.Fatalf("WorkspacePush() of a detached slot with commits error = %v, want a detached-HEAD conflict", err)
 	}
-	if _, err := platform.WorkspaceSourcePush(ctx, "feature-a", "app", ""); !errors.As(err, &conflict) || !strings.Contains(err.Error(), "detached HEAD") {
+	if _, err := platform.WorkspaceSourcePush(ctx, "feature-a", "app", ""); AsOperationError(err).Cause != CauseDetachedHead || !strings.Contains(err.Error(), "detached HEAD") {
 		t.Fatalf("WorkspaceSourcePush() of a detached slot with commits error = %v, want a detached-HEAD conflict", err)
 	}
 	if err := platform.WorkspaceDestroy(ctx, "feature-a", true); err == nil || !strings.Contains(err.Error(), "1 commit(s) on a detached HEAD that no branch holds") {
