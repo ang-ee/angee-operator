@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git
+RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git openssh-client
 COPY --from=builder /build/angee /usr/local/bin/angee
 
 ENTRYPOINT ["/usr/local/bin/angee"]
