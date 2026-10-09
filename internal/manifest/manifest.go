@@ -22,6 +22,24 @@ const (
 var routeNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var routeHostPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 
+// dnsLabelPattern is one DNS label: 1-63 letters, digits and hyphens, not
+// starting or ending with a hyphen.
+var dnsLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// isDNSHostName reports whether name is a host name the edge can get a
+// certificate for: at most 253 characters of dot-separated DNS labels.
+func isDNSHostName(name string) bool {
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
 type Runtime string
 
 const (
@@ -589,7 +607,7 @@ func (s *Stack) ValidateExtended() error {
 		}
 		seen := map[string]bool{strings.ToLower(domain): true}
 		for _, alias := range s.Ingress.Aliases {
-			if !routeHostPattern.MatchString(alias) {
+			if !isDNSHostName(alias) {
 				return fmt.Errorf("ingress.aliases: %q is not a host name", alias)
 			}
 			// Host names are case-insensitive.
