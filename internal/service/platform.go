@@ -151,7 +151,8 @@ func (p *Platform) LoadStack() (*manifest.Stack, error) {
 	return stack, nil
 }
 
-func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
+func (p *Platform) StackPrepare(ctx context.Context) (prepared *CompiledStack, err error) {
+	defer stackOperation("stack.prepare", "Stack prepare").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return nil, err

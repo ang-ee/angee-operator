@@ -31,7 +31,8 @@ import (
 // attempted. Whenever the repair runs, the result lists every slot and the
 // error is a *WorkspaceRepairError naming the failed slots, or nil. Any other
 // error means the repair could not start, and the result is empty.
-func (p *Platform) WorkspaceRepair(ctx context.Context, name string) (api.WorkspaceRepairResult, error) {
+func (p *Platform) WorkspaceRepair(ctx context.Context, name string) (_ api.WorkspaceRepairResult, err error) {
+	defer operation{name: "workspace.repair", title: fmt.Sprintf("Repair for workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
 	if err != nil {
 		return api.WorkspaceRepairResult{}, err

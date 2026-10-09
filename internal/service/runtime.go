@@ -34,7 +34,8 @@ const devLogFollowTail = 50
 // a container that `angee restart` brings back up shortly after.
 const devLogFollowRetryDelay = time.Second
 
-func (p *Platform) StackBuild(ctx context.Context, services []string) error {
+func (p *Platform) StackBuild(ctx context.Context, services []string) (err error) {
+	defer stackOperation("stack.build", "Stack build").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return err
@@ -65,7 +66,8 @@ func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 	return p.composeBackend.Build(ctx, runtime.Target{Root: p.root, Services: selected, EnvFile: p.runtimeEnvFile(stack)})
 }
 
-func (p *Platform) StackUp(ctx context.Context, services []string, build bool) error {
+func (p *Platform) StackUp(ctx context.Context, services []string, build bool) (err error) {
+	defer stackOperation("stack.up", "Stack up").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return err
@@ -395,7 +397,8 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-func (p *Platform) StackDown(ctx context.Context) error {
+func (p *Platform) StackDown(ctx context.Context) (err error) {
+	defer stackOperation("stack.down", "Stack down").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return err

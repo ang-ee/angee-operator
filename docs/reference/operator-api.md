@@ -82,7 +82,9 @@ Every failed operation is reported in one shape. GraphQL puts it in
 Failures outside the client's control answer `500`, rather than a gateway
 status (`502`, `504`) that a proxy in front of the operator might retry or
 replace. A REST request rejected for its credentials answers `401` with code
-`UNAUTHORIZED`; it never reaches an operation.
+`UNAUTHORIZED`; it never reaches an operation. A GraphQL query that gqlgen
+rejects itself (a parse or validation error) keeps gqlgen's code, such as
+`GRAPHQL_VALIDATION_FAILED`.
 
 Causes come from angee's own state and from what a step was doing. angee
 never derives one by reading a tool's output: git, ssh and the remote own

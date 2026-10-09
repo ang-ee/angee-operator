@@ -58,6 +58,9 @@ latest tag.
   git failures and timeouts still answer `500`.
 - A dirty checkout is detected one way, by `git status`; go-git's status,
   which could disagree about untracked files, is no longer used.
+- URLs in errors and logs have their query values masked as well as their
+  user information, since a token is sometimes passed as a query
+  parameter.
 
 ### Removed
 

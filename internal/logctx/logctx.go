@@ -260,16 +260,28 @@ func needsQuoting(value string) bool {
 	return false
 }
 
-// RedactURL replaces URL user information with a fixed placeholder. A URL
-// without user information is returned unchanged; one that does not parse is
-// masked as free text (RedactText), since it may still carry a credential.
+// RedactURL replaces URL user information, and the values of its query
+// parameters (where a token is sometimes passed instead), with a fixed
+// placeholder. A URL with neither is returned unchanged; one that does not
+// parse is masked as free text (RedactText), since it may still carry a
+// credential.
 func RedactURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return RedactText(rawURL)
 	}
-	if parsed.User == nil {
+	if parsed.User == nil && parsed.RawQuery == "" {
 		return rawURL
+	}
+	if parsed.RawQuery != "" {
+		query := parsed.Query()
+		for key := range query {
+			query[key] = []string{"***"}
+		}
+		parsed.RawQuery = strings.ReplaceAll(query.Encode(), "%2A%2A%2A", "***")
+	}
+	if parsed.User == nil {
+		return parsed.String()
 	}
 	parsed.User = nil
 	redacted := parsed.String()

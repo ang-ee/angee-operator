@@ -179,6 +179,16 @@ func classifyOperationError(err error) *OperationError {
 	case errors.As(err, &invalid):
 		return &OperationError{Code: CodeInvalidInput, Err: err}
 	}
+	var repair *WorkspaceRepairError
+	if errors.As(err, &repair) {
+		// A repair that ran and could not materialize some slots keeps its
+		// message, which names each slot and why; the result carries them too.
+		opErr := &OperationError{Code: CodeInternal, Workspace: repair.Workspace, Err: err}
+		if len(repair.Failed) == 1 {
+			opErr.Slot = repair.Failed[0].Slot
+		}
+		return opErr
+	}
 	var command *git.CommandError
 	if git.IsTimeout(err) || errors.As(err, &command) {
 		var opErr *OperationError
@@ -432,4 +442,9 @@ func syncConflictOrFailure(ctx context.Context, err error, path string, step git
 	opErr.Summary = fmt.Sprintf("%s stopped on conflicts in %s. %s", step.describe(), strings.Join(conflicted[:min(len(conflicted), maxMessagePaths)], ", "), hint)
 	opErr.GitLine = ""
 	return opErr
+}
+
+// stackOperation names a verb on the whole stack, such as "Stack up".
+func stackOperation(name, title string) operation {
+	return operation{name: name, title: title}
 }

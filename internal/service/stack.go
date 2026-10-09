@@ -15,7 +15,8 @@ type StackInitResult struct {
 	Root     string `json:"root"`
 }
 
-func (p *Platform) StackInit(ctx context.Context, template string, targetPath string, inputs map[string]string, force bool) (StackInitResult, error) {
+func (p *Platform) StackInit(ctx context.Context, template string, targetPath string, inputs map[string]string, force bool) (result StackInitResult, err error) {
+	defer stackOperation("stack.init", "Stack init").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return StackInitResult{}, err
@@ -167,7 +168,8 @@ func (p *Platform) resolveChainTemplate(ctx context.Context, stackTemplatePath, 
 	return path, err
 }
 
-func (p *Platform) StackUpdate(ctx context.Context) error {
+func (p *Platform) StackUpdate(ctx context.Context) (err error) {
+	defer stackOperation("stack.update", "Stack update").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return err

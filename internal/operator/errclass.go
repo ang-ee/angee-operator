@@ -150,7 +150,7 @@ func (c classifiedError) extensions() map[string]any {
 // the client can act on, ERROR for one in git, a job or the operator.
 func (c classifiedError) logLevel() slog.Level {
 	switch c.code {
-	case service.CodeNotFound, service.CodeInvalidInput, service.CodeConflict, service.CodePreconditionFailed:
+	case service.CodeNotFound, service.CodeInvalidInput, service.CodeConflict, service.CodePreconditionFailed, codeUnauthorized:
 		return slog.LevelWarn
 	default:
 		return slog.LevelError

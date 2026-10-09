@@ -20,22 +20,24 @@ import (
 // current branch with `--no-ff` (mirrors the safe-default a human would
 // pick). On conflict the worktree is left in conflicted state for the
 // caller to resolve and the response carries the conflicting paths.
-func (p *Platform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, ref string) (api.GitOpResult, error) {
+func (p *Platform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, ref string) (result api.GitOpResult, err error) {
+	op := workspaceSlotOperation("workspace.source-merge", "Merge", workspace, slot)
+	defer op.annotate(&err)
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "merge ref is required"}
 	}
-	op := workspaceSlotOperation("workspace.source-merge", "Merge", workspace, slot)
 	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("merging %s into", ref)}, workspace, slot, "merge", "--no-ff", "--no-edit", ref)
 }
 
 // WorkspaceSourceRebase rebases the current branch onto `ref`. On conflict
 // the worktree stays in the rebasing state; callers must
 // `workspaceSourceRebaseContinue` or `workspaceSourceRebaseAbort`.
-func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, ref string) (api.GitOpResult, error) {
+func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, ref string) (result api.GitOpResult, err error) {
+	op := workspaceSlotOperation("workspace.source-rebase", "Rebase", workspace, slot)
+	defer op.annotate(&err)
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "rebase ref is required"}
 	}
-	op := workspaceSlotOperation("workspace.source-rebase", "Rebase", workspace, slot)
 	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, workspace, slot, "rebase", ref)
 }
 

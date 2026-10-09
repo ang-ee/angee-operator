@@ -488,7 +488,7 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 			Code:    CodeJobFailed,
 			Cause:   CauseDependencyFailed,
 			Job:     op.RootJob,
-			Hint:    "Check the failed service's logs with `angee logs <service>`, then restart it.",
+			Hint:    "Check the failed node's logs with `angee logs <name>`, then run the job again.",
 			Summary: strings.Join(failures, "; "),
 		}
 	}

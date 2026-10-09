@@ -57,3 +57,16 @@ func TestDirtyPaths(t *testing.T) {
 		t.Fatalf("DirtyPaths() = %q, want %q", paths, want)
 	}
 }
+
+// Output that echoes a credential-bearing URL is redacted where git ran, so
+// the CommandError never holds the credential.
+func TestRunRedactsCommandOutput(t *testing.T) {
+	_, err := Client{Bin: "sh"}.Run(t.Context(), "", "-c", "echo 'fatal: https://user:s3cret@example.com/x.git'; exit 1")
+	var command *CommandError
+	if !errors.As(err, &command) {
+		t.Fatalf("Run() error = %v, want *CommandError", err)
+	}
+	if strings.Contains(command.Output, "s3cret") || strings.Contains(err.Error(), "s3cret") || !strings.Contains(command.Output, "https://***@example.com/x.git") {
+		t.Fatalf("output = %q, want the credential masked", command.Output)
+	}
+}

@@ -351,7 +351,7 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
 	}
 	path := p.sourcePath(name, source)
-	if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join(path, ".git")); os.IsNotExist(err) {
 		hint := fmt.Sprintf("Run `angee source fetch %s` to clone it.", name)
 		return api.SourceState{}, &OperationError{
 			Code:    CodePreconditionFailed,
@@ -362,6 +362,8 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 			Summary: fmt.Sprintf("source %q has no cache at %s, so there is nothing to push. %s", name, path, hint),
 			Err:     err,
 		}
+	} else if err != nil {
+		return api.SourceState{}, err
 	}
 	client := p.gitClient()
 	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source %q", name), "", name); err != nil {

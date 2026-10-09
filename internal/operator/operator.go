@@ -1200,12 +1200,14 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	// Every error body carries a code and the request's ID.
+	// Every error body carries a code and the request's ID, and is logged
+	// as a failure, including one a handler writes without a service error.
 	if body, ok := value.(api.ErrorResponse); ok {
 		if body.Code == "" {
 			body.Code = codeForStatus(status)
 		}
 		body.RequestID = w.Header().Get(requestIDHeader)
+		recordFailure(w, classifiedError{status: status, code: body.Code, cause: body.Cause, operation: body.Operation, message: body.Error})
 		value = body
 	}
 	w.Header().Set("Content-Type", "application/json")

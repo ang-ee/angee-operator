@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
@@ -18,6 +19,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
+	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -179,20 +181,25 @@ func readGraphQLBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 
 func formatGraphQLError(ctx context.Context, err error) *gqlerror.Error {
 	gqlErr := graphql.DefaultErrorPresenter(ctx, err)
-	// Errors gqlgen raises itself (parse and validation failures) wrap no
-	// service error and already carry their own extensions.
-	if gqlErr.Err == nil {
-		return gqlErr
-	}
-
-	// Share the classifier with the REST surface.
-	c := classifyServiceError(gqlErr.Err)
-	gqlErr.Message = c.message
 	if gqlErr.Extensions == nil {
 		gqlErr.Extensions = map[string]any{}
 	}
-	for key, value := range c.extensions() {
-		gqlErr.Extensions[key] = value
+	var c classifiedError
+	if gqlErr.Err != nil {
+		// Share the classifier with the REST surface.
+		c = classifyServiceError(gqlErr.Err)
+		gqlErr.Message = c.message
+		for key, value := range c.extensions() {
+			gqlErr.Extensions[key] = value
+		}
+	} else {
+		// A parse or validation error gqlgen raises itself keeps its own
+		// code (GRAPHQL_VALIDATION_FAILED, ...); one without gets
+		// INVALID_INPUT, since the request is at fault.
+		if _, ok := gqlErr.Extensions["code"]; !ok {
+			gqlErr.Extensions["code"] = service.CodeInvalidInput
+		}
+		c = classifiedError{code: fmt.Sprint(gqlErr.Extensions["code"]), message: gqlErr.Message}
 	}
 	requestID := requestIDFromContext(ctx)
 	if requestID != "" {

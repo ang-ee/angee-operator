@@ -150,7 +150,8 @@ func TestSyncBaseErrorContract(t *testing.T) {
 func TestRESTErrorsAlwaysCarryACodeAndRequestID(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, "version: 1\nkind: stack\nname: test\n")
-	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 28093})
+	var logs bytes.Buffer
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 28093, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -178,6 +179,25 @@ func TestRESTErrorsAlwaysCarryACodeAndRequestID(t *testing.T) {
 		if rr.Code != tc.wantStatus || body.Code != tc.wantCode || body.RequestID != id || len(id) != 8 {
 			t.Fatalf("%s %s = %d %+v (header id %q), want %d %s with a generated request id", tc.method, tc.path, rr.Code, body, id, tc.wantStatus, tc.wantCode)
 		}
+		// Written by the handler or by the service, the failure is logged.
+		if line := logLine(logs.String(), "operation failed"); !strings.Contains(line, "req="+id) || !strings.Contains(line, "code="+tc.wantCode) {
+			t.Fatalf("%s %s log = %q, want an operation failed record", tc.method, tc.path, logs.String())
+		}
+		logs.Reset()
+	}
+
+	// A query gqlgen rejects itself keeps gqlgen's code and gains the request ID.
+	rr := serveRequest(server, graphQLRequest(t, `{ noSuchField }`))
+	var resp struct {
+		Errors []struct {
+			Extensions map[string]any `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil || len(resp.Errors) == 0 {
+		t.Fatalf("GraphQL response = %s (%v), want an error", rr.Body.String(), err)
+	}
+	if ext := resp.Errors[0].Extensions; ext["code"] != "GRAPHQL_VALIDATION_FAILED" || ext["request_id"] != rr.Header().Get("X-Request-ID") {
+		t.Fatalf("GraphQL validation error extensions = %#v, want gqlgen's code and the request id", ext)
 	}
 }
 

@@ -51,6 +51,25 @@ func TestRepairReasonUsesSummaryAndGitLine(t *testing.T) {
 	}
 }
 
+// Only a missing cache is source_cache_missing; one that cannot be inspected
+// is reported as the failure it is.
+func TestSourcePushTellsAMissingCacheFromAnUnreadableOne(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	p, cache, _, _, _ := newMovedGitSource(t)
+	// The cache exists but cannot be searched, so its .git cannot be statted.
+	if err := os.Chmod(cache, 0); err != nil {
+		t.Fatalf("Chmod(%s) error = %v", cache, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cache, 0o755) })
+
+	_, err := p.SourcePush(t.Context(), "app", "")
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause == CauseSourceCacheMissing || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("SourcePush() error = %v (%+v), want the permission failure, not source_cache_missing", err, opErr)
+	}
+}
+
 // A remote URL that does not parse still has its credential masked.
 func TestGitFailureMasksAnUnparseableRemote(t *testing.T) {
 	remote := "https://user:p%zzword@example.com/x.git"
@@ -272,8 +291,11 @@ func TestWorkspaceSyncBaseReportsMergeConflict(t *testing.T) {
 	runGit(t, seed, "commit", "-am", "upstream readme")
 	runGit(t, seed, "push", "origin", "main")
 	app := fixture.slotPath("app")
+	// The merge needs a committer, which a CI runner's git does not have.
+	runGit(t, app, "config", "user.email", "test@example.com")
+	runGit(t, app, "config", "user.name", "Test User")
 	mustWriteFile(t, filepath.Join(app, "README.md"), "slot change\n")
-	runGit(t, app, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "-am", "slot readme")
+	runGit(t, app, "commit", "-am", "slot readme")
 
 	_, err := fixture.platform.WorkspaceSyncBase(context.Background(), "feature-a", "merge")
 	opErr := AsOperationError(err)
