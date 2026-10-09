@@ -4,7 +4,7 @@ Requirements:
 
 - Go 1.25+
 - Docker, for container services and compose-backed tests
-- git
+- git 2.24+
 - process-compose, for local-process services
 
 ## Make Targets

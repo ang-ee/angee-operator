@@ -48,7 +48,7 @@ Requirements:
   Services. The compose backend shells out to `docker compose`, which some
   installs (for example `brew install docker` alone) do not provide.
 - `process-compose`, for `runtime: local` Services.
-- `git`, for git-kind Sources.
+- `git` 2.24 or newer, for git-kind Sources.
 - Nothing else: `angee init` resolves its templates from the template
   registry ([ang-ee/angee-django](https://github.com/ang-ee/angee-django))
   and `angee dev` clones the Host sources the rendered manifest declares.

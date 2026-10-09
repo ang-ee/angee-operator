@@ -665,7 +665,7 @@ func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, pa
 	if _, onBranch, err := client.CurrentBranch(ctx, path); err != nil {
 		return "", err
 	} else if !onBranch {
-		held, err := client.CountNotOn(ctx, path, "--branches", "--remotes", "--tags")
+		held, err := client.CountNotOnAnyRef(ctx, path)
 		if err != nil {
 			return "", err
 		}
