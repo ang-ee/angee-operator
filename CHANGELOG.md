@@ -23,6 +23,14 @@ latest tag.
   service gets the same labels, networks and ports as a full compile; the
   edge service itself is still left out. Broken since v0.15.0.
 
+### Security
+
+- **Built with Go 1.26.9 and `golang.org/x/net` v0.60.0.** Release binaries
+  and images were built with Go 1.26.6, whose `net/http`, `crypto/tls`,
+  `net/textproto` and `os` have vulnerabilities fixed in 1.26.9
+  (GO-2026-6603, -6604, -6605, -6607, -6608, -6610, -6611, -6612, -6613,
+  -6617). govulncheck reports none on this release.
+
 ## v0.18.0 — 2026-10-06
 
 ### Added
