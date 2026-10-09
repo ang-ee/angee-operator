@@ -31,7 +31,8 @@ import (
 // attempted. Whenever the repair runs, the result lists every slot and the
 // error is a *WorkspaceRepairError naming the failed slots, or nil. Any other
 // error means the repair could not start, and the result is empty.
-func (p *Platform) WorkspaceRepair(ctx context.Context, name string) (api.WorkspaceRepairResult, error) {
+func (p *Platform) WorkspaceRepair(ctx context.Context, name string) (_ api.WorkspaceRepairResult, err error) {
+	defer operation{name: "workspace.repair", title: fmt.Sprintf("Repair for workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
 	if err != nil {
 		return api.WorkspaceRepairResult{}, err
@@ -166,9 +167,18 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 
 // repairReason renders an error as a slot outcome's reason: on one line, with
 // credentials in remote URLs redacted, since git errors quote both their
-// command line and its output.
+// command line and its output. An operation error gives what failed and git's
+// line, without the operation's title, which the repair result already names.
 func repairReason(err error) string {
-	return strings.Join(strings.Fields(logctx.RedactText(err.Error())), " ")
+	text := err.Error()
+	var opErr *OperationError
+	if errors.As(err, &opErr) && opErr != nil && opErr.Summary != "" {
+		text = opErr.Summary
+		if opErr.GitLine != "" {
+			text += " git: " + opErr.GitLine
+		}
+	}
+	return strings.Join(strings.Fields(logctx.RedactText(text)), " ")
 }
 
 // repairMissingWorkspaceSlot materializes one declared slot whose path is

@@ -29,8 +29,10 @@ enable `DEBUG`; additional repetitions such as `-vv` stay at `DEBUG`.
 `ANGEE_VERBOSE=0|1|2` provides the count when the flag is absent, and an
 explicit flag value takes precedence over the environment.
 
-Every request receives an eight-character hexadecimal request ID. A completed
-request is one line in this form (timestamps and durations vary):
+Every request receives an eight-character hexadecimal request ID, or keeps
+the `X-Request-ID` it sent (see [Errors](#errors)); the response returns it in
+`X-Request-ID`. A completed request is one line in this form (timestamps and
+durations vary):
 
 ```text
 time=2026-09-04T12:34:56.789Z level=INFO msg=request req=7f3a2c19 method=POST path=/stack/prepare status=200 duration=812.4ms remote=127.0.0.1:54321
@@ -47,6 +49,113 @@ Request records include only the HTTP method and URL path. The operator never
 logs URL query strings (which can contain connection tokens), `Authorization`
 headers, or request bodies. Secret audit records contain secret names but never
 secret values.
+
+## Errors
+
+Every failed operation is reported in one shape. GraphQL puts it in
+`errors[].extensions`; REST error bodies carry the same keys beside `error`
+(the message):
+
+| Key | When | Meaning |
+|---|---|---|
+| `code` | always | The category, from the table below. |
+| `cause` | when known | What went wrong, such as `uncommitted_changes`. |
+| `operation` | when known | The verb that failed, such as `workspace.sync-base`. |
+| `workspace`, `slot`, `source`, `job`, `service` | when they apply | The objects it concerns, including the one a `NOT_FOUND` names. |
+| `remote` | git failures | The remote URL, with credentials masked. |
+| `paths` | when they apply | Files or directories, such as a slot's uncommitted files (up to 100). |
+| `hint` | when angee knows the remedy | One sentence saying what to do. |
+| `detail` | git failures | git's output, redacted, at most the last 4 KiB. |
+| `request_id` | always | The request's ID (see [Logging and verbosity](#logging-and-verbosity)). |
+
+| `code` | Meaning | REST status |
+|---|---|---|
+| `NOT_FOUND` | The named object is not declared. | `404` |
+| `INVALID_INPUT` | The request is malformed or names an invalid value. | `400` |
+| `CONFLICT` | Another mutation is running, or the object already exists. | `409` |
+| `PRECONDITION_FAILED` | The target's state must change first. | `409` |
+| `GIT_FAILED` | A git command failed. | `500` |
+| `TIMEOUT` | The operation ran out of time (`ANGEE_GIT_TIMEOUT`, `ANGEE_JOB_TIMEOUT`). | `500` |
+| `JOB_FAILED` | A job run failed. | `500` |
+| `INTERNAL` | Anything else. | `500` |
+
+Failures outside the client's control answer `500`, rather than a gateway
+status (`502`, `504`) that a proxy in front of the operator might retry or
+replace. A REST request rejected for its credentials answers `401` with code
+`UNAUTHORIZED`; it never reaches an operation. A GraphQL query that gqlgen
+rejects itself (a parse or validation error) keeps gqlgen's code, such as
+`GRAPHQL_VALIDATION_FAILED`.
+
+Causes come from angee's own state and from what a step was doing. angee
+never derives one by reading a tool's output: git, ssh and the remote own
+their diagnostics, and their words are passed through.
+
+| `cause` | `code` | Meaning |
+|---|---|---|
+| `uncommitted_changes` | `PRECONDITION_FAILED` | A checkout has uncommitted changes; `paths` lists them. |
+| `slot_missing` | `PRECONDITION_FAILED` | A declared slot is not on disk; the hint names `angee workspace repair`. |
+| `branch_mismatch` | `PRECONDITION_FAILED` | A slot is not on its workspace branch. |
+| `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push. |
+| `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
+| `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
+| `merge_conflict` | `GIT_FAILED` | A merge or rebase stopped on conflicts (from git's index); `paths` lists them. |
+| `fetch_failed`, `push_failed`, `clone_failed` | `GIT_FAILED` or `TIMEOUT` | That git action failed. |
+| `git_unavailable` | `GIT_FAILED` | git is not installed. |
+| `dependency_failed` | `JOB_FAILED` | A job run's dependent failed or was blocked. |
+
+Messages read `<operation> for <target>: <what failed>. <remedy>`. A git
+failure ends with git's own words: its first `fatal:` or `error:` line, with
+the line before it, where git relays what ssh or the remote said. A
+not-found, conflict or invalid-input error keeps its own message. For
+example, sync-base on a workspace whose slot has uncommitted changes:
+
+```json
+{
+  "message": "Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in addons/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry.",
+  "path": ["workspaceSyncBase"],
+  "extensions": {
+    "code": "PRECONDITION_FAILED",
+    "cause": "uncommitted_changes",
+    "operation": "workspace.sync-base",
+    "workspace": "src",
+    "slot": "django",
+    "source": "angee-django",
+    "paths": ["addons/angee/operator/web/schema/operator.graphql"],
+    "hint": "Commit or restore the changes, then retry.",
+    "request_id": "7f3a2c19"
+  }
+}
+```
+
+and a fetch whose SSH remote the operator cannot reach (`code` `GIT_FAILED`,
+`cause` `fetch_failed`, git's whole output in `detail`):
+
+```text
+Sync base for workspace "src": fetching source "angee-arp" (git@github-arpee:ang-ee/angee-arp.git) failed. git: git@github.com: Permission denied (publickey). fatal: Could not read from remote repository.
+```
+
+Workspace and source verbs check angee's own state before running git, so a
+refusal leaves nothing half done. `workspace sync-base` and `workspace push`
+check every slot before touching any: each must be on disk and on its
+branch, with no uncommitted changes, and (for push) have a branch to push.
+`workspace sync-base` also fetches every slot and resolves its base before
+merging any.
+
+A failed job run's receipt (`GET /job-runs/{id}`, GraphQL `jobRun`) carries
+`error_code` (`errorCode`) and `error_cause` (`errorCause`) beside `error`.
+When a dependent fails, `error` names it and why, such as
+`service "frontend" failed: apply service frontend: ...`.
+
+Every response carries an `X-Request-ID` header. A request that sends a short
+`X-Request-ID` (letters, digits, `.`, `_`, `-`; up to 64 characters) keeps it,
+so a client can correlate its own logs. Each failed operation is logged, with
+that ID, at `WARN` for `NOT_FOUND`, `INVALID_INPUT`, `CONFLICT` and
+`PRECONDITION_FAILED`, and at `ERROR` otherwise. A failed GraphQL operation
+still answers HTTP `200`, so its record is the only trace in the log:
+
+```text
+level=WARN msg="graphql operation failed" req=7f3a2c19 path=workspaceSyncBase code=PRECONDITION_FAILED cause=uncommitted_changes operation=workspace.sync-base error="Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in addons/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry."
+```
 
 ## REST
 
@@ -259,8 +368,9 @@ A source slot declared in the manifest but not materialized (one added to an
 existing workspace, a dangling link, or for a git slot a directory that is not
 its own checkout) makes `sync-base`, `push` and the per-slot routes under
 `/workspaces/{name}/sources/{slot}/` fail with `409` before any slot is
-touched. The error names the slot and points at `repair`; status reports a
-missing slot with `state: "missing"`.
+touched, with code `PRECONDITION_FAILED` and cause `slot_missing`. The error
+names the slot and points at `repair`; status reports a missing slot with
+`state: "missing"`.
 
 `repair` (no body) materializes each declared slot whose path is missing (for
 a git slot, also an empty directory), the way workspace create cuts it, and
@@ -268,7 +378,7 @@ leaves anything else at a slot's path untouched. A repair that ran answers
 `200` with one entry per slot, even when some slots failed; `ok` is `false`
 then. A repair that cannot run answers with the usual error mapping: `404` for
 an undeclared workspace, `409` when the workspace directory does not exist or
-is not a directory, `400` while another stack mutation is active.
+is not a directory, `409` while another stack mutation is active.
 
 ```json
 {
@@ -695,7 +805,7 @@ list mirrors unified-diff output: `{oldStart, oldLines, newStart, newLines,
 header, body}` with `body` carrying the raw `+`/`-`/` ` prefixed lines.
 When `ref` is empty the diff is "working tree vs HEAD" (uncommitted
 changes); when set, it is "HEAD vs ref". Only git sources are
-diffable — local sources surface a typed `InvalidInputError`.
+diffable — local sources fail with code `INVALID_INPUT`.
 
 ### Convergence operations
 

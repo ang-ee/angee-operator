@@ -271,7 +271,8 @@ func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceSt
 	return page, total, nil
 }
 
-func (p *Platform) SourceFetch(ctx context.Context, name string) (api.SourceState, error) {
+func (p *Platform) SourceFetch(ctx context.Context, name string) (state api.SourceState, err error) {
+	defer sourceOperation("source.fetch", "Fetch", name).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "source")
 	if err != nil {
 		return api.SourceState{}, err
@@ -303,7 +304,8 @@ func (p *Platform) SourceStatus(ctx context.Context, name string) (api.SourceSta
 	return p.sourceState(ctx, name, source)
 }
 
-func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState, error) {
+func (p *Platform) SourcePull(ctx context.Context, name string) (state api.SourceState, err error) {
+	defer sourceOperation("source.pull", "Pull", name).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "source")
 	if err != nil {
 		return api.SourceState{}, err
@@ -323,13 +325,15 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (api.SourceState
 	if err := p.materializeSource(ctx, name, source, false); err != nil {
 		return api.SourceState{}, err
 	}
-	if err := p.gitClient().Pull(ctx, p.sourcePath(name, source)); err != nil {
-		return api.SourceState{}, err
+	path := p.sourcePath(name, source)
+	if err := p.gitClient().Pull(ctx, path); err != nil {
+		return api.SourceState{}, gitFailure(err, gitStep{action: "pulling", object: fmt.Sprintf("source %q", name), remote: source.Repo, cause: CauseFetchFailed, source: name})
 	}
 	return p.sourceState(ctx, name, source)
 }
 
-func (p *Platform) SourcePush(ctx context.Context, name, ref string) (api.SourceState, error) {
+func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.SourceState, err error) {
+	defer sourceOperation("source.push", "Push", name).annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "source")
 	if err != nil {
 		return api.SourceState{}, err
@@ -347,15 +351,27 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (api.Source
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
 	}
 	path := p.sourcePath(name, source)
-	dirty, err := p.gitClient().Dirty(ctx, path)
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(path, ".git")); os.IsNotExist(err) {
+		hint := fmt.Sprintf("Run `angee source fetch %s` to clone it.", name)
+		return api.SourceState{}, &OperationError{
+			Code:    CodePreconditionFailed,
+			Cause:   CauseSourceCacheMissing,
+			Source:  name,
+			Paths:   []string{path},
+			Hint:    hint,
+			Summary: fmt.Sprintf("source %q has no cache at %s, so there is nothing to push. %s", name, path, hint),
+			Err:     err,
+		}
+	} else if err != nil {
 		return api.SourceState{}, err
 	}
-	if dirty {
-		return api.SourceState{}, fmt.Errorf("source %q has uncommitted changes", name)
-	}
-	if err := p.gitClient().Push(ctx, path, ref); err != nil {
+	client := p.gitClient()
+	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source %q", name), "", name); err != nil {
 		return api.SourceState{}, err
+	}
+	step := gitStep{action: "pushing", object: fmt.Sprintf("source %q", name), remote: pushRemoteURL(ctx, client, path), cause: CausePushFailed, source: name}
+	if err := client.Push(ctx, path, ref); err != nil {
+		return api.SourceState{}, gitFailure(err, step)
 	}
 	return p.sourceState(ctx, name, source)
 }
@@ -381,7 +397,8 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 			finish := logctx.Step(ctx, "refreshing source "+name, slog.String("remote", logctx.RedactURL(source.Repo)))
 			err := syncSourceOrigin(ctx, client, name, path, source.Repo, !bestEffortRefresh)
 			if err == nil {
-				err = client.Fetch(ctx, path)
+				step := gitStep{action: "fetching", object: fmt.Sprintf("source %q", name), remote: source.Repo, cause: CauseFetchFailed, source: name}
+				err = gitFailure(client.Fetch(ctx, path), step)
 			}
 			if err != nil {
 				if !bestEffortRefresh || ctx.Err() != nil {
@@ -408,7 +425,8 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 			finish(err)
 			return err
 		}
-		err := client.CloneRef(ctx, source.Repo, path, source.DefaultRef)
+		step := gitStep{action: "cloning", object: fmt.Sprintf("source %q", name), remote: source.Repo, cause: CauseCloneFailed, source: name}
+		err := gitFailure(client.CloneRef(ctx, source.Repo, path, source.DefaultRef), step)
 		finish(err)
 		return err
 	case "local":
@@ -580,4 +598,10 @@ func (p *Platform) sourcePath(name string, source manifest.Source) string {
 		cachePath = filepath.Join("sources", name)
 	}
 	return manifest.ResolvePath(p.root, cachePath)
+}
+
+// sourceOperation names a verb on a top-level source, such as
+// `Pull for source "app"`.
+func sourceOperation(name, verb, source string) operation {
+	return operation{name: name, title: fmt.Sprintf("%s for source %q", verb, source), source: source}
 }

@@ -445,7 +445,7 @@ services:
 	if err := json.Unmarshal(rr.Body.Bytes(), &notFound); err != nil {
 		t.Fatalf("Unmarshal missing service error = %v", err)
 	}
-	if notFound.Kind != "service" || notFound.Name != "missing" {
+	if notFound.Code != "NOT_FOUND" || notFound.Service != "missing" {
 		t.Fatalf("missing service error = %#v", notFound)
 	}
 
@@ -460,7 +460,7 @@ services:
 	if err := json.Unmarshal(rr.Body.Bytes(), &invalid); err != nil {
 		t.Fatalf("Unmarshal invalid service error = %v", err)
 	}
-	if invalid.Field != "name" || invalid.Reason == "" {
+	if invalid.Code != "INVALID_INPUT" || !strings.HasPrefix(invalid.Error, "name: ") {
 		t.Fatalf("invalid service error = %#v", invalid)
 	}
 
@@ -500,7 +500,7 @@ func TestRESTStackInitConflictUsesTypedStatusCode(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &conflict); err != nil {
 		t.Fatalf("Unmarshal stack init conflict = %v", err)
 	}
-	if conflict.Kind != "stack-root" || conflict.Name != filepath.Join(root, ".angee") || conflict.Reason == "" {
+	if conflict.Code != "CONFLICT" || conflict.Cause != "stack_root_exists" || len(conflict.Paths) != 1 || conflict.Paths[0] != filepath.Join(root, ".angee") {
 		t.Fatalf("stack init conflict = %#v", conflict)
 	}
 }
@@ -536,7 +536,7 @@ services:
 	if !ok {
 		t.Fatalf("GraphQL error extensions = %#v, want object", errObj["extensions"])
 	}
-	if extensions["kind"] != "workspace" || extensions["name"] != "missing" {
+	if extensions["code"] != "NOT_FOUND" || extensions["workspace"] != "missing" || extensions["kind"] != nil || extensions["name"] != nil {
 		t.Fatalf("GraphQL error extensions = %#v, want workspace missing", extensions)
 	}
 }

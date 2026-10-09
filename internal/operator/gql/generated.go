@@ -177,6 +177,8 @@ type ComplexityRoot struct {
 		CurrentStep    func(childComplexity int) int
 		EndedAt        func(childComplexity int) int
 		Error          func(childComplexity int) int
+		ErrorCause     func(childComplexity int) int
+		ErrorCode      func(childComplexity int) int
 		ID             func(childComplexity int) int
 		Nodes          func(childComplexity int) int
 		Output         func(childComplexity int) int
@@ -1369,6 +1371,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.JobRunOperation.Error(childComplexity), true
+	case "JobRunOperation.errorCause":
+		if e.ComplexityRoot.JobRunOperation.ErrorCause == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobRunOperation.ErrorCause(childComplexity), true
+	case "JobRunOperation.errorCode":
+		if e.ComplexityRoot.JobRunOperation.ErrorCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobRunOperation.ErrorCode(childComplexity), true
 	case "JobRunOperation.id":
 		if e.ComplexityRoot.JobRunOperation.ID == nil {
 			break
@@ -3997,7 +4011,7 @@ scalar Time
 enum JobRunStatus { PENDING RUNNING SUCCEEDED FAILED BLOCKED }
 enum JobRunNodeKind { JOB SERVICE }
 type JobRunNode { name: String!, kind: JobRunNodeKind!, status: JobRunStatus!, message: String }
-type JobRunOperation { id: ID!, rootJob: String!, chainedRestart: Boolean!, status: JobRunStatus!, currentStep: String, startedAt: Time!, endedAt: Time, nodes: [JobRunNode!]!, output: String, error: String }
+type JobRunOperation { id: ID!, rootJob: String!, chainedRestart: Boolean!, status: JobRunStatus!, currentStep: String, startedAt: Time!, endedAt: Time, nodes: [JobRunNode!]!, output: String, error: String, errorCode: String, errorCause: String }
 type JobRunPreview { jobs: [String!]!, services: [String!]! }
 
 type KeyValue {
@@ -5353,6 +5367,10 @@ func (ec *executionContext) childFields_JobRunOperation(ctx context.Context, fie
 		return ec.fieldContext_JobRunOperation_output(ctx, field)
 	case "error":
 		return ec.fieldContext_JobRunOperation_error(ctx, field)
+	case "errorCode":
+		return ec.fieldContext_JobRunOperation_errorCode(ctx, field)
+	case "errorCause":
+		return ec.fieldContext_JobRunOperation_errorCause(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type JobRunOperation", field.Name)
 }
@@ -10511,6 +10529,52 @@ func (ec *executionContext) _JobRunOperation_error(ctx context.Context, field gr
 	)
 }
 func (ec *executionContext) fieldContext_JobRunOperation_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobRunOperation", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _JobRunOperation_errorCode(ctx context.Context, field graphql.CollectedField, obj *model.JobRunOperation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobRunOperation_errorCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrorCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_JobRunOperation_errorCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobRunOperation", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _JobRunOperation_errorCause(ctx context.Context, field graphql.CollectedField, obj *model.JobRunOperation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobRunOperation_errorCause(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ErrorCause, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_JobRunOperation_errorCause(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("JobRunOperation", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -25031,6 +25095,10 @@ func (ec *executionContext) _JobRunOperation(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._JobRunOperation_output(ctx, field, obj)
 		case "error":
 			out.Values[i] = ec._JobRunOperation_error(ctx, field, obj)
+		case "errorCode":
+			out.Values[i] = ec._JobRunOperation_errorCode(ctx, field, obj)
+		case "errorCause":
+			out.Values[i] = ec._JobRunOperation_errorCause(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

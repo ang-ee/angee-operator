@@ -110,7 +110,7 @@ func (p *Platform) beginMutation(ctx context.Context, field string) (context.Con
 	case <-p.mutationLease:
 		return context.WithValue(ctx, mutationLeaseContextKey{}, p), func() { p.mutationLease <- struct{}{} }, nil
 	default:
-		return ctx, nil, &InvalidInputError{Field: field, Reason: "another stack mutation is active"}
+		return ctx, nil, mutationBusyError("another stack mutation is active")
 	}
 }
 
@@ -151,7 +151,8 @@ func (p *Platform) LoadStack() (*manifest.Stack, error) {
 	return stack, nil
 }
 
-func (p *Platform) StackPrepare(ctx context.Context) (*CompiledStack, error) {
+func (p *Platform) StackPrepare(ctx context.Context) (prepared *CompiledStack, err error) {
+	defer stackOperation("stack.prepare", "Stack prepare").annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "stack")
 	if err != nil {
 		return nil, err

@@ -50,6 +50,8 @@ type JobRunOperation struct {
 	Nodes          []*JobRunNode `json:"nodes"`
 	Output         *string       `json:"output,omitempty"`
 	Error          *string       `json:"error,omitempty"`
+	ErrorCode      *string       `json:"errorCode,omitempty"`
+	ErrorCause     *string       `json:"errorCause,omitempty"`
 }
 
 type JobRunPreview struct {

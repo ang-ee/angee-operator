@@ -2,33 +2,34 @@ package operator
 
 import (
 	"net/http"
-
-	"github.com/ang-ee/angee-operator/api"
 )
 
+// writeServiceError writes err as a REST error body with the status its code
+// maps to, sharing classifyServiceError with the GraphQL surface, and hands
+// the failure to the request log.
 func writeServiceError(w http.ResponseWriter, err error) {
-	status, body := serviceErrorResponse(err)
-	writeJSON(w, status, body)
+	c := classifyServiceError(err)
+	recordFailure(w, c)
+	writeJSON(w, c.status, c.errorResponse())
 }
 
-// serviceErrorResponse maps a service-layer error to an HTTP status and
-// response body. It shares classifyServiceError with the GraphQL surface so the
-// NotFound/Conflict/InvalidInput ladder lives in exactly one place. Each
-// category populates only its relevant fields; the rest stay empty and are
-// omitted, reproducing the historical per-category JSON shapes. For a matched
-// error the message is the matched type's own Error() text (carried on
-// classifiedError) so it stays correct even if a caller later %w-wraps the
-// typed error; unmatched errors fall back to err.Error().
-func serviceErrorResponse(err error) (int, api.ErrorResponse) {
-	c := classifyServiceError(err)
-	if !c.matched {
-		return c.status, api.ErrorResponse{Error: err.Error()}
-	}
-	return c.status, api.ErrorResponse{
-		Kind:   c.kind,
-		Name:   c.name,
-		Field:  c.field,
-		Reason: c.reason,
-		Error:  c.message,
+// failureRecorder is implemented by the request-logging response writer, which
+// logs a recorded failure once the handler returns.
+type failureRecorder interface {
+	recordFailure(c classifiedError)
+}
+
+// recordFailure hands c to the request-logging writer under w, if any.
+func recordFailure(w http.ResponseWriter, c classifiedError) {
+	for w != nil {
+		if recorder, ok := w.(failureRecorder); ok {
+			recorder.recordFailure(c)
+			return
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = unwrapper.Unwrap()
 	}
 }

@@ -6,6 +6,70 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **An error contract for every failed operation.** GraphQL errors carry
+  `extensions.code` (`NOT_FOUND`, `INVALID_INPUT`, `CONFLICT`,
+  `PRECONDITION_FAILED`, `GIT_FAILED`, `TIMEOUT`, `JOB_FAILED` or `INTERNAL`).
+  When they apply, they also carry:
+  - a `cause` such as `uncommitted_changes`, `slot_missing` or
+    `merge_conflict`;
+  - the `operation` and the `workspace`, `slot`, `source`, `job` or `service`
+    it concerns;
+  - the masked `remote`;
+  - the `paths` involved;
+  - a `hint`;
+  - git's redacted output as `detail` (at most 4 KiB);
+  - the `request_id`.
+
+  REST error bodies carry the same keys. Causes come from angee's own state
+  and the step that failed; git's and ssh's diagnostics are passed through,
+  never interpreted. See [Errors](docs/reference/operator-api.md#errors).
+- **Messages that say what failed and what to do.** For example,
+  `Sync base for workspace "src": source slot "django" has uncommitted
+  changes in addons/.../operator.graphql. Commit or restore the changes, then
+  retry.` A git failure names the action and remote, then quotes git's own
+  line, instead of leading with git's raw output.
+- **Checks before git runs.** `workspace sync-base` and `workspace push`
+  check every slot before touching any, and sync-base fetches every slot
+  before merging any, so a refusal never leaves the workspace half done. The
+  slot verbs and `source push` refuse up front, each with its own message:
+  - a checkout with uncommitted changes, listing its files;
+  - a missing slot, pointing at `workspace repair`;
+  - a slot off its branch;
+  - a push from a detached HEAD;
+  - a source with no cache.
+- **Failed operations are logged.** Each is logged with the request ID,
+  operation, code and cause: at WARN when the client can act on it, at ERROR
+  otherwise. A failed GraphQL operation used to leave only `status=200` in the
+  log. Responses carry `X-Request-ID`; a request that sends one keeps it.
+- **Job runs name what failed.** A chained job run whose dependent fails
+  reports which one and why, such as `service "frontend" failed: ...`,
+  instead of "one or more dependents failed". The receipt carries
+  `error_code` and `error_cause` (GraphQL `errorCode`, `errorCause`).
+
+### Changed
+
+- REST statuses now follow the error code:
+  - uncommitted changes and a branch mismatch answer `409` instead of `500`;
+  - a request made while another mutation is running answers `409` instead
+    of `400`.
+
+  git failures and timeouts still answer `500`.
+- A dirty checkout is detected one way, by `git status`; go-git's status,
+  which could disagree about untracked files, is no longer used.
+- URLs in errors and logs have their query values masked as well as their
+  user information, since a token is sometimes passed as a query
+  parameter.
+
+### Removed
+
+- **The `kind`, `name`, `field` and `reason` error keys.** They are gone from
+  REST error bodies and GraphQL extensions; use `code`, `cause` and the
+  context keys. A not-found error names its object in `workspace`, `slot`,
+  `source`, `job` or `service`. The "stack root exists" conflict of
+  `stack init` is `cause: stack_root_exists`, with the root in `paths`.
+
 ## v0.18.1 — 2026-10-09
 
 ### Fixed

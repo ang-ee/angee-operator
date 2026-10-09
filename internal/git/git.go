@@ -77,9 +77,48 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 	if err != nil {
 		// Callers return this error to CLI and API clients, so keep
 		// credentials in a remote URL out of it.
-		return out, fmt.Errorf("git %v: %w: %s", logctx.RedactArgs(args), err, logctx.RedactText(string(out)))
+		return out, &CommandError{Args: logctx.RedactArgs(args), Output: logctx.RedactText(string(out)), Err: err}
 	}
 	return out, nil
+}
+
+// CommandError is a git command that failed to start or exited non-zero. Args
+// and Output are redacted, so the error can be returned to clients; Output
+// is kept separately so callers can classify the failure and quote it.
+type CommandError struct {
+	Args   []string
+	Output string
+	Err    error
+}
+
+func (e *CommandError) Error() string {
+	return fmt.Sprintf("git %v: %v: %s", e.Args, e.Err, e.Output)
+}
+
+func (e *CommandError) Unwrap() error { return e.Err }
+
+// DirtyPaths lists the paths `git status` reports as changed, staged or
+// untracked in the checkout at dir, in its order. A rename lists its new path.
+func (c Client) DirtyPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	entries := strings.Split(string(out), "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) < 4 {
+			continue
+		}
+		paths = append(paths, entry[3:])
+		// A rename or copy, staged or in the worktree, is followed by its
+		// original path.
+		if strings.ContainsAny(entry[:2], "RC") {
+			i++
+		}
+	}
+	return paths, nil
 }
 
 func (c Client) runText(ctx context.Context, dir string, args ...string) (string, error) {
@@ -657,20 +696,11 @@ func (c Client) pushRemote(ctx context.Context, dir string) (string, error) {
 	return "", fmt.Errorf("multiple git remotes configured; set remote.pushDefault")
 }
 
+// Dirty reports whether the checkout at dir has uncommitted changes, as git
+// status sees them (DirtyPaths).
 func (c Client) Dirty(ctx context.Context, dir string) (bool, error) {
-	repo, err := openRepo(dir)
-	if err != nil {
-		return c.dirtyCLI(ctx, dir)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		return c.dirtyCLI(ctx, dir)
-	}
-	st, err := wt.Status()
-	if err != nil {
-		return c.dirtyCLI(ctx, dir)
-	}
-	return !st.IsClean(), nil
+	paths, err := c.DirtyPaths(ctx, dir)
+	return len(paths) > 0, err
 }
 
 func (c Client) currentRefCLI(ctx context.Context, dir string) (string, error) {
@@ -737,14 +767,6 @@ func (c Client) remotesCLI(ctx context.Context, dir string) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Fields(out), nil
-}
-
-func (c Client) dirtyCLI(ctx context.Context, dir string) (bool, error) {
-	out, err := c.runText(ctx, dir, "status", "--porcelain=v1", "--untracked-files=all")
-	if err != nil {
-		return false, err
-	}
-	return out != "", nil
 }
 
 func shortHash(h string) string {

@@ -19,12 +19,24 @@ type Operation struct {
 	EndedAt   *time.Time      `json:"ended_at,omitempty"`
 }
 
+// ErrorResponse is a REST error body: the message and the error contract's
+// keys, shared with GraphQL extensions (docs/reference/operator-api.md,
+// "Errors").
 type ErrorResponse struct {
-	Kind   string `json:"kind,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Field  string `json:"field,omitempty"`
-	Reason string `json:"reason,omitempty"`
-	Error  string `json:"error"`
+	Error     string   `json:"error"`
+	Code      string   `json:"code,omitempty"`
+	Cause     string   `json:"cause,omitempty"`
+	Operation string   `json:"operation,omitempty"`
+	Workspace string   `json:"workspace,omitempty"`
+	Slot      string   `json:"slot,omitempty"`
+	Source    string   `json:"source,omitempty"`
+	Remote    string   `json:"remote,omitempty"`
+	Job       string   `json:"job,omitempty"`
+	Service   string   `json:"service,omitempty"`
+	Paths     []string `json:"paths,omitempty"`
+	Hint      string   `json:"hint,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+	RequestID string   `json:"request_id,omitempty"`
 }
 
 type StackInitRequest struct {
@@ -152,6 +164,10 @@ type JobRunOperation struct {
 	Nodes          []JobRunNode `json:"nodes"`
 	Output         string       `json:"output,omitempty"`
 	Error          string       `json:"error,omitempty"`
+	// ErrorCode and ErrorCause classify a failed run with the error
+	// contract's code (JOB_FAILED or TIMEOUT) and cause.
+	ErrorCode  string `json:"error_code,omitempty"`
+	ErrorCause string `json:"error_cause,omitempty"`
 }
 
 type JobRunPreview struct {

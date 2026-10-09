@@ -163,10 +163,12 @@ func TestRedactURL(t *testing.T) {
 		in   string
 		want string
 	}{
-		{name: "username and password", in: "https://alexis:secret@example.com/repo?q=1", want: "https://***@example.com/repo?q=1"},
+		{name: "username and password", in: "https://alexis:secret@example.com/repo?q=1", want: "https://***@example.com/repo?q=***"},
+		{name: "query token", in: "https://example.com/repo.git?access_token=abc123&ref=main", want: "https://example.com/repo.git?access_token=***&ref=***"},
 		{name: "username", in: "ssh://git@example.com/repo", want: "ssh://***@example.com/repo"},
 		{name: "no userinfo", in: "https://example.com/repo", want: "https://example.com/repo"},
 		{name: "invalid", in: "://%", want: "://%"},
+		{name: "invalid with credential", in: "https://user:p%zzword@example.com/x.git", want: "https://***@example.com/x.git"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

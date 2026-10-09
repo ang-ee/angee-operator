@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"time"
@@ -15,7 +17,9 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/lru"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
+	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -180,30 +184,30 @@ func formatGraphQLError(ctx context.Context, err error) *gqlerror.Error {
 	if gqlErr.Extensions == nil {
 		gqlErr.Extensions = map[string]any{}
 	}
-
-	// Share the classifier with the REST surface; the status doubles as the
-	// category discriminator that selects which extension keys to attach.
-	switch c := classifyServiceError(err); c.status {
-	case http.StatusNotFound:
+	var c classifiedError
+	if gqlErr.Err != nil {
+		// Share the classifier with the REST surface.
+		c = classifyServiceError(gqlErr.Err)
 		gqlErr.Message = c.message
-		gqlErr.Extensions["kind"] = c.kind
-		gqlErr.Extensions["name"] = c.name
-		return gqlErr
-	case http.StatusConflict:
-		gqlErr.Message = c.message
-		gqlErr.Extensions["kind"] = c.kind
-		gqlErr.Extensions["name"] = c.name
-		gqlErr.Extensions["reason"] = c.reason
-		return gqlErr
-	case http.StatusBadRequest:
-		gqlErr.Message = c.message
-		gqlErr.Extensions["field"] = c.field
-		gqlErr.Extensions["reason"] = c.reason
-		return gqlErr
+		for key, value := range c.extensions() {
+			gqlErr.Extensions[key] = value
+		}
+	} else {
+		// A parse or validation error gqlgen raises itself keeps its own
+		// code (GRAPHQL_VALIDATION_FAILED, ...); one without gets
+		// INVALID_INPUT, since the request is at fault.
+		if _, ok := gqlErr.Extensions["code"]; !ok {
+			gqlErr.Extensions["code"] = service.CodeInvalidInput
+		}
+		c = classifiedError{code: fmt.Sprint(gqlErr.Extensions["code"]), message: gqlErr.Message}
 	}
-
-	if len(gqlErr.Extensions) == 0 {
-		gqlErr.Extensions = nil
+	requestID := requestIDFromContext(ctx)
+	if requestID != "" {
+		gqlErr.Extensions["request_id"] = requestID
 	}
+	// A failed GraphQL operation still answers 200, so the request log alone
+	// does not show it.
+	attrs := append([]slog.Attr{slog.String("path", gqlErr.Path.String())}, c.logAttrs()...)
+	logctx.From(ctx).LogAttrs(ctx, c.logLevel(), "graphql operation failed", attrs...)
 	return gqlErr
 }
