@@ -161,7 +161,12 @@ seed_users:
 | `placeholder` | Hint shown while the input is empty. |
 | `required: true` (in `_angee.inputs`) | The form refuses an empty value; non-interactive runs name the `--input` flag to pass. |
 | `when` | A question whose condition is false, given the answers before it, is not asked: the form hides it, line prompts skip it, and it takes its default. A value passed for it is not validated, since copier ignores it too. copier-go evaluates the condition, so it means what it means at render time. |
-| `validator` | Carried in the descriptor but not evaluated by the form. |
+| `validator` | Not evaluated by the form; the render runs it on every answer it uses, inputs and defaults alike, as copier does. A failing validator, a value outside `choices`, or a required question with neither an input nor a default fails the render with code `INVALID_INPUT` and copier's message naming the question. |
+
+angee passes copier the inputs you give, plus generated values and the path
+inputs it rewrites, but not a template's plain defaults. copier works those out
+itself: it renders a templated default (`default: "{{ name|lower }}"`), and on
+`stack update --template` it keeps an answer recorded last time.
 
 `_angee.inputs` declares metadata-only inputs (`generated`, `immutable`,
 `required`) that are not questions; they appear read-only in the form.

@@ -178,7 +178,7 @@ func TestStackTemplateInputsRenderedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StackTemplateInputs fallback: %v", err)
 	}
-	if response.Template.Ref != template || response.Recorded["label"] != "after" {
+	if !sameTemplatePath(t, response.Template.Ref, template) || response.Recorded["label"] != "after" {
 		t.Fatalf("fallback response = %#v", response)
 	}
 }
@@ -237,7 +237,7 @@ func TestServiceTemplateInputsRenderedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	response, err = platform.ServiceTemplateInputs(ctx, "agent-my-pa")
-	if err != nil || response.Template.Ref != template {
+	if err != nil || !sameTemplatePath(t, response.Template.Ref, template) {
 		t.Fatalf("legacy response = %#v, err = %v", response, err)
 	}
 }
@@ -332,4 +332,16 @@ func TestReadTemplateAnswersPreservesFormValues(t *testing.T) {
 	if source != "/template" || !reflect.DeepEqual(map[string]string(answers), want) {
 		t.Fatalf("source/answers = %q/%#v", source, answers)
 	}
+}
+
+// sameTemplatePath compares a template reference read from an answers file's
+// _src_path with the template's path. copier records the real path, so a
+// temporary directory behind a symlink (macOS's /var) reads back resolved.
+func sameTemplatePath(t *testing.T, got, want string) bool {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", want, err)
+	}
+	return got == want || got == resolved
 }

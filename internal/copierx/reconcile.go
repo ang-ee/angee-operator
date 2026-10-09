@@ -72,13 +72,19 @@ type RenderLayer struct {
 	StateTemplate string
 	DestRoot      string
 	Inputs        Inputs
+	// Context holds inputs angee supplies to the render that are not the
+	// template's questions, such as a service's workspace_name. copier
+	// records only question answers, so angee keeps these in its render
+	// state for later renders.
+	Context Inputs
 }
 
 type RenderLayerState struct {
-	Name        string `json:"name"`
-	Template    string `json:"template"`
-	DestRoot    string `json:"dest_root,omitempty"`
-	AnswersFile string `json:"answers_file,omitempty"`
+	Name        string            `json:"name"`
+	Template    string            `json:"template"`
+	DestRoot    string            `json:"dest_root,omitempty"`
+	AnswersFile string            `json:"answers_file,omitempty"`
+	Context     map[string]string `json:"context,omitempty"`
 }
 
 type Fingerprint struct {
@@ -374,6 +380,7 @@ func PrepareReconcile(ctx context.Context, plan RenderPlan, opts ReconcileOption
 			Template:    stateTemplate,
 			DestRoot:    filepath.ToSlash(filepath.Clean(layer.DestRoot)),
 			AnswersFile: answerRel,
+			Context:     layer.Context,
 		})
 	}
 	if err := ctx.Err(); err != nil {

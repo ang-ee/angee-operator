@@ -283,6 +283,19 @@ func TestServiceUpdateFromTemplateAdoptsLegacyInstance(t *testing.T) {
 	if err := os.Remove(statePath); err != nil {
 		t.Fatalf("Remove(render state): %v", err)
 	}
+	// A service rendered before angee kept its workspace in the render state
+	// has it in the answers file, where copier-go used to record every input.
+	answersFiles, err := filepath.Glob(filepath.Join(p.root, "services", "agent-my-pa", ".copier-answers*"))
+	if err != nil || len(answersFiles) != 1 {
+		t.Fatalf("answers files = %v, %v", answersFiles, err)
+	}
+	answers, err := os.ReadFile(answersFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(answersFiles[0], append(answers, []byte("workspace_name: my-pa\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result, err := p.ServiceUpdateFromTemplate(ctx, "agent-my-pa", api.ServiceUpdateTemplateRequest{})
 	if err != nil {
 		t.Fatalf("ServiceUpdateFromTemplate(legacy): %v", err)
