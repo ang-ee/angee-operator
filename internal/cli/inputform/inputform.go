@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/copierx"
 )
 
 // Mode selects how template answers are collected.
@@ -93,6 +94,12 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		req.Err = io.Discard
 	}
 	for _, desc := range req.Inputs {
+		// A conditional question's value is validated with the final answers
+		// (validateResult), once they settle whether it applies: an earlier
+		// answer may still change it.
+		if desc.When != "" {
+			continue
+		}
 		if value, ok := req.Provided[desc.Name]; ok {
 			if err := Validate(desc, value); err != nil {
 				// Stack defaults can be stale for the chosen workspace template.
@@ -116,6 +123,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	switch req.Mode {
 	case ModeDefaults:
 		result := initialResult(req)
+		settleInactive(req, result)
 		if err := validateResult(req, result); err != nil {
 			return Result{}, err
 		}
@@ -156,9 +164,36 @@ func initialResult(req Request) Result {
 	return result
 }
 
+// applies reports whether desc's `when` condition holds for values, settled in
+// input order as copier asks the questions (copierx.SettleInputs). A question
+// whose condition is false is not asked and takes its default.
+func applies(req Request, desc api.TemplateInputDescriptor, values map[string]string) bool {
+	if desc.When == "" {
+		return true
+	}
+	_, active := copierx.SettleInputs(req.Inputs, values, req.Provided)
+	return active[desc.Name]
+}
+
+// settleInactive gives every question whose condition is false its default, as
+// copier answers them.
+func settleInactive(req Request, result Result) {
+	settled, active := copierx.SettleInputs(req.Inputs, result.Values, req.Provided)
+	for _, desc := range req.Inputs {
+		if !desc.Question || desc.Generated || active[desc.Name] {
+			continue
+		}
+		result.Values[desc.Name] = settled[desc.Name]
+		result.Origins[desc.Name] = OriginDefault
+	}
+}
+
 func validateResult(req Request, result Result) error {
 	var failures []error
 	for _, desc := range req.Inputs {
+		if !applies(req, desc, result.Values) {
+			continue
+		}
 		value, provided := req.Provided[desc.Name]
 		if desc.Question && !desc.Generated {
 			value = result.Values[desc.Name]

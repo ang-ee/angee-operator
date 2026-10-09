@@ -44,6 +44,16 @@ func Parse(raw string) (Mount, error) {
 	return Mount{Scheme: scheme, Name: name, Subpath: subpath, Target: target, ReadOnly: readOnly}, nil
 }
 
+// BindSource is a bind mount's host path as compose takes it: a relative path
+// is made explicit ("./data"), since compose reads a bare name as a volume.
+func (m Mount) BindSource() string {
+	host := filepath.Clean(m.HostPath)
+	if !filepath.IsAbs(host) && !strings.HasPrefix(host, ".") {
+		host = "." + string(filepath.Separator) + host
+	}
+	return host
+}
+
 func ResolveContainer(raw string, resolver Resolver) (string, error) {
 	m, err := Parse(raw)
 	if err != nil {
@@ -72,11 +82,7 @@ func ResolveContainer(raw string, resolver Resolver) (string, error) {
 		}
 		return m.Name + ":" + m.Target + suffix, nil
 	case "bind":
-		host := filepath.Clean(m.HostPath)
-		if !filepath.IsAbs(host) && !strings.HasPrefix(host, ".") {
-			host = "." + string(filepath.Separator) + host
-		}
-		return host + ":" + m.Target + suffix, nil
+		return m.BindSource() + ":" + m.Target + suffix, nil
 	default:
 		return "", fmt.Errorf("unsupported mount scheme %q", m.Scheme)
 	}

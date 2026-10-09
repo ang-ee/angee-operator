@@ -110,7 +110,7 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 	compiled.Services["edge"] = compose.Service{
 		Image:   image,
 		Ports:   edgePorts,
-		Volumes: []string{"/var/run/docker.sock:/var/run/docker.sock:ro"},
+		Volumes: []compose.ServiceVolume{compose.ShortVolume("/var/run/docker.sock:/var/run/docker.sock:ro")},
 		Environment: map[string]string{
 			"CADDY_INGRESS_NETWORKS": ingressNetworks,
 		},

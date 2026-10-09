@@ -195,3 +195,17 @@ func serviceInputTestCommand(stdin string, stderr *bytes.Buffer) *cobra.Command 
 	cmd.Flags().StringArray("answers", nil, "answers files")
 	return cmd
 }
+
+// A required question whose `when` is false is neither missing nor invalid.
+func TestTemplateInputProblemsSkipsInactiveQuestions(t *testing.T) {
+	inputs := []api.TemplateInputDescriptor{
+		{Name: "runtime_mode", Type: "str", Question: true, Default: "process"},
+		{Name: "operator_home", Type: "int", Question: true, Required: true, When: "{{ runtime_mode == 'docker' }}"},
+	}
+	if missing, invalid, err := templateInputProblems(inputs, map[string]string{}); missing || invalid || err != nil {
+		t.Fatalf("process = %v, %v, %v; want no problems", missing, invalid, err)
+	}
+	if missing, _, err := templateInputProblems(inputs, map[string]string{"runtime_mode": "docker"}); !missing || err == nil {
+		t.Fatalf("docker = missing %v, %v; want operator_home missing", missing, err)
+	}
+}

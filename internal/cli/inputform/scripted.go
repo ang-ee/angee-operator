@@ -26,6 +26,11 @@ func runScripted(ctx context.Context, req Request) (Result, error) {
 		if _, provided := req.Provided[desc.Name]; provided {
 			continue
 		}
+		// A question whose condition is false given the answers so far is
+		// not asked; settleInactive gives it its default.
+		if !applies(req, desc, result.Values) {
+			continue
+		}
 		desc.Default = result.Values[desc.Name]
 		value, err := prompt(ctx, req, reader, desc)
 		if err != nil {
@@ -36,6 +41,7 @@ func runScripted(ctx context.Context, req Request) (Result, error) {
 		}
 		result.Values[desc.Name] = value
 	}
+	settleInactive(req, result)
 	if err := validateResult(req, result); err != nil {
 		return Result{}, err
 	}

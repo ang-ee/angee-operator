@@ -470,3 +470,35 @@ func TestMergeInputDefKeepsMetadataFlagsUnderTheQuestion(t *testing.T) {
 		t.Fatalf("metadata fallback lost: %+v", fallback)
 	}
 }
+
+// `~` and `~/…` expand to the rendering user's home before the ANGEE_ROOT
+// rewrite, so the recorded answer is that absolute path.
+func TestResolvePathInputsExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	tmp := t.TempDir()
+	tpl := writeTemplate(t, filepath.Join(tmp, "tpl"), strings.Join([]string{
+		"_angee:",
+		"  kind: stack",
+		"  name: dev",
+		"operator_home:",
+		"  type: path",
+		"  default: \"~\"",
+		"ssh_dir:",
+		"  type: path",
+		"ANGEE_ROOT:",
+		"  type: str",
+		"  default: .angee",
+	}, "\n"))
+	dest := filepath.Join(tmp, "host")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatalf("MkdirAll(host) = %v", err)
+	}
+	out, err := ResolvePathInputs(tpl, Inputs{"operator_home": "~", "ssh_dir": "~/.ssh", "ANGEE_ROOT": ".angee"}, dest, ".angee")
+	if err != nil {
+		t.Fatalf("ResolvePathInputs() = %v", err)
+	}
+	if out["operator_home"] != home || out["ssh_dir"] != filepath.Join(home, ".ssh") {
+		t.Fatalf("resolved = %v, want operator_home %q and ssh_dir %q", out, home, filepath.Join(home, ".ssh"))
+	}
+}
