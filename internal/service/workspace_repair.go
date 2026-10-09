@@ -211,21 +211,28 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, workspaceName
 
 // existingWorkspaceSlotOutcome classifies a slot repair found on disk from its
 // status. The branch check is the one the git verbs enforce
-// (workspaceGitBranchMismatchReason, which the status applies), reported here
-// instead of failing the repair.
+// (gitdriver.BranchMismatch, which the status applies), reported here instead
+// of failing the repair.
 func existingWorkspaceSlotOutcome(status api.WorkspaceSourceStatus) (action, reason string) {
 	switch status.State {
 	case "clean", "ready":
-		return api.WorkspaceRepairOK, status.State
+		return api.WorkspaceRepairOK, withUnpushedReason(status.State, status)
 	case "ahead":
+		// Ahead of the base with nothing of its own, as after sync-base.
+		if status.UnpushedReason == "" {
+			return api.WorkspaceRepairOK, fmt.Sprintf("ahead by %d commit(s)", status.Ahead)
+		}
 		return api.WorkspaceRepairOK, "ahead: " + status.UnpushedReason
 	case "behind":
-		return api.WorkspaceRepairOK, fmt.Sprintf("behind by %d commit(s)", status.Behind)
+		return api.WorkspaceRepairOK, withUnpushedReason(fmt.Sprintf("behind by %d commit(s)", status.Behind), status)
 	case workspaceSourceStateBranchMismatch:
 		return api.WorkspaceRepairNeedsAttention, "branch mismatch: " + status.UnpushedReason
 	case "dirty":
 		return api.WorkspaceRepairNeedsAttention, "uncommitted changes"
 	case "diverged":
+		if status.UnpushedReason == "" {
+			return api.WorkspaceRepairNeedsAttention, fmt.Sprintf("diverged: %d ahead and %d behind", status.Ahead, status.Behind)
+		}
 		return api.WorkspaceRepairNeedsAttention, fmt.Sprintf("diverged: %s and %d behind", status.UnpushedReason, status.Behind)
 	default:
 		if status.Error != "" {
@@ -233,6 +240,15 @@ func existingWorkspaceSlotOutcome(status api.WorkspaceSourceStatus) (action, rea
 		}
 		return api.WorkspaceRepairNeedsAttention, "state " + status.State
 	}
+}
+
+// withUnpushedReason adds what only the slot holds to a reason whose state
+// does not say so, such as a clean detached HEAD with commits no branch holds.
+func withUnpushedReason(reason string, status api.WorkspaceSourceStatus) string {
+	if status.Pushed || status.UnpushedReason == "" {
+		return reason
+	}
+	return reason + ": " + status.UnpushedReason
 }
 
 // describeWorkspaceSlotCut says how a slot repair created was materialized.

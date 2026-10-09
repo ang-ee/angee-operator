@@ -105,7 +105,8 @@ func TestBranchlessWorktreeSlotIsDetachedUntilPublished(t *testing.T) {
 
 // The cache's local base only moves on `source pull`, while sync-base moves a
 // slot to the remote base. Commits the slot gained that way are the remote's,
-// not its own: push leaves the slot alone and destroy lets it go.
+// not its own: status shows the slot ahead of the local base but pushed, push
+// leaves it alone and destroy lets it go.
 func TestBranchlessSlotAfterSyncBaseIsNotUnpushed(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
@@ -131,6 +132,13 @@ func TestBranchlessSlotAfterSyncBaseIsNotUnpushed(t *testing.T) {
 		t.Fatalf("slot after sync-base is missing the upstream commit: %v", err)
 	}
 	assertDetached(t, slotPath)
+	status, err := platform.WorkspaceStatus(ctx, "feature-a")
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() after sync-base error = %v", err)
+	}
+	if slot := status.Sources[0]; slot.State != "ahead" || slot.Ahead != 1 || !slot.Pushed || slot.UnpushedReason != "" {
+		t.Fatalf("slot status after sync-base = %#v, want ahead of the local base by 1 and pushed", slot)
+	}
 	if _, err := platform.WorkspacePush(ctx, "feature-a", ""); err != nil {
 		t.Fatalf("WorkspacePush() after sync-base error = %v, want the slot left alone", err)
 	}
@@ -142,6 +150,8 @@ func TestBranchlessSlotAfterSyncBaseIsNotUnpushed(t *testing.T) {
 // A base that exists only as origin/<ref> in the cache is used as such. Given
 // the bare name, git would create and check out a local tracking branch of
 // that name instead of the slot's branch, and --detach would refuse it.
+// Status counts against origin/<ref> too, so the slot reads clean and can be
+// destroyed.
 func TestWorktreeSlotStartsFromRemoteOnlyBase(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -190,6 +200,16 @@ func TestWorktreeSlotStartsFromRemoteOnlyBase(t *testing.T) {
 			}
 			if got := strings.TrimSpace(runGitOutput(t, filepath.Join(root, ".cache", "app"), "branch", "--list", "develop")); got != "" {
 				t.Fatalf("cache gained a local develop branch %q, want none", got)
+			}
+			status, err := platform.WorkspaceStatus(ctx, "feature-a")
+			if err != nil {
+				t.Fatalf("WorkspaceStatus() error = %v", err)
+			}
+			if slot := status.Sources[0]; slot.State != "clean" || !slot.Pushed || slot.Error != "" {
+				t.Fatalf("slot status on a remote-only base = %#v, want clean and pushed", slot)
+			}
+			if err := platform.WorkspaceDestroy(ctx, "feature-a", false); err != nil {
+				t.Fatalf("WorkspaceDestroy() on a remote-only base error = %v", err)
 			}
 		})
 	}
@@ -376,6 +396,41 @@ func TestWorkspaceCreateResolvesAndValidatesSlotMode(t *testing.T) {
 				t.Fatalf(".git is a directory = %v, want %v for mode %q", info.IsDir(), tc.wantMode == "clone", tc.wantMode)
 			}
 		})
+	}
+}
+
+// A clone slot is a repository of its own: its branches go with it, so a
+// commit only one of them holds is unpushed, and destroy refuses the slot.
+// (Tags count as holding a commit: git keeps fetched tags with local ones.)
+func TestCloneSlotCommitOnlyItsOwnBranchHoldsIsUnpushed(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeSlotWorkspaceTemplate(t, base, remote, map[string]string{"mode": "clone", "branch": "feature-a", "ref": "main", "default_ref": "main"})
+	seedWorktreeRemote(t, base, remote)
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: workspaceTemplate, Name: "feature-a"}); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	slotPath := filepath.Join(root, "workspaces", "feature-a")
+	runGit(t, slotPath, "switch", "-c", "mywork")
+	commitFile(t, slotPath, "change.txt")
+	runGit(t, slotPath, "switch", "--detach")
+
+	const reason = "1 commit(s) on a detached HEAD that no remote branch or tag holds"
+	status, err := platform.WorkspaceStatus(ctx, "feature-a")
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	if slot := status.Sources[0]; slot.Pushed || slot.UnpushedReason != reason {
+		t.Fatalf("clone slot status = %#v, want unpushed with %q", slot, reason)
+	}
+	if err := platform.WorkspaceDestroy(ctx, "feature-a", false); err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("WorkspaceDestroy() error = %v, want the unpushed refusal", err)
 	}
 }
 

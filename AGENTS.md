@@ -102,6 +102,8 @@ service.Platform
 | `internal/secrets/` | env-file and OpenBao secret backends. |
 | `internal/service/` | Business logic shared by CLI and operator. |
 | `internal/substitute/` | `${...}` substitution resolver and filters. |
+| `internal/vcs/` | Slot driver interface between the service and a slot's version control. |
+| `internal/vcs/gitdriver/` | Driver for git worktree and clone slots. |
 
 ## Current Concepts
 

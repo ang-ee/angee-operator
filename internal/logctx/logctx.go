@@ -430,6 +430,18 @@ func Truncate(output []byte, maxBytes int) string {
 	return fmt.Sprintf("%s … (%d bytes truncated)", output[:maxBytes], len(output)-maxBytes)
 }
 
+// CombinedOutput joins a process's separately captured stdout and stderr for
+// TraceExec's completion function.
+func CombinedOutput(stdout, stderr []byte) []byte {
+	if len(stdout) == 0 {
+		return stderr
+	}
+	if len(stderr) == 0 {
+		return stdout
+	}
+	return append(append([]byte(nil), stdout...), stderr...)
+}
+
 // TraceExec logs the start and completion of an external process at Debug.
 // The returned completion function is safe to call more than once.
 func TraceExec(ctx context.Context, name string, args []string, dir string, attrs ...slog.Attr) func(output []byte, err error) {

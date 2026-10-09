@@ -126,7 +126,9 @@ func gitOpsLinkFromWorkspaceSource(workspace string, source api.WorkspaceSourceS
 
 func countGitOpsState(summary *api.GitOpsSummary, state string, pushed bool) {
 	normalized := strings.ToLower(state)
-	if !pushed && (normalized == "dirty" || normalized == "ahead" || normalized == "diverged" || normalized == workspaceSourceStateBranchMismatch) {
+	// A clean or behind source can still hold commits of its own, such as a
+	// detached HEAD with no base to count against.
+	if !pushed && normalized != "error" {
 		summary.Unpushed++
 	}
 	switch normalized {
