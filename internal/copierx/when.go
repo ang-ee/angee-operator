@@ -1,6 +1,7 @@
 package copierx
 
 import (
+	"errors"
 	"maps"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -8,10 +9,11 @@ import (
 )
 
 // InputApplies reports whether an input whose `when` condition is when applies
-// given the answers so far, as copier decides it: copier-go renders the
-// condition with the answers parsed to each input's type, and a false
-// condition means the question is not asked and takes its default. An empty
-// condition, or one that fails to render, applies (copier shows the question).
+// given the answers so far, as copier decides it: copier-go evaluates the
+// condition (EvaluateWhen) with the answers parsed to each input's type, and a
+// false condition means the question is not asked and takes its default. An
+// empty condition applies. One that fails to render applies too, so the
+// question stays visible and the render reports the error.
 func InputApplies(when string, inputs []api.TemplateInputDescriptor, values map[string]string) bool {
 	if when == "" {
 		return true
@@ -23,7 +25,7 @@ func InputApplies(when string, inputs []api.TemplateInputDescriptor, values map[
 			continue
 		}
 		answers[desc.Name] = raw
-		if parsed, err := copier.ParseAnswer(copier.QuestionDef{Name: desc.Name, Type: copier.QuestionType(desc.Type)}, raw); err == nil {
+		if parsed, err := copier.ParseAnswer(copier.QuestionDef{Name: desc.Name, Type: desc.Type}, raw); err == nil {
 			answers[desc.Name] = parsed
 		}
 	}
@@ -32,7 +34,27 @@ func InputApplies(when string, inputs []api.TemplateInputDescriptor, values map[
 			answers[name] = raw
 		}
 	}
-	return copier.ShouldAsk(copier.QuestionDef{When: when}, copier.NewRenderer(nil, ""), answers)
+	applies, err := copier.EvaluateWhen(copier.QuestionDef{When: when}, answers)
+	if err != nil {
+		return true
+	}
+	return applies
+}
+
+// IsUnsupportedTemplate reports whether err is copier refusing a template
+// whose _min_copier_version is newer than the Copier it implements.
+func IsUnsupportedTemplate(err error) bool {
+	return errors.Is(err, copier.ErrUnsupportedVersion)
+}
+
+// IsAnswerError reports whether err is copier refusing an answer before it
+// renders anything: a validator rejecting it, a value outside the question's
+// choices, or a required question with neither an input nor a default.
+func IsAnswerError(err error) bool {
+	var validation *copier.ValidationError
+	var choice *copier.InvalidChoiceError
+	return errors.As(err, &validation) || errors.As(err, &choice) ||
+		errors.Is(err, copier.ErrInvalidChoice) || errors.Is(err, copier.ErrQuestionRequired)
 }
 
 // SettleInputs walks inputs in order, as copier asks its questions, and

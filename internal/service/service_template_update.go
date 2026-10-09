@@ -79,7 +79,7 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 	if templateRef == "" {
 		return api.ServiceTemplateUpdateResult{}, &InvalidInputError{Field: "template", Reason: "service template origin is missing"}
 	}
-	workspaceName := answers["workspace_name"]
+	workspaceName := serviceRenderWorkspace(state, answers)
 	if workspaceName == "" {
 		return api.ServiceTemplateUpdateResult{}, &InvalidInputError{Field: "template", Reason: "service answers do not record workspace_name; recreate the service before template update"}
 	}
@@ -129,7 +129,7 @@ func (p *Platform) serviceUpdateFromTemplateLocked(ctx context.Context, name str
 	}
 	prepared, err := copierx.PrepareReconcile(ctx, copierx.RenderPlan{
 		Target: buildContext, TargetRoot: p.root, StateRoot: p.root, StatePath: statePath,
-		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs}},
+		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs, Context: serviceRenderContext(workspaceName)}},
 		Documents: []string{"service.yaml"},
 	}, copierx.ReconcileOptions{Mode: copierx.ReconcileUpdate, DryRun: req.DryRun, Overwrite: req.Overwrite})
 	if err != nil {
@@ -405,4 +405,22 @@ func serviceValueChange(path string, current any, currentExists bool, merged any
 		kind = copierx.ChangeDelete
 	}
 	return []copierx.Change{{Path: path, Kind: kind}}
+}
+
+// serviceRenderContext is what a service's render state remembers beyond the
+// template's answers: the workspace it was created for.
+func serviceRenderContext(workspace string) copierx.Inputs {
+	return copierx.Inputs{"workspace_name": workspace}
+}
+
+// serviceRenderWorkspace is the workspace a service was rendered for: from its
+// render state, or, for a service rendered before angee kept it there, from
+// its answers file, where copier-go used to record every input.
+func serviceRenderWorkspace(state copierx.RenderState, answers map[string]string) string {
+	for _, layer := range state.Layers {
+		if name := layer.Context["workspace_name"]; name != "" {
+			return name
+		}
+	}
+	return answers["workspace_name"]
 }

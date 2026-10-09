@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
@@ -35,6 +36,7 @@ const (
 	CauseDetachedHead       = "detached_head"
 	CauseSourceCacheMissing = "source_cache_missing"
 	CauseStackRootExists    = "stack_root_exists"
+	CauseTemplateTooNew     = "template_too_new"
 	CauseGitUnavailable     = "git_unavailable"
 	CauseFetchFailed        = "fetch_failed"
 	CausePushFailed         = "push_failed"
@@ -178,6 +180,17 @@ func classifyOperationError(err error) *OperationError {
 		return &OperationError{Code: CodeConflict, Err: err}
 	case errors.As(err, &invalid):
 		return &OperationError{Code: CodeInvalidInput, Err: err}
+	}
+	// copier refusing an answer (a validator, a choice, a missing required
+	// input) is the caller's input at fault; its message names the question.
+	if copierx.IsAnswerError(err) {
+		return &OperationError{Code: CodeInvalidInput, Err: err}
+	}
+	// A template that needs a newer Copier than angee's copier-go implements
+	// is a requirement of the template, met by upgrading angee.
+	if copierx.IsUnsupportedTemplate(err) {
+		hint := "Upgrade angee, or use a template version that supports this Copier."
+		return &OperationError{Code: CodePreconditionFailed, Cause: CauseTemplateTooNew, Hint: hint, Summary: err.Error() + ". " + hint, Err: err}
 	}
 	var repair *WorkspaceRepairError
 	if errors.As(err, &repair) {

@@ -168,7 +168,7 @@ func (p *Platform) serviceCreateLocked(ctx context.Context, req api.ServiceCreat
 	statePath := renderPlanStatePath(p.root, "services", serviceName)
 	prepared, err := copierx.PrepareReconcile(ctx, copierx.RenderPlan{
 		Target: buildContext, TargetRoot: p.root, StateRoot: p.root, StatePath: statePath,
-		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs}},
+		Layers:    []copierx.RenderLayer{{Name: "service", Template: templatePath, Inputs: renderInputs, Context: serviceRenderContext(req.Workspace)}},
 		Documents: []string{"service.yaml"},
 	}, copierx.ReconcileOptions{Mode: copierx.ReconcileCreate})
 	if err != nil {

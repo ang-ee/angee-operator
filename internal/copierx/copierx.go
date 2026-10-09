@@ -372,7 +372,7 @@ func (LocalRenderer) Copy(ctx context.Context, req CopyRequest) error {
 func copierOptions(cfg config, inputs Inputs) []copier.Option {
 	return []copier.Option{
 		copier.WithAnswersFile(cfg.AnswersFile),
-		copier.WithData(inputsAsData(inputs)),
+		copier.WithData(inputsAsData(cfg, inputs)),
 		copier.WithDefaults(true),
 		copier.WithOverwrite(true),
 		copier.WithQuiet(true),
@@ -380,9 +380,19 @@ func copierOptions(cfg config, inputs Inputs) []copier.Option {
 	}
 }
 
-func inputsAsData(inputs Inputs) map[string]any {
+// inputsAsData is what angee passes copier as data: every input except one
+// still at the template's raw default. copier computes a default itself: it
+// renders a templated one ("{{ name|lower }}"), keeps the answer recorded last
+// time, and does not validate it when the question does not apply or is
+// secret. Passing the raw default as data would undo all three. Generated
+// values and path inputs angee rewrote differ from the raw default, so they
+// are still passed.
+func inputsAsData(cfg config, inputs Inputs) map[string]any {
 	data := make(map[string]any, len(inputs))
 	for key, value := range inputs {
+		if raw, ok := cfg.Defaults[key]; ok && raw == value {
+			continue
+		}
 		data[key] = value
 	}
 	return data

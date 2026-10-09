@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.21.0 — 2026-10-09
+
 ### Added
 
 - **`when:` in the template input form.** A question whose condition is false,
@@ -16,8 +18,33 @@ latest tag.
   running the render before the value is made relative to the stack root. The
   expanded absolute path is what the answers record.
 
+- **Template validators are enforced.** copier-go (now synced with upstream
+  Copier 9.18.2) runs a question's `validator:` on every answer the render
+  uses: inputs passed with `--input` or by `--yes`, and the defaults it falls
+  back to. A failing validator, a value outside a question's `choices`, or a
+  required question with neither an input nor a default fails `angee init`,
+  `stack update --template`, workspace create and service create with code
+  `INVALID_INPUT`, and copier's message names the question. `angee init --yes`
+  used to accept, for example, `serve_mode=production` with
+  `runtime_mode=process`.
+
 ### Changed
 
+- **Template defaults are left to copier.** angee passes copier the inputs
+  given, generated values and rewritten path inputs, but no longer a
+  template's plain defaults. A templated default (`"{{ name|lower }}"`) is
+  rendered instead of being taken as its literal text. On
+  `stack update --template`, an answer recorded last time is kept rather than
+  reset to the default. An inactive or secret question's default is not
+  validated.
+- copier-go is bumped to v0.1.0, its sync with upstream Copier 9.18.2. It adds
+  the `ask:` question key, and the trust list matches a URL with
+  percent-encoding, backslashes or doubled slashes only exactly. A template
+  whose `_min_copier_version` is newer than 9.18.2 now fails with code
+  `PRECONDITION_FAILED` and cause `template_too_new`; before, the check was
+  skipped. copier records only answers to
+  questions, so angee keeps a service's workspace in its own render state.
+  Services rendered earlier still read it from their answers file.
 - **A read-only bind mount must exist.** A `bind://…:ro` mount compiles to
   compose's long syntax with `create_host_path: false`, so a missing host path
   fails the container's start (`bind source path does not exist`) instead of

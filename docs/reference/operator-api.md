@@ -71,7 +71,7 @@ Every failed operation is reported in one shape. GraphQL puts it in
 | `code` | Meaning | REST status |
 |---|---|---|
 | `NOT_FOUND` | The named object is not declared. | `404` |
-| `INVALID_INPUT` | The request is malformed or names an invalid value. | `400` |
+| `INVALID_INPUT` | The request is malformed or names an invalid value, including a template answer copier refuses (a validator, a choice, a missing required input). | `400` |
 | `CONFLICT` | Another mutation is running, or the object already exists. | `409` |
 | `PRECONDITION_FAILED` | The target's state must change first. | `409` |
 | `GIT_FAILED` | A git command failed. | `500` |
@@ -98,6 +98,7 @@ their diagnostics, and their words are passed through.
 | `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
+| `template_too_new` | `PRECONDITION_FAILED` | The template's `_min_copier_version` is newer than the Copier angee implements. |
 | `merge_conflict` | `GIT_FAILED` | A merge or rebase stopped on conflicts (from git's index); `paths` lists them. |
 | `fetch_failed`, `push_failed`, `clone_failed` | `GIT_FAILED` or `TIMEOUT` | That git action failed. |
 | `git_unavailable` | `GIT_FAILED` | git is not installed. |
