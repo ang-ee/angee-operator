@@ -70,7 +70,7 @@ func TestWorkspaceRepairReportsExistingSlotsWithoutTouchingThem(t *testing.T) {
 		{name: "wrong branch", wantReason: `branch mismatch: current branch/ref "other", expected workspace branch "feature-a"`, prepare: func(t *testing.T, slotPath, _ string) {
 			runGit(t, slotPath, "switch", "-c", "other")
 		}},
-		{name: "diverged", wantReason: "diverged: 1 commit(s) ahead of main and 1 behind", prepare: func(t *testing.T, slotPath, cache string) {
+		{name: "diverged", wantReason: "diverged: 1 commit(s) ahead of base ref main with no upstream and 1 behind", prepare: func(t *testing.T, slotPath, cache string) {
 			commitFile(t, slotPath, "slot.txt")
 			commitFile(t, cache, "base.txt")
 		}},
@@ -584,4 +584,23 @@ func slotSnapshot(t *testing.T, dir string) string {
 		strings.TrimSpace(runGitOutputAllowFailure(t, dir, "branch", "--show-current")),
 		strings.TrimSpace(runGitOutput(t, dir, "status", "--porcelain", "--untracked-files=all")),
 	}, " | ")
+}
+
+// A slot whose state does not say it holds commits of its own, such as a clean
+// detached HEAD with no base to count against, still says so in the repair.
+func TestExistingWorkspaceSlotOutcomeNamesUnpushedWork(t *testing.T) {
+	held := "1 commit(s) on a detached HEAD that no branch holds"
+	for _, tc := range []struct {
+		status api.WorkspaceSourceStatus
+		want   string
+	}{
+		{status: api.WorkspaceSourceStatus{State: "clean", Pushed: true}, want: "clean"},
+		{status: api.WorkspaceSourceStatus{State: "clean", UnpushedReason: held}, want: "clean: " + held},
+		{status: api.WorkspaceSourceStatus{State: "behind", Behind: 2, UnpushedReason: held}, want: "behind by 2 commit(s): " + held},
+		{status: api.WorkspaceSourceStatus{State: "ahead", Ahead: 1, Pushed: true}, want: "ahead by 1 commit(s)"},
+	} {
+		if action, reason := existingWorkspaceSlotOutcome(tc.status); action != api.WorkspaceRepairOK || reason != tc.want {
+			t.Fatalf("existingWorkspaceSlotOutcome(%#v) = %q, %q, want ok, %q", tc.status, action, reason, tc.want)
+		}
+	}
 }

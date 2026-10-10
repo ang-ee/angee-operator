@@ -8,6 +8,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -65,6 +67,17 @@ func New() Client {
 // that need git operations not exposed by the typed API (e.g. checkout in
 // templates.go). Prefer adding a typed method over using Run.
 func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd, trace := c.command(ctx, dir, args)
+	out, err := cmd.CombinedOutput()
+	trace(out, err)
+	if err != nil {
+		return out, commandError(args, out, err)
+	}
+	return out, nil
+}
+
+// command builds the git command for args in dir, and its trace.
+func (c Client) command(ctx context.Context, dir string, args []string) (*exec.Cmd, func([]byte, error)) {
 	bin := c.Bin
 	if bin == "" {
 		bin = "git"
@@ -77,15 +90,13 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 	if c.NonInteractive {
 		cmd.Env = NonInteractiveEnv(os.Environ())
 	}
-	trace := logctx.TraceExec(ctx, bin, args, dir)
-	out, err := cmd.CombinedOutput()
-	trace(out, err)
-	if err != nil {
-		// Callers return this error to CLI and API clients, so keep
-		// credentials in a remote URL out of it.
-		return out, &CommandError{Args: logctx.RedactArgs(args), Output: logctx.RedactText(string(out)), Err: err}
-	}
-	return out, nil
+	return cmd, logctx.TraceExec(ctx, bin, args, dir)
+}
+
+// commandError wraps a failed git command. Callers return it to CLI and API
+// clients, so credentials in a remote URL are kept out of it.
+func commandError(args []string, output []byte, err error) *CommandError {
+	return &CommandError{Args: logctx.RedactArgs(args), Output: logctx.RedactText(string(output)), Err: err}
 }
 
 // CommandError is a git command that failed to start or exited non-zero. Args
@@ -125,6 +136,34 @@ func (c Client) DirtyPaths(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// Diff returns the parsed unified diff of the checkout at dir: the working tree
+// against HEAD when ref is empty, else the committed range HEAD..ref.
+func (c Client) Diff(ctx context.Context, dir, ref string) ([]*gitdiff.File, error) {
+	args := []string{"diff", "--no-color", "--no-ext-diff"}
+	// Use the two-argument form for a ref: `git diff <ref>` would compare the
+	// working tree against ref and leak uncommitted edits into a committed
+	// diff.
+	if ref != "" {
+		args = append(args, EndOfOptions, "HEAD", ref, "--")
+	}
+	cmd, trace := c.command(ctx, dir, args)
+	// stdout is parsed, so stderr is captured apart from it.
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	trace(logctx.CombinedOutput(stdout.Bytes(), stderr.Bytes()), err)
+	if err != nil {
+		return nil, commandError(args, stderr.Bytes(), err)
+	}
+	files, _, err := gitdiff.Parse(stdout)
+	if err != nil {
+		return nil, fmt.Errorf("parse git diff in %s: %w", dir, err)
+	}
+	return files, nil
 }
 
 func (c Client) runText(ctx context.Context, dir string, args ...string) (string, error) {
@@ -563,6 +602,53 @@ func (c Client) CountNotOn(ctx context.Context, dir string, bases ...string) (in
 // holds.
 func (c Client) CountNotOnAnyRef(ctx context.Context, dir string) (int, error) {
 	return c.countHead(ctx, dir, "--not", "--branches", "--remotes", "--tags")
+}
+
+// CountNotOnRemotesOrTags counts the commits reachable from HEAD in dir that
+// no remote-tracking branch or tag reaches. git keeps fetched tags with local
+// ones, so a remote's tag on a release commit counts as holding it.
+func (c Client) CountNotOnRemotesOrTags(ctx context.Context, dir string) (int, error) {
+	return c.countHead(ctx, dir, "--not", "--remotes", "--tags")
+}
+
+// LinkedWorktree reports whether the checkout at dir is a linked worktree,
+// whose branches and tags live in the repository it was added from and
+// outlive it, rather than a repository of its own.
+func (c Client) LinkedWorktree(ctx context.Context, dir string) (bool, error) {
+	out, err := c.runText(ctx, dir, "rev-parse", "--git-dir", "--git-common-dir")
+	if err != nil {
+		return false, err
+	}
+	gitDir, commonDir, ok := strings.Cut(out, "\n")
+	if !ok {
+		return false, fmt.Errorf("git rev-parse --git-dir --git-common-dir in %s: unexpected output %q", dir, out)
+	}
+	// git prints either path relative to dir or absolute, and older versions
+	// mix the two, so compare where they lead.
+	same, err := samePath(gitPathIn(dir, gitDir), gitPathIn(dir, commonDir))
+	if err != nil {
+		return false, err
+	}
+	return !same, nil
+}
+
+func gitPathIn(dir, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(dir, path)
+}
+
+func samePath(a, b string) (bool, error) {
+	a, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false, err
+	}
+	b, err = filepath.EvalSymlinks(b)
+	if err != nil {
+		return false, err
+	}
+	return a == b, nil
 }
 
 func (c Client) countHead(ctx context.Context, dir string, args ...string) (int, error) {

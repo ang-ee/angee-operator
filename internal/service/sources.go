@@ -17,6 +17,8 @@ import (
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
+	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
 )
 
 func (p *Platform) materializeReferencedSources(ctx context.Context, stack *manifest.Stack) error {
@@ -525,67 +527,25 @@ func (p *Platform) sourceState(ctx context.Context, name string, source manifest
 		return state, err
 	}
 	state.Exists = true
-	state.Pushed = true
 	if source.Kind != "git" {
 		state.State = "ready"
 		return state, nil
 	}
-	client := p.gitClient()
-	ref, err := client.CurrentRef(ctx, path)
+	// A cache is not a slot, but the git driver reads any git checkout, so the
+	// cache and its slots share one status rule.
+	read, err := gitdriver.New(p.gitClient()).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef})
 	if err != nil {
 		return state, err
 	}
-	dirty, err := client.Dirty(ctx, path)
-	if err != nil {
-		return state, err
-	}
-	state.Ref = ref
-	state.CurrentRef = ref
-	state.Dirty = dirty
-	if dirty {
-		state.State = "dirty"
-		state.Pushed = false
-		state.UnpushedReason = "uncommitted changes"
-		return state, nil
-	}
-	base, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil {
-		return state, err
-	}
-	if hasUpstream {
-		state.Upstream = base
-	}
-	if base == "" {
-		base = source.DefaultRef
-	}
-	if base == "" {
-		state.State = "clean"
-		return state, nil
-	}
-	ahead, behind, err := client.AheadBehind(ctx, path, base)
-	if err != nil {
-		return state, err
-	}
-	state.Ahead = ahead
-	state.Behind = behind
-	switch {
-	case ahead > 0 && behind > 0:
-		state.State = "diverged"
-		state.Pushed = false
-		state.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
-	case ahead > 0:
-		state.State = "ahead"
-		state.Pushed = false
-		if hasUpstream {
-			state.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
-		} else {
-			state.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base)
-		}
-	case behind > 0:
-		state.State = "behind"
-	default:
-		state.State = "clean"
-	}
+	state.Ref = read.CurrentRef
+	state.CurrentRef = read.CurrentRef
+	state.Dirty = read.Dirty
+	state.Upstream = read.Upstream
+	state.Ahead = read.Ahead
+	state.Behind = read.Behind
+	state.State = workspaceSourceStateOf(read)
+	state.Pushed = read.Pushed
+	state.UnpushedReason = read.UnpushedReason
 	return state, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
@@ -186,4 +187,27 @@ func cacheDirFromWorktree(worktree string) string {
 	root := filepath.Dir(filepath.Dir(filepath.Dir(worktree))) // <base>/.angee
 	base := filepath.Dir(root)
 	return filepath.Join(base, "cache")
+}
+
+// The topology counts a source as unpushed whenever it holds commits of its
+// own, whatever its state is named; a source that could not be read is
+// counted as an error only.
+func TestCountGitOpsStateCountsUnpushedByPushed(t *testing.T) {
+	for _, tc := range []struct {
+		state        string
+		pushed       bool
+		wantUnpushed int
+	}{
+		{state: "clean", pushed: false, wantUnpushed: 1},
+		{state: "behind", pushed: false, wantUnpushed: 1},
+		{state: "ahead", pushed: true, wantUnpushed: 0},
+		{state: "ahead", pushed: false, wantUnpushed: 1},
+		{state: "error", pushed: false, wantUnpushed: 0},
+	} {
+		var summary api.GitOpsSummary
+		countGitOpsState(&summary, tc.state, tc.pushed)
+		if summary.Unpushed != tc.wantUnpushed {
+			t.Fatalf("countGitOpsState(%q, pushed=%v) unpushed = %d, want %d", tc.state, tc.pushed, summary.Unpushed, tc.wantUnpushed)
+		}
+	}
 }
