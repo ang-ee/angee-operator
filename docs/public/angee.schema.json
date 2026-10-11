@@ -459,6 +459,40 @@
         "repo": {
           "type": "string"
         },
+        "remotes": {
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "canonical": {
+                    "type": "boolean"
+                  },
+                  "branches": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "url"
+                ]
+              }
+            ]
+          },
+          "type": "object"
+        },
+        "push_default": {
+          "type": "string"
+        },
         "url": {
           "type": "string"
         },

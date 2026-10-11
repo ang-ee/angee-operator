@@ -1,14 +1,20 @@
 package manifest
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
@@ -175,15 +181,266 @@ type Volume struct {
 }
 
 type Source struct {
-	Kind       string     `yaml:"kind" json:"kind" validate:"required,oneof=git local" jsonschema:"required,enum=git,enum=local"`
-	Repo       string     `yaml:"repo,omitempty" json:"repo,omitempty"`
-	URL        string     `yaml:"url,omitempty" json:"url,omitempty"`
-	Path       string     `yaml:"path,omitempty" json:"path,omitempty"`
-	DefaultRef string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
-	CachePath  string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
-	Auth       SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
-	Git        SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
-	Checksum   string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+	Kind string `yaml:"kind" json:"kind" validate:"required,oneof=git local" jsonschema:"required,enum=git,enum=local"`
+	// Repo is the one-remote form: it declares the remote `origin`. Remotes
+	// declares several; a source sets one or the other.
+	Repo    string                  `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Remotes map[string]SourceRemote `yaml:"remotes,omitempty" json:"remotes,omitempty"`
+	// PushDefault names the declared remote a push goes to when nothing more
+	// specific (a branch's pushRemote) says otherwise. It becomes the cache's
+	// remote.pushDefault.
+	PushDefault string     `yaml:"push_default,omitempty" json:"push_default,omitempty"`
+	URL         string     `yaml:"url,omitempty" json:"url,omitempty"`
+	Path        string     `yaml:"path,omitempty" json:"path,omitempty"`
+	DefaultRef  string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
+	CachePath   string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
+	Auth        SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Git         SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
+	Checksum    string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+}
+
+// DefaultRemote is the remote a source's `repo:` declares.
+const DefaultRemote = "origin"
+
+// SourceRemote is one remote of a git source. In YAML and JSON a bare string
+// is the URL alone: `origin: git@github.com:me/app.git`.
+type SourceRemote struct {
+	URL string `yaml:"url" json:"url"`
+	// Canonical marks the fetch-only remote: the cache is cloned from it and
+	// can never push to it.
+	Canonical bool `yaml:"canonical,omitempty" json:"canonical,omitempty"`
+	// Branches lists the branch patterns (path.Match syntax) a publish to this
+	// remote may create or update. Empty allows any branch.
+	Branches []string `yaml:"branches,omitempty" json:"branches,omitempty"`
+}
+
+// sourceRemoteFields are the keys the mapping form of a SourceRemote accepts.
+// A custom UnmarshalYAML decodes with a fresh decoder, which does not inherit
+// LoadFile's KnownFields, so the mapping form checks its keys itself.
+var sourceRemoteFields = map[string]bool{"url": true, "canonical": true, "branches": true}
+
+func (r *SourceRemote) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		*r = SourceRemote{URL: value.Value}
+		return nil
+	}
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: a remote is a URL or a mapping with url, canonical and branches", value.Line)
+	}
+	if err := checkSourceRemoteKeys(value); err != nil {
+		return err
+	}
+	type plain SourceRemote
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*r = SourceRemote(decoded)
+	return nil
+}
+
+// checkSourceRemoteKeys refuses a key the mapping form does not have. A `<<`
+// merge key is accepted, as everywhere else in the manifest, and the mappings
+// it merges are checked the same way.
+func checkSourceRemoteKeys(mapping *yaml.Node) error {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		key, value := mapping.Content[i], mapping.Content[i+1]
+		if key.Kind == yaml.ScalarNode && key.Value == "<<" && (key.Tag == "!!merge" || key.Tag == "") {
+			merged := []*yaml.Node{value}
+			if value.Kind == yaml.SequenceNode {
+				merged = value.Content
+			}
+			for _, node := range merged {
+				if node.Kind == yaml.AliasNode {
+					node = node.Alias
+				}
+				if node == nil || node.Kind != yaml.MappingNode {
+					return fmt.Errorf("line %d: a merge key in a remote takes a mapping", key.Line)
+				}
+				if err := checkSourceRemoteKeys(node); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !sourceRemoteFields[key.Value] {
+			return fmt.Errorf("line %d: field %s not found in a remote (url, canonical, branches)", key.Line, key.Value)
+		}
+	}
+	return nil
+}
+
+// MarshalYAML writes a remote that has only a URL in the bare-string form, so
+// a manifest the operator saves keeps the form it was written in.
+func (r SourceRemote) MarshalYAML() (any, error) {
+	if !r.Canonical && len(r.Branches) == 0 {
+		return r.URL, nil
+	}
+	type plain SourceRemote
+	return plain(r), nil
+}
+
+func (r *SourceRemote) UnmarshalJSON(data []byte) error {
+	var url string
+	if err := json.Unmarshal(data, &url); err == nil {
+		*r = SourceRemote{URL: url}
+		return nil
+	}
+	type plain SourceRemote
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var decoded plain
+	if err := dec.Decode(&decoded); err != nil {
+		return err
+	}
+	*r = SourceRemote(decoded)
+	return nil
+}
+
+// DeclaredRemotes returns the remotes the source declares: `remotes:` as
+// written, or `repo:` as the one remote origin. It is nil when neither is set.
+func (s Source) DeclaredRemotes() map[string]SourceRemote {
+	if len(s.Remotes) > 0 {
+		return s.Remotes
+	}
+	if s.Repo != "" {
+		return map[string]SourceRemote{DefaultRemote: {URL: s.Repo}}
+	}
+	return nil
+}
+
+// CloneRemote names the remote a new cache is cloned from: the canonical
+// remote, else origin, else the only remote. ok is false when the source
+// declares no remote, or several of which none qualifies (ValidateSource
+// refuses the latter).
+func (s Source) CloneRemote() (name string, remote SourceRemote, ok bool) {
+	remotes := s.DeclaredRemotes()
+	for name, remote := range remotes {
+		if remote.Canonical {
+			return name, remote, true
+		}
+	}
+	if remote, ok := remotes[DefaultRemote]; ok {
+		return DefaultRemote, remote, true
+	}
+	if len(remotes) == 1 {
+		for name, remote := range remotes {
+			return name, remote, true
+		}
+	}
+	return "", SourceRemote{}, false
+}
+
+// CloneURL returns the URL a new cache is cloned from (CloneRemote), or "" when
+// the source declares no remote.
+func (s Source) CloneURL() string {
+	_, remote, _ := s.CloneRemote()
+	return remote.URL
+}
+
+// IsRelativeURL reports whether a remote URL is a relative filesystem path
+// rather than a URL, an scp-like `host:path`, or an absolute path. git records
+// a clone's source as an absolute path and resolves a relative remote URL
+// against the checkout, so a relative URL means something else in each one.
+func IsRelativeURL(url string) bool {
+	if strings.Contains(url, "://") || filepath.IsAbs(url) {
+		return false
+	}
+	colon := strings.Index(url, ":")
+	slash := strings.Index(url, "/")
+	scpLike := colon > 0 && (slash < 0 || colon < slash)
+	return !scpLike
+}
+
+// remoteNamePattern is a conservative subset of git's remote names: it keeps
+// every name usable as a config section and a ref path component.
+var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// checkRemoteURL refuses a URL git would store differently from what the
+// manifest says: one with a control character (a newline would become a second
+// URL line in the git config) or with surrounding spaces.
+func checkRemoteURL(url string) error {
+	if strings.TrimSpace(url) != url {
+		return errors.New("has leading or trailing spaces")
+	}
+	if strings.ContainsFunc(url, unicode.IsControl) {
+		return errors.New("contains a control character")
+	}
+	return nil
+}
+
+// ValidateSource checks a source's remotes:
+//   - `repo:` and `remotes:` are not both set;
+//   - every URL, `repo:` included, has no control character or surrounding
+//     spaces;
+//   - every remote under `remotes:` has a valid name that differs from the
+//     others by more than case, and an absolute or remote URL;
+//   - at most one is canonical, and a canonical remote has no branches;
+//   - push_default names a declared remote that is not canonical;
+//   - the remote to clone from can be determined (CloneRemote).
+func ValidateSource(name string, s Source) error {
+	if s.Repo != "" && len(s.Remotes) > 0 {
+		return fmt.Errorf("source %q: set repo or remotes, not both (repo declares the remote %s)", name, DefaultRemote)
+	}
+	if (len(s.Remotes) > 0 || s.PushDefault != "") && s.Kind != "git" {
+		return fmt.Errorf("source %q: remotes and push_default require kind: git", name)
+	}
+	if err := checkRemoteURL(s.Repo); err != nil {
+		return fmt.Errorf("source %q: repo %w", name, err)
+	}
+	canonical := ""
+	folded := map[string]string{}
+	for _, remoteName := range slices.Sorted(maps.Keys(s.Remotes)) {
+		remote := s.Remotes[remoteName]
+		if !remoteNamePattern.MatchString(remoteName) || strings.HasSuffix(remoteName, ".lock") || strings.Contains(remoteName, "..") {
+			return fmt.Errorf("source %q: remote name %q must start with a letter or digit and hold only letters, digits, '.', '_' and '-'", name, remoteName)
+		}
+		// Remote-tracking refs live in files, so on a case-insensitive file
+		// system two such remotes would share refs/remotes/<name>.
+		if other, ok := folded[strings.ToLower(remoteName)]; ok {
+			return fmt.Errorf("source %q: remote names %q and %q differ only in case", name, other, remoteName)
+		}
+		folded[strings.ToLower(remoteName)] = remoteName
+		if remote.URL == "" {
+			return fmt.Errorf("source %q remote %q: url is required", name, remoteName)
+		}
+		if err := checkRemoteURL(remote.URL); err != nil {
+			return fmt.Errorf("source %q remote %q: url %w", name, remoteName, err)
+		}
+		if IsRelativeURL(remote.URL) {
+			return fmt.Errorf("source %q remote %q: url %q is a relative path; use an absolute path or a URL", name, remoteName, remote.URL)
+		}
+		if remote.Canonical {
+			if canonical != "" {
+				return fmt.Errorf("source %q: remotes %q and %q are both canonical; mark one", name, canonical, remoteName)
+			}
+			canonical = remoteName
+			if len(remote.Branches) > 0 {
+				return fmt.Errorf("source %q remote %q: a canonical remote is fetch-only, so branches has nothing to allow", name, remoteName)
+			}
+		}
+		for _, pattern := range remote.Branches {
+			if _, err := path.Match(pattern, ""); err != nil || pattern == "" {
+				return fmt.Errorf("source %q remote %q: branches pattern %q is not a valid path.Match pattern", name, remoteName, pattern)
+			}
+		}
+	}
+	remotes := s.DeclaredRemotes()
+	if s.PushDefault != "" {
+		remote, ok := remotes[s.PushDefault]
+		if !ok {
+			return fmt.Errorf("source %q: push_default %q names no declared remote", name, s.PushDefault)
+		}
+		if remote.Canonical {
+			return fmt.Errorf("source %q: push_default %q is the canonical remote, which is fetch-only", name, s.PushDefault)
+		}
+	}
+	if len(remotes) > 0 {
+		if _, _, ok := s.CloneRemote(); !ok {
+			return fmt.Errorf("source %q: cannot tell which remote to clone from; mark one canonical or name one %s", name, DefaultRemote)
+		}
+	}
+	return nil
 }
 
 type SourceAuth struct {
@@ -707,6 +964,11 @@ func (s *Stack) ValidateExtended() error {
 	}
 	for name, job := range s.Jobs {
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
+			return err
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Sources)) {
+		if err := ValidateSource(name, s.Sources[name]); err != nil {
 			return err
 		}
 	}

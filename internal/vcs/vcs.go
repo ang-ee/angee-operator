@@ -16,6 +16,9 @@ type Slot struct {
 	Path    string // the checkout
 	Branch  string // the branch the checkout must be on; empty when any ref will do
 	BaseRef string // the slot's ref, else its source's default ref; may be empty
+	// BaseRemote is the remote BaseRef comes from: the source's clone remote.
+	// Empty lets the driver pick (git: origin).
+	BaseRemote string
 }
 
 // Status is what a driver reads from a slot's checkout.

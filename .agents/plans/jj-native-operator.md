@@ -11,14 +11,16 @@ This plan turns the proposal into mergeable pull requests. The proposal owns
 the *why* and the ownership split between jj and the operator; this file owns
 the *order*, the files, and the decisions the proposal left open or got wrong.
 
-**Where it stands (2026-10-10):** phase 1 is merged (#93) and released in
-v0.16.0. Phase 4a (reads behind the driver) is the PR that commits this
-file. Phase 2 can start any time; phase 4 is the critical path. Q1 is
-answered (jj slots are created in place), and so is Q2 (2026-10-09:
+**Where it stands (2026-10-11):** phase 1 is merged (#93) and released in
+v0.16.0. Phase 4a (reads behind the driver) is merged (#107). Phase 2 steps
+1-4 (remotes, push default, canonical remote, cache reconcile) are in the PR
+that adds this sentence; step 5 (publish) follows 4b and lands before the
+release after v0.21.3. Phase 4 is the critical path. Q1 is answered (jj
+slots are created in place), and so is Q2 (2026-10-09:
 `<stack>--<workspace>`, a clash is refused), so phase 6 waits only on
 phase 5. Q6 is answered (2026-10-10: slot state is read on demand, so
 every read snapshots and there is no interval), which drops phase 10. Q3
-to Q5 are still open.
+to Q5 and Q7 are still open.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -252,6 +254,116 @@ Steps:
 
 Tests: YAML round-trip of both forms; clone-URL resolution table; reconcile
 is idempotent; publish to a canonical remote is refused; allow-list refusal.
+
+**As built: steps 1-4 (2026-10-11).** Step 5 is not in this PR; it follows
+4b, which moves publish behind the driver.
+
+- **Manifest.** A remote is a bare URL or a mapping with `url`, `canonical`
+  and `branches`.
+  - The mapping form checks its own keys, because a custom `UnmarshalYAML`
+    decodes with a fresh decoder that does not inherit `LoadFile`'s
+    `KnownFields`.
+  - Saving writes a URL-only remote back as a bare string, so the operator's
+    rewrites of `angee.yaml` keep the form it was written in. JSON accepts
+    both forms. `cmd/schema` describes both (a `Mapper`, so `manifest` does
+    not import jsonschema).
+  - The mapping form accepts `<<` merge keys, as the rest of the manifest
+    does, and checks the merged mappings' keys too.
+  - `ValidateSource` also requires remote names to match
+    `^[A-Za-z0-9][A-Za-z0-9._-]*$` (no `/`, no `..`, no `.lock` suffix) and
+    to differ by more than case (remote-tracking refs are files), rejects
+    remotes on a `kind: local` source, `branches` on the canonical remote and
+    invalid `branches` patterns (`path.Match`), refuses relative URLs under
+    `remotes:` (`manifest.IsRelativeURL`, which the `repo:` reconcile also
+    uses), and refuses control characters and surrounding spaces in every
+    URL, `repo:` included.
+  - A git source with no remote at all stays valid: an adopted cache needs
+    none.
+- **Helpers.** `Source.DeclaredRemotes()` and `Source.CloneRemote()`, with
+  `CloneURL()` on top. `CloneRemote` returns the remote's name as well as its
+  URL, because the clone is made under that name. `git.Client.CloneRef`
+  passes `--origin <name>` for every name, origin included: without it git
+  takes the user's `clone.defaultRemoteName`, which could give a canonical
+  origin another name the reconcile never blocks. The template cache clones
+  as origin explicitly, since it reads `origin/HEAD`.
+- **Base resolution.** `git.Client.SyncBaseRef(dir, ref, baseRemote)` tries,
+  in order: git's own `<ref>@{upstream}` (a remote branch only), then
+  `<baseRemote>/<ref>` (origin when empty), then the other remotes in name
+  order, then the local ref. It used to try origin first and then go-git's
+  map order, so with origin a fork the base was the fork's branch, and
+  without origin it varied between calls. `vcs.Slot` gains `BaseRemote`
+  (the source's clone remote, set by `workspaceVCSSlot` and the cache read),
+  and `gitdriver.CommitsBeyondBase` takes it, so sync-base, the worktree
+  start point and status agree. **For 4b:** `ResolveBase` must pass
+  `s.BaseRemote` to `SyncBaseRef`.
+- **Canonical push block.** The canonical remote's push URL is set to
+  `angee-fetch-only://<name>`. No git remote helper serves that scheme, so a
+  push fails with "remote helper 'angee-fetch-only' aborted session", and
+  `git remote -v` shows why. Every push form was tried (`--all`, `--mirror`,
+  `--tags`, `--repo`, `-u`, a plain `git push`): none reaches it. A remote
+  that `remotes:` declares without `canonical` loses that push URL. A push
+  URL the user set on a non-canonical remote is left alone.
+- **Reconcile.** `syncSourceRemotes` replaces `syncSourceOrigin`, keeping
+  its rules, and runs in three modes:
+  - *report* (bring-up, workspace provisioning, clone-slot reads) only warns;
+  - *adopt* (`source fetch` / `source pull`) writes and warns per change;
+  - *fresh* (just cloned) writes silently.
+
+  The `repo:` form behaves as before: origin's URL only, with the same
+  warnings. It never reads or writes push URLs or tracking, so a `repo:`
+  stack sharing a cache cannot lift another stack's canonical block. A
+  missing canonical remote is reported once, as missing.
+- **Tracking.** Under `remotes:`, adopt mode sets `default_ref`'s upstream to
+  `<clone remote>/<default_ref>` after the fetch (`git branch
+  --set-upstream-to refs/remotes/…`, in full so a local branch of the same
+  short name is not taken for it), as a fresh clone has it; report mode
+  warns. Without it a cache cloned under `repo:` keeps tracking origin, which
+  `remotes:` may now name a fork, and `source pull` and the base follow the
+  fork.
+- **Staged clone.** A missing cache is cloned into `clone/` inside a sibling
+  temporary directory (`.<name>.clone-*`), reconciled there, and renamed into
+  place. git creates `clone/` with the umask's permissions, as a plain clone
+  has them; the temporary directory itself is 0700. Until the reconcile the
+  canonical remote is pushable, so nothing may see the clone before it.
+  - A failure removes only the staging directory. A new attempt first
+    removes staging directories an interrupted one left.
+  - A symlinked `cache_path` is resolved first, so the clone lands in its
+    target, as `git clone` did.
+  - An existing empty directory, which a rename may not replace (a mount
+    point), is cloned in place and configured right after, as before this
+    PR, with that short window. A failed configuration empties it again; a
+    failed clone leaves the directory as git left it, since what is in it may
+    be another writer's.
+  - A path that holds anything else is refused before cloning.
+- **Clone slots.** A clone slot (`mode: clone`, or a git slot with no mode,
+  which `materializeWorkspaceSource` also clones) is cloned and reconciled
+  the same way (`workspaces.go`, the clone branch of
+  `materializeWorkspaceSource`), because it is a repository of its own and
+  would otherwise push to the canonical remote. Because nothing reconciles it
+  afterwards, workspace status (and so repair) runs the reconcile on it in
+  report mode whenever it reads the slot, on demand, if the slot has its own
+  `.git`. Its warnings point at git in the slot, since `source fetch` acts on
+  the cache, and repeat on every read until the slot is fixed. 4c moves this
+  code with the rest of the lifecycle. `workspace push` still selects only
+  `worktree` and `clone` slots, so it skips a git slot with no mode; see Q7.
+- **Status of a cache with a local branch named like a remote branch** (a
+  local `upstream/main`, say) fails: the driver counts against the short
+  upstream name, which git finds ambiguous. This predates the PR; the
+  tracking write above no longer trips over it.
+- **Template sources.** An inline source's remotes and `push_default` are
+  substituted like its other strings, and it becomes `kind: git` when it
+  declares remotes. It is validated before anything is cloned.
+- **Order with step 5 (owner, 2026-10-11).** Publish still defaults to
+  `origin`; there is no interim fallback. v0.21.3 is tagged before this PR
+  merges, and step 5 lands before the release after that.
+- **Gaps recorded here.**
+  - No primary lock: D9 arrives in 4c. The reconcile runs under the stack's
+    mutation lease, as `materializeSource` did, so two stacks sharing one
+    cache are not serialized.
+  - A remote the manifest stops declaring stays in the cache: removing
+    remotes is out of scope.
+  - Step 5 must also make publish refuse a remote that the slot does not
+    have configured.
 
 ### Phase 3. `link` slot mode
 
@@ -749,6 +861,17 @@ Q1, Q2 and Q6 are answered. The rest can be answered later.
   is being edited, each snapshot writes one operation and briefly takes the
   slot's working-copy lock. The owner asked why the operator polls at all,
   which led to the on-demand rule.
+- **Q7. Should `workspace push` cover clone slots with no `mode`?** A git
+  slot with no mode is materialized as a clone, and status reports its
+  remotes like a `mode: clone` slot's (phase 2), but `workspace push`
+  selects only `worktree` and `clone` slots, so it skips it. Including it
+  was tried in #116 and dropped: angee-django's `templates/workspaces/src`
+  declares the `.work` work-state slot with no mode and a `kind: git`
+  source, so `workspace push` would refuse whenever `.work` is dirty (almost
+  always), and would push a clean, ahead `.work` with git, outside the
+  work-state store's own publish recipe. Covering them needs a way to
+  exclude a work-state slot first: a slot or source flag (`push: false`,
+  say), a dedicated mode for it, or a rule on the work-state source. Open.
 
 ## 6. Corrections to feed back into the proposal
 

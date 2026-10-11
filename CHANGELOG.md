@@ -6,6 +6,56 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **Git sources can declare several remotes** (`remotes:`), with one
+  `push_default` and one `canonical` remote (phase 2 of
+  `.agents/plans/jj-native-operator.md`, steps 1-4). A remote is a bare URL or
+  a mapping with `url`, `canonical` and `branches`; `repo:` still declares the
+  one remote `origin`.
+  - A new cache, or `clone`-mode slot, is cloned from the canonical remote
+    (else `origin`, else the only remote) under that remote's name, whatever
+    git's `clone.defaultRemoteName` says. It gets the other remotes,
+    `remote.pushDefault`, and a push URL on the canonical remote that makes
+    every push to it fail (`angee-fetch-only://<name>`). A cache is
+    configured in a staging directory beside its path and moved into place
+    only then, with a plain clone's permissions. A symlinked `cache_path` is
+    cloned into its target, and an existing empty directory (a mount point,
+    say) in place, configured right after. A path that holds anything else
+    is refused.
+  - `angee source fetch` and `source pull` reconcile an existing cache's
+    declared remotes, push block and push default, warning for each change.
+    Under `remotes:` they also make `default_ref` track the clone remote, so
+    a cache cloned under `repo:`, whose origin `remotes:` now names a fork,
+    pulls from the canonical remote. Bring-up and workspace provisioning only
+    warn about differences, as they already did for `origin`. Undeclared
+    remotes are never touched, and a `repo:` source never reads or writes
+    push URLs or tracking.
+  - `workspace status` and `workspace repair` warn when a clone slot's
+    (`mode: clone`, or a git slot with no mode) remotes differ from the
+    manifest's, such as a remote marked canonical after the slot was
+    created. They change nothing.
+  - The manifest refuses `repo` and `remotes` together, a `push_default`
+    that is undeclared or canonical, two canonical remotes, `branches` on the
+    canonical remote, invalid remote names or names differing only in case,
+    relative URLs under `remotes`, URLs (`repo` included) with control
+    characters or surrounding spaces, invalid `branches` patterns, and
+    several remotes with no clone remote. A workspace template's inline
+    source is checked the same way before anything is cloned. The mapping
+    form accepts `<<` merge keys, as the rest of the manifest does.
+  - Publish does not use `push_default` or enforce `branches` yet; that is
+    step 5, after the git verbs move behind the driver (4b).
+
+### Changed
+
+- **The base ref is read from the source's clone remote.** A slot's base
+  (its `ref`, else `default_ref`) was read from `origin/<ref>` first and then
+  from the other remotes in an unspecified order, which varied between
+  calls. It now comes from the remote branch git has the local branch track,
+  then the clone remote's, then the other remotes' by name. This decides a
+  new worktree slot's start, status counts and `sync-base`. A `repo:`
+  source resolves as before unless its local branch tracks another remote.
+
 ## v0.21.3 — 2026-10-11
 
 ### Changed

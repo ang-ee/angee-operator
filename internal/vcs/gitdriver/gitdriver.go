@@ -53,7 +53,7 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	if hasUpstream {
 		status.Upstream = upstream
 		countBase = upstream
-	} else if bases = baseRefs(ctx, d.git, s.Path, s.BaseRef); len(bases) > 0 {
+	} else if bases = baseRefs(ctx, d.git, s.Path, s.BaseRef, s.BaseRemote); len(bases) > 0 {
 		countBase = bases[0]
 	}
 	reason, decided, err := d.pushedVerdict(ctx, s, hasUpstream, bases)
@@ -166,18 +166,19 @@ func BranchMismatch(currentRef, branch string) string {
 }
 
 // CommitsBeyondBase counts the commits reachable from HEAD at dir that neither
-// base nor its remote counterpart (<remote>/<base>, origin's first) reaches.
+// base nor its remote counterpart (git.Client.SyncBaseRef, from baseRemote)
+// reaches.
 // The cache's local base only moves on `source pull`, while sync-base moves a
 // slot to the remote one, so counting against either alone would take the
 // remote's commits for the slot's own. known is false when base is empty,
 // neither ref exists, or the count cannot be read.
-func CommitsBeyondBase(ctx context.Context, client git.Client, dir, base string) (ahead int, known bool) {
-	return countBeyond(ctx, client, dir, baseRefs(ctx, client, dir, base))
+func CommitsBeyondBase(ctx context.Context, client git.Client, dir, base, baseRemote string) (ahead int, known bool) {
+	return countBeyond(ctx, client, dir, baseRefs(ctx, client, dir, base, baseRemote))
 }
 
 // baseRefs returns the refs at dir that hold base: base itself when it exists,
 // then its remote counterpart when that is another ref.
-func baseRefs(ctx context.Context, client git.Client, dir, base string) []string {
+func baseRefs(ctx context.Context, client git.Client, dir, base, baseRemote string) []string {
 	if base == "" {
 		return nil
 	}
@@ -185,7 +186,7 @@ func baseRefs(ctx context.Context, client git.Client, dir, base string) []string
 	if client.RefExists(ctx, dir, base) {
 		refs = append(refs, base)
 	}
-	if remote, err := client.SyncBaseRef(ctx, dir, base); err == nil && remote != base {
+	if remote, err := client.SyncBaseRef(ctx, dir, base, baseRemote); err == nil && remote != base {
 		refs = append(refs, remote)
 	}
 	return refs

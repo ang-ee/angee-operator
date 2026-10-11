@@ -19,9 +19,16 @@ func (p *Platform) slotDriver(slot vcs.Slot) vcs.Driver {
 // driver. Only a worktree slot that names a branch must be on it
 // (workspaceSourceRequiresBranch).
 func workspaceVCSSlot(path string, source manifest.Source, wsSource manifest.WorkspaceSource) vcs.Slot {
-	slot := vcs.Slot{Path: path, BaseRef: workspaceSourceBaseRef(source, wsSource)}
+	slot := vcs.Slot{Path: path, BaseRef: workspaceSourceBaseRef(source, wsSource), BaseRemote: sourceBaseRemote(source)}
 	if workspaceSourceRequiresBranch(wsSource) {
 		slot.Branch = wsSource.Branch
 	}
 	return slot
+}
+
+// sourceBaseRemote names the remote a source's base refs come from: its clone
+// remote (origin for `repo:`), or "" when it declares none.
+func sourceBaseRemote(source manifest.Source) string {
+	name, _, _ := source.CloneRemote()
+	return name
 }
