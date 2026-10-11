@@ -986,6 +986,8 @@ func (s *Server) workspaceUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ref)
 }
 
+// workspaceLogs serves the deprecated GET /workspaces/{name}/logs: a workspace
+// has no logs of its own (#110), so it answers an empty body.
 func (s *Server) workspaceLogs(w http.ResponseWriter, r *http.Request) {
 	logs, err := s.platform.WorkspaceLogs(r.Context(), r.PathValue("name"), false)
 	if err != nil {

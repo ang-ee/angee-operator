@@ -39,10 +39,9 @@ func TestLoadStackMissingManifestExplainsNextStep(t *testing.T) {
 	if strings.Contains(err.Error(), "no such file or directory") {
 		t.Fatalf("error = %q, want no raw open error", err)
 	}
-	// Callers branch on the missing-manifest case (workspacePortInputs treats
-	// it as "not a managed workspace inner stack", WorkspaceCreatePreflight as
-	// "no host stack defaults"), so the friendlier message must not cost the
-	// error its os.ErrNotExist identity.
+	// Callers branch on the missing-manifest case (WorkspaceCreatePreflight
+	// treats it as "no host stack defaults"), so the friendlier message must
+	// not cost the error its os.ErrNotExist identity.
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("error = %q, want errors.Is(err, os.ErrNotExist)", err)
 	}

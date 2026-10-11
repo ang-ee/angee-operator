@@ -35,8 +35,8 @@ const PathInputType = "path"
 //     recorded and a later render elsewhere reuses it
 //   - absolute path → kept absolute (manifest.ResolvePath passes it through)
 //   - relative path → resolved against destDir (the render destination,
-//     i.e. the target stack root for `angee init` or the workspace
-//     dir for a chained workspace render), then re-expressed relative
+//     i.e. the target stack root for `angee init`, or a chained stack
+//     template's root inside it), then re-expressed relative
 //     to <destDir>/<ANGEE_ROOT> via filepath.Rel — yielding the natural
 //     "../..." escape that ANGEE_ROOT introduces.
 //

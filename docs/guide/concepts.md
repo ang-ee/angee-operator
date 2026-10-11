@@ -19,9 +19,9 @@ CI/CD system that knows how to build your app:
    and (when needed) worktrees them.
 2. **Workspaces compose Sources for development** — render a Copier
    template that materializes a chosen set of Sources on a feature
-   branch and allocates ports. Workspaces produce only files; if the
-   template chains an inner Stack, it's rendered as files and you bring
-   it up with a Stack operation against the inner root.
+   branch and allocates ports. Workspaces produce only files; a Stack's
+   services and jobs reach them through `workspace://` mounts, `workdir`
+   and env.
 3. **Stacks compose Sources for deployment** — the same `angee.yaml`
    compiles to runtime files (Docker Compose or process-compose) and is
    driven by the operator.
@@ -63,7 +63,7 @@ React, or any specific framework.
 | **Secrets backend** | env-file by default; OpenBao for production. Resolved values land in `run/secrets.env`. | `internal/secrets/` |
 | **Port pool** | Named ranges (`workspace`, `django`, `acp`, …) with leases, so workspaces don't collide. | `internal/ports/` |
 | **Stack template** | A Copier template with `_angee.kind: stack` that produces an `angee.yaml`. | `internal/copierx/` |
-| **Workspace template** | A Copier template with `_angee.kind: workspace` that produces a workspace tree, declares Sources to materialize, and may chain an inner Stack template **as files**. | `internal/copierx/` |
+| **Workspace template** | A Copier template with `_angee.kind: workspace` that produces a workspace tree and declares Sources to materialize. It renders no Stack. | `internal/copierx/` |
 
 Every concept above has a `service.Platform` method and at least one of
 {CLI, REST, GraphQL}. The full classification is tracked in
@@ -123,7 +123,7 @@ can read and drive over REST + GraphQL.
 | **Service** | Long-running workloads declared in the stack. | `services`, `serviceLogs`. | `serviceInit`, `serviceUpdate`, `serviceStart`, `serviceStop`, `serviceRestart`, `serviceDestroy`. |
 | **Job** | One-shot commands in the startup dependency graph, with daemon-owned receipts for explicit reruns. | `jobs`, `jobRunOperation`, `latestJobRun`, `jobRunPreview`. | `jobRun(name, inputs, chainedRestart)`. A chained run starts dependents only after the root succeeds, waits at dependency joins, and reports failed or blocked descendants individually. |
 | **Source** | Reusable source material (git or local) declared in the stack. | `sources`, `source(name)` (with state). | `sourceFetch`, `sourcePull` (= **update**: fetch + fast-forward), `sourcePush`, `sourceDiff`. |
-| **Workspace** | Rendered file tree under `workspaces/<name>`. | `workspaces`, `workspace(name)`, `workspaceStatus(name)`, `workspaceLogs(name)`. | `workspaceCreate`, `workspaceCreatePreflight` (validate without rendering), `workspaceUpdate` (re-render with new inputs / TTL), `workspaceDestroy`. **Never** start/stop — see "Workspaces don't run" below. |
+| **Workspace** | Rendered file tree under `workspaces/<name>`. | `workspaces`, `workspace(name)`, `workspaceStatus(name)`. (`workspaceLogs(name)` is deprecated and empty: a workspace has no logs.) | `workspaceCreate`, `workspaceCreatePreflight` (validate without rendering), `workspaceUpdate` (re-render with new inputs / TTL), `workspaceDestroy`. **Never** start/stop — see "Workspaces don't run" below. |
 | **Workspace source slot** | One git materialization inside a Workspace. | `workspaceGit(name)` (all slots), `workspaceSourceDiff(workspace, slot, ref)`. | `workspaceSourceFetch`, `workspaceSourcePull` (= **slot-level update**), `workspaceSourcePush`, `workspaceSourceMerge`/`Rebase`/`MergeAbort`/`RebaseAbort`/`RebaseContinue`/`Publish`. |
 | **Workspace branch identity** | The cross-slot promise that every git slot in a workspace lives on its declared branch. | `workspaceStatus.sources[].branch` / `currentRef` / `state`. Top-level `state: discrepancy` flags any mismatch. | `workspacePush` (push every slot's branch), `workspaceSyncBase(name, method)` (= **multi-slot update** against each base ref; merge or rebase). |
 | **GitOps topology** | Derived view over Sources × Workspace slots. | `gitOpsTopology(withCommits: Int)` (snapshot; `withCommits > 0` opt-in populates `sources[].commits`). Live: `onGitOpsTopologyChange` subscription. | No direct writes — the view recomputes from the underlying state on every read. |
@@ -151,22 +151,18 @@ want to bring its working branches forward without leaving them.
 ### Workspaces don't run
 
 A Workspace is a file primitive. `workspaceCreate` renders a Copier
-template (including any chained inner-stack template **as files**) and
-materializes git/local sources. It does **not** start services.
+template and materializes git/local sources. It does **not** start
+services, and it renders no Stack: a workspace template that declares
+`chain` or `chain_root` is refused
+([#110](https://github.com/ang-ee/angee-operator/issues/110)).
 
-If a Workspace renders an inner Stack and you want it running, drive it
-explicitly as a Stack operation against the inner root:
-
-```sh
-angee stack up --root workspaces/<name>/.angee
-# or expose it as its own HTTP control plane:
-angee operator --root workspaces/<name>/.angee --port 9100
-```
-
-This boundary keeps Workspace (data) and Stack (runtime) cleanly
-separable — a Service in the outer Stack can mount
-`workspace://<name>` without anything inside the workspace needing to
-"run".
+This boundary keeps Workspace (files) and Stack (runtime) cleanly
+separable. A Stack's services and jobs reach a workspace through
+`workspace://<name>` mounts, `workdir` and env, so several of them can
+each use a different workspace without anything inside the workspace
+needing to "run"; the workspace's status lists them under `mountedBy`. A
+Stack that sits inside a workspace's directory is an ordinary Stack, run
+and reported by its own operator.
 
 ### Live event streams
 
@@ -180,7 +176,7 @@ single-connection SSE mode).
 | `onGitOpsTopologyChange` | Polled topology hash changes (2 s tick by default). |
 | `onWorkspaceStatusChange(name)` | A specific workspace's polled status hash changes. |
 | `onServiceLogs(name)` | New log lines arrive from the runtime backend's `--follow`. |
-| `onWorkspaceLogs(name)` | Same, scoped to a workspace's logs. |
+| `onWorkspaceLogs(name)` | Deprecated: a workspace has no logs, so the stream ends at once. |
 
 No initial snapshot is emitted on connect — clients should issue a
 one-shot query for the current state alongside opening the
@@ -250,15 +246,11 @@ Putting the pieces together, a typical loop looks like this:
 2. **Render a Workspace (files only).**
    `angee workspace create fix-issue-123 --template dev-pr` renders a
    Copier template, materializes each Source as a worktree on
-   `workspace/fix-issue-123`, and allocates ports. If the template
-   chains an inner Stack template, it's rendered **as files** under
-   the workspace tree.
-3. **Bring the inner Stack up explicitly.** Workspaces don't manage
-   services — start the inner Stack with
-   `angee stack up --root workspaces/fix-issue-123/.angee` (or expose
-   it over HTTP/GraphQL by running a second operator against that
-   root). The same `stack up` / `stack down` / `stack logs` commands
-   work on a workspace's inner Stack as on production.
+   `workspace/fix-issue-123`, and allocates ports.
+3. **Run the workspace's code from a Stack.** Workspaces don't manage
+   services — a Stack's services and jobs mount the workspace
+   (`workspace://fix-issue-123/app`) or run in it (`workdir`), and the
+   usual `stack up` / `stack down` / `stack logs` commands drive them.
 4. **Stay current.** `workspaceSyncBase` merges or rebases each slot's
    workspace branch against its declared base ref so the workspace
    doesn't drift from `main` while you work.

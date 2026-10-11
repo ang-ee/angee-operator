@@ -214,9 +214,11 @@ type JobRunPreview struct {
 }
 
 type WorkspaceRef struct {
-	Name               string         `json:"name"`
-	Path               string         `json:"path"`
-	Template           string         `json:"template"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Template string `json:"template"`
+	// Deprecated: a workspace no longer renders a stack (#110), so ChainRoot
+	// is always empty. It is removed in a later release.
 	ChainRoot          string         `json:"chain_root,omitempty"`
 	Allocations        map[string]int `json:"allocations,omitempty"`
 	ProcessComposePort int            `json:"process_compose_port,omitempty"`
@@ -227,15 +229,19 @@ type WorkspaceRef struct {
 }
 
 type WorkspaceStatusResponse struct {
-	Name               string                          `json:"name"`
-	Path               string                          `json:"path"`
-	Exists             bool                            `json:"exists"`
-	State              string                          `json:"state"`
-	Error              string                          `json:"error,omitempty"`
-	Template           string                          `json:"template"`
-	Inputs             map[string]string               `json:"inputs,omitempty"`
-	Sources            []WorkspaceSourceStatus         `json:"sources,omitempty"`
-	Chain              []string                        `json:"chain,omitempty"`
+	Name     string                  `json:"name"`
+	Path     string                  `json:"path"`
+	Exists   bool                    `json:"exists"`
+	State    string                  `json:"state"`
+	Error    string                  `json:"error,omitempty"`
+	Template string                  `json:"template"`
+	Inputs   map[string]string       `json:"inputs,omitempty"`
+	Sources  []WorkspaceSourceStatus `json:"sources,omitempty"`
+	// Deprecated: a workspace no longer renders a stack (#110), so Chain and
+	// ChainRoot are always empty. They are removed in a later release. Chain is
+	// always sent (`"chain": []`), as it was when every workspace listed its
+	// own template there, so REST clients that read it keep a list.
+	Chain              []string                        `json:"chain"`
 	ChainRoot          string                          `json:"chain_root,omitempty"`
 	Allocations        map[string]int                  `json:"allocations,omitempty"`
 	ProcessComposePort int                             `json:"process_compose_port,omitempty"`
@@ -246,8 +252,11 @@ type WorkspaceStatusResponse struct {
 	TTLExpiresAt       *time.Time                      `json:"ttl_expires_at,omitempty"`
 	Expired            bool                            `json:"expired"`
 	MountedBy          []WorkspaceMountRef             `json:"mounted_by,omitempty"`
-	InnerStack         *StackStatusResponse            `json:"inner_stack,omitempty"`
-	InnerError         string                          `json:"inner_error,omitempty"`
+	// Deprecated: the operator no longer reads a stack inside a workspace
+	// (#110); that stack's own operator reports it. InnerStack is always nil
+	// and InnerError always empty. They are removed in a later release.
+	InnerStack *StackStatusResponse `json:"inner_stack,omitempty"`
+	InnerError string               `json:"inner_error,omitempty"`
 }
 
 type WorkspaceSourceStatus struct {

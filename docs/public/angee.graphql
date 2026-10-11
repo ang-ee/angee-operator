@@ -310,7 +310,7 @@ type Query {
 	The last `tail` lines of one service, as in `stackLogs`.
 	"""
 	serviceLogs(name: String!, limit: Int, tail: Int): String!
-	workspaceLogs(name: String!, limit: Int): String!
+	workspaceLogs(name: String!, limit: Int): String! @deprecated(reason: "A workspace is files and has no logs (angee-operator#110); always empty, removed in a later release. Read the logs of the services and jobs that mount it.")
 	mcpDescriptor: JSON
 	secretValue(name: String!): SecretValue
 	file(source: String!, path: String!): FileContent!
@@ -640,7 +640,7 @@ type Subscription {
 	the newest lines of the replay, so a larger tail is refused.
 	"""
 	onServiceLogs(name: String!, tail: Int): String!
-	onWorkspaceLogs(name: String!): String!
+	onWorkspaceLogs(name: String!): String! @deprecated(reason: "A workspace is files and has no logs (angee-operator#110); the stream ends at once, removed in a later release. Follow the services and jobs that mount it.")
 	onWorkspaceStatusChange(name: String!): WorkspaceStatus!
 	"""
 	Emitted whenever the aggregate stack snapshot's hash changes.
@@ -776,8 +776,8 @@ type WorkspaceStatus {
 	template: String!
 	inputs: JSON
 	sources: [WorkspaceSourceStatus!]!
-	chain: [String!]!
-	chainRoot: String
+	chain: [String!]! @deprecated(reason: "A workspace no longer renders a stack (angee-operator#110); always empty, removed in a later release.")
+	chainRoot: String @deprecated(reason: "A workspace no longer renders a stack (angee-operator#110); always empty, removed in a later release.")
 	allocations: JSON
 	processComposePort: Int
 	playwrightMcpName: String
@@ -787,8 +787,8 @@ type WorkspaceStatus {
 	ttlExpiresAt: String
 	expired: Boolean!
 	mountedBy: [WorkspaceMountRef!]!
-	innerStack: StackStatus
-	innerError: String
+	innerStack: StackStatus @deprecated(reason: "The operator no longer reads a stack inside a workspace (angee-operator#110); query that stack's own operator. Always null, removed in a later release.")
+	innerError: String @deprecated(reason: "The operator no longer reads a stack inside a workspace (angee-operator#110). Always empty, removed in a later release.")
 }
 type jobs_aggregate {
 	aggregate: jobs_aggregate_fields

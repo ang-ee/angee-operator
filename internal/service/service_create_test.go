@@ -115,7 +115,7 @@ func TestServiceCreateHappyPath(t *testing.T) {
 
 // TestServiceCreateControlRootNoDoubling pins the fix for the `.angee/.angee`
 // path doubling: when the stack root is itself a `.angee` control dir (the
-// standard chain_root layout, and every workspace inner-stack), the build
+// standard ANGEE_ROOT layout), the build
 // context must land at <root>/services/<name>, never <root>/.angee/services.
 func TestServiceCreateControlRootNoDoubling(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".angee")

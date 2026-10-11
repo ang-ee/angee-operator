@@ -54,8 +54,8 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceStatus` | Yes | Yes | Yes | - |
 | `WorkspaceUpdate` | Yes | Yes | Yes | - |
 | `WorkspaceDestroy` | Yes | Yes | Yes | - |
-| `WorkspaceLogs` | Yes | Yes | No | GraphQL uses bounded `WorkspaceLogsLimited`. |
-| `WorkspaceLogsLimited` | No | No | Yes | GraphQL snapshot guardrail. |
+| `WorkspaceLogs` | Yes | Yes | No | Deprecated (#110): always empty. GraphQL uses bounded `WorkspaceLogsLimited`. |
+| `WorkspaceLogsLimited` | No | No | Yes | Deprecated (#110): always empty. |
 | `WorkspaceGitStatus` | Yes | Yes | Yes | - |
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |

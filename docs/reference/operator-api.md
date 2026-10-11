@@ -421,10 +421,18 @@ POST  /workspaces/{name}/repair
 
 Workspaces are a pure file primitive — `POST /workspaces` renders Copier
 output and materializes sources, but the operator never starts services
-on a workspace's behalf. If a workspace renders an inner stack and you want
-it running, drive it with `POST /stack/up` against the inner root (start a
-second operator with `--root workspaces/<name>/.angee`, or run `angee stack
-up --root workspaces/<name>/.angee` locally).
+on a workspace's behalf, and a workspace renders no stack: a workspace
+template that declares `chain` or `chain_root` is refused with
+`INVALID_INPUT` ([#110](https://github.com/ang-ee/angee-operator/issues/110)),
+and so is `PATCH /workspaces/{name}` of a workspace created from such
+a template before then. A stack's services and jobs reach a workspace
+through `workspace://` mounts, `workdir` and env.
+
+Deprecated, removed in a later release: `GET /workspaces/{name}/logs` answers
+an empty body, since a workspace has no logs of its own. Workspace status
+always sends `"chain": []` and omits `chain_root`, `inner_stack` and
+`inner_error`. The operator no longer reads a stack that sits inside a
+workspace's directory; that stack's own operator reports it.
 
 Workspace status is the authoritative branch-identity surface for managed git
 worktrees. Each status source includes the manifest `branch`, actual
@@ -727,7 +735,7 @@ Available subscription operations:
 | `onGitOpsTopologyChange` | — | `GitOpsTopology` snapshot, emitted when the polled topology hash changes. |
 | `onWorkspaceStatusChange` | `name: String!` | `WorkspaceStatus` snapshot for that workspace, emitted on change. |
 | `onServiceLogs` | `name: String!` | Service log lines, follow-tailed from the runtime backend. |
-| `onWorkspaceLogs` | `name: String!` | Workspace log lines, follow-tailed from the runtime backend. |
+| `onWorkspaceLogs` | `name: String!` | Deprecated: a workspace has no logs, so the stream ends at once. |
 
 `onStackSnapshotChange` is the aggregate the web console reads as one — it
 fans out the same Query-root reads (`stackStatus`, `services`, `jobs`,

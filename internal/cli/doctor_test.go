@@ -69,6 +69,44 @@ operator:
 	}
 }
 
+// doctor reports a workspace template that chains a stack as an error, naming
+// #110, since workspace create refuses it; an ordinary one stays OK.
+func TestDoctorReportsAChainingWorkspaceTemplate(t *testing.T) {
+	host := t.TempDir()
+	writeTemplate := func(name, copier string) {
+		t.Helper()
+		dir := filepath.Join(host, ".templates", filepath.FromSlash(name))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "copier.yml"), []byte(copier), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s copier.yml): %v", name, err)
+		}
+	}
+	writeTemplate("stacks/dev", "_angee:\n  kind: stack\n  name: dev\n  chain:\n    - template: ../../projects/web\n      root: .\n")
+	writeTemplate("workspaces/dev-pr", "_angee:\n  kind: workspace\n  name: dev-pr\n  chain_root: .angee\n")
+	writeTemplate("workspaces/dev-pr-multi", "_angee:\n  kind: workspace\n  name: dev-pr-multi\n")
+	t.Chdir(host)
+
+	runner := &doctorRunner{}
+	runner.checkTemplates()
+	report := doctorReport{Checks: runner.checks}
+	for name, want := range map[string]doctorStatus{
+		"template.stacks/dev":              doctorOK,
+		"template.workspaces/dev-pr":       doctorError,
+		"template.workspaces/dev-pr-multi": doctorOK,
+	} {
+		if got := doctorCheckStatus(report, name); got != want {
+			t.Fatalf("%s status = %q, want %q (checks %+v)", name, got, want, runner.checks)
+		}
+	}
+	for _, check := range runner.checks {
+		if check.Name == "template.workspaces/dev-pr" && !strings.Contains(check.Detail, "#110") {
+			t.Fatalf("chaining template detail = %q, want it to name #110", check.Detail)
+		}
+	}
+}
+
 func TestPickVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

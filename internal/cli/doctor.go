@@ -17,6 +17,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/spf13/cobra"
 )
@@ -438,8 +439,13 @@ func (r *doctorRunner) checkTemplates() {
 			r.add("template."+template.name, doctorWarn, "missing copier.yml", "Check out or update angee-examples.")
 			continue
 		}
-		if _, err := copierx.ValidateMetadata(path, template.kind); err != nil {
+		metadata, err := copierx.ValidateMetadata(path, template.kind)
+		if err != nil {
 			r.add("template."+template.name, doctorError, err.Error(), "Fix the template _angee metadata.")
+			continue
+		}
+		if err := service.RefuseWorkspaceChain(template.name, metadata); err != nil {
+			r.add("template."+template.name, doctorError, err.Error(), "Remove chain and chain_root from the workspace template; see ang-ee/angee-operator#110.")
 			continue
 		}
 		r.add("template."+template.name, doctorOK, displayPath(path), "")

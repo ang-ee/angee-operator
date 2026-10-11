@@ -51,7 +51,7 @@ func readChainFile(t *testing.T, path string) string {
 }
 
 func applyStackRenderPlan(ctx context.Context, p *Platform, stackTemplatePath, targetPath string, inputs copierx.Inputs) error {
-	plan, _, err := p.buildStackRenderPlan(ctx, stackTemplatePath, targetPath, inputs, "", stackPlanOptions{})
+	plan, _, err := p.buildStackRenderPlan(ctx, stackTemplatePath, targetPath, inputs, "")
 	if err != nil {
 		return err
 	}

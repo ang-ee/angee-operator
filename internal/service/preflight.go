@@ -31,7 +31,7 @@ func (p *Platform) WorkspaceCreatePreflight(ctx context.Context, req api.Workspa
 	if err != nil {
 		return api.WorkspaceCreatePreflightResponse{}, err
 	}
-	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	metadata, err := validateWorkspaceTemplate(templatePath, templateRef)
 	if err != nil {
 		return api.WorkspaceCreatePreflightResponse{}, err
 	}

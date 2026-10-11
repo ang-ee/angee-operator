@@ -48,11 +48,19 @@ client-facing reference.
   Each subscriber today spawns its own `docker compose logs --follow`
   process. Acceptable for v1 (operator is single-stack); revisit if
   multi-subscriber overhead becomes visible.
-- [ ] **`fsnotify`-based topology change detection.** The current 2 s
-  polling tick is fine for the polling-friendly UI but inefficient for
-  larger stacks. Migrate when subscribers report latency complaints;
-  policy note: the maintainer governance scare around fsnotify (2026-05)
-  is unresolved, so pin via the community fork if/when we adopt.
+- [ ] **Replace the 2 s subscription poll.** Not with file watching: the
+  owner's rule (2026-10-10) is that the console updates live only for what
+  an owner pushes (Docker events, process-compose's state stream, the
+  operator's own actions) and reads everything else on demand. The plan is
+  `.agents/plans/owner-pushed-live-views.md` (PR #109).
+- [ ] **Delete the deprecated workspace inner-stack fields (#110 step 2).**
+  `innerStack`, `innerError`, `chain`, `chainRoot`, `workspaceLogs`,
+  `onWorkspaceLogs`, `GET /workspaces/{name}/logs`, `angee workspace logs`
+  and `Platform.WorkspaceLogs`/`WorkspaceLogsLimited` go once the console
+  releases in use have stopped selecting them (angee-django #352 did; it
+  must be what stacks run). The old `chain`/`chain_root` fields of a
+  workspace record, and `copierx.GuardedPath.SnapshotDirectory` (used only
+  by the removed chain snapshot), can go with them.
 - [ ] **Operator-managed `acp_token` provisioning.** The agent-runtime
   template resolves `${secret:acp_token}` against the secret backend;
   the operator currently relies on the host to put it there. Add an

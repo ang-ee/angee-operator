@@ -13,8 +13,9 @@ The operator renders three kinds:
   `angee init`); the **local** flavour (local / staging / prod) renders a
   self-contained docker-compose root (`angee stack init`).
 - **Workspace template** (`kind: workspace`) — produces a workspace tree
-  under `$ANGEE_ROOT/workspaces/<name>`, may declare Sources to
-  materialize, and may chain an inner Stack template.
+  under `$ANGEE_ROOT/workspaces/<name>` and may declare Sources to
+  materialize. It renders no Stack (see
+  [Workspaces and stacks](#workspaces-and-stacks)).
 - **Service template** (`kind: service`) — produces one Service
   definition (see [Service templates](#service-templates)).
 
@@ -180,8 +181,8 @@ Answers recorded by a render (`.copier-answers.stack.yml` for stacks,
 
 ## Workspace metadata
 
-Workspace templates may declare inputs, sources to materialize, chained
-stack templates, port pool ranges to ensure, and persistent paths:
+Workspace templates may declare inputs, sources to materialize, port pool
+ranges to ensure, and persistent paths:
 
 ```yaml
 _angee:
@@ -199,10 +200,6 @@ _angee:
       mode: worktree
       branch: "${inputs.branch}"
       subpath: app
-  chain_root: stack
-  chain:
-    - template: stacks/dev
-      root: stack
   ensure:
     operator.port_pool.workspace:
       range: "8100-8199"
@@ -212,10 +209,9 @@ _angee:
       scope: workspace
 ```
 
-`sources:` is the GitOps half — when the workspace is created, each
-listed Source is materialized (a git worktree, a local mount, etc.) on
-the configured branch. `chain:` is the deployment half — the workspace
-optionally renders a Stack template that runs against those Sources.
+When the workspace is created, each Source listed under `sources:` is
+materialized (a git worktree, a local mount, etc.) on the configured
+branch.
 
 A source's `mode`, `branch`, `ref` and `subpath` accept `${...}`
 substitution, so a stack can choose them through inputs without forking
@@ -229,16 +225,50 @@ Stack templates use the same Copier rendering path and must produce an
 simpler — just `_angee.kind: stack` plus the Jinja-templated
 `angee.yaml` and any seed files (env templates, runtime overlays).
 
+### Workspaces and stacks
+
+A workspace and a stack are separate concerns. A workspace is files: its
+rendered template and its source slots. A stack is a manifest and its
+runtime, run by its own operator. A stack's services and jobs reach a
+workspace through `workspace://` mounts, `workdir` and env values, so
+several services and jobs can each use a different workspace:
+
+```yaml
+services:
+  web:
+    image: python:3.13
+    workdir: workspace://pr-42/app
+    mounts:
+      - "workspace://pr-42/app:/app"
+```
+
+The workspace's status lists them under `mountedBy`.
+
+A workspace template that declares `chain` or `chain_root` is refused, with
+an error naming
+[angee-operator#110](https://github.com/ang-ee/angee-operator/issues/110).
+Workspace templates used to render a stack into the workspace tree that way,
+which gave that stack's `angee.yaml` two writers and its ports two records.
+To run a workspace's code in a stack of its own, create that stack as any
+other (`angee stack init`) and point its services at the workspace's files.
+
+A workspace created from a chaining template before that change keeps its
+files, the stack inside included, which is now an ordinary stack at that
+path. Its status reports no inner stack and `destroy` works as usual, but
+`workspace update` refuses it: a render of the workspace template alone would
+overwrite or delete what the chain rendered (the stack's own
+`.copier-answers.yml` among them), and an update cannot switch the template a
+workspace records. Destroy it and create it again from a template that
+renders no stack. A stack template's own `chain:` (a stack composing
+templates at its root, as `stacks/dev` chains `projects/web`) is unaffected.
+
 ### Reaching outside the template directory
 
-When a workspace renders a chained template, Angee first snapshots that
-template to a private directory so the render is pinned against edits
-mid-flight. By default the snapshot is the template directory alone, so a
-template that includes a file from outside it — a shared partial kept beside
-the collection, say — would not find it.
-
-Declare how far the template reaches with `_angee.include_root`, and that
-ancestor is snapshotted instead:
+copier-go confines a template's includes to its own root, the directory
+holding `copier.yml`, so a template that includes a file from outside it — a
+shared partial kept beside the collection, say — would not find it. Declare
+how far the template reaches with `_angee.include_root`, and that ancestor
+becomes the boundary instead:
 
 ```yaml
 # templates/stacks/dev/copier.yml
@@ -256,26 +286,11 @@ Include names resolve against the template's root, the directory holding
 `copier.yml`, as upstream Copier resolves them: from `stacks/dev`,
 `../_shared/` is `stacks/_shared/`.
 
-`include_root` is relative to the template directory, must name one of its
-ancestors, and must stay inside the workspace — pointing it at the workspace
-root or beyond is rejected. Angee does not infer this from directory names:
-how you lay out a template collection is your business, so a collection named
-`hosts/` behaves exactly like one named `stacks/`.
-
-Leave it unset for a self-contained template; the snapshot is then exactly the
-template, which is both cheaper and tighter.
-
-::: warning Keep the root tight
-Everything under `include_root` is recursively copied on **every** chain
-render. The workspace is the only bound Angee enforces, so a template living
-inside a materialized Source can legitimately declare a root that pins the
-whole checkout — `node_modules` and all. Point it at the smallest directory
-that makes your includes resolve.
-:::
-
-copier-go confines includes to the template's own root. `include_root` also
-widens that boundary for every render, chained or not, so the include may read
-the declared ancestor and nothing above it.
+`include_root` is relative to the template directory and must name one of its
+ancestors; an include may read the declared ancestor and nothing above it.
+Angee does not infer this from directory names: how you lay out a template
+collection is your business, so a collection named `hosts/` behaves exactly
+like one named `stacks/`. Leave it unset for a self-contained template.
 
 ## How "self-building" works
 
@@ -285,15 +300,14 @@ Putting templates and Sources together, the loop is:
    the rendered `angee.yaml`. Angee fetches and caches them.
 2. **A Workspace renders a development shape** — pick a Workspace
    template, supply the inputs (branch name, base ref, port ranges).
-   Angee materializes Sources on that branch and renders any chained
-   inner Stack template **as files** under the workspace tree.
-   Workspaces are a pure file primitive — they never start services.
-3. **An explicit stack command brings the inner stack up** — running
-   services is always a Stack concern, not a Workspace concern. Drive
-   it with `angee stack up --root workspaces/<name>/.angee` (or point a
-   second operator at that root). The same `stack up`/`stack down`/
-   `stack logs` commands work on a workspace's inner stack as on
-   production.
+   Angee materializes Sources on that branch and renders the template
+   under the workspace tree. Workspaces are a pure file primitive — they
+   never start services.
+3. **Services and jobs run the workspace's code** — running services is
+   always a Stack concern, not a Workspace concern. A stack's services
+   and jobs reach the workspace through `workspace://` mounts, `workdir`
+   and env (see [Workspaces and stacks](#workspaces-and-stacks)), and the
+   usual `stack up`/`stack down`/`stack logs` commands drive them.
 4. **A production Stack runs the same Sources** — point the operator at
    a different root with the same `sources:` referring to release
    branches or tags.

@@ -24,7 +24,7 @@ REST + GraphQL:
 | **Service** | `services`, `serviceInit`/`Update`/`Start`/`Stop`/`Restart`/`Destroy`, `serviceLogs`. |
 | **Job** | `jobs`, `jobRun`. |
 | **Source** | `sources`, `sourceFetch`, **`sourcePull`** (= update from upstream), `sourcePush`, `sourceDiff`. |
-| **Workspace** (file primitive — never starts services) | `workspaces`, `workspaceCreate`, `workspaceCreatePreflight` (validate without rendering), `workspaceUpdate`, `workspaceStatus`, `workspaceLogs`, `workspaceDestroy`, `workspaceGit`, `workspacePush`, **`workspaceSyncBase`** (= multi-slot update against base). |
+| **Workspace** (file primitive — never starts services) | `workspaces`, `workspaceCreate`, `workspaceCreatePreflight` (validate without rendering), `workspaceUpdate`, `workspaceStatus`, `workspaceDestroy`, `workspaceGit`, `workspacePush`, **`workspaceSyncBase`** (= multi-slot update against base). |
 | **Workspace source slot** (one git materialization inside a workspace) | `workspaceSourceFetch`, **`workspaceSourcePull`** (= slot-level update), `workspaceSourcePush`, `workspaceSourceMerge`/`Rebase`/`MergeAbort`/`RebaseAbort`/`RebaseContinue`/`Publish`, `workspaceSourceDiff`. |
 | **GitOps topology** (derived view: sources × slots) | `gitOpsTopology(withCommits: Int)` snapshot; `onGitOpsTopologyChange` live. |
 | **Templates** (discoverable Copier templates) | `templates`, `template(ref)`. |
@@ -32,7 +32,7 @@ REST + GraphQL:
 | **Files** (scoped read/write inside a stack source) | `file(source, path)`, `fileWrite(source, path, content, etag)` (etag compare-and-set; REST `GET`/`PUT /files`; CLI `angee file get`/`set`). |
 | **Ingress / endpoints** (optional Caddy edge) | `serviceEndpoint(name)` (routed URL + `logStream` descriptor), `ingressStatus`. |
 | **Tokens** (per-actor scoped JWTs) | `mintConnectionToken(actor, scope, ttl)` (`aud=operator`), `mintRouteToken(actor, service, ttl)` (`aud=svc:<service>`, for edge/log sockets). Gated by the admin bearer. |
-| **Subscriptions** (SSE, GraphQL-only) | `onStackSnapshotChange` (aggregate), `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`, `onWorkspaceLogs`. |
+| **Subscriptions** (SSE, GraphQL-only) | `onStackSnapshotChange` (aggregate), `onGitOpsTopologyChange`, `onWorkspaceStatusChange`, `onServiceLogs`. |
 
 Every operation above is reachable over both REST (`POST /...` /
 `GET /...`) and GraphQL — subscriptions are the one deliberate split
@@ -44,15 +44,9 @@ JWTs for finer-grained scoping.
 (one slot), `workspaceSyncBase` (every slot's workspace branch against its
 base ref — typically `origin/main`).
 
-Workspaces materialize files — including any chained inner-stack template
-as files. They never start services. If a workspace renders an inner stack
-and you want it running, drive it explicitly:
-
-```sh
-angee stack up --root workspaces/<name>/.angee
-# or run a second operator pointed at that root:
-angee operator --root workspaces/<name>/.angee --port 9100
-```
+Workspaces materialize files. They never start services and render no
+stack: a stack's services and jobs reach a workspace through
+`workspace://` mounts, `workdir` and env.
 
 See [docs/guide/concepts.md](docs/guide/concepts.md) for the full
 mental model and [docs/reference/operator-api.md](docs/reference/operator-api.md)

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	slashpath "path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -28,6 +27,52 @@ import (
 )
 
 const workspaceSourceStateBranchMismatch = "branch-mismatch"
+
+// validateWorkspaceTemplate reads a workspace template's metadata, checking
+// its kind, and refuses one that chains a template (RefuseWorkspaceChain).
+func validateWorkspaceTemplate(templatePath, templateRef string) (copierx.Metadata, error) {
+	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	if err != nil {
+		return copierx.Metadata{}, err
+	}
+	if err := RefuseWorkspaceChain(templateRef, metadata); err != nil {
+		return copierx.Metadata{}, err
+	}
+	return metadata, nil
+}
+
+// RefuseWorkspaceChain refuses a workspace template that declares `chain` or
+// `chain_root` (#110); `angee doctor` reports a template it refuses. A workspace is files: its rendered template and its
+// source slots. A stack is a manifest and a runtime with its own operator, and
+// its services and jobs reach a workspace through workspace:// mounts,
+// workdir and env. A stack template's own `chain:` is unaffected.
+func RefuseWorkspaceChain(templateRef string, metadata copierx.Metadata) error {
+	if metadata.Kind != "workspace" || len(metadata.Chain) == 0 && metadata.ChainRoot == "" {
+		return nil
+	}
+	return &InvalidInputError{
+		Field:  "template",
+		Reason: fmt.Sprintf("workspace template %q declares chain or chain_root, but a workspace no longer renders a stack (ang-ee/angee-operator#110); create the stack as a stack of its own and link its services and jobs to the workspace through workspace:// mounts, workdir or env", templateRef),
+	}
+}
+
+// refuseRecordedWorkspaceChain refuses to update a workspace whose record
+// still carries a chain: one created, before #110, from a template that
+// chained a stack. Its files include what that chain rendered (the stack's
+// answers file among them), which a render of the workspace template alone
+// would overwrite or delete. The record is left as it is; status, logs and
+// destroy still work. A record written before #110 always lists the
+// workspace's own template first, so only a chain root or a second entry
+// marks a chain.
+func refuseRecordedWorkspaceChain(name string, workspace manifest.Workspace) error {
+	if workspace.Resolved.ChainRoot == "" && len(workspace.Resolved.Chain) <= 1 {
+		return nil
+	}
+	return &InvalidInputError{
+		Field:  "workspace",
+		Reason: fmt.Sprintf("workspace %q was created from a template that chained a stack (ang-ee/angee-operator#110); destroy it and create it again", name),
+	}
+}
 
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (result api.WorkspaceRef, retErr error) {
 	ctx, release, err := p.beginMutation(ctx, "workspace")
@@ -65,7 +110,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	metadata, err := validateWorkspaceTemplate(templatePath, templateRef)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -118,8 +163,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	var workspaceSources map[string]manifest.WorkspaceSource
 	var sourceCleanup *workspaceSourceCleanup
 	var rollbackTemplateFiles func() error
-	var rollbackTemplateDocuments func() error
-	var closeTemplateDocuments func() error
 	var rollbackPersistPaths func() error
 	var closePersistPaths func() error
 	statePath := renderPlanStatePath(p.root, "workspaces", name)
@@ -159,7 +202,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		return api.WorkspaceRef{}, err
 	}
 	finishRendering := logctx.Step(ctx, "rendering template")
-	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, inputs, name, allocations, workspaceSources, stack.Sources, statePath)
+	renderPlan, err := p.buildWorkspaceRenderPlan(workspacePath, templatePath, metadata, inputs, name, allocations, workspaceSources, stack.Sources, statePath)
 	if err != nil {
 		finishRendering(err)
 		return api.WorkspaceRef{}, err
@@ -185,31 +228,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 			retErr = joinRollbackErrors(retErr, rollbackTemplateFiles)
 		}
 	}()
-	renderedDocuments := make(map[string][]byte, len(renderPlan.Documents))
-	for _, document := range renderPlan.Documents {
-		data, ok := prepared.RenderedDocument(document.Path)
-		if !ok {
-			return api.WorkspaceRef{}, fmt.Errorf("workspace chain did not render %s", document.Path)
-		}
-		if _, err := decodeStackDocument(data); err != nil {
-			return api.WorkspaceRef{}, fmt.Errorf("load rendered workspace stack %s: %w", document.Path, err)
-		}
-		renderedDocuments[document.Path] = data
-	}
-	documentExpectations, err := captureRenderedDocumentExpectations(ctx, prepared.OpenTargetPath, renderedDocuments)
-	if err != nil {
-		return api.WorkspaceRef{}, err
-	}
-	rollbackTemplateDocuments, closeTemplateDocuments, verifyTemplateDocuments, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, workspacePath, renderedDocuments, nil, nil, documentExpectations, false)
-	if err != nil {
-		return api.WorkspaceRef{}, err
-	}
-	defer func() {
-		if !committed {
-			retErr = joinRollbackErrors(retErr, rollbackTemplateDocuments)
-		}
-		_ = closeTemplateDocuments()
-	}()
 	rollbackPersistPaths, closePersistPaths, verifyPersistPaths, err := materializePersistPaths(ctx, prepared.OpenTargetPath, workspacePath, metadata.Persist, renderPlan.Plan.AllowedSymlinkParents)
 	if err != nil {
 		return api.WorkspaceRef{}, err
@@ -225,8 +243,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		Inputs:   map[string]string(inputs),
 		Sources:  workspaceSources,
 		Resolved: manifest.WorkspaceResolved{
-			Chain:        renderPlan.Chain,
-			ChainRoot:    renderPlan.ChainRoot,
 			Allocations:  copyIntMap(allocations),
 			PersistPaths: metadata.Persist,
 		},
@@ -244,7 +260,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		stack.Workspaces = map[string]manifest.Workspace{}
 	}
 	stack.Workspaces[name] = workspace
-	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyTemplateDocuments, verifyPersistPaths); err != nil {
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyPersistPaths); err != nil {
 		return api.WorkspaceRef{}, err
 	}
 	finishSaving := logctx.Step(ctx, "saving stack")
@@ -348,8 +364,7 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 		Template:           workspace.Template,
 		Inputs:             copyStringMap(workspace.Inputs),
 		Sources:            []api.WorkspaceSourceStatus{},
-		Chain:              append([]string{}, workspace.Resolved.Chain...),
-		ChainRoot:          workspace.Resolved.ChainRoot,
+		Chain:              []string{},
 		Allocations:        copyIntMap(workspace.Resolved.Allocations),
 		ProcessComposePort: processComposePort,
 		PlaywrightMCPName:  playwrightMCPName,
@@ -368,21 +383,6 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 		status.Sources = append(status.Sources, sourceStatus)
 		if sourceStatus.State == workspaceSourceStateBranchMismatch {
 			status.State = "discrepancy"
-		}
-	}
-	if workspace.Resolved.ChainRoot != "" {
-		innerRoot := filepath.Join(path, workspace.Resolved.ChainRoot)
-		if _, err := os.Stat(manifest.Path(innerRoot)); err != nil {
-			status.InnerError = err.Error()
-		} else {
-			inner, err := New(innerRoot)
-			if err != nil {
-				status.InnerError = err.Error()
-			} else if innerStatus, err := inner.StackStatus(ctx); err != nil {
-				status.InnerError = err.Error()
-			} else {
-				status.InnerStack = &innerStatus
-			}
 		}
 	}
 	return status
@@ -632,11 +632,14 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 	if !ok {
 		return api.WorkspaceRef{}, &NotFoundError{Kind: "workspace", Name: name}
 	}
+	if err := refuseRecordedWorkspaceChain(name, workspace); err != nil {
+		return api.WorkspaceRef{}, err
+	}
 	templatePath, templateRef, err := p.resolveTemplate(ctx, workspace.Template, "workspace")
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	metadata, err := validateWorkspaceTemplate(templatePath, templateRef)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -668,7 +671,7 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 	}
 	workspacePath := filepath.Join(p.root, "workspaces", name)
 	statePath := renderPlanStatePath(p.root, "workspaces", name)
-	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, workspace.Inputs, name, workspace.Resolved.Allocations, workspace.Sources, stack.Sources, statePath)
+	renderPlan, err := p.buildWorkspaceRenderPlan(workspacePath, templatePath, metadata, workspace.Inputs, name, workspace.Resolved.Allocations, workspace.Sources, stack.Sources, statePath)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -690,93 +693,53 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 		}
 		return api.WorkspaceRef{}, &ConflictError{Kind: "workspace-template", Name: name, Reason: fmt.Sprintf("locally modified paths: %s; use --overwrite to replace", strings.Join(paths, ", "))}
 	}
-	mergedDocuments := make(map[string][]byte, len(renderPlan.Documents))
-	documentExpectations := make(map[string]renderedDocumentExpectation, len(renderPlan.Documents))
-	for _, document := range renderPlan.Documents {
-		rendered, ok := prepared.RenderedDocument(document.Path)
-		if !ok {
-			return api.WorkspaceRef{}, fmt.Errorf("workspace chain did not render %s", document.Path)
-		}
-		theirs, err := decodeStackDocument(rendered)
-		if err != nil {
-			return api.WorkspaceRef{}, fmt.Errorf("load rendered workspace stack %s: %w", document.Path, err)
-		}
-		merged := theirs
-		current, documentExpectation, loadErr := readStackDocumentExpectation(prepared.OpenTargetPath, document.Path)
-		if loadErr != nil {
-			return api.WorkspaceRef{}, fmt.Errorf("load workspace stack %s: %w", document.Path, loadErr)
-		}
-		exists := documentExpectation.Exists
-		if exists {
-			merged = mergeStackFromTemplate(current, theirs, true)
-		}
-		documentExpectations[document.Path] = documentExpectation
-		documentMetadata, err := copierx.ReadMetadata(document.Template)
-		if err != nil {
-			return api.WorkspaceRef{}, err
-		}
-		if err := manifest.Ensure(merged, documentMetadata.Ensure); err != nil {
-			return api.WorkspaceRef{}, err
-		}
-		mergedDocuments[document.Path], err = manifest.Marshal(merged)
-		if err != nil {
-			return api.WorkspaceRef{}, err
-		}
-	}
 	rollbackFiles, err := prepared.ApplyFiles(ctx)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	rollbackDocuments, closeDocuments, verifyDocuments, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, workspacePath, mergedDocuments, nil, nil, documentExpectations, false)
+	rollbackPersistPaths, closePersistPaths, verifyPersistPaths, err := materializePersistPaths(ctx, prepared.OpenTargetPath, workspacePath, metadata.Persist, renderPlan.Plan.AllowedSymlinkParents)
 	if err != nil {
 		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackFiles)
 	}
-	defer func() { _ = closeDocuments() }()
-	rollbackPersistPaths, closePersistPaths, verifyPersistPaths, err := materializePersistPaths(ctx, prepared.OpenTargetPath, workspacePath, metadata.Persist, renderPlan.Plan.AllowedSymlinkParents)
-	if err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackDocuments, rollbackFiles)
-	}
 	defer func() { _ = closePersistPaths() }()
 	workspace.Template = templateRef
-	workspace.Resolved.Chain = renderPlan.Chain
-	workspace.Resolved.ChainRoot = renderPlan.ChainRoot
 	workspace.Resolved.PersistPaths = metadata.Persist
 	stack.Workspaces[name] = workspace
-	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyDocuments, verifyPersistPaths); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackDocuments, rollbackFiles)
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyPersistPaths); err != nil {
+		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackFiles)
 	}
 	if err := parentTx.Save(stack); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackDocuments, rollbackFiles)
+		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackFiles)
 	}
 	if err := prepared.SaveState(ctx); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, parentTx.Rollback, rollbackPersistPaths, rollbackDocuments, rollbackFiles)
+		return api.WorkspaceRef{}, joinRollbackErrors(err, parentTx.Rollback, rollbackPersistPaths, rollbackFiles)
 	}
 	return workspaceRef(name, workspacePath, workspace), nil
 }
 
+// WorkspaceLogs is deprecated (#110): a workspace is files and has no logs of
+// its own. It answers a declared workspace with a closed channel, as it always
+// did for a workspace without a chained stack, and is removed in a later
+// release. A stack's services and jobs have their own logs.
 func (p *Platform) WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error) {
 	return p.WorkspaceLogsLimited(ctx, name, follow, 0)
 }
 
-func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, follow bool, maxBytes int) (<-chan string, error) {
+// WorkspaceLogsLimited is deprecated with WorkspaceLogs.
+func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, _ bool, _ int) (<-chan string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
 	}
-	workspace, ok := stack.Workspaces[name]
-	if !ok {
+	if _, ok := stack.Workspaces[name]; !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	if workspace.Resolved.ChainRoot == "" {
-		ch := make(chan string)
-		close(ch)
-		return ch, nil
-	}
-	inner, err := New(filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot))
-	if err != nil {
-		return nil, err
-	}
-	return inner.StackLogsLimited(ctx, nil, follow, 0, maxBytes)
+	ch := make(chan string)
+	close(ch)
+	return ch, nil
 }
 
 func releaseWorkspacePorts(stack *manifest.Stack, workspaceName string) {
@@ -922,7 +885,6 @@ func workspaceRef(name, path string, ws manifest.Workspace) api.WorkspaceRef {
 		Name:               name,
 		Path:               path,
 		Template:           ws.Template,
-		ChainRoot:          ws.Resolved.ChainRoot,
 		Allocations:        copyIntMap(ws.Resolved.Allocations),
 		ProcessComposePort: processComposePort,
 		PlaywrightMCPName:  playwrightMCPName,
@@ -2094,182 +2056,6 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 		return "", fmt.Errorf("local source symlink target: %w", err)
 	}
 	return target, nil
-}
-
-// chainTemplateSnapshotRoot returns the workspace-relative directory to
-// snapshot for a chain template ref, plus the template's location inside the
-// snapshot.
-//
-// A template that reaches outside its own directory — typically to include a
-// sibling collection entry, as `stacks/dev` does with
-// `{% include "../_shared/AGENTS.md.jinja" %}` — declares how far it reaches
-// via `_angee.include_root`, and that ancestor is snapshotted instead of the
-// template directory alone so the include still resolves from the pinned copy.
-// The default is the template directory, so a self-contained template pins
-// exactly itself. Angee deliberately does not infer this from directory names:
-// how a template collection is laid out is the collection author's business,
-// not a vocabulary this repo should carry.
-//
-// include_root must name an ancestor of the template and must stay inside the
-// workspace. Escaping the workspace, or resolving to the workspace root itself,
-// is rejected: a chain entry should pin its own template material, not the
-// whole tree it happens to live in. Note that the workspace is the only bound —
-// a template inside a materialized source can legitimately declare a root that
-// pins that whole checkout, which is the author's cost to pay and is called out
-// in docs/guide/templates.md.
-func chainTemplateSnapshotRoot(clean, includeRoot string) (snapshotRoot, templateSubpath string, err error) {
-	// The workspace root is out of bounds however it is reached: normalizing a
-	// ref like `.` or `a/..` lands here too, not just an over-reaching
-	// declaration.
-	if clean == "." {
-		return "", "", fmt.Errorf("chain template ref resolves to the workspace root, which is more than a chain entry may pin")
-	}
-	includeRoot = strings.TrimSpace(includeRoot)
-	if includeRoot == "" || includeRoot == "." {
-		return clean, ".", nil
-	}
-	if slashpath.IsAbs(includeRoot) {
-		return "", "", fmt.Errorf("_angee.include_root %q must be relative to the template", includeRoot)
-	}
-	root := slashpath.Join(clean, includeRoot)
-	if root == ".." || strings.HasPrefix(root, "../") {
-		return "", "", fmt.Errorf("_angee.include_root %q escapes the workspace", includeRoot)
-	}
-	if root == "." {
-		return "", "", fmt.Errorf("_angee.include_root %q resolves to the workspace root, which is more than a chain entry may pin", includeRoot)
-	}
-	if root == clean {
-		return clean, ".", nil
-	}
-	if !strings.HasPrefix(clean, root+"/") {
-		return "", "", fmt.Errorf("_angee.include_root %q is not an ancestor of the template", includeRoot)
-	}
-	return root, strings.TrimPrefix(clean, root+"/"), nil
-}
-
-// verifiedSnapshotTemplatePath resolves a template subpath inside a chain
-// template snapshot. SnapshotDirectory copies symlinks verbatim, so joining
-// the subpath lexically could traverse one and hand copier-go a template root
-// outside the snapshot — copier-go's own containment check is lexical against
-// that root and would not notice. Re-guarding inside the private snapshot
-// directory restores the per-component containment the outer guard covered
-// before the collection root became the snapshot root.
-func verifiedSnapshotTemplatePath(snapshot, templateSubpath string) (string, error) {
-	path := filepath.Join(snapshot, filepath.FromSlash(templateSubpath))
-	if templateSubpath == "." {
-		return path, nil
-	}
-	guard, err := copierx.OpenGuardedPath(snapshot, snapshot, templateSubpath, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = guard.Close() }()
-	info, exists, err := guard.Lstat()
-	if err != nil {
-		return "", err
-	}
-	if !exists || !info.IsDir() {
-		return "", fmt.Errorf("template subpath %q is not a directory", templateSubpath)
-	}
-	if err := guard.VerifyPathIdentity(path); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-// verifySnapshotIncludeRoot checks that a chain template snapshot's own
-// copier.yml declares the include_root the snapshot was taken for. The render
-// reads `_angee.include_root` from the snapshot and widens copier-go's include
-// sandbox to it, so a larger root written into the workspace between the
-// guarded read and SnapshotDirectory would let includes read outside the
-// snapshot. The snapshot is private once taken, so this read is the last one
-// that can differ.
-func verifySnapshotIncludeRoot(snapshot, templateSubpath, includeRoot string) error {
-	config, err := copierx.OpenGuardedPath(snapshot, snapshot, slashpath.Join(templateSubpath, "copier.yml"), nil)
-	if err != nil {
-		return err
-	}
-	data, _, exists, err := config.ReadRegularFile()
-	_ = config.Close()
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("copier.yml changed while the template was being pinned")
-	}
-	metadata, err := copierx.ParseMetadata(data)
-	if err != nil {
-		return err
-	}
-	if cleanIncludeRoot(metadata.IncludeRoot) != cleanIncludeRoot(includeRoot) {
-		return fmt.Errorf("_angee.include_root changed from %q to %q while the template was being pinned", includeRoot, metadata.IncludeRoot)
-	}
-	return nil
-}
-
-func cleanIncludeRoot(includeRoot string) string {
-	includeRoot = strings.TrimSpace(includeRoot)
-	if includeRoot == "" {
-		return "."
-	}
-	return slashpath.Clean(includeRoot)
-}
-
-func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspacePath, ref string, allowedSymlinkParents map[string]*copierx.TrustedRoot) (string, string, func() error, error) {
-	if ref != "" && !filepath.IsAbs(ref) && !isRemoteTemplateRef(ref) {
-		clean, err := normalizeWorkspaceSubpath(ref)
-		if err != nil {
-			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-		}
-		configPath := filepath.ToSlash(filepath.Join(filepath.FromSlash(clean), "copier.yml"))
-		config, err := copierx.OpenGuardedPath(p.root, workspacePath, configPath, allowedSymlinkParents)
-		if err != nil {
-			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-		}
-		configData, _, exists, readErr := config.ReadRegularFile()
-		_ = config.Close()
-		if readErr != nil {
-			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, readErr)
-		}
-		if exists {
-			// Reuse the bytes the guarded probe already read. Reopening by
-			// pathname (ReadMetadata) would be a plain os.ReadFile, so a
-			// copier.yml swapped for a symlink between the two reads would be
-			// followed anywhere on disk; these bytes came through the retained
-			// root with an entry-identity check. The tree can still change
-			// before SnapshotDirectory runs, so the snapshot's own copier.yml
-			// is checked against the include_root honoured here below.
-			metadata, err := copierx.ParseMetadata(configData)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			snapshotRoot, templateSubpath, err := chainTemplateSnapshotRoot(clean, metadata.IncludeRoot)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			templateDir, err := copierx.OpenGuardedPath(p.root, workspacePath, snapshotRoot, allowedSymlinkParents)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			snapshot, cleanup, err := templateDir.SnapshotDirectory(ctx)
-			_ = templateDir.Close()
-			if err != nil {
-				return "", "", nil, fmt.Errorf("snapshot workspace chain template %q: %w", ref, err)
-			}
-			templatePath, err := verifiedSnapshotTemplatePath(snapshot, templateSubpath)
-			if err != nil {
-				_ = cleanup()
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			if err := verifySnapshotIncludeRoot(snapshot, templateSubpath, metadata.IncludeRoot); err != nil {
-				_ = cleanup()
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			return templatePath, ref, cleanup, nil
-		}
-	}
-	path, resolvedRef, err := p.resolveTemplate(ctx, ref, "stack")
-	return path, resolvedRef, nil, err
 }
 
 func (p *Platform) allocateWorkspacePorts(stack *manifest.Stack, workspaceName string) (map[string]int, error) {

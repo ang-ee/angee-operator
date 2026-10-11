@@ -1210,11 +1210,16 @@ func workspaceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 	var follow bool
 	cmd := &cobra.Command{
 		Use:   "logs [name]",
-		Short: "Show workspace logs",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Deprecated: a workspace has no logs of its own",
+		Long: "Deprecated (angee-operator#110): a workspace is files and has no logs of its own, so this prints nothing. " +
+			"Read the logs of the services and jobs that mount the workspace with `angee logs <service>`. The command is removed in a later release.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, name, err := workspaceTarget(args, root, operatorURL, "logs")
 			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "angee: `workspace logs` is deprecated: a workspace has no logs of its own (angee-operator#110); use `angee logs <service>` for the services and jobs that mount it"); err != nil {
 				return err
 			}
 			logs, err := platform.WorkspaceLogs(cmd.Context(), name, follow)
@@ -1587,7 +1592,6 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 	}{
 		{key: "path", value: status.Path},
 		{key: "template", value: status.Template},
-		{key: "chain_root", value: status.ChainRoot},
 		{key: "ttl", value: status.TTL},
 	}
 	for _, row := range rows {
@@ -1650,16 +1654,6 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\n", ref.Kind, ref.Name, ref.Field, ref.Value); err != nil {
 				return err
 			}
-		}
-	}
-	if status.InnerStack != nil {
-		if _, err := fmt.Fprintf(stdout, "inner_stack\t%s\tservices=%d\tjobs=%d\tworkspaces=%d\n", status.InnerStack.Name, len(status.InnerStack.Services), len(status.InnerStack.Jobs), len(status.InnerStack.Workspaces)); err != nil {
-			return err
-		}
-	}
-	if status.InnerError != "" {
-		if _, err := fmt.Fprintf(stdout, "inner_error\t%s\n", status.InnerError); err != nil {
-			return err
 		}
 	}
 	return nil
