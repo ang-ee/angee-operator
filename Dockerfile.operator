@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -o angee-operator \
     ./cmd/operator
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 # su-exec: the entrypoint drops to the stack root's owning uid so git and
 # compose writes on the bind mount stay host-owned (see operator-entrypoint.sh).
