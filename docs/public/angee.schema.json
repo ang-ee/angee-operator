@@ -430,6 +430,15 @@
         "stop_grace_period": {
           "type": "string",
           "default": "10s"
+        },
+        "restart": {
+          "type": "string",
+          "enum": [
+            "no",
+            "on_failure",
+            "always"
+          ],
+          "default": "on_failure"
         }
       },
       "additionalProperties": false,

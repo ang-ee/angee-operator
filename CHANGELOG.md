@@ -6,7 +6,56 @@ latest tag.
 
 ## Unreleased
 
+## v0.21.3 — 2026-10-11
+
 ### Changed
+
+- **Services restart on failure by default (#111).** A service that exited
+  stayed down until someone restarted it, because neither generated file
+  carried a restart policy. Services now take `restart: on_failure | always |
+  no`, and **the default is `on_failure`**, so on upgrade every service that
+  sets nothing restarts after a non-zero exit, a crash or an outside kill.
+  - Each runtime applies its own policy, with its own backoff. process-compose
+    gets an `availability` block and waits its default second before each
+    restart. Docker Compose gets `restart: on-failure`, or `unless-stopped`
+    for `always`, and doubles its own wait up to a minute.
+  - Neither limits the number of restarts. process-compose counts every
+    restart since the process was last started, so a limit would eventually
+    leave a long-running service down for good. A crash loop's output stays
+    bounded by each local service's rotated `run/logs/<name>.log` (#113).
+  - A stop either runtime was asked for (`angee down`, `service stop`,
+    `service restart`) never triggers a restart.
+  - Jobs take no `restart`; it is refused on a job.
+  - The edge container restarts on failure too.
+  - process-compose now restarts a local service whose readiness probe fails,
+    where it used to leave it stopped.
+  - Set `restart: no` to keep the old behaviour for a service.
+  - On upgrade, the first `angee up` recreates container services, because
+    Compose sees a changed definition. A running process-compose supervisor
+    applies the policy when Angee next starts or restarts a process, or after
+    `angee down`.
+- **A crash loop is visible.**
+  - A service waiting out its restart backoff has the outcome `restarting`,
+    counted under `summary` as `restarting` (REST and GraphQL). A local
+    service also reports the exit that ended its last run and `restarts`,
+    process-compose's restart count; Docker's status reports neither for a
+    container.
+  - `angee status` lists restarting services under the counts, and
+    `angee service list` shows `restarting (exit 1, 3 restarts)` or
+    `running (3 restarts)`.
+  - A pending job or service waiting on a service the runtime keeps
+    restarting has a `reason` naming it. A running service counts only when
+    it has a readiness probe, the only case in which process-compose holds
+    its dependents back.
+  - `angee dev` and `angee dev -d` print that reason once while they wait
+    for jobs, and a service still restarting when they finish may be in the
+    summary line: it is, when the last status read finds it in its backoff.
+  - To apply a fix to `angee.yaml` to a crash loop, run
+    `angee service restart <name>`. `angee service up <name>` now also passes
+    a changed definition to a local service caught in its restart backoff,
+    where it used to leave it alone; once the service has relaunched, `up`
+    sees it running and leaves it. A job waiting on the service is skipped
+    when process-compose replaces it.
 
 - **Workspace and source status agree with `workspace destroy` on whether a
   source is pushed.** They computed it separately. Status now uses destroy's

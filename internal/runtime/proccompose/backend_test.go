@@ -404,7 +404,7 @@ func TestUpStartsProcessTheUpdateDidNotRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			project := newFakeProject("/stack", map[string]processListEntry{"api": tt.state})
 			if tt.unchanged {
-				project.processes["api"].config = map[string]any{"name": "api", "command": "run-api", "environment": nil, "workingDir": "", "dependsOn": nil, "readinessProbe": nil}
+				project.processes["api"].config = map[string]any{"name": "api", "command": "run-api", "environment": nil, "workingDir": "", "dependsOn": nil, "readinessProbe": nil, "restartPolicy": map[string]any{}}
 			}
 			project.processes["api"].afterPost = tt.afterPost
 			port := project.serve(t)
@@ -422,6 +422,53 @@ func TestUpStartsProcessTheUpdateDidNotRun(t *testing.T) {
 			}
 			if got := project.startedProcesses(); !slices.Equal(got, tt.started) {
 				t.Fatalf("started processes = %v, want %v", got, tt.started)
+			}
+		})
+	}
+}
+
+// A named process in its restart backoff gets its compiled definition, so `up`
+// applies a manifest fix to a crash loop: process-compose replaces a process
+// whose definition changed and runs it. An unchanged one is left to the restart
+// under way, and neither is started, which `process start` would refuse. One
+// up brings up as a dependency only is left alone.
+func TestUpReappliesTheDefinitionOfARestartingProcess(t *testing.T) {
+	const configuration = "version: \"0.5\"\nprocesses:\n  api:\n    command: run-api\n    depends_on:\n      db:\n        condition: process_started\n  db:\n    command: run-db\n"
+	for _, tt := range []struct {
+		name      string
+		unchanged bool
+		posted    []string
+	}{
+		{name: "changed definition", posted: []string{"api"}},
+		{name: "unchanged definition", unchanged: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			project := newFakeProject("/stack", map[string]processListEntry{
+				"api": {Status: "Restarting", ExitCode: 1, Restarts: 4},
+				"db":  {Status: "Restarting", ExitCode: 1, Restarts: 2},
+			})
+			if tt.unchanged {
+				project.processes["api"].config = map[string]any{
+					"name": "api", "command": "run-api", "environment": nil, "workingDir": "",
+					"dependsOn": map[string]any{"db": map[string]any{"condition": float64(3)}}, "readinessProbe": nil,
+					"restartPolicy": map[string]any{},
+				}
+			}
+			port := project.serve(t)
+			backend := Backend{Runner: project}
+
+			err := backend.Up(t.Context(), runtime.Target{Root: "/stack", Services: []string{"api"}, ControlPort: port, Configuration: []byte(configuration)})
+			if err != nil {
+				t.Fatalf("Up() error = %v", err)
+			}
+			if got := project.postedProcesses(); !slices.Equal(got, tt.posted) {
+				t.Fatalf("updated processes = %v, want %v", got, tt.posted)
+			}
+			if got := project.startedProcesses(); len(got) != 0 {
+				t.Fatalf("started processes = %v, want none", got)
+			}
+			if got := project.state("db"); got.Status != "Restarting" {
+				t.Fatalf("db = %+v, want left to its restart", got)
 			}
 		})
 	}
@@ -552,7 +599,7 @@ func newFakeProject(root string, states map[string]processListEntry) *fakeProjec
 	}
 	for name, state := range states {
 		state.Name = name
-		config := map[string]any{"name": name, "command": "old"}
+		config := map[string]any{"name": name, "command": "old", "restartPolicy": map[string]any{}}
 		if state.Status == "Disabled" {
 			config["disabled"] = true
 		}
@@ -1099,7 +1146,8 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 	const payload = `[
 	{"name":"build-watch","status":"Running","is_running":true,"exit_code":0,"is_ready":"-"},
 	{"name":"web","status":"Running","is_running":true,"exit_code":0,"is_ready":"Ready"},
-	{"name":"migrate","status":"Completed","is_running":false,"exit_code":0,"is_ready":"-"}
+	{"name":"migrate","status":"Completed","is_running":false,"exit_code":0,"is_ready":"-"},
+	{"name":"worker","status":"Restarting","is_running":false,"exit_code":1,"is_ready":"-","restarts":3}
 ]`
 	runner := &stubListRunner{output: []byte(payload)}
 	backend := Backend{Runner: runner}
@@ -1115,6 +1163,7 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
 		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
 		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "worker", Runtime: "local", State: "restarting", ExitCode: intPointer(1), Restarts: 3, Generation: "3:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -1324,6 +1373,131 @@ func TestUpdateProcessRefusesUnboundedRunningLegacyProcess(t *testing.T) {
 	}
 }
 
+func TestProcessUpdatesIncludesRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		availability *Availability
+		want         map[string]any
+	}{
+		{&Availability{Restart: "on_failure"}, map[string]any{"restart": 2, "backoffSeconds": 0, "maxRestarts": 0}},
+		{&Availability{Restart: "always"}, map[string]any{"restart": 1, "backoffSeconds": 0, "maxRestarts": 0}},
+		{&Availability{Restart: "no"}, map[string]any{"restart": 0, "backoffSeconds": 0, "maxRestarts": 0}},
+		// A job compiles no availability: process-compose's default, no restart.
+		{nil, map[string]any{"restart": 0, "backoffSeconds": 0, "maxRestarts": 0}},
+	} {
+		updates, err := processUpdates(Process{Availability: tc.availability})
+		if err != nil {
+			t.Fatalf("processUpdates(%+v) error = %v", tc.availability, err)
+		}
+		if got := updates["restartPolicy"]; !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("processUpdates(%+v) restartPolicy = %#v, want %#v", tc.availability, got, tc.want)
+		}
+	}
+	if _, err := processUpdates(Process{Availability: &Availability{Restart: "exit_on_failure"}}); err == nil {
+		t.Fatal("processUpdates() accepted a restart policy Angee does not compile")
+	}
+}
+
+// restartPolicyServer serves one process whose native configuration is info and
+// records what is posted for it.
+func restartPolicyServer(t *testing.T, info string, posted *map[string]any) int {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/worker":
+			_, _ = io.WriteString(w, info)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			if err := json.NewDecoder(r.Body).Decode(posted); err != nil {
+				t.Errorf("decode process: %v", err)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	_, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	return port
+}
+
+// postRestartPolicy updates the served worker to availability and returns
+// whether it posted, and what.
+func postRestartPolicy(t *testing.T, info string, availability *Availability) (bool, map[string]any) {
+	t.Helper()
+	var posted map[string]any
+	port := restartPolicyServer(t, info, &posted)
+	policy, err := nativeAvailability(availability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := (Backend{}).updateProcess(t.Context(), runtime.Target{ControlPort: port}, "worker", map[string]any{"command": "run", "restartPolicy": policy})
+	if err != nil {
+		t.Fatalf("updateProcess(%s, %+v) error = %v", info, availability, err)
+	}
+	if changed != (posted != nil) {
+		t.Fatalf("updateProcess(%s, %+v) = %v, but posted %#v", info, availability, changed, posted)
+	}
+	return changed, posted
+}
+
+// The policy is merged into what the supervisor holds: exit_on_end and
+// exit_on_skipped are not Angee's to set, and a zero field is process-compose's
+// omitted default, so it is removed rather than posted.
+func TestUpdateProcessMergesRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		info         string
+		availability *Availability
+		want         map[string]any
+	}{
+		{
+			name:         "a supervisor without a policy",
+			info:         `{"name":"worker","command":"run","restartPolicy":{"exitOnEnd":true}}`,
+			availability: &Availability{Restart: "on_failure"},
+			want:         map[string]any{"restart": float64(2), "exitOnEnd": true},
+		},
+		{
+			// A deleted field, not a skipped one: skipping the zero would post
+			// the old on_failure back.
+			name:         "a running process switched to restart: no",
+			info:         `{"name":"worker","command":"run","restartPolicy":{"restart":2,"exitOnEnd":true}}`,
+			availability: &Availability{Restart: "no"},
+			want:         map[string]any{"exitOnEnd": true},
+		},
+		{
+			name:         "a backoff and a limit Angee does not set",
+			info:         `{"name":"worker","command":"run","restartPolicy":{"restart":2,"backoffSeconds":5,"maxRestarts":3}}`,
+			availability: &Availability{Restart: "on_failure"},
+			want:         map[string]any{"restart": float64(2)},
+		},
+	} {
+		changed, posted := postRestartPolicy(t, tc.info, tc.availability)
+		if !changed {
+			t.Fatalf("%s: updateProcess() posted nothing", tc.name)
+		}
+		if got := posted["restartPolicy"]; !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: posted restartPolicy = %#v, want %#v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// An unchanged definition is not posted: the post replaces the process, and a
+// zero-valued policy field is one process-compose leaves out of what it reports.
+func TestUpdateProcessSeesUnchangedRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		info         string
+		availability *Availability
+	}{
+		{`{"name":"worker","command":"run","restartPolicy":{}}`, &Availability{Restart: "no"}},
+		{`{"name":"worker","command":"run","restartPolicy":{}}`, nil},
+		{`{"name":"worker","command":"run","restartPolicy":{"restart":2}}`, &Availability{Restart: "on_failure"}},
+	} {
+		if changed, posted := postRestartPolicy(t, tc.info, tc.availability); changed {
+			t.Fatalf("updateProcess(%s, %+v) posted %#v", tc.info, tc.availability, posted)
+		}
+	}
+}
+
 // process-compose prints an ANSI-coloured "new version available" notice to
 // stderr, which CombinedOutput folds in ahead of the JSON array. Its escape
 // codes (e.g. "\x1b[33m") contain a '[', so a naive "trim to the first '['"
@@ -1506,7 +1680,7 @@ func restartFallbackServer(t *testing.T) *httptest.Server {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/job/"):
 			writeLogPage(w, []byte("job log line\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
-			_, _ = io.WriteString(w, `{"name":"job","command":"run","workingDir":""}`)
+			_, _ = io.WriteString(w, `{"name":"job","command":"run","workingDir":"","restartPolicy":{}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/process":
 			t.Errorf("updateProcess posted an update; want changed=false restart fallback")
 			http.NotFound(w, r)
@@ -2001,7 +2175,7 @@ func TestApplyRegistersMissingProcessWithoutRestartingIt(t *testing.T) {
 func TestApplyRestartsProcessWithUnchangedDefinition(t *testing.T) {
 	supervisor := &fakeSupervisor{
 		name:   "web",
-		config: `{"name":"web","command":"serve","workingDir":"/srv"}`,
+		config: `{"name":"web","command":"serve","workingDir":"/srv","restartPolicy":{}}`,
 		state:  processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100},
 	}
 	server := httptest.NewServer(supervisor)

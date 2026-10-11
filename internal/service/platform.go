@@ -575,10 +575,12 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		if status == "" {
 			status = "declared"
 		}
-		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Outcome: outcomes[name], ExitCode: runtimeExitCode(observed), Health: observed.Health}
+		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Outcome: outcomes[name], ExitCode: runtimeExitCode(observed), Restarts: observed.Restarts, Health: observed.Health}
 		switch state.Outcome {
 		case api.JobSkipped:
 			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		case api.JobPending:
+			state.Reason = waitReason(stack, runtimeStates, outcomes, name)
 		case api.JobFailed:
 			if startFailed(observed) {
 				state.Reason = couldNotStart
@@ -594,6 +596,8 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		switch state.Status {
 		case api.JobSkipped:
 			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		case api.JobPending:
+			state.Reason = waitReason(stack, runtimeStates, outcomes, name)
 		case api.JobFailed:
 			if startFailed(observed) {
 				state.Reason = couldNotStart
@@ -755,6 +759,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Healthcheck:     composeHealthcheck(service.Ready),
 				DependsOn:       composeDependsOn(append(service.After, service.DependsOn...), stack),
 				StopGracePeriod: stopGracePeriod,
+				Restart:         composeRestart(service.NormalizedRestart()),
 			}
 		case manifest.RuntimeLocal:
 			localEnv, err := localMountEnv(mounts, mountResolver)
@@ -788,6 +793,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Shutdown:       stopTimeout,
 				LogLocation:    logLocation,
 				LogConfig:      logConfig,
+				Availability:   processAvailability(service.NormalizedRestart()),
 			}
 		}
 	}
@@ -919,6 +925,36 @@ func processDependsOn(names []string, stack *manifest.Stack) map[string]proccomp
 		deps[name] = proccompose.ProcessDependency{Condition: condition}
 	}
 	return deps
+}
+
+// processAvailability compiles a service's restart policy for process-compose.
+//
+// It sets no backoff, so process-compose's own one second applies. Its backoff
+// is constant, and `process restart` also waits it out between stopping and
+// starting the process, so a longer one would add to every restart's downtime,
+// once per service in a chained restart. A crash loop's output stays bounded by
+// the rotated log file each local service writes.
+//
+// It sets no restart limit: process-compose counts every restart since the
+// process was last started and never resets the count after a healthy run, so
+// any limit would leave a long-running service down after enough crashes,
+// however far apart.
+func processAvailability(policy manifest.RestartPolicy) *proccompose.Availability {
+	return &proccompose.Availability{Restart: string(policy)}
+}
+
+// composeRestart compiles a service's restart policy for Docker Compose.
+// Docker never restarts a container it was asked to stop; unless-stopped also
+// keeps such a container stopped when the Docker daemon restarts.
+func composeRestart(policy manifest.RestartPolicy) string {
+	switch policy {
+	case manifest.RestartNo:
+		return "no"
+	case manifest.RestartAlways:
+		return "unless-stopped"
+	default:
+		return "on-failure"
+	}
 }
 
 func composeDependsOn(names []string, stack *manifest.Stack) map[string]compose.ServiceDependency {

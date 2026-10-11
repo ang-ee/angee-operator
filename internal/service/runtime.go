@@ -294,12 +294,14 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 }
 
 // watchDevJobs waits for the jobs `angee dev` started to finish and reports what
-// they left broken. As soon as they finish, a failed job or a skipped service or
-// job is printed to stderr while the rest of the stack keeps running, and the
-// *StackFailureError is returned so the command exits non-zero when it ends. It
-// returns nil for a healthy bring-up, and when ctx ends first (Ctrl-C, `angee
-// down`, or the supervisor failing) because the runtime is then shutting down
-// and its states no longer describe the bring-up.
+// they left broken. As soon as they finish, a failed job, a restarting service,
+// or a skipped service or job is printed to stderr while the rest of the stack
+// keeps running, and the *StackFailureError is returned so the command exits
+// non-zero when it ends. A job found waiting on a service the runtime keeps
+// restarting is printed while the wait goes on. It returns nil for a healthy
+// bring-up, and when ctx ends first (Ctrl-C, `angee down`, or the supervisor
+// failing) because the runtime is then shutting down and its states no longer
+// describe the bring-up.
 func (p *Platform) watchDevJobs(ctx context.Context, stack *manifest.Stack, hasLocal bool, stderr io.Writer) error {
 	// The foreground supervisor starts concurrently with this watch. Until it
 	// answers, its jobs read as never run, which awaitJobs counts as finished,
@@ -307,7 +309,9 @@ func (p *Platform) watchDevJobs(ctx context.Context, stack *manifest.Stack, hasL
 	if hasLocal && !p.awaitSupervisor(ctx, stack) {
 		return nil
 	}
-	status, err := awaitJobs(ctx, p, 0, nil)
+	status, err := awaitJobs(ctx, p, 0, nil, func(job, reason string) {
+		fmt.Fprintf(stderr, "angee dev: job %s is %s\n", job, reason)
+	})
 	if err != nil || ctx.Err() != nil {
 		return nil
 	}

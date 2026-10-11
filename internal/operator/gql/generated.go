@@ -351,6 +351,7 @@ type ComplexityRoot struct {
 		Name     func(childComplexity int) int
 		Outcome  func(childComplexity int) int
 		Reason   func(childComplexity int) int
+		Restarts func(childComplexity int) int
 		Runtime  func(childComplexity int) int
 		Status   func(childComplexity int) int
 	}
@@ -432,11 +433,12 @@ type ComplexityRoot struct {
 	}
 
 	StatusCounts struct {
-		Completed func(childComplexity int) int
-		Failed    func(childComplexity int) int
-		Running   func(childComplexity int) int
-		Skipped   func(childComplexity int) int
-		Total     func(childComplexity int) int
+		Completed  func(childComplexity int) int
+		Failed     func(childComplexity int) int
+		Restarting func(childComplexity int) int
+		Running    func(childComplexity int) int
+		Skipped    func(childComplexity int) int
+		Total      func(childComplexity int) int
 	}
 
 	Subscription struct {
@@ -2573,6 +2575,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServiceState.Reason(childComplexity), true
+	case "ServiceState.restarts":
+		if e.ComplexityRoot.ServiceState.Restarts == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceState.Restarts(childComplexity), true
 	case "ServiceState.runtime":
 		if e.ComplexityRoot.ServiceState.Runtime == nil {
 			break
@@ -2918,6 +2926,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StatusCounts.Failed(childComplexity), true
+	case "StatusCounts.restarting":
+		if e.ComplexityRoot.StatusCounts.Restarting == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusCounts.Restarting(childComplexity), true
 	case "StatusCounts.running":
 		if e.ComplexityRoot.StatusCounts.Running == nil {
 			break
@@ -4101,23 +4115,37 @@ type ServiceState {
   status: String!
   """
   The runtime state as the stack summary counts it: running, completed (exit
-  0), failed (a non-zero exit, or the command could not start), stopped (ended
-  by a stop signal), skipped (a dependency failed), pending, never-run (the
-  runtime holds no state for it) or unknown (the runtime could not be queried).
-  Empty when the runtime was not read, as in a create or update result.
+  0), failed (a non-zero exit, or the command could not start), restarting (it
+  exited and the runtime's restart policy is starting it again), stopped
+  (ended by a stop signal), skipped (a dependency failed), pending, never-run
+  (the runtime holds no state for it) or unknown (the runtime could not be
+  queried). Empty when the runtime was not read, as in a create or update
+  result.
 
   A local service killed by any signal reads as stopped, not failed:
   process-compose reports exit code -1 alike for a crash by signal, a SIGKILL
   from outside (such as the OOM killer) and a deliberate stop.
   """
   outcome: String
-  "Exit status of a service that ended, when the runtime reports one."
+  """
+  Exit status of a service that ended, when the runtime reports one. A
+  restarting local service reports the exit that ended its last run; docker
+  compose reports none for a restarting container.
+  """
   exitCode: Int
+  """
+  How many times the runtime's restart policy has restarted the service since
+  it was last started. Only process-compose reports it; a container service
+  reads 0.
+  """
+  restarts: Int!
   health: String
   """
   Why a skipped service did not run: the failed job or service its dependency
   chain stopped at, such as ` + "`" + `job deps failed (exit 1)` + "`" + `. For a failed service
-  whose command could not start, it says so.
+  whose command could not start, it says so. For a pending service waiting on
+  a service the runtime keeps restarting, it names that service, such as
+  ` + "`" + `waiting for service db: restarting (exit 1, 3 restarts)` + "`" + `.
   """
   reason: String
 }
@@ -4152,7 +4180,10 @@ type JobState {
   status: String!
   "Exit status of a completed or failed run, when the runtime reports one."
   exitCode: Int
-  "Why a job failed without an exit status, or was skipped."
+  """
+  Why a job failed without an exit status, or was skipped, or is still pending
+  on a service the runtime keeps restarting.
+  """
   reason: String
 }
 
@@ -4319,14 +4350,15 @@ type GitOpsSummary {
 Counts of declared entries by observed outcome. total counts every entry;
 pending, stopped, never-run and unobserved entries count only there. failed
 counts entries that exited non-zero or could not start (a service stopped by a
-signal is not failed); skipped counts entries skipped because a dependency
-failed.
+signal is not failed); restarting counts services the runtime is restarting
+after they exited; skipped counts entries skipped because a dependency failed.
 """
 type StatusCounts {
   total: Int!
   running: Int!
   completed: Int!
   failed: Int!
+  restarting: Int!
   skipped: Int!
 }
 
@@ -5579,6 +5611,8 @@ func (ec *executionContext) childFields_ServiceState(ctx context.Context, field 
 		return ec.fieldContext_ServiceState_outcome(ctx, field)
 	case "exitCode":
 		return ec.fieldContext_ServiceState_exitCode(ctx, field)
+	case "restarts":
+		return ec.fieldContext_ServiceState_restarts(ctx, field)
 	case "health":
 		return ec.fieldContext_ServiceState_health(ctx, field)
 	case "reason":
@@ -5749,6 +5783,8 @@ func (ec *executionContext) childFields_StatusCounts(ctx context.Context, field 
 		return ec.fieldContext_StatusCounts_completed(ctx, field)
 	case "failed":
 		return ec.fieldContext_StatusCounts_failed(ctx, field)
+	case "restarting":
+		return ec.fieldContext_StatusCounts_restarting(ctx, field)
 	case "skipped":
 		return ec.fieldContext_StatusCounts_skipped(ctx, field)
 	}
@@ -15317,6 +15353,29 @@ func (ec *executionContext) fieldContext_ServiceState_exitCode(_ context.Context
 	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _ServiceState_restarts(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceState_restarts(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Restarts, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceState_restarts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
 func (ec *executionContext) _ServiceState_health(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16819,6 +16878,29 @@ func (ec *executionContext) _StatusCounts_failed(ctx context.Context, field grap
 	)
 }
 func (ec *executionContext) fieldContext_StatusCounts_failed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _StatusCounts_restarting(ctx context.Context, field graphql.CollectedField, obj *api.StatusCounts) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_StatusCounts_restarting(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Restarting, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_StatusCounts_restarting(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("StatusCounts", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
@@ -27074,6 +27156,11 @@ func (ec *executionContext) _ServiceState(ctx context.Context, sel ast.Selection
 			out.Values[i] = ec._ServiceState_outcome(ctx, field, obj)
 		case "exitCode":
 			out.Values[i] = ec._ServiceState_exitCode(ctx, field, obj)
+		case "restarts":
+			out.Values[i] = ec._ServiceState_restarts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "health":
 			out.Values[i] = ec._ServiceState_health(ctx, field, obj)
 		case "reason":
@@ -27710,6 +27797,11 @@ func (ec *executionContext) _StatusCounts(ctx context.Context, sel ast.Selection
 			}
 		case "failed":
 			out.Values[i] = ec._StatusCounts_failed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "restarting":
+			out.Values[i] = ec._StatusCounts_restarting(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
