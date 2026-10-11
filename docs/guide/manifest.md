@@ -440,12 +440,18 @@ sources:
 - **The clone remote** is the canonical remote, else `origin`, else the only
   remote. A source with several remotes where none qualifies is an error.
 - **`push_default`** names the remote a push goes to when the branch names
-  no `pushRemote`. It becomes the cache's `remote.pushDefault`, must be
-  declared, and cannot be the canonical remote.
-- **`branches`** lists the branch patterns (`path.Match` syntax) a publish to
-  that remote may create or update. The manifest validates the patterns, but
-  publish does not enforce them yet. The canonical remote takes none, since
-  nothing is published to it.
+  no `pushRemote`. It becomes the cache's (and a clone slot's)
+  `remote.pushDefault`, so plain `git push` and
+  `angee workspace source publish` without `--remote` both follow it. It
+  must be declared, and cannot be the canonical remote.
+- **`branches`** lists the branch patterns a publish to that remote may
+  create or update, in `path.Match` syntax, where `*` does not match across
+  a `/`: `feature/*` matches `feature/x` but not `feature/x/y`. Publishing a
+  branch that matches none of them is refused before anything changes. The
+  patterns apply to a publish to a declared remote; a remote added to the
+  cache by hand has none. The canonical remote takes none, since nothing is
+  published to it: a publish to it is refused before anything changes, and
+  git's push block refuses any push to it made outside angee.
 - Remote names start with a letter or digit and hold only letters, digits,
   `.`, `_` and `-`, and no two differ only in case.
 - A URL under `remotes` is a URL, an `host:path` address or an absolute

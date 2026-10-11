@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -65,10 +66,19 @@ func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace,
 }
 
 // WorkspaceSourcePublish pushes the worktree's branch to the named remote
-// (default "origin") under the named branch (default: the current branch),
-// setting upstream tracking if not already configured. Useful for
-// publishing a workspace branch for the first time so an external
-// reviewer can open a PR against it.
+// under the named branch (default: the current branch), setting upstream
+// tracking if not already configured. Useful for publishing a workspace
+// branch for the first time so an external reviewer can open a PR against
+// it.
+//
+// Without a remote it publishes to the remote the slot's driver resolves: for
+// git, the push remote git itself would use (the branch's pushRemote, then
+// remote.pushDefault, which the cache takes from the source's push_default,
+// then the branch's remote, origin, or the only remote). When git names none,
+// the caller is asked to pass one. A remote the slot does not have is
+// refused, and so are the canonical remote and a branch that matches none of
+// the target remote's declared `branches` patterns, all before anything
+// changes.
 //
 // The slot's driver decides what is published (vcs.Driver.PlanPublish). For
 // a git source, two cases differ from a plain push. Without an explicit
@@ -87,16 +97,21 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
-	if remote == "" {
-		remote = "origin"
-	}
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
 	intent := vcs.PublishIntent{Remote: remote, Branch: branch, Explicit: branch != "", Unmanaged: source.Kind != "git"}
 	if intent.Branch == "" {
 		intent.Branch = wsSource.Branch
 	}
 	plan, err := driver.PlanPublish(ctx, target, intent)
+	var unknownRemote *vcs.UnknownRemoteError
+	var noPushRemote *vcs.NoPushRemoteError
 	switch {
+	case errors.As(err, &unknownRemote) && unknownRemote.Resolved:
+		return api.GitOpResult{}, &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("source slot %q pushes to remote %q by its own configuration, but has no such remote; pass a remote, or fix the slot's push remote", slot, unknownRemote.Remote)}
+	case errors.As(err, &unknownRemote):
+		return api.GitOpResult{}, &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("source slot %q has no remote %q", slot, unknownRemote.Remote)}
+	case errors.As(err, &noPushRemote):
+		return api.GitOpResult{}, &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("source slot %q has no push remote to default to (%s); pass a remote, or declare push_default", slot, noPushRemote.Reason)}
 	case errors.Is(err, vcs.ErrNothingToPublish):
 		return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: fmt.Sprintf("nothing to publish: no commits beyond %s; pass a branch to publish anyway", target.BaseRef)}, nil
 	case errors.Is(err, vcs.ErrNoBranch):
@@ -108,14 +123,38 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 	case err != nil:
 		return api.GitOpResult{}, err
 	}
+	// The manifest's rules for the target remote apply to a declared remote
+	// only, and are checked before the driver creates a branch on a detached
+	// slot, so a refused publish changes nothing. git's push block on the
+	// canonical remote still refuses any push made outside angee.
+	declared := source.DeclaredRemotes()[plan.Remote]
+	if declared.Canonical {
+		return api.GitOpResult{}, &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("remote %q of source %q is canonical (fetch-only) in angee.yaml; publish to another remote", plan.Remote, wsSource.Source)}
+	}
+	if len(declared.Branches) > 0 && !matchesAnyBranchPattern(declared.Branches, plan.Branch) {
+		return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("remote %q of source %q accepts only branches matching %s; %q matches none", plan.Remote, wsSource.Source, strings.Join(declared.Branches, ", "), plan.Branch)}
+	}
 	// A slot cut without a branch starts detached; publishing names its
 	// branch, so the driver creates it for the push below to track.
 	if err := driver.PreparePublish(ctx, target, plan); err != nil {
 		return api.GitOpResult{}, err
 	}
-	step := gitStep{action: fmt.Sprintf("pushing branch %q of", plan.Branch), object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, plan.Remote), cause: CausePushFailed, slot: slot, source: wsSource.Source}
+	step := gitStep{action: fmt.Sprintf("pushing branch %q of", plan.Branch), object: fmt.Sprintf("source slot %q", slot), remote: plan.URL, cause: CausePushFailed, slot: slot, source: wsSource.Source}
 	result, err = driver.Publish(ctx, target, plan)
 	return result, gitFailure(err, step)
+}
+
+// matchesAnyBranchPattern reports whether branch matches one of patterns, in
+// path.Match syntax, where `*` does not cross a `/`. A pattern path.Match
+// rejects counts as no match; ValidateSource refuses such patterns when the
+// manifest loads, so none reaches here.
+func matchesAnyBranchPattern(patterns []string, branch string) bool {
+	for _, pattern := range patterns {
+		if ok, err := path.Match(pattern, branch); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // slotOp is one driver operation on a slot that may stop on conflicts.

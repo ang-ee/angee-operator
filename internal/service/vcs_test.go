@@ -155,15 +155,20 @@ func (f *fakeDriver) RebaseContinue(_ context.Context, s vcs.Slot) (api.GitOpRes
 	return f.result("RebaseContinue"), nil
 }
 
-// PlanPublish publishes the intent's branch, else the one the checkout is on
-// (the slot's), creating it when detached.
+// PlanPublish publishes to the intent's remote, else origin, the intent's
+// branch, else the one the checkout is on (the slot's), creating it when
+// detached.
 func (f *fakeDriver) PlanPublish(_ context.Context, s vcs.Slot, intent vcs.PublishIntent) (vcs.PublishPlan, error) {
 	f.call("PlanPublish", s, intent.Remote, intent.Branch, strconv.FormatBool(intent.Explicit))
+	remote := intent.Remote
+	if remote == "" {
+		remote = "origin"
+	}
 	branch := intent.Branch
 	if branch == "" && !f.detached {
 		branch = s.Branch
 	}
-	return vcs.PublishPlan{Remote: intent.Remote, Branch: branch, Create: f.detached}, nil
+	return vcs.PublishPlan{Remote: remote, URL: "fake://" + remote, Branch: branch, Create: f.detached}, nil
 }
 
 func (f *fakeDriver) PreparePublish(_ context.Context, s vcs.Slot, plan vcs.PublishPlan) error {
@@ -349,11 +354,11 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "publish", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourcePublish(ctx, ws, "app", "", "")
 			return result.Message, err
-		}, want: []string{"PlanPublish(origin,feature-a,false)", "PreparePublish(feature-a,false)", "PushURL(origin)", "Publish(origin,feature-a)"}, wantMsg: "fake Publish"},
+		}, want: []string{"PlanPublish(,feature-a,false)", "PreparePublish(feature-a,false)", "Publish(origin,feature-a)"}, wantMsg: "fake Publish"},
 		{name: "publish from a detached HEAD", detached: true, run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourcePublish(ctx, ws, "app", "fork", "new")
 			return result.Message, err
-		}, want: []string{"PlanPublish(fork,new,true)", "PreparePublish(new,true)", "PushURL(fork)", "Publish(fork,new)"}, wantMsg: "fake Publish"},
+		}, want: []string{"PlanPublish(fork,new,true)", "PreparePublish(new,true)", "Publish(fork,new)"}, wantMsg: "fake Publish"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			platform, workspaceName, _, _ := setupGitWorkspace(t)

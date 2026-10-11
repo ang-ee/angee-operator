@@ -943,13 +943,23 @@ func (c Client) pushRemote(ctx context.Context, dir string) (string, error) {
 		return remotes[0], nil
 	}
 	if len(remotes) == 0 {
-		return "", fmt.Errorf("no git remotes configured")
+		return "", &NoPushRemoteError{Reason: "no git remotes configured"}
 	}
 	if hasBranch {
-		return "", fmt.Errorf("multiple git remotes configured; set branch.%s.pushRemote or remote.pushDefault", branch)
+		return "", &NoPushRemoteError{Reason: fmt.Sprintf("multiple git remotes configured; set branch.%s.pushRemote or remote.pushDefault", branch)}
 	}
-	return "", fmt.Errorf("multiple git remotes configured; set remote.pushDefault")
+	return "", &NoPushRemoteError{Reason: "multiple git remotes configured; set remote.pushDefault"}
 }
+
+// NoPushRemoteError reports a checkout for which git's push configuration
+// names no remote and no single remote stands in: none is configured, or
+// several are and neither the branch's pushRemote nor remote.pushDefault
+// picks one. Reason says which, and what to set.
+type NoPushRemoteError struct {
+	Reason string
+}
+
+func (e *NoPushRemoteError) Error() string { return e.Reason }
 
 // Dirty reports whether the checkout at dir has uncommitted changes, as git
 // status sees them (DirtyPaths).

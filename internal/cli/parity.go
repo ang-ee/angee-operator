@@ -443,7 +443,7 @@ func workspaceSlotPublishCommand(stdout io.Writer, root, operatorURL *string, js
 			return printGitOpResult(stdout, jsonOutput, result)
 		},
 	}
-	cmd.Flags().StringVar(&remote, "remote", "", "remote name (default: origin)")
+	cmd.Flags().StringVar(&remote, "remote", "", "remote name (default: the source's push_default, else git's push remote, else origin)")
 	cmd.Flags().StringVar(&branch, "branch", "", "branch name (default: workspace source manifest branch)")
 	return cmd
 }

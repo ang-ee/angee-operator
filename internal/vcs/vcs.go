@@ -8,6 +8,7 @@ package vcs
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/ang-ee/angee-operator/api"
 )
@@ -64,7 +65,9 @@ type PushPlan struct {
 
 // PublishIntent is what a caller asked publish for.
 type PublishIntent struct {
-	// Remote is the remote to publish to.
+	// Remote is the remote to publish to. Empty lets the driver resolve the
+	// remote its version control system pushes the checkout to (git: its
+	// push remote, else origin).
 	Remote string
 	// Branch is the branch to publish under; empty publishes the branch the
 	// checkout is on.
@@ -84,6 +87,7 @@ type PublishIntent struct {
 // before anything changes.
 type PublishPlan struct {
 	Remote string
+	URL    string // Remote's URL, for messages
 	Branch string
 	// Create reports that Branch does not exist yet and PreparePublish creates
 	// it where the checkout stands.
@@ -174,8 +178,10 @@ type Driver interface {
 	RebaseAbort(ctx context.Context, s Slot) (api.GitOpResult, error)
 	RebaseContinue(ctx context.Context, s Slot) (api.GitOpResult, error)
 	// PlanPublish decides what publishing the checkout does without changing
-	// anything: the branch to publish (the intent's, else the checkout's)
-	// and whether it must be created. It refuses with ErrNothingToPublish,
+	// anything: the remote (the intent's, else the one the checkout pushes
+	// to), the branch to publish (the intent's, else the checkout's) and
+	// whether it must be created. It refuses a remote the checkout does not
+	// have with *UnknownRemoteError, and otherwise with ErrNothingToPublish,
 	// ErrNoBranch or ErrBranchExists.
 	PlanPublish(ctx context.Context, s Slot, intent PublishIntent) (PublishPlan, error)
 	// PreparePublish gets the checkout ready for a plan PlanPublish returned:
@@ -186,6 +192,25 @@ type Driver interface {
 	// tracks it there.
 	Publish(ctx context.Context, s Slot, plan PublishPlan) (api.GitOpResult, error)
 }
+
+// UnknownRemoteError is returned by Driver.PlanPublish for a remote the
+// checkout does not have. Resolved marks a remote the checkout's own push
+// configuration named, rather than the caller.
+type UnknownRemoteError struct {
+	Remote   string
+	Resolved bool
+}
+
+func (e *UnknownRemoteError) Error() string { return fmt.Sprintf("no remote %q", e.Remote) }
+
+// NoPushRemoteError is returned by Driver.PlanPublish when the caller names
+// no remote and the checkout's push configuration resolves none. Reason is
+// the version-control tool's own account, saying what to set.
+type NoPushRemoteError struct {
+	Reason string
+}
+
+func (e *NoPushRemoteError) Error() string { return "no push remote: " + e.Reason }
 
 // CountError reports that Status decided whether a checkout is pushed but
 // could not count it against its upstream or base, for example because the

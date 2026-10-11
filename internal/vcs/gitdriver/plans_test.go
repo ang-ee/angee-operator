@@ -11,25 +11,32 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-// PlanPublish decides from the checkout alone and changes nothing: what it
-// publishes, whether it creates the branch, and what it refuses. An unmanaged
-// checkout skips the nothing-to-publish check and never has a branch created.
+// PlanPublish decides from the checkout alone and changes nothing: the
+// remote, what it publishes, whether it creates the branch, and what it
+// refuses. Without a remote it takes git's push remote, else origin; a remote
+// the checkout lacks is refused. An unmanaged checkout skips the
+// nothing-to-publish check and never has a branch created.
 func TestPlanPublish(t *testing.T) {
 	ctx := context.Background()
 	d := New(git.New())
 	for _, tc := range []struct {
-		name     string
-		detached bool
-		ahead    bool
-		upstream bool
-		intent   vcs.PublishIntent
-		want     vcs.PublishPlan
-		wantErr  error
+		name       string
+		detached   bool
+		ahead      bool
+		upstream   bool
+		pushRemote bool // branch.feature.pushRemote names a second remote, "other"
+		intent     vcs.PublishIntent
+		want       vcs.PublishPlan
+		wantErr    error
 	}{
 		{name: "nothing of its own", intent: vcs.PublishIntent{Remote: "origin"}, wantErr: vcs.ErrNothingToPublish},
 		{name: "nothing of its own, branch named", intent: vcs.PublishIntent{Remote: "origin", Branch: "feature", Explicit: true}, want: vcs.PublishPlan{Remote: "origin", Branch: "feature"}},
 		{name: "nothing of its own, unmanaged", intent: vcs.PublishIntent{Remote: "origin", Unmanaged: true}, want: vcs.PublishPlan{Remote: "origin", Branch: "feature"}},
-		{name: "its own commit", ahead: true, intent: vcs.PublishIntent{Remote: "fork"}, want: vcs.PublishPlan{Remote: "fork", Branch: "feature"}},
+		{name: "its own commit", ahead: true, intent: vcs.PublishIntent{Remote: "origin"}, want: vcs.PublishPlan{Remote: "origin", Branch: "feature"}},
+		{name: "no remote named", ahead: true, want: vcs.PublishPlan{Remote: "origin", Branch: "feature"}},
+		{name: "no remote named, the branch's push remote", ahead: true, pushRemote: true, want: vcs.PublishPlan{Remote: "other", Branch: "feature"}},
+		{name: "a remote it lacks", ahead: true, intent: vcs.PublishIntent{Remote: "nosuch"}, wantErr: &vcs.UnknownRemoteError{Remote: "nosuch"}},
+		{name: "a URL for a remote", ahead: true, intent: vcs.PublishIntent{Remote: "https://example.invalid/x.git"}, wantErr: &vcs.UnknownRemoteError{Remote: "https://example.invalid/x.git"}},
 		{name: "tracking", upstream: true, intent: vcs.PublishIntent{Remote: "origin"}, want: vcs.PublishPlan{Remote: "origin", Branch: "feature"}},
 		{name: "detached, nothing of its own", detached: true, intent: vcs.PublishIntent{Remote: "origin", Branch: "manifest"}, wantErr: vcs.ErrNothingToPublish},
 		{name: "detached, no branch", detached: true, ahead: true, intent: vcs.PublishIntent{Remote: "origin"}, wantErr: vcs.ErrNoBranch},
@@ -39,10 +46,15 @@ func TestPlanPublish(t *testing.T) {
 		{name: "detached, unmanaged, no branch", detached: true, intent: vcs.PublishIntent{Remote: "origin", Unmanaged: true}, wantErr: vcs.ErrNoBranch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, _ := clone(t)
+			dir, remote := clone(t)
+			urls := map[string]string{"origin": remote, "other": remote + "-other"}
+			run(t, dir, "remote", "add", "other", urls["other"])
 			run(t, dir, "switch", "--no-track", "-c", "feature", "main")
 			if tc.upstream {
 				run(t, dir, "branch", "--set-upstream-to", "origin/main")
+			}
+			if tc.pushRemote {
+				run(t, dir, "config", "branch.feature.pushRemote", "other")
 			}
 			if tc.ahead {
 				commit(t, dir, "change.txt")
@@ -52,9 +64,19 @@ func TestPlanPublish(t *testing.T) {
 			}
 			s := vcs.Slot{Path: dir, BaseRef: "main", BaseRemote: "origin"}
 			head := gitOutput(t, dir, "rev-parse", "HEAD")
+			want := tc.want
+			if want.Remote != "" {
+				want.URL = urls[want.Remote]
+			}
 			got, err := d.PlanPublish(ctx, s, tc.intent)
-			if !errors.Is(err, tc.wantErr) || got != tc.want {
-				t.Fatalf("PlanPublish() = %+v, %v, want %+v, %v", got, err, tc.want, tc.wantErr)
+			var unknown, wantUnknown *vcs.UnknownRemoteError
+			switch {
+			case errors.As(tc.wantErr, &wantUnknown):
+				if !errors.As(err, &unknown) || *unknown != *wantUnknown {
+					t.Fatalf("PlanPublish() = %+v, %v, want %v", got, err, tc.wantErr)
+				}
+			case !errors.Is(err, tc.wantErr) || got != want:
+				t.Fatalf("PlanPublish() = %+v, %v, want %+v, %v", got, err, want, tc.wantErr)
 			}
 			if after := gitOutput(t, dir, "rev-parse", "HEAD"); after != head || (tc.detached && gitOutput(t, dir, "branch", "--show-current") != "") {
 				t.Fatal("PlanPublish() changed the checkout")

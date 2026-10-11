@@ -160,9 +160,11 @@ func TestBranchlessSlotPushAndPublishRunTheirGit(t *testing.T) {
 			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a Exists:true State:clean Branch: Ref:main CurrentRef:<sha> Dirty:false Upstream: Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error:}]",
 		},
 		{
-			name:    "publish untouched",
-			call:    func() (any, error) { return platform.WorkspaceSourcePublish(ctx, "feature-a", "app", "", "") },
-			git:     beyondBase,
+			name: "publish untouched",
+			call: func() (any, error) { return platform.WorkspaceSourcePublish(ctx, "feature-a", "app", "", "") },
+			// No remote named: git's push remote (origin, the only one), then
+			// its URL.
+			git:     concat(pushURL, beyondBase),
 			outcome: "{OK:true Conflicted:false ConflictFiles:[] Message:nothing to publish: no commits beyond main; pass a branch to publish anyway Source:<nil>}",
 		},
 		{
@@ -181,24 +183,23 @@ func TestBranchlessSlotPushAndPublishRunTheirGit(t *testing.T) {
 		{
 			name:    "publish detached without a branch",
 			call:    func() (any, error) { return platform.WorkspaceSourcePublish(ctx, "feature-a", "app", "", "") },
-			git:     beyondBase,
+			git:     concat(pushURL, beyondBase),
 			outcome: "error: branch: worktree is in detached HEAD; pass an explicit branch",
 		},
 		{
 			name:    "publish detached onto an existing branch",
 			setup:   func(t *testing.T) { runGit(t, cache, "branch", "taken", "main") },
 			call:    func() (any, error) { return platform.WorkspaceSourcePublish(ctx, "feature-a", "app", "", "taken") },
-			git:     []string{""},
+			git:     pushURL,
 			outcome: "error: branch: worktree is in detached HEAD and branch \"taken\" already exists; switch to it or pass another branch",
 		},
 		{
 			name: "publish detached with a branch",
 			call: func() (any, error) { return platform.WorkspaceSourcePublish(ctx, "feature-a", "app", "", "feature-a") },
-			git: []string{
+			git: concat(pushURL, []string{
 				dir + " [] switch -c feature-a",
-				dir + " [] config --get-all --end-of-options remote.origin.url",
 				dir + " [angee] push --set-upstream --end-of-options origin refs/heads/feature-a:refs/heads/feature-a",
-			},
+			}),
 			outcome: "{OK:true Conflicted:false ConflictFiles:[] Message:branch 'feature-a' set up to track 'origin/feature-a'.\n\nTo <base>/remote.git\n * [new branch]      feature-a -> feature-a Source:<nil>}",
 		},
 		{
@@ -252,6 +253,7 @@ func TestBranchSlotPushAndPublishRunTheirGit(t *testing.T) {
 			name: "publish untouched to a named remote",
 			call: func() (any, error) { return platform.WorkspaceSourcePublish(ctx, workspaceName, "app", "fork", "") },
 			git: []string{
+				forkURL,
 				dir + " [] rev-parse --verify --quiet --symbolic-full-name --end-of-options main@{upstream}",
 				dir + " [] rev-list --count HEAD --not --end-of-options main fork/main",
 			},

@@ -179,17 +179,38 @@ func (d Driver) RebaseContinue(ctx context.Context, s vcs.Slot) (api.GitOpResult
 	return d.runOp(ctx, s.Path, "-c", "core.editor=true", "rebase", "--continue")
 }
 
-// PlanPublish decides a publish without changing anything. The branch is the
-// intent's, else the one HEAD is on. Unless the caller named the branch, a
-// branch that tracks nothing and holds no commit beyond the slot's base has
-// nothing to publish; the count is of HEAD, so it only speaks when HEAD is
-// what would be pushed. On a detached HEAD the branch is created at HEAD
+// PlanPublish decides a publish without changing anything. The remote is the
+// intent's, else git's push remote for the checkout (git.Client.PushRemote:
+// the branch's pushRemote, remote.pushDefault, the branch's remote, origin,
+// the only remote); when git names none, that is a *vcs.NoPushRemoteError
+// with git's reason. A remote the checkout has no URL for is refused. The
+// branch is the intent's, else the one HEAD is on. Unless the caller named
+// the branch, a branch that tracks nothing and holds no commit beyond the
+// slot's base has nothing to publish; the count is of HEAD, so it only speaks
+// when HEAD is what would be pushed. On a detached HEAD the branch is created at HEAD
 // first, and an existing branch of that name is not reused: it may point
 // elsewhere. An unmanaged checkout skips both rules.
 func (d Driver) PlanPublish(ctx context.Context, s vcs.Slot, intent vcs.PublishIntent) (vcs.PublishPlan, error) {
 	current, onBranch, err := d.git.CurrentBranch(ctx, s.Path)
 	if err != nil {
 		return vcs.PublishPlan{}, fmt.Errorf("resolve HEAD branch in %s: %w", s.Path, err)
+	}
+	remote := intent.Remote
+	if remote == "" {
+		if remote, err = d.git.PushRemote(ctx, s.Path); err != nil {
+			var none *git.NoPushRemoteError
+			if errors.As(err, &none) {
+				return vcs.PublishPlan{}, &vcs.NoPushRemoteError{Reason: none.Reason}
+			}
+			return vcs.PublishPlan{}, fmt.Errorf("resolve the push remote in %s: %w", s.Path, err)
+		}
+	}
+	url, ok, err := d.git.RemoteURL(ctx, s.Path, remote)
+	if err != nil {
+		return vcs.PublishPlan{}, err
+	}
+	if !ok {
+		return vcs.PublishPlan{}, &vcs.UnknownRemoteError{Remote: remote, Resolved: intent.Remote == ""}
 	}
 	branch := intent.Branch
 	if branch == "" && onBranch {
@@ -211,7 +232,7 @@ func (d Driver) PlanPublish(ctx context.Context, s vcs.Slot, intent vcs.PublishI
 		// on the remote.
 		return vcs.PublishPlan{}, vcs.ErrNoBranch
 	}
-	plan := vcs.PublishPlan{Remote: intent.Remote, Branch: branch}
+	plan := vcs.PublishPlan{Remote: remote, URL: url, Branch: branch}
 	if !intent.Unmanaged && !onBranch {
 		if d.git.RefExists(ctx, s.Path, "refs/heads/"+branch) {
 			return vcs.PublishPlan{}, vcs.ErrBranchExists
