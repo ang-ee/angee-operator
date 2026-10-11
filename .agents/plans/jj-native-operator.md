@@ -738,6 +738,15 @@ decision, the cache refresh, the primary lock and every message.
   found in the review of #125: with `worktree.useRelativePaths=true` (git
   2.48+), staging and then copying leaves the slot's `.git` relative to the
   temporary stage, and git calls the slot "not a git repository".
+  **Settled in the follow-up PR.** The `-c` on the add alone fixes that bug,
+  since the staged `.git` is then absolute, and it keeps the add from
+  setting `extensions.relativeWorktrees` on the cache. `git worktree repair`
+  was tried and rejected: whichever slot it is given, it checks every
+  worktree registered in the cache and rewrites any broken one's `.git`
+  through that worktree's path, outside the destination guard, and it fails
+  a create when an unrelated slot of the cache is broken. Git has no command
+  that re-points one registration, so the guarded `gitdir` write, the
+  `copierx` import and `strictlyInside` stay.
 - The "branch already exists; checking it out" warning is logged by the
   driver, which is where that choice is made.
 - **The primary lock (D9, narrowed in the review of #125)** is
