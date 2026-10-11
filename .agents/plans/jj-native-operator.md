@@ -1,6 +1,6 @@
 # jj-native operator: implementation plan
 
-**Status:** Draft, revised after a Codex review (2026-10-01) and the owner's decisions of 2026-10-05, 2026-10-09 and 2026-10-10 · **Created:**
+**Status:** Draft, revised after a Codex review (2026-10-01) and the owner's decisions of 2026-10-05, 2026-10-09, 2026-10-10 and 2026-10-11 · **Created:**
 2026-10-01 · **Source:**
 [`docs/proposals/jj-native-operator.md`](../../docs/proposals/jj-native-operator.md)
 (merged in #90), a read of `internal/` at `60fa9c2`, and nine scratch-repo
@@ -12,15 +12,19 @@ the *why* and the ownership split between jj and the operator; this file owns
 the *order*, the files, and the decisions the proposal left open or got wrong.
 
 **Where it stands (2026-10-11):** phase 1 is merged (#93) and released in
-v0.16.0. Phase 4a (reads behind the driver) is merged (#107). Phase 2 steps
-1-4 (remotes, push default, canonical remote, cache reconcile) are in the PR
-that adds this sentence; step 5 (publish) follows 4b and lands before the
-release after v0.21.3. Phase 4 is the critical path. Q1 is answered (jj
-slots are created in place), and so is Q2 (2026-10-09:
-`<stack>--<workspace>`, a clash is refused), so phase 6 waits only on
-phase 5. Q6 is answered (2026-10-10: slot state is read on demand, so
-every read snapshots and there is no interval), which drops phase 10. Q3
-to Q5 and Q7 are still open.
+v0.16.0. Phase 4a (reads behind the driver) is merged as #107
+(`cb27d2e`), and phase 2 steps 1-4 (remotes, push default, canonical
+remote, cache reconcile) as #116 (`12e69d1`). 4b (verbs behind the driver)
+is the PR that updates this paragraph; 4c (lifecycle) and 4d (driver-owned
+push and publish rules) follow before phase 5. Phase 2 step 5 (publish)
+lands with or after 4d, before the release after v0.21.3. Phase 4 is the
+critical path. Q1 (jj slots are created in place), Q2 (2026-10-09:
+`<stack>--<workspace>`, a clash is refused), Q6 (2026-10-10: slot state is
+read on demand, so every read snapshots and there is no interval, which
+drops phase 10), and Q3 to Q5 (2026-10-11: `link` mode is dropped, sync
+runs only on request, and CI pins jj in `.github/jj-rev`) are answered;
+Q7 (`workspace push` and clone slots with no mode) is open. Phase 6 waits
+only on phase 5.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -140,7 +144,7 @@ entry; and a pass of the `go-code-reviewer` agent.
 0  landed
 1  mode validation + branchless worktree slots      (git only, can start now)
 2  remotes with roles                               (git only, can start now)
-4a..4c  vcs.Driver seam, git driver only            (after 1)
+4a..4d  vcs.Driver seam, git driver only            (after 1; 4a merged, 4b in review)
 5  jj driver package + doctor probe + CI            (after 4)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5)
 7  status fields and topology                       (after 6)
@@ -148,7 +152,7 @@ entry; and a pass of the `go-code-reviewer` agent.
 9  ws source migrate                                (after 8)
 10 op-heads watch: dropped, slot state is read on demand (Q6)
 11 templates, docs, live check                      (after 8, 9)
-3  link mode: see Q3        12 automatic sync cadence: see Q4
+3  link mode: dropped (Q3)  12 automatic sync: not in this plan (Q4)
 ```
 
 ### Phase 0. Landed
@@ -250,7 +254,9 @@ Steps:
 5. `WorkspaceSourcePublish`: the default remote becomes `push_default`, then
    `git.Client.PushRemote` (the existing triangular resolution), then
    `origin`. Refuse a branch that matches no pattern in the target remote's
-   `branches` (`path.Match`), with an `InvalidInputError`.
+   `branches` (`path.Match`), with an `InvalidInputError`. This step lands
+   with or after 4d, which moves the publish rules into the driver, and
+   before the next release after v0.21.3.
 
 Tests: YAML round-trip of both forms; clone-URL resolution table; reconcile
 is idempotent; publish to a canonical remote is refused; allow-list refusal.
@@ -367,7 +373,8 @@ is idempotent; publish to a canonical remote is refused; allow-list refusal.
 
 ### Phase 3. `link` slot mode
 
-Deferred. See Q3: the proposal's own field evidence argues against it.
+Dropped (Q3, answered 2026-10-11): the proposal's own field evidence argues
+against it, and every `.work` becomes its own jj workspace in phase 6.
 
 ### Phase 4. `vcs.Driver` seam with the git driver only
 
@@ -488,9 +495,10 @@ only what it uses:
   no local `<ref>`; status used to report such a slot as an error.
 - `gitdriver.BranchMismatch` and `gitdriver.CommitsBeyondBase` are the one
   implementation of each; the service's verb preconditions and push/publish
-  call them until 4b moves the verbs behind the driver.
+  call them until 4b moves the verbs behind the driver (done: they are
+  driver methods since 4b).
 
-The three PRs:
+The four PRs:
 
 - **4a. Reads.** `internal/vcs` types, `internal/vcs/gitdriver` with
   `Status` and `Diff`, `Platform.slotDriver`/`Platform.slot`. The service's
@@ -507,6 +515,90 @@ The three PRs:
   `materializeSource`. The worktree start point ("the local `<ref>`, else
   its remote counterpart", `workspaces.go` in the worktree add path) and
   `gitdriver.baseRefs` make the same choice; the move makes them one.
+- **4d. Driver-owned push and publish rules.** Before phase 5. 4b leaves the
+  push and publish rules in the service, asking the driver git-shaped
+  questions; 4d hands each driver its rules (review of #117, 2026-10-11):
+  - `PlanPush(s, ref)` returns a plan the service can hold for every slot
+    before `Push(s, plan)` runs any, and `Publish(s, intent)` takes what the
+    caller asked for (remote, branch, explicit or not). Each refuses with a
+    typed `vcs` error (nothing to push, detached with work of its own, a
+    branch that exists) that the service maps to its messages. Then
+    `CurrentBranch`, `Upstream`, `CommitsBeyondBase`, `PushSetUpstream` and
+    `CreateBranch` leave the interface.
+  - The preconditions are answered per driver: whether a slot is on the
+    branch it must be on, and whether it is clean enough for a verb, mean
+    different things for a jj slot, so the driver answers "may this verb
+    run" instead of the service reading a branch and dirty paths.
+  - Failure wording is VCS-neutral: the service's messages and hints stop
+    naming git commands (`git -C ... switch`, the " git: " quote), and the
+    driver supplies the tool's own words.
+  - The sync default reaches the driver: an empty method means the driver's
+    natural sync (merge for git), not a fixed "merge" in the service.
+
+  Phase 2 step 5 (the publish default remote and branch allow-list) lands
+  with or after 4d, before the next release after v0.21.3.
+
+**As built in 4b (2026-10-11).** Every service verb on a workspace slot asks
+its driver (`Platform.workspaceSlotDriver`). The service keeps the mutation
+lease, the manifest lookups, the kind check, input validation, the push and
+publish rules and every error message; the driver carries the verb out and
+answers the reads those rules need.
+
+- Verbs moved: slot fetch, pull and push, `workspace push`, sync-base,
+  publish, merge, rebase, and merge-abort, rebase-abort and
+  rebase-continue. The list above was complete, but the sketch's one-call
+  `SyncBase(s, method)` and `Push(s, ref)` cannot keep what the aggregates
+  promise: sync-base fetches and resolves every slot's base before changing
+  any, and `workspace push` plans every slot before pushing any. So the
+  driver has `Fetch`, `ResolveBase` and `SyncBase(onto, method)`, and
+  `Push` and `PushSetUpstream` carry out the service's push plan.
+- `Driver` grows from 2 methods to 22 (+20), each one a verb uses. The reads:
+  `BranchMismatch` (the branch precondition), `DirtyPaths` (the
+  clean-checkout precondition, for caches too), `CurrentBranch`, `Upstream`
+  and `CommitsBeyondBase` (the push and publish rules), and `FetchURL` and
+  `PushURL` (the remote a failure names). `CreateBranch` returns
+  `vcs.ErrBranchExists` for publish's refusal. The push and publish reads
+  are git-shaped; 4d replaces them.
+- Conflicts are results: `Merge`, `Rebase`, the state-machine verbs and
+  `SyncBase` return `api.GitOpResult` with `Conflicted` and the files, and an
+  error only for a failure. `SyncBase` still runs `git.Client`'s merge and
+  rebase, so a sync records the user, not angee.
+- `vcs.ErrBaseNotFound` is a base that exists nowhere (the service's
+  "Check the base ref" refusal); any other `ResolveBase` failure is a failure
+  of that step. The service no longer inspects git's error types there.
+- Rebased onto phase 2 steps 1-4 (#116): `ResolveBase` and
+  `CommitsBeyondBase` resolve the base from `Slot.BaseRemote` (the source's
+  clone remote), as status does, so sync-base and the push and publish
+  "nothing to push" checks count against the canonical remote, not a fork
+  named origin. `FetchURL` names `Slot.BaseRemote` too, else origin, else
+  the only remote.
+- `vcs.ErrUnsupported` is a verb a driver has no meaning for (merge-abort on
+  a jj slot, say). The service reports it once, as invalid input on the slot
+  (`classifyOperationError`), for phases 6 and 8 to use.
+- One git runner: `git.Client.RunIsolated` runs a command with only the
+  variables git needs to reach ssh and credential helpers (#89) plus the
+  caller's, never prompting, and returns stdout and stderr apart. Merge,
+  rebase, their abort and continue, publish's push and the conflict listing
+  run through it with angee's identity; their arguments and environment are
+  byte-identical to `runGitOpAt`'s (a test records them through a fake git,
+  and the same expectations pass against `cb27d2e`). `gitdriver` keeps only
+  the reading of results. No verb runs git on a slot path from the service
+  any more.
+- Source caches keep `git.Client` for their verbs, but ask the git driver
+  for the same reads (`DirtyPaths` through the one clean-check helper,
+  `PushURL`), as cache status reads through the driver since 4a.
+- The publish remote is still chosen in the service (`origin` when none is
+  given); phase 2 step 5 replaces that line with `push_default`.
+- No behaviour change. Characterization tests, written first and passing on
+  `cb27d2e`, pin: merge records a merge commit with angee's identity even
+  when it could fast-forward; a conflict reports raw non-ASCII paths, and
+  abort restores; rebase abort, and continue without an editor (angee
+  commits); fetch and pull; the remote each network verb's failure names,
+  including publish to a named remote; sync-base by rebase and by merge as
+  the user, its non-ASCII conflict message, and that it resolves every base
+  before syncing any; `workspace push` checks every slot is clean before
+  pushing any. A fake driver proves each verb's calls and the slot facts it
+  is handed, with no git on PATH.
 
 `git.Client` remains for what is not a slot: source cache clone/fetch,
 template repositories (`templates.go`), `commits.go`. (Since 4a, a cache's
@@ -833,21 +925,24 @@ Q1, Q2 and Q6 are answered. The rest can be answered later.
   message on collision (D13 as written); or append a short hash of the stack
   root. Recommendation: keep the readable name and fail clearly, because
   the names are what a human reads in `jj workspace list`.
-- **Q3. Is `link` mode still wanted?** The proposal lists it as prerequisite
-  3 (a slot that is a symlink to the primary checkout, for the shared
-  work-state). Its own field evidence says the work-state protocol forbids a
-  symlinked `.work` and that every `.work` must be its own jj workspace,
-  which phase 6 delivers. Recommendation: drop `link` from the proposal.
-- **Q4. Automatic sync cadence.** The proposal's text wants the operator to
-  rebase every slot whenever a fetch moves the base; its acceptance list
-  only requires that `sync-base` does so when run. Automatic sync makes the
+- **Q3. Is `link` mode still wanted? Answered 2026-10-11: no; phase 3 is
+  dropped.** The proposal lists it as prerequisite 3 (a slot that is a
+  symlink to the primary checkout, for the shared work-state). Its own field
+  evidence says the work-state protocol forbids a symlinked `.work` and that
+  every `.work` must be its own jj workspace, which phase 6 delivers. Recommendation, taken: drop `link` from the
+  proposal (correction 12).
+- **Q4. Automatic sync cadence. Answered 2026-10-11: on request only, not
+  in this plan.** The proposal's text wants the operator to rebase every
+  slot whenever a fetch moves the base; its acceptance list only requires
+  that `sync-base` does so when run. Automatic sync makes the
   operator rewrite commits under a working agent and force-update published
-  branches without being asked. Recommendation: not in this plan; reword
-  the proposal's sentence to "on request", and revisit as a separate,
-  default-off feature after phase 11.
-- **Q5. What is "latest jj" in CI?** Recommendation: a `.github/jj-rev` file
-  holding a jj main commit, bumped deliberately; developer machines run
-  whatever `brew upgrade --fetch-HEAD jj` gives. The fixtures then record
+  branches without being asked. Recommendation, taken: not in this plan;
+  reword the proposal's sentence to "on request" (correction 11), and
+  revisit as a separate, default-off feature after phase 11.
+- **Q5. What is "latest jj" in CI? Answered 2026-10-11: the jj main commit
+  named in `.github/jj-rev`** (phase 5 step 8). Recommendation, taken: a
+  `.github/jj-rev` file holding a jj main commit, bumped deliberately;
+  developer machines run whatever `brew upgrade --fetch-HEAD jj` gives. The fixtures then record
   the newest jj the project has verified, and a bump that changes a template
   field fails one obvious test.
 - **Q6. Snapshot interval. Answered 2026-10-10: there is none.** The 2 s
@@ -891,7 +986,9 @@ Q1, Q2 and Q6 are answered. The rest can be answered later.
    rule for shared history (D12).
 9. Topology cannot report other stacks' workspace paths reliably (phase 7).
 10. Migration must carry ignored and untracked files across (phase 9).
-11. Automatic sync is in the text but not in the acceptance list (Q4).
+11. Automatic sync is in the text but not in the acceptance list (Q4): it
+    runs on request only.
+12. `link` mode is dropped (Q3): every `.work` is its own jj workspace.
 
 ## 7. Review record
 

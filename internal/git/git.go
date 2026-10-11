@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,7 +69,7 @@ func New() Client {
 // that need git operations not exposed by the typed API (e.g. checkout in
 // templates.go). Prefer adding a typed method over using Run.
 func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd, trace := c.command(ctx, dir, args)
+	cmd, trace := c.command(ctx, dir, nil, args)
 	out, err := cmd.CombinedOutput()
 	trace(out, err)
 	if err != nil {
@@ -77,8 +78,47 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 	return out, nil
 }
 
-// command builds the git command for args in dir, and its trace.
-func (c Client) command(ctx context.Context, dir string, args []string) (*exec.Cmd, func([]byte, error)) {
+// isolatedEnvKeys are the variables RunIsolated passes on: PATH (for ssh),
+// HOME (for ~/.ssh/config and friends), the ssh agent, the locale, and what
+// HTTPS credential helpers such as `gh auth git-credential` read their token
+// and config from. Without the last, a push over HTTPS fails with "could not
+// read Username" on machines that authenticate gh through GH_TOKEN.
+var isolatedEnvKeys = []string{
+	"PATH", "HOME", "USER", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_SSH_COMMAND", "LANG", "LC_ALL",
+	"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GIT_ASKPASS",
+}
+
+// RunIsolated runs git in dir with only isolatedEnvKeys from the environment,
+// then extraEnv, and never prompts, whatever c.NonInteractive says. It returns
+// standard output, and combined: standard output then standard error,
+// trimmed. A failure is a *CommandError whose Output is combined, redacted.
+// Only key names are traced, never values.
+func (c Client) RunIsolated(ctx context.Context, dir string, extraEnv []string, args ...string) (stdout []byte, combined string, err error) {
+	env := make([]string, 0, len(isolatedEnvKeys)+len(extraEnv)+2)
+	for _, key := range isolatedEnvKeys {
+		if v, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+v)
+		}
+	}
+	env = append(env, "GIT_TERMINAL_PROMPT=0")
+	env = append(env, extraEnv...)
+	cmd, trace := c.command(ctx, dir, NonInteractiveEnv(env), args)
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	runErr := cmd.Run()
+	trace(logctx.CombinedOutput(out.Bytes(), errOut.Bytes()), runErr)
+	combined = strings.TrimSpace(out.String() + "\n" + errOut.String())
+	if runErr != nil {
+		return out.Bytes(), combined, commandError(args, []byte(combined), runErr)
+	}
+	return out.Bytes(), combined, nil
+}
+
+// command builds the git command for args in dir, and its trace. A nil env
+// inherits the environment, made non-interactive when c.NonInteractive is
+// set; otherwise env is the whole environment.
+func (c Client) command(ctx context.Context, dir string, env, args []string) (*exec.Cmd, func([]byte, error)) {
 	bin := c.Bin
 	if bin == "" {
 		bin = "git"
@@ -87,6 +127,10 @@ func (c Client) command(ctx context.Context, dir string, args []string) (*exec.C
 	cmd.WaitDelay = gitWaitDelay
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if env != nil {
+		cmd.Env = env
+		return cmd, logctx.TraceExec(ctx, bin, args, dir, slog.Any("env", logctx.EnvKeys(env)))
 	}
 	if c.NonInteractive {
 		cmd.Env = NonInteractiveEnv(os.Environ())
@@ -149,7 +193,7 @@ func (c Client) Diff(ctx context.Context, dir, ref string) ([]*gitdiff.File, err
 	if ref != "" {
 		args = append(args, EndOfOptions, "HEAD", ref, "--")
 	}
-	cmd, trace := c.command(ctx, dir, args)
+	cmd, trace := c.command(ctx, dir, nil, args)
 	// stdout is parsed, so stderr is captured apart from it.
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}

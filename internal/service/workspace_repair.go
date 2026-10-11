@@ -211,8 +211,8 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, workspaceName
 
 // existingWorkspaceSlotOutcome classifies a slot repair found on disk from its
 // status. The branch check is the one the git verbs enforce
-// (gitdriver.BranchMismatch, which the status applies), reported here instead
-// of failing the repair.
+// (Driver.BranchMismatch, which the status applies), reported here instead of
+// failing the repair.
 func existingWorkspaceSlotOutcome(status api.WorkspaceSourceStatus) (action, reason string) {
 	switch status.State {
 	case "clean", "ready":

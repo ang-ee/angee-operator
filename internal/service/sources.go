@@ -368,10 +368,12 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 		return api.SourceState{}, err
 	}
 	client := p.gitClient()
-	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source %q", name), "", name); err != nil {
+	// A cache is not a slot, but the git driver reads any git checkout.
+	cache, cacheSlot := gitdriver.New(client), vcs.Slot{Path: path}
+	if err := requireCleanSlot(ctx, cache, cacheSlot, fmt.Sprintf("source %q", name), "", name); err != nil {
 		return api.SourceState{}, err
 	}
-	step := gitStep{action: "pushing", object: fmt.Sprintf("source %q", name), remote: pushRemoteURL(ctx, client, path), cause: CausePushFailed, source: name}
+	step := gitStep{action: "pushing", object: fmt.Sprintf("source %q", name), remote: cache.PushURL(ctx, cacheSlot, ""), cause: CausePushFailed, source: name}
 	if err := client.Push(ctx, path, ref); err != nil {
 		return api.SourceState{}, gitFailure(err, step)
 	}
