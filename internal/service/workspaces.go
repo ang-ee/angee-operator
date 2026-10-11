@@ -25,14 +25,9 @@ import (
 	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 	"github.com/ang-ee/angee-operator/internal/vcs"
-	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
 )
 
-const (
-	workspaceSourceStateBranchMismatch = "branch-mismatch"
-	workspaceSyncBaseMerge             = "merge"
-	workspaceSyncBaseRebase            = "rebase"
-)
+const workspaceSourceStateBranchMismatch = "branch-mismatch"
 
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (result api.WorkspaceRef, retErr error) {
 	ctx, release, err := p.beginMutation(ctx, "workspace")
@@ -551,11 +546,12 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 		}
 		return err
 	}
-	currentRef, err := p.gitClient().CurrentRef(ctx, path)
+	driver, target := p.workspaceSlotDriver(path, source, wsSource)
+	reason, err := driver.BranchMismatch(ctx, target)
 	if err != nil {
 		return err
 	}
-	if reason := gitdriver.BranchMismatch(currentRef, wsSource.Branch); reason != "" {
+	if reason != "" {
 		hint := fmt.Sprintf("Switch it back with `git -C %s switch %s`, then retry.", path, wsSource.Branch)
 		return &OperationError{
 			Code:      CodePreconditionFailed,
@@ -1109,19 +1105,19 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
 		return nil, err
 	}
-	client := p.gitClient()
 	plans := make([]workspaceGitPush, len(targets))
 	for i, target := range targets {
-		if err := requireCleanCheckout(ctx, client, target.path, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+		driver, slot := p.workspaceSlotDriver(target.path, target.source, target.wsSource)
+		if err := requireCleanSlot(ctx, driver, slot, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
 			return nil, err
 		}
-		if plans[i], err = planWorkspaceGitPush(ctx, client, name, target.slot, target.path, target.source, target.wsSource, ref); err != nil {
+		if plans[i], err = planWorkspaceGitPush(ctx, driver, slot, name, target.slot, target.wsSource, ref); err != nil {
 			return nil, err
 		}
 	}
 	states = []api.SourceState{}
 	for i, target := range targets {
-		if err := plans[i].run(ctx, client, target.path); err != nil {
+		if err := plans[i].run(ctx); err != nil {
 			return nil, err
 		}
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
@@ -1298,6 +1294,8 @@ func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath
 // left alone (skip says why), since the push would only create a remote
 // branch with no work on it.
 type workspaceGitPush struct {
+	driver   vcs.Driver
+	target   vcs.Slot
 	ref      string // an explicit ref, or "" for the upstream
 	upstream string // the branch to push and track, when it has no upstream
 	skip     string
@@ -1307,24 +1305,24 @@ type workspaceGitPush struct {
 // planWorkspaceGitPush decides a slot's push without pushing, so an
 // aggregate push can refuse before any slot is pushed: a slot on a detached
 // HEAD with commits of its own has no branch to push.
-func planWorkspaceGitPush(ctx context.Context, client git.Client, workspaceName, slot, path string, source manifest.Source, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
-	plan := workspaceGitPush{ref: ref, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: pushRemoteURL(ctx, client, path), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
+func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slot, workspaceName, slot string, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
+	plan := workspaceGitPush{driver: driver, target: target, ref: ref, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, ""), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
 	if ref != "" {
 		return plan, nil
 	}
-	current, onBranch, err := client.CurrentBranch(ctx, path)
+	current, onBranch, err := driver.CurrentBranch(ctx, target)
 	if err != nil {
 		return plan, err
 	}
-	_, hasUpstream, err := client.Upstream(ctx, path)
+	_, hasUpstream, err := driver.Upstream(ctx, target)
 	if err != nil || hasUpstream {
 		return plan, err
 	}
 	// The count is of HEAD, so it only speaks for the push when HEAD is what
 	// would be pushed.
 	if !onBranch || wsSource.Branch == "" || current == wsSource.Branch {
-		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known && ahead == 0 {
-			plan.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, base)
+		if ahead, known := driver.CommitsBeyondBase(ctx, target); known && ahead == 0 {
+			plan.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, target.BaseRef)
 			return plan, nil
 		}
 	}
@@ -1336,15 +1334,15 @@ func planWorkspaceGitPush(ctx context.Context, client git.Client, workspaceName,
 }
 
 // run carries out the push the plan decided.
-func (plan workspaceGitPush) run(ctx context.Context, client git.Client, path string) error {
+func (plan workspaceGitPush) run(ctx context.Context) error {
 	switch {
 	case plan.skip != "":
 		logctx.From(ctx).Warn(plan.skip)
 		return nil
 	case plan.upstream != "":
-		return gitFailure(client.PushSetUpstream(ctx, path, plan.upstream), plan.step)
+		return gitFailure(plan.driver.PushSetUpstream(ctx, plan.target, plan.upstream), plan.step)
 	default:
-		return gitFailure(client.Push(ctx, path, plan.ref), plan.step)
+		return gitFailure(plan.driver.Push(ctx, plan.target, plan.ref), plan.step)
 	}
 }
 
@@ -1359,14 +1357,6 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 		Hint:      fmt.Sprintf("Publish it with `%s`.", publish),
 		Summary:   fmt.Sprintf("source slot %q is on a detached HEAD, so there is no branch to push; publish it with `%s`", slot, publish),
 	}
-}
-
-// workspaceGitSourceCommitsBeyondBase counts the slot's own commits beyond
-// its base ref (gitdriver.CommitsBeyondBase), and returns that base.
-func workspaceGitSourceCommitsBeyondBase(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (ahead int, base string, known bool) {
-	base = workspaceSourceBaseRef(source, wsSource)
-	ahead, known = gitdriver.CommitsBeyondBase(ctx, client, path, base, sourceBaseRemote(source))
-	return ahead, base, known
 }
 
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (states []api.SourceState, err error) {
@@ -1386,7 +1376,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	}
 	method = normalizeWorkspaceSyncBaseMethod(method)
 	if method == "" {
-		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", workspaceSyncBaseMerge, workspaceSyncBaseRebase)}
+		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", vcs.SyncMerge, vcs.SyncRebase)}
 	}
 	// Check the slots are materialized first: the branch check reads git in
 	// each slot's path and would read an enclosing repository's branch.
@@ -1399,14 +1389,14 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	}
 	// Every slot must be able to sync before any is touched, so a refusal
 	// never leaves the workspace half-synced.
-	client := p.gitClient()
-	baseRefs := make([]string, len(targets))
+	drivers := make([]vcs.Driver, len(targets))
+	slots := make([]vcs.Slot, len(targets))
 	for i, target := range targets {
-		if err := requireCleanCheckout(ctx, client, target.path, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+		drivers[i], slots[i] = p.workspaceSlotDriver(target.path, target.source, target.wsSource)
+		if err := requireCleanSlot(ctx, drivers[i], slots[i], fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
 			return nil, err
 		}
-		baseRefs[i] = workspaceSourceBaseRef(target.source, target.wsSource)
-		if baseRefs[i] == "" {
+		if slots[i].BaseRef == "" {
 			return nil, &OperationError{
 				Code:    CodePreconditionFailed,
 				Slot:    target.slot,
@@ -1420,34 +1410,31 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	// that fails or lacks the base refuses the sync with no slot changed.
 	syncRefs := make([]string, len(targets))
 	for i, target := range targets {
-		fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: originURL(ctx, client, target.path), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
-		if err := client.Fetch(ctx, target.path); err != nil {
+		fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: drivers[i].FetchURL(ctx, slots[i]), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
+		if err := drivers[i].Fetch(ctx, slots[i]); err != nil {
 			return nil, gitFailure(err, fetch)
 		}
-		syncRef, err := client.SyncBaseRef(ctx, target.path, baseRefs[i], sourceBaseRemote(target.source))
-		if err != nil {
-			var command *git.CommandError
-			if errors.As(err, &command) {
-				return nil, gitFailure(err, gitStep{action: "resolving the base of", object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source})
-			}
-			hint := fmt.Sprintf("Check the base ref %q of source slot %q.", baseRefs[i], target.slot)
+		syncRef, err := drivers[i].ResolveBase(ctx, slots[i])
+		if errors.Is(err, vcs.ErrBaseNotFound) {
+			hint := fmt.Sprintf("Check the base ref %q of source slot %q.", slots[i].BaseRef, target.slot)
 			return nil, &OperationError{Code: CodePreconditionFailed, Slot: target.slot, Source: target.wsSource.Source, Hint: hint, Summary: fmt.Sprintf("source slot %q: %v. %s", target.slot, err, hint), Err: err}
+		} else if err != nil {
+			return nil, gitFailure(err, gitStep{action: "resolving the base of", object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source})
 		}
 		syncRefs[i] = syncRef
 	}
 	states = []api.SourceState{}
 	for i, target := range targets {
 		step := gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
-		var err error
-		switch method {
-		case workspaceSyncBaseRebase:
+		if method == vcs.SyncRebase {
 			step.action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
-			err = client.Rebase(ctx, target.path, syncRefs[i])
-		default:
-			err = client.Merge(ctx, target.path, syncRefs[i])
 		}
+		result, err := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], method)
 		if err != nil {
-			return nil, syncConflictOrFailure(ctx, err, target.path, step)
+			return nil, gitFailure(err, step)
+		}
+		if result.Conflicted {
+			return nil, syncConflict(result, step)
 		}
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {
@@ -1460,10 +1447,10 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 
 func normalizeWorkspaceSyncBaseMethod(method string) string {
 	switch strings.ToLower(strings.TrimSpace(method)) {
-	case "", workspaceSyncBaseMerge:
-		return workspaceSyncBaseMerge
-	case workspaceSyncBaseRebase:
-		return workspaceSyncBaseRebase
+	case "", vcs.SyncMerge:
+		return vcs.SyncMerge
+	case vcs.SyncRebase:
+		return vcs.SyncRebase
 	default:
 		return ""
 	}

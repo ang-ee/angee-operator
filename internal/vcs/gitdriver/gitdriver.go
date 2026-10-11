@@ -11,7 +11,9 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-// Driver reads git checkouts through a git.Client.
+// Driver reads and acts on git checkouts through a git.Client. Merge, rebase,
+// their abort and continue, and publish's push run git with an environment of
+// their own (runOp), which pins angee's identity for the commits they make.
 type Driver struct {
 	git git.Client
 }
@@ -35,7 +37,7 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	if status.Dirty, err = d.git.Dirty(ctx, s.Path); err != nil {
 		return status, err
 	}
-	if reason := BranchMismatch(currentRef, s.Branch); reason != "" {
+	if reason := branchMismatch(currentRef, s.Branch); reason != "" {
 		status.MismatchReason = reason
 		status.UnpushedReason = reason
 		return status, nil
@@ -156,23 +158,23 @@ func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFil
 	return out, nil
 }
 
-// BranchMismatch says how a checkout on currentRef differs from the branch it
+// branchMismatch says how a checkout on currentRef differs from the branch it
 // must be on, or returns "" when branch is empty or matches.
-func BranchMismatch(currentRef, branch string) string {
+func branchMismatch(currentRef, branch string) string {
 	if branch == "" || currentRef == branch {
 		return ""
 	}
 	return fmt.Sprintf("current branch/ref %q, expected workspace branch %q", currentRef, branch)
 }
 
-// CommitsBeyondBase counts the commits reachable from HEAD at dir that neither
+// commitsBeyondBase counts the commits reachable from HEAD at dir that neither
 // base nor its remote counterpart (git.Client.SyncBaseRef, from baseRemote)
 // reaches.
 // The cache's local base only moves on `source pull`, while sync-base moves a
 // slot to the remote one, so counting against either alone would take the
 // remote's commits for the slot's own. known is false when base is empty,
 // neither ref exists, or the count cannot be read.
-func CommitsBeyondBase(ctx context.Context, client git.Client, dir, base, baseRemote string) (ahead int, known bool) {
+func commitsBeyondBase(ctx context.Context, client git.Client, dir, base, baseRemote string) (ahead int, known bool) {
 	return countBeyond(ctx, client, dir, baseRefs(ctx, client, dir, base, baseRemote))
 }
 

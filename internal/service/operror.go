@@ -7,10 +7,12 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
 // Error codes are the stable category of a failed operation. GraphQL errors
@@ -189,6 +191,10 @@ func classifyOperationError(err error) *OperationError {
 	case errors.As(err, &invalid):
 		return &OperationError{Code: CodeInvalidInput, Err: err}
 	}
+	// A verb the slot's version control does not support, as its driver says.
+	if errors.Is(err, vcs.ErrUnsupported) {
+		return &OperationError{Code: CodeInvalidInput, Err: &InvalidInputError{Field: "slot", Reason: err.Error()}}
+	}
 	// copier refusing an answer (a validator, a choice, a missing required
 	// input) is the caller's input at fault; its message names the question.
 	if copierx.IsAnswerError(err) {
@@ -267,7 +273,9 @@ func gitFailure(err error, step gitStep) error {
 		return nil
 	}
 	var opErr *OperationError
-	if errors.As(err, &opErr) {
+	if errors.As(err, &opErr) || errors.Is(err, vcs.ErrUnsupported) {
+		// A verb the slot's driver does not support is the caller's input at
+		// fault; classifyOperationError reports it.
 		return err
 	}
 	code, cause := CodeGitFailed, step.cause
@@ -379,10 +387,11 @@ func tailBytes(s string, max int) string {
 	return s
 }
 
-// requireCleanCheckout fails with uncommitted_changes, listing the changed
-// paths, when the checkout at path has uncommitted changes.
-func requireCleanCheckout(ctx context.Context, client git.Client, path, object, slot, source string) error {
-	paths, err := client.DirtyPaths(ctx, path)
+// requireCleanSlot fails with uncommitted_changes, listing the changed paths,
+// when the checkout target, a workspace slot or a source cache, has
+// uncommitted changes.
+func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, object, slot, source string) error {
+	paths, err := driver.DirtyPaths(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -406,36 +415,6 @@ func requireCleanCheckout(ctx context.Context, client git.Client, path, object, 
 	}
 }
 
-// originURL returns the URL of the checkout's origin remote, or of its only
-// remote, for naming it in a message.
-func originURL(ctx context.Context, client git.Client, dir string) string {
-	if url, ok, err := client.RemoteURL(ctx, dir, "origin"); err == nil && ok {
-		return url
-	}
-	remotes, err := client.Remotes(ctx, dir)
-	if err != nil || len(remotes) != 1 {
-		return ""
-	}
-	if url, ok, err := client.RemoteURL(ctx, dir, remotes[0]); err == nil && ok {
-		return url
-	}
-	return ""
-}
-
-// pushRemoteURL returns the URL of the remote a push from the checkout at dir
-// goes to, or "" when it cannot be resolved.
-func pushRemoteURL(ctx context.Context, client git.Client, dir string) string {
-	remote, err := client.PushRemote(ctx, dir)
-	if err != nil {
-		return ""
-	}
-	url, ok, err := client.RemoteURL(ctx, dir, remote)
-	if err != nil || !ok {
-		return ""
-	}
-	return url
-}
-
 // mutationBusyError is the CONFLICT returned while another mutation holds the
 // lease.
 func mutationBusyError(reason string) error {
@@ -446,23 +425,22 @@ func mutationBusyError(reason string) error {
 	}
 }
 
-// syncConflictOrFailure reports a failed merge or rebase in a slot. When git
-// left conflicted paths (git ls-files -u, as runGitOpAt reads them), it is a
-// merge_conflict listing them; otherwise the git failure.
-func syncConflictOrFailure(ctx context.Context, err error, path string, step gitStep) error {
-	out, lsErr := runGitCapture(ctx, path, "ls-files", "-u")
-	conflicted := parseConflictedPaths(out)
-	if lsErr != nil || len(conflicted) == 0 {
-		return gitFailure(err, step)
-	}
-	opErr := AsOperationError(gitFailure(err, step))
+// syncConflict is the merge_conflict a merge or rebase in a slot stopped on,
+// listing the conflicted files, with the output it stopped with as Detail.
+func syncConflict(result api.GitOpResult, step gitStep) error {
+	conflicted := result.ConflictFiles
 	hint := "Resolve the conflicts in the slot and commit, or abort the merge or rebase there."
-	opErr.Cause = CauseMergeConflict
-	opErr.Paths = conflicted
-	opErr.Hint = hint
-	opErr.Summary = fmt.Sprintf("%s stopped on conflicts in %s. %s", step.describe(), strings.Join(conflicted[:min(len(conflicted), maxMessagePaths)], ", "), hint)
-	opErr.GitLine = ""
-	return opErr
+	return &OperationError{
+		Code:    CodeGitFailed,
+		Cause:   CauseMergeConflict,
+		Slot:    step.slot,
+		Source:  step.source,
+		Remote:  logctx.RedactURL(step.remote),
+		Paths:   conflicted,
+		Hint:    hint,
+		Detail:  tailBytes(strings.TrimSpace(result.Message), maxErrorDetail),
+		Summary: fmt.Sprintf("%s stopped on conflicts in %s. %s", step.describe(), strings.Join(conflicted[:min(len(conflicted), maxMessagePaths)], ", "), hint),
+	}
 }
 
 // stackOperation names a verb on the whole stack, such as "Stack up".

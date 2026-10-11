@@ -55,6 +55,12 @@ latest tag.
   then the clone remote's, then the other remotes' by name. This decides a
   new worktree slot's start, status counts and `sync-base`. A `repo:`
   source resolves as before unless its local branch tracks another remote.
+- The workspace slot verbs (fetch, pull, push, `workspace push`, sync-base,
+  publish, merge, rebase, and abort and continue) go through the slot driver
+  (phase 4b of `.agents/plans/jj-native-operator.md`), with no change in
+  behaviour, except that a failed fetch (in a slot fetch, pull or sync-base)
+  names the source's clone remote rather than `origin` when the source
+  declares `remotes:`.
 
 ## v0.21.3 — 2026-10-11
 

@@ -165,9 +165,9 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
-	client := p.gitClient()
-	step := gitStep{action: "fetching", object: fmt.Sprintf("source %q", wsSource.Source), remote: originURL(ctx, client, path), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
-	if err := client.Fetch(ctx, path); err != nil {
+	driver, target := p.workspaceSlotDriver(path, source, wsSource)
+	step := gitStep{action: "fetching", object: fmt.Sprintf("source %q", wsSource.Source), remote: driver.FetchURL(ctx, target), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
+	if err := driver.Fetch(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
@@ -190,12 +190,12 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	client := p.gitClient()
-	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
+	driver, target := p.workspaceSlotDriver(path, source, wsSource)
+	if err := requireCleanSlot(ctx, driver, target, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	step := gitStep{action: "pulling", object: fmt.Sprintf("source slot %q", slot), remote: originURL(ctx, client, path), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
-	if err := client.Pull(ctx, path); err != nil {
+	step := gitStep{action: "pulling", object: fmt.Sprintf("source slot %q", slot), remote: driver.FetchURL(ctx, target), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
+	if err := driver.Pull(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
@@ -218,15 +218,15 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	client := p.gitClient()
-	if err := requireCleanCheckout(ctx, client, path, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
+	driver, target := p.workspaceSlotDriver(path, source, wsSource)
+	if err := requireCleanSlot(ctx, driver, target, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	plan, err := planWorkspaceGitPush(ctx, client, workspaceName, slot, path, source, wsSource, ref)
+	plan, err := planWorkspaceGitPush(ctx, driver, target, workspaceName, slot, wsSource, ref)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	if err := plan.run(ctx, client, path); err != nil {
+	if err := plan.run(ctx); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,12 +14,35 @@ import (
 )
 
 // fakeDriver answers for a slot without running anything, so a test can tell
-// that the service asked the driver rather than git.
+// that the service asked the driver rather than git. Status and Diff record
+// their slots in slots; every other method records a call.
 type fakeDriver struct {
 	status vcs.Status
 	err    error
 	diff   []api.DiffFile
 	slots  []vcs.Slot
+
+	calls      []fakeCall
+	detached   bool             // CurrentBranch reports no branch
+	upstream   string           // Upstream's answer; "" for none
+	syncResult *api.GitOpResult // SyncBase's result; nil for OK
+	resolveErr error            // returned by ResolveBase
+	fail       map[string]error // an error for a method by name
+}
+
+// fakeCall is one driver method the service called, with its arguments.
+type fakeCall struct {
+	method string
+	slot   vcs.Slot
+	args   []string
+}
+
+func (f *fakeDriver) call(method string, s vcs.Slot, args ...string) {
+	f.calls = append(f.calls, fakeCall{method: method, slot: s, args: args})
+}
+
+func (f *fakeDriver) result(method string) api.GitOpResult {
+	return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: "fake " + method}
 }
 
 func (f *fakeDriver) Status(_ context.Context, s vcs.Slot) (vcs.Status, error) {
@@ -30,6 +55,118 @@ func (f *fakeDriver) Diff(_ context.Context, s vcs.Slot, _ string) ([]api.DiffFi
 	return f.diff, f.err
 }
 
+func (f *fakeDriver) BranchMismatch(_ context.Context, s vcs.Slot) (string, error) {
+	f.call("BranchMismatch", s)
+	return "", nil
+}
+
+func (f *fakeDriver) DirtyPaths(_ context.Context, s vcs.Slot) ([]string, error) {
+	f.call("DirtyPaths", s)
+	return nil, f.fail["DirtyPaths"]
+}
+
+func (f *fakeDriver) CurrentBranch(_ context.Context, s vcs.Slot) (string, bool, error) {
+	f.call("CurrentBranch", s)
+	if f.detached {
+		return "", false, nil
+	}
+	return s.Branch, true, nil
+}
+
+func (f *fakeDriver) Upstream(_ context.Context, s vcs.Slot) (string, bool, error) {
+	f.call("Upstream", s)
+	return f.upstream, f.upstream != "", nil
+}
+
+func (f *fakeDriver) CommitsBeyondBase(_ context.Context, s vcs.Slot) (int, bool) {
+	f.call("CommitsBeyondBase", s)
+	return 1, true
+}
+
+func (f *fakeDriver) FetchURL(_ context.Context, s vcs.Slot) string {
+	f.call("FetchURL", s)
+	return "fake://fetch"
+}
+
+func (f *fakeDriver) PushURL(_ context.Context, s vcs.Slot, remote string) string {
+	f.call("PushURL", s, remote)
+	return "fake://push"
+}
+
+func (f *fakeDriver) ResolveBase(_ context.Context, s vcs.Slot) (string, error) {
+	f.call("ResolveBase", s)
+	if f.resolveErr != nil {
+		return "", f.resolveErr
+	}
+	return "fake/" + s.BaseRef, nil
+}
+
+func (f *fakeDriver) Fetch(_ context.Context, s vcs.Slot) error {
+	f.call("Fetch", s)
+	return nil
+}
+
+func (f *fakeDriver) Pull(_ context.Context, s vcs.Slot) error {
+	f.call("Pull", s)
+	return nil
+}
+
+func (f *fakeDriver) Push(_ context.Context, s vcs.Slot, ref string) error {
+	f.call("Push", s, ref)
+	return nil
+}
+
+func (f *fakeDriver) PushSetUpstream(_ context.Context, s vcs.Slot, branch string) error {
+	f.call("PushSetUpstream", s, branch)
+	return nil
+}
+
+func (f *fakeDriver) SyncBase(_ context.Context, s vcs.Slot, onto, method string) (api.GitOpResult, error) {
+	f.call("SyncBase", s, onto, method)
+	if f.syncResult != nil {
+		return *f.syncResult, nil
+	}
+	return f.result("SyncBase"), nil
+}
+
+func (f *fakeDriver) Merge(_ context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
+	f.call("Merge", s, ref)
+	return f.result("Merge"), nil
+}
+
+func (f *fakeDriver) Rebase(_ context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
+	f.call("Rebase", s, ref)
+	return f.result("Rebase"), nil
+}
+
+func (f *fakeDriver) MergeAbort(_ context.Context, s vcs.Slot) (api.GitOpResult, error) {
+	f.call("MergeAbort", s)
+	if err := f.fail["MergeAbort"]; err != nil {
+		return api.GitOpResult{}, err
+	}
+	return f.result("MergeAbort"), nil
+}
+
+func (f *fakeDriver) RebaseAbort(_ context.Context, s vcs.Slot) (api.GitOpResult, error) {
+	f.call("RebaseAbort", s)
+	return f.result("RebaseAbort"), nil
+}
+
+func (f *fakeDriver) RebaseContinue(_ context.Context, s vcs.Slot) (api.GitOpResult, error) {
+	f.call("RebaseContinue", s)
+	return f.result("RebaseContinue"), nil
+}
+
+func (f *fakeDriver) CreateBranch(_ context.Context, s vcs.Slot, branch string) error {
+	f.call("CreateBranch", s, branch)
+	return nil
+}
+
+func (f *fakeDriver) Publish(_ context.Context, s vcs.Slot, remote, branch string) (api.GitOpResult, error) {
+	f.call("Publish", s, remote, branch)
+	return f.result("Publish"), nil
+}
+
 // Slot status, the destroy guard and slot diffs read the slot through its
 // driver, which is handed the manifest's facts about the slot.
 func TestWorkspaceSlotReadsDispatchToTheSlotDriver(t *testing.T) {
@@ -40,6 +177,8 @@ func TestWorkspaceSlotReadsDispatchToTheSlotDriver(t *testing.T) {
 		diff:   []api.DiffFile{{NewPath: "fake.txt"}},
 	}
 	platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	// No git to run: every read must go through the driver.
+	t.Setenv("PATH", t.TempDir())
 
 	status, err := platform.WorkspaceStatus(ctx, workspaceName)
 	if err != nil {
@@ -123,6 +262,195 @@ func TestWorkspaceSlotDriverFailures(t *testing.T) {
 				t.Fatalf("WorkspaceDestroy() error = %v, want the workspace let go", err)
 			case tc.wantDestroy != "" && (err == nil || !strings.Contains(err.Error(), tc.wantDestroy)):
 				t.Fatalf("WorkspaceDestroy() error = %v, want it refused with %q", err, tc.wantDestroy)
+			}
+		})
+	}
+}
+
+// Every slot verb runs through the slot's driver: its preconditions read the
+// slot there, and the driver carries the verb out, handed the manifest's facts
+// about the slot. The calls are listed in the order the service makes them.
+func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		detached  bool
+		upstream  string
+		run       func(p *Platform, ws string) (string, error) // returns the result's message, if any
+		want      []string
+		wantMsg   string
+		wantError string
+	}{
+		{name: "fetch", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSourceFetch(ctx, ws, "app")
+			return "", err
+		}, want: []string{"FetchURL", "Fetch"}},
+		{name: "pull", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSourcePull(ctx, ws, "app")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Pull"}},
+		{name: "push to the upstream", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSourcePush(ctx, ws, "app", "")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "CurrentBranch", "Upstream", "Push()"}},
+		{name: "push a new branch", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSourcePush(ctx, ws, "app", "")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "CurrentBranch", "Upstream", "CommitsBeyondBase", "PushSetUpstream(feature-a)"}},
+		{name: "push a ref", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSourcePush(ctx, ws, "app", "v1")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "Push(v1)"}},
+		{name: "workspace push", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspacePush(ctx, ws, "")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "CurrentBranch", "Upstream", "Push()"}},
+		{name: "sync-base by merge", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSyncBase(ctx, ws, "merge")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
+		{name: "sync-base by rebase", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSyncBase(ctx, ws, "rebase")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,rebase)"}},
+		{name: "merge", run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourceMerge(ctx, ws, "app", "main")
+			return result.Message, err
+		}, want: []string{"Merge(main)"}, wantMsg: "fake Merge"},
+		{name: "rebase", run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourceRebase(ctx, ws, "app", "main")
+			return result.Message, err
+		}, want: []string{"Rebase(main)"}, wantMsg: "fake Rebase"},
+		{name: "merge abort", run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourceMergeAbort(ctx, ws, "app")
+			return result.Message, err
+		}, want: []string{"MergeAbort"}, wantMsg: "fake MergeAbort"},
+		{name: "rebase abort", run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourceRebaseAbort(ctx, ws, "app")
+			return result.Message, err
+		}, want: []string{"RebaseAbort"}, wantMsg: "fake RebaseAbort"},
+		{name: "rebase continue", run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourceRebaseContinue(ctx, ws, "app")
+			return result.Message, err
+		}, want: []string{"RebaseContinue"}, wantMsg: "fake RebaseContinue"},
+		{name: "publish", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourcePublish(ctx, ws, "app", "", "")
+			return result.Message, err
+		}, want: []string{"CurrentBranch", "Upstream", "PushURL(origin)", "Publish(origin,feature-a)"}, wantMsg: "fake Publish"},
+		{name: "publish from a detached HEAD", detached: true, run: func(p *Platform, ws string) (string, error) {
+			result, err := p.WorkspaceSourcePublish(ctx, ws, "app", "fork", "new")
+			return result.Message, err
+		}, want: []string{"CurrentBranch", "CreateBranch(new)", "PushURL(fork)", "Publish(fork,new)"}, wantMsg: "fake Publish"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			platform, workspaceName, _, _ := setupGitWorkspace(t)
+			fake := &fakeDriver{detached: tc.detached, upstream: tc.upstream}
+			platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+			// No git to run: every verb must go through the driver.
+			t.Setenv("PATH", t.TempDir())
+
+			msg, err := tc.run(platform, workspaceName)
+			if err != nil {
+				t.Fatalf("verb error = %v", err)
+			}
+			if msg != tc.wantMsg {
+				t.Fatalf("result message = %q, want %q", msg, tc.wantMsg)
+			}
+			want := vcs.Slot{Path: filepath.Join(platform.Root(), "workspaces", workspaceName, "app"), Branch: workspaceName, BaseRef: "main", BaseRemote: "origin"}
+			var got []string
+			for _, call := range fake.calls {
+				if call.slot != want {
+					t.Fatalf("%s slot = %#v, want %#v", call.method, call.slot, want)
+				}
+				name := call.method
+				if len(call.args) > 0 {
+					name += "(" + strings.Join(call.args, ",") + ")"
+				}
+				got = append(got, name)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("driver calls = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A sync that stops on conflicts is merge_conflict on the files its driver
+// reports, with the output it stopped with as the detail.
+func TestWorkspaceSyncBaseReportsTheDriversConflict(t *testing.T) {
+	platform, workspaceName, _, _ := setupGitWorkspace(t)
+	fake := &fakeDriver{syncResult: &api.GitOpResult{Conflicted: true, ConflictFiles: []string{"fake.txt"}, Message: "CONFLICT (content): fake.txt\n"}}
+	platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := platform.WorkspaceSyncBase(context.Background(), workspaceName, "merge")
+	opErr := AsOperationError(err)
+	if opErr == nil || opErr.Code != CodeGitFailed || opErr.Cause != CauseMergeConflict || !slices.Equal(opErr.Paths, []string{"fake.txt"}) ||
+		opErr.Slot != "app" || opErr.Source != "app" || opErr.Detail != "CONFLICT (content): fake.txt" || opErr.GitLine != "" {
+		t.Fatalf("WorkspaceSyncBase() error = %+v, want merge_conflict on the driver's files", opErr)
+	}
+	if want := `Sync base for workspace "feature-a": merging fake/main into source slot "app" stopped on conflicts in fake.txt. Resolve the conflicts`; !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("message = %q, want it to start %q", err.Error(), want)
+	}
+}
+
+// A base the driver cannot find refuses the sync as a precondition naming
+// the base; any other failure to resolve it is a git failure of that step.
+// Either way, no slot is synced.
+func TestWorkspaceSyncBaseReportsTheDriversBaseFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		code      string
+		wantStart string
+	}{
+		{"missing base", fmt.Errorf("base ref %q was not found after fetch: %w", "main", vcs.ErrBaseNotFound), CodePreconditionFailed,
+			`Sync base for workspace "feature-a": source slot "app": base ref "main" was not found after fetch: base not found. Check the base ref "main" of source slot "app".`},
+		{"other failure", errors.New("cannot read the remotes"), CodeGitFailed,
+			`Sync base for workspace "feature-a": resolving the base of source slot "app" failed.`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			platform, workspaceName, _, _ := setupGitWorkspace(t)
+			fake := &fakeDriver{resolveErr: tc.err}
+			platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+			t.Setenv("PATH", t.TempDir())
+
+			_, err := platform.WorkspaceSyncBase(context.Background(), workspaceName, "merge")
+			if opErr := AsOperationError(err); opErr == nil || opErr.Code != tc.code || opErr.Slot != "app" || !strings.HasPrefix(err.Error(), tc.wantStart) {
+				t.Fatalf("WorkspaceSyncBase() error = %v, want it to start %q", err, tc.wantStart)
+			}
+			for _, call := range fake.calls {
+				if call.method == "SyncBase" {
+					t.Fatal("SyncBase was called after the base failed to resolve")
+				}
+			}
+		})
+	}
+}
+
+// A verb the slot's driver does not support is invalid input, whether the
+// driver says so carrying the verb out or answering a precondition.
+func TestUnsupportedSlotVerbsAreInvalidInput(t *testing.T) {
+	ctx := context.Background()
+	unsupported := fmt.Errorf("%w: this slot never stops mid-merge", vcs.ErrUnsupported)
+	for _, tc := range []struct {
+		name   string
+		method string
+		run    func(p *Platform, ws string) error
+	}{
+		{"verb", "MergeAbort", func(p *Platform, ws string) error { _, err := p.WorkspaceSourceMergeAbort(ctx, ws, "app"); return err }},
+		{"precondition", "DirtyPaths", func(p *Platform, ws string) error { _, err := p.WorkspaceSourcePull(ctx, ws, "app"); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			platform, workspaceName, _, _ := setupGitWorkspace(t)
+			fake := &fakeDriver{fail: map[string]error{tc.method: unsupported}}
+			platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+
+			err := tc.run(platform, workspaceName)
+			var invalid *InvalidInputError
+			if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodeInvalidInput || !errors.As(err, &invalid) ||
+				err.Error() != "slot: not supported for this slot: this slot never stops mid-merge" {
+				t.Fatalf("error = %v (%+v), want invalid input on the slot", err, opErr)
 			}
 		})
 	}
