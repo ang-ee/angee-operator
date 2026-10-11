@@ -856,17 +856,28 @@ func serviceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput 
 	}
 }
 
-// serviceStatusText renders a service's runtime state, or `failed (exit 1)` for
-// a failed service: the runtime calls an exited process `Completed` whatever its
-// exit status.
-func serviceStatusText(service api.ServiceState) string {
-	if service.Outcome != api.JobFailed {
-		return service.Status
+// serviceStatusText renders a service's runtime state, `failed (exit 1)` for a
+// failed service (the runtime calls an exited process `Completed` whatever its
+// exit status), or `restarting (exit 1, 3 restarts)` for one the runtime is
+// restarting. A service that runs after restarts shows their count, such as
+// `running (3 restarts)`.
+func serviceStatusText(state api.ServiceState) string {
+	switch state.Outcome {
+	case api.JobFailed:
+		if state.ExitCode == nil {
+			return api.JobFailed
+		}
+		return fmt.Sprintf("%s (exit %d)", api.JobFailed, *state.ExitCode)
+	case api.ServiceRestarting:
+		return service.RestartingText(state.ExitCode, state.Restarts)
 	}
-	if service.ExitCode == nil {
-		return api.JobFailed
+	switch {
+	case state.Restarts == 1:
+		return state.Status + " (1 restart)"
+	case state.Restarts > 1:
+		return fmt.Sprintf("%s (%d restarts)", state.Status, state.Restarts)
 	}
-	return fmt.Sprintf("%s (exit %d)", api.JobFailed, *service.ExitCode)
+	return state.Status
 }
 
 func bindServiceFlags(cmd *cobra.Command, req *api.ServiceInitRequest, env *[]string) {
@@ -1698,7 +1709,7 @@ func statusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool
 			}
 			for _, name := range slices.Sorted(maps.Keys(status.Services)) {
 				service := status.Services[name]
-				if service.Outcome != api.JobFailed {
+				if service.Outcome != api.JobFailed && service.Outcome != api.ServiceRestarting {
 					continue
 				}
 				if _, err := fmt.Fprintln(stdout, "  "+listRow(name, serviceStatusText(service), service.Reason)); err != nil {
@@ -1722,6 +1733,7 @@ func statusCountsText(total int, counts api.StatusCounts) string {
 		{"running", counts.Running},
 		{"completed", counts.Completed},
 		{"failed", counts.Failed},
+		{"restarting", counts.Restarting},
 		{"skipped", counts.Skipped},
 	} {
 		if outcome.count > 0 {

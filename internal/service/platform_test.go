@@ -643,6 +643,7 @@ services:
         extra_hosts:
             - host.docker.internal:host-gateway
         stop_grace_period: 10s
+        restart: on-failure
 `, composeProjectName("demo", root))
 	if !bytes.Equal(composeYAML, []byte(wantCompose)) {
 		t.Fatalf("Compose output changed without ready\ngot:\n%s\nwant:\n%s", composeYAML, wantCompose)
@@ -673,6 +674,8 @@ processes:
             rotation:
                 max_size_mb: 10
                 max_backups: 3
+        availability:
+            restart: on_failure
 `
 	if !bytes.Equal(processYAML, []byte(wantProcess)) {
 		t.Fatalf("process-compose output changed without ready\ngot:\n%s\nwant:\n%s", processYAML, wantProcess)
@@ -719,6 +722,62 @@ func TestCompileKeepsLocalOutputInRunLogs(t *testing.T) {
 		if path, config := processLogFile(root, name); path != "" || config != nil {
 			t.Errorf("processLogFile(%q) = %q, %+v; want no file", name, path, config)
 		}
+	}
+}
+
+func TestCompileRestartPolicies(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "demo",
+		Services: map[string]manifest.Service{
+			"web":        {Runtime: manifest.RuntimeContainer, Image: "nginx:alpine"},
+			"web-no":     {Runtime: manifest.RuntimeContainer, Image: "nginx:alpine", Restart: manifest.RestartNo},
+			"web-always": {Runtime: manifest.RuntimeContainer, Image: "nginx:alpine", Restart: manifest.RestartAlways},
+			"worker":     {Runtime: manifest.RuntimeLocal, Command: []string{"worker"}},
+			"worker-no":  {Runtime: manifest.RuntimeLocal, Command: []string{"worker"}, Restart: manifest.RestartNo},
+			"worker-all": {Runtime: manifest.RuntimeLocal, Command: []string{"worker"}, Restart: manifest.RestartAlways},
+		},
+		Jobs: map[string]manifest.Job{
+			"migrate": {Runtime: manifest.RuntimeContainer, Image: "example/app:latest", Command: []string{"migrate"}},
+			"seed":    {Runtime: manifest.RuntimeLocal, Command: []string{"seed"}},
+		},
+	}
+	stack.Defaults()
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	compiled, err := Compile(stack, "/stack", nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	for name, want := range map[string]string{"web": "on-failure", "web-no": "no", "web-always": "unless-stopped", "migrate": ""} {
+		if got := compiled.Compose.Services[name].Restart; got != want {
+			t.Errorf("compose %s restart = %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range map[string]*proccompose.Availability{
+		"worker":     {Restart: "on_failure"},
+		"worker-no":  {Restart: "no"},
+		"worker-all": {Restart: "always"},
+		"seed":       nil,
+	} {
+		if got := compiled.ProcessCompose.Processes[name].Availability; !reflect.DeepEqual(got, want) {
+			t.Errorf("process %s availability = %+v, want %+v", name, got, want)
+		}
+	}
+	// `no` is quoted in both files: an unquoted no is false to a YAML 1.1 reader.
+	composeYAML, err := compose.Marshal(compiled.Compose)
+	if err != nil {
+		t.Fatalf("compose.Marshal() error = %v", err)
+	}
+	if !bytes.Contains(composeYAML, []byte(`restart: "no"`)) {
+		t.Errorf("compose YAML does not quote restart no:\n%s", composeYAML)
+	}
+	processYAML, err := proccompose.Marshal(compiled.ProcessCompose)
+	if err != nil {
+		t.Fatalf("proccompose.Marshal() error = %v", err)
+	}
+	if !bytes.Contains(processYAML, []byte(`restart: "no"`)) {
+		t.Errorf("process-compose YAML does not quote restart no:\n%s", processYAML)
 	}
 }
 

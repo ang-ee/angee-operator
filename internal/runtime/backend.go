@@ -103,8 +103,12 @@ type ServiceStatus struct {
 	// Health mirrors docker's healthcheck verdict (`healthy`,
 	// `unhealthy`, `starting`). Empty when the container has no
 	// healthcheck declared or when the backend doesn't expose one.
-	Health     string `json:"health,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
+	Health   string `json:"health,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	// Restarts is how many times the runtime's restart policy has restarted
+	// the process since it was last started. process-compose reports it;
+	// docker compose's status does not.
+	Restarts   int    `json:"restarts,omitempty"`
 	PID        int    `json:"pid,omitempty"`
 	Generation string `json:"generation,omitempty"`
 }

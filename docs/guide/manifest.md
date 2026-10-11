@@ -256,6 +256,71 @@ force-stops a service. The value uses Go duration syntax, such as `30s` or
 `2m`. Compose receives the duration directly; process-compose rounds it up to
 whole seconds. The default is `10s`.
 
+### Restart policy
+
+`restart` says what the runtime does when a service exits:
+
+- `on_failure` (the default) restarts it after a non-zero exit, a crash or a
+  kill from outside the runtime;
+- `always` restarts it after any exit;
+- `no` leaves it stopped.
+
+```yaml
+services:
+  worker:
+    runtime: local
+    command: ["celery", "-A", "app", "worker"]
+    restart: always
+```
+
+Each runtime applies its own policy. Angee writes it into the generated files
+and never restarts a process itself:
+
+| `restart` | process-compose (`availability`) | Docker Compose (`restart`) |
+|---|---|---|
+| `on_failure` | `restart: on_failure` | `on-failure` |
+| `always` | `restart: always` | `unless-stopped` |
+| `no` | `restart: "no"` | `"no"` |
+
+- **Backoff.** Angee sets none, so each runtime uses its own. process-compose
+  waits a constant second before each restart. It also waits that second
+  between stopping and starting a process on `angee service restart`, so a
+  longer backoff would add to every restart. Docker doubles its wait from
+  100 ms up to a minute. Neither limits the number of restarts.
+- **Crash loops.** A local service that keeps crashing restarts about once a
+  second, plus however long it runs. Its output goes to its own
+  `run/logs/<name>.log`, which process-compose rotates at 10 MB, keeping three
+  rotated files, so a crash loop's log stays bounded.
+- **Status.** A service waiting out its backoff reads `restarting` in
+  `angee status` and `angee service list`. A local service also shows the exit
+  that ended its last run and its restart count, such as
+  `restarting (exit 1, 3 restarts)`, and once running again, the count, such
+  as `running (3 restarts)`. Docker's status reports neither for a container.
+  A job or service waiting on a service the runtime keeps restarting says so
+  in its reason, and `angee dev` prints it while it waits for jobs.
+- **Deliberate stops.** A stop either runtime was asked for never triggers a
+  restart: `angee down`, `angee service stop` and `angee service restart`, and
+  for Docker also `docker kill`.
+- **Fixing a crash loop.** After fixing `angee.yaml`, run
+  `angee service restart <name>`: it always gives the service the compiled
+  definition and restarts it. `angee service up <name>` passes a changed
+  definition only to a local service caught in its restart backoff; one that
+  has relaunched reads as running, so `up` leaves it on the old definition.
+  A job that was waiting on the service is skipped when process-compose
+  replaces it; run it again with `angee job run <job>`.
+- **Readiness.** process-compose stops a local service whose readiness probe
+  fails `retries` times in a row. With `always` it then restarts it, and with
+  `on_failure` it does unless the service exited 0 on that stop. Docker only
+  marks a failing container unhealthy.
+- **Jobs** take no `restart`. They run on request, and a failed run is reported
+  as failed.
+- **The edge** container that serves routes restarts on failure.
+
+A process-compose supervisor that is already running applies a changed policy
+when Angee next starts or restarts the process, or after `angee down`.
+Compose recreates container services whose policy changed on the next
+`angee up`.
+
 ### Readiness probes
 
 A service can declare when it is ready to accept work. Set exactly one probe

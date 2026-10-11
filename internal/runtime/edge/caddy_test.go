@@ -54,6 +54,9 @@ func TestCaddyBackend_Contribute(t *testing.T) {
 	if want := []string{"host.docker.internal:host-gateway"}; !reflect.DeepEqual(edge.ExtraHosts, want) {
 		t.Fatalf("edge.ExtraHosts = %#v, want %#v", edge.ExtraHosts, want)
 	}
+	if edge.Restart != "on-failure" {
+		t.Fatalf("edge.Restart = %q, want on-failure", edge.Restart)
+	}
 
 	agent := file.Services["agent"]
 	if want := []string{"default", "demo_edge"}; !reflect.DeepEqual(agent.Networks, want) {

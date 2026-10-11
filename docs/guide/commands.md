@@ -78,10 +78,15 @@ services: 14 (13 running, 1 failed)
   celery-worker	failed (exit 1)
 ```
 
+A service the runtime is restarting after it exited (its restart policy, see
+the manifest guide) is counted as `restarting` and gets a line too, such as
+`celery-worker	restarting (exit 1, 3 restarts)`.
+
 In `--json`, each service keeps the runtime's own `status` (process-compose
 reports an exited process as `Completed` whatever its exit status) and adds
 `outcome` (the verdict the counts use: `running`, `completed`, `failed`,
-`stopped`, `skipped`, `pending`, `never-run` or `unknown`) and `exit_code`.
+`restarting`, `stopped`, `skipped`, `pending`, `never-run` or `unknown`),
+`exit_code` and, for a local service, `restarts`.
 
 A local service killed by a signal reads as stopped, not failed.
 process-compose reports exit code `-1` for any signal: a crash such as a
@@ -285,6 +290,11 @@ in the background, then waits for its jobs before returning, up to
 out, it names the unfinished jobs and exits non-zero; Ctrl-C stops the wait.
 The stack keeps running in every case.
 
+A job waiting on a service the runtime keeps restarting would wait as long as
+the crash loop lasts. Both forms print it once while they wait, such as
+`job migrate is waiting for service db: restarting (exit 1, 3 restarts)`. A
+service still restarting when the jobs finish is part of the summary line.
+
 The process-compose supervisor for local services stays up after every local
 process has ended, until `angee down` (or Ctrl-C for a foreground `angee dev`),
 so the states and logs of finished and skipped processes remain readable and
@@ -363,10 +373,13 @@ angee service logs <name> [--follow] [-n <lines>]
 
 `service list` prints each service's name, runtime and status. A failed service
 shows `failed (exit 1)`, or `failed` with the reason `could not start`, in
-place of the runtime's status. A service the runtime skipped gets a fourth
-column naming the failed job or service its dependency chain stopped at, such
-as `job deps failed (exit 1)`; `--json` carries it as `reason`, beside
-`outcome` and `exit_code`.
+place of the runtime's status. A service the runtime is restarting shows
+`restarting`, with a local service's last exit and restart count, such as
+`restarting (exit 1, 3 restarts)`; a local service running again after
+restarts shows their count, such as `running (2 restarts)`. A service the
+runtime skipped gets a fourth column naming the failed job or service its
+dependency chain stopped at, such as `job deps failed (exit 1)`; `--json`
+carries it as `reason`, beside `outcome`, `exit_code` and `restarts`.
 
 `service init` builds a service from explicit flags (image, command,
 env, ports). `service create` renders a Copier template with

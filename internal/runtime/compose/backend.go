@@ -408,7 +408,13 @@ func parsePS(data []byte) ([]runtime.ServiceStatus, error) {
 		if name == "" {
 			continue
 		}
-		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State, Health: one.Health, ExitCode: &one.ExitCode})
+		status := runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State, Health: one.Health, ExitCode: &one.ExitCode}
+		// docker compose fills ExitCode only for an exited container: one in
+		// its restart backoff reads 0 whatever its last exit, so it has none.
+		if strings.EqualFold(one.State, "restarting") {
+			status.ExitCode = nil
+		}
+		statuses = append(statuses, status)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read docker compose status: %w", err)

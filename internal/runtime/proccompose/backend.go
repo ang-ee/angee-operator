@@ -280,7 +280,9 @@ func upOrder(document File, names []string) ([]string, error) {
 // "restart".
 //
 // A process the supervisor is running, launching or waiting to launch is left
-// alone. One it has never run (Disabled) is started. One that has run and
+// alone, except a named one its restart policy is relaunching (Restarting),
+// which gets its compiled definition. One it has never run (Disabled) is
+// started. One that has run and
 // stopped (Completed, Error, Skipped) is started again only when it was named:
 // as a dependency, or under an `up` that names no process, it has had the single
 // run a fresh `up` gives it, and its result stands.
@@ -290,6 +292,15 @@ func upOrder(document File, names []string) ([]string, error) {
 // except a Disabled process, whose replacement keeps the flag and stays down;
 // otherwise the process is started explicitly, as applyProcess restarts it.
 func (b Backend) upProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any, before *processListEntry, named bool) error {
+	// A named process its restart policy is relaunching gets the compiled
+	// definition, so a manifest fix reaches a crash loop: process-compose
+	// replaces a process whose definition changed and runs the new one at once.
+	// An unchanged one is left to the restart already under way, which
+	// `process start` would refuse anyway.
+	if named && strings.EqualFold(strings.TrimSpace(before.Status), "restarting") {
+		_, err := b.updateProcess(ctx, target, name, updates)
+		return err
+	}
 	if !upStarts(before.Status, named) {
 		return nil
 	}
@@ -763,6 +774,26 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 				normalized = merged
 			}
 		}
+		// The restart policy also carries exit_on_end and exit_on_skipped, which
+		// Angee does not compile; keep them. process-compose omits zero-valued
+		// fields from the policy it reports (it always reports the policy), so
+		// a zero is a deletion, not a change.
+		if key == "restartPolicy" {
+			desired, _ := normalized.(map[string]any)
+			current, _ := config[key].(map[string]any)
+			merged := maps.Clone(current)
+			if merged == nil {
+				merged = map[string]any{}
+			}
+			for nestedKey, nestedValue := range desired {
+				if nestedValue == float64(0) {
+					delete(merged, nestedKey)
+					continue
+				}
+				merged[nestedKey] = nestedValue
+			}
+			normalized = merged
+		}
 		if !reflect.DeepEqual(config[key], normalized) {
 			changed = true
 			config[key] = normalized
@@ -1014,6 +1045,21 @@ func compiledFile(target runtime.Target) (File, error) {
 	return document, nil
 }
 
+// nativeAvailability returns a process's restart policy as process-compose's
+// HTTP API spells it. No availability is process-compose's default: no restart.
+// The backoff and restart limit go as zero, process-compose's defaults, so a
+// supervisor that holds other values is reset to the compiled policy.
+func nativeAvailability(availability *Availability) (map[string]any, error) {
+	if availability == nil {
+		availability = &Availability{Restart: "no"}
+	}
+	restart, ok := nativeRestartPolicy[availability.Restart]
+	if !ok {
+		return nil, fmt.Errorf("unsupported process-compose restart policy %q", availability.Restart)
+	}
+	return map[string]any{"restart": restart, "backoffSeconds": 0, "maxRestarts": 0}, nil
+}
+
 func processUpdates(process Process) (map[string]any, error) {
 	var dependsOn map[string]any
 	if len(process.DependsOn) > 0 {
@@ -1060,6 +1106,11 @@ func processUpdates(process Process) (map[string]any, error) {
 		}
 		updates["loggerConfig"] = logger
 	}
+	restartPolicy, err := nativeAvailability(process.Availability)
+	if err != nil {
+		return nil, err
+	}
+	updates["restartPolicy"] = restartPolicy
 	if process.ReadinessProbe == nil {
 		updates["readinessProbe"] = nil
 	} else {
@@ -1346,6 +1397,7 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 			State:      strings.ToLower(strings.TrimSpace(entry.Status)),
 			Health:     procHealth(entry),
 			ExitCode:   &entry.ExitCode,
+			Restarts:   entry.Restarts,
 			PID:        entry.PID,
 			Generation: fmt.Sprintf("%d:%v:%v", entry.Restarts, entry.ProcessStartTime, entry.ProcessEndTime),
 		})

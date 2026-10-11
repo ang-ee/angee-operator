@@ -187,6 +187,45 @@ func TestServiceStopGracePeriodValidation(t *testing.T) {
 	}
 }
 
+func TestServiceRestartPolicy(t *testing.T) {
+	load := func(t *testing.T, body string) (*Stack, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "angee.yaml")
+		data := "version: 1\nkind: stack\nname: restart\n" + body
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		return LoadFile(path)
+	}
+	// An unquoted `no` is a YAML 1.1 boolean; it must load as the policy name.
+	for _, tc := range []struct{ value, want string }{
+		{"", "on_failure"},
+		{"no", "no"},
+		{`"no"`, "no"},
+		{"on_failure", "on_failure"},
+		{"always", "always"},
+	} {
+		body := "services:\n  web:\n    runtime: local\n    command: [server]\n"
+		if tc.value != "" {
+			body += "    restart: " + tc.value + "\n"
+		}
+		stack, err := load(t, body)
+		if err != nil {
+			t.Fatalf("restart %q: LoadFile() error = %v", tc.value, err)
+		}
+		if got := stack.Services["web"].NormalizedRestart(); string(got) != tc.want {
+			t.Fatalf("restart %q: NormalizedRestart() = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+	if _, err := load(t, "services:\n  web:\n    runtime: local\n    command: [server]\n    restart: on-failure\n"); err == nil || !strings.Contains(err.Error(), `service "web": restart must be no, on_failure or always, not "on-failure"`) {
+		t.Fatalf("restart on-failure: LoadFile() error = %v", err)
+	}
+	// Jobs are run on request and never restart, so they have no such field.
+	if _, err := load(t, "jobs:\n  migrate:\n    runtime: local\n    command: [migrate]\n    restart: always\n"); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("job restart: LoadFile() error = %v", err)
+	}
+}
+
 func TestLoadFileReadyProbeRejectsZeroRetries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "angee.yaml")
 	data := `version: 1

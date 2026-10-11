@@ -180,6 +180,24 @@ func TestParsePS(t *testing.T) {
 	}
 }
 
+// docker compose reports ExitCode 0 for a container in its restart backoff
+// whatever its last exit (its Status reads "Restarting (1) ..."), so the entry
+// carries no exit code rather than a false 0. An exited one keeps its own.
+func TestParsePSLeavesARestartingContainerWithoutAnExitCode(t *testing.T) {
+	got, err := parsePS([]byte(`{"Service":"crasher","State":"restarting","Status":"Restarting (1) 2 seconds ago","ExitCode":0}
+{"Service":"worker","State":"exited","Status":"Exited (3) 1 minute ago","ExitCode":3}
+`))
+	if err != nil {
+		t.Fatalf("parsePS() error = %v", err)
+	}
+	if len(got) != 2 || got[0].State != "restarting" || got[0].ExitCode != nil {
+		t.Fatalf("crasher entry = %#v, want restarting without an exit code", got)
+	}
+	if got[1].ExitCode == nil || *got[1].ExitCode != 3 {
+		t.Fatalf("worker entry = %#v, want exit 3", got[1])
+	}
+}
+
 func TestParsePSSkipsNonJSONLines(t *testing.T) {
 	got, err := parsePS([]byte("WARN[0000] Found orphan containers\n{\"Service\":\"web\",\"State\":\"running\"}\nnot json\n"))
 	if err != nil {

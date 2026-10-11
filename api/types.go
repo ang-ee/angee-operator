@@ -76,14 +76,16 @@ type StackSummary struct {
 // StatusCounts counts declared entries by outcome. Total counts every declared
 // entry; pending, stopped, never-run and unobserved entries count only there.
 // Failed counts entries that exited non-zero or could not start; a service
-// stopped by a signal (`angee stop`, Ctrl-C) is stopped, not failed. Skipped
-// counts entries the runtime skipped because a dependency failed.
+// stopped by a signal (`angee stop`, Ctrl-C) is stopped, not failed.
+// Restarting counts services the runtime is restarting after they exited.
+// Skipped counts entries the runtime skipped because a dependency failed.
 type StatusCounts struct {
-	Total     int `json:"total"`
-	Running   int `json:"running"`
-	Completed int `json:"completed"`
-	Failed    int `json:"failed"`
-	Skipped   int `json:"skipped"`
+	Total      int `json:"total"`
+	Running    int `json:"running"`
+	Completed  int `json:"completed"`
+	Failed     int `json:"failed"`
+	Restarting int `json:"restarting"`
+	Skipped    int `json:"skipped"`
 }
 
 type ServiceState struct {
@@ -94,9 +96,10 @@ type ServiceState struct {
 	Status string `json:"status"`
 	// Outcome classifies the runtime state as the stack summary counts it:
 	// running, completed (exit 0), failed (a non-zero exit, or the command
-	// could not start), stopped (ended by a stop signal), skipped (a
-	// dependency failed), pending, never-run (the runtime holds no state for
-	// it) or unknown (the runtime could not be queried). Empty when the
+	// could not start), restarting (it exited and the runtime's restart
+	// policy is starting it again), stopped (ended by a stop signal), skipped
+	// (a dependency failed), pending, never-run (the runtime holds no state
+	// for it) or unknown (the runtime could not be queried). Empty when the
 	// runtime was not read, as in a create or update response.
 	//
 	// A local service killed by any signal reads as stopped, not failed:
@@ -105,8 +108,13 @@ type ServiceState struct {
 	// deliberate stop, so the outcome cannot tell them apart.
 	Outcome string `json:"outcome,omitempty"`
 	// ExitCode is the exit status of a service that ended, when the runtime
-	// reports one.
+	// reports one. A restarting local service reports the exit that ended its
+	// last run; docker compose reports none for a restarting container.
 	ExitCode *int `json:"exit_code,omitempty"`
+	// Restarts is how many times the runtime's restart policy has restarted
+	// the service since it was last started. Only process-compose reports it;
+	// docker compose does not, so a container service leaves it zero.
+	Restarts int `json:"restarts,omitempty"`
 	// Health mirrors the container healthcheck verdict from the
 	// runtime backend: typically `healthy`, `unhealthy`, or `starting`.
 	// Empty when no healthcheck is declared, the service has not been
@@ -114,7 +122,9 @@ type ServiceState struct {
 	Health string `json:"health,omitempty"`
 	// Reason explains a skipped service: the failed job or service its
 	// dependency chain stopped at, such as `job deps failed (exit 1)`. For a
-	// failed service whose command could not start, it says so.
+	// failed service whose command could not start, it says so. For a pending
+	// service waiting on a service the runtime keeps restarting, it names
+	// that service.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -138,6 +148,10 @@ const (
 	// it exited after a stop signal, or it is a container that exists without
 	// running. Services otherwise take the Job* outcomes; a job has none.
 	ServiceStopped = "stopped"
+	// ServiceRestarting is a service's outcome while it waits out the
+	// runtime's restart backoff after it exited: process-compose's
+	// `Restarting` or docker compose's `restarting`.
+	ServiceRestarting = "restarting"
 )
 
 type JobState struct {
@@ -149,7 +163,9 @@ type JobState struct {
 	// runtime reports one.
 	ExitCode *int `json:"exit_code,omitempty"`
 	// Reason explains a failed or skipped job, such as `job deps failed (exit
-	// 1)` for a job skipped because deps failed.
+	// 1)` for a job skipped because deps failed, or a pending job waiting on a
+	// service the runtime keeps restarting, such as `waiting for service db:
+	// restarting (exit 1, 3 restarts)`.
 	Reason string `json:"reason,omitempty"`
 }
 

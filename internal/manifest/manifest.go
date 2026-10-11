@@ -283,6 +283,11 @@ type Service struct {
 	// StopGracePeriod bounds graceful shutdown before the runtime force-stops
 	// the service. It uses Go duration syntax (for example, "30s").
 	StopGracePeriod string `yaml:"stop_grace_period,omitempty" json:"stop_grace_period,omitempty" jsonschema:"default=10s"`
+	// Restart is the restart policy the runtime applies when the service
+	// exits: on_failure (the default) after a non-zero exit, always after any
+	// exit, no never. A stop the runtime was asked for (stack down, service
+	// stop or restart) never triggers one.
+	Restart RestartPolicy `yaml:"restart,omitempty" json:"restart,omitempty" validate:"omitempty,oneof=no on_failure always" jsonschema:"enum=no,enum=on_failure,enum=always,default=on_failure"`
 }
 
 const DefaultStopGracePeriod = "10s"
@@ -292,6 +297,33 @@ func (s Service) NormalizedStopGracePeriod() string {
 		return DefaultStopGracePeriod
 	}
 	return s.StopGracePeriod
+}
+
+// RestartPolicy is a service's restart policy. Each runtime backend compiles
+// it into its own policy; the operator never restarts a process itself.
+type RestartPolicy string
+
+const (
+	// RestartNo leaves a service stopped after it exits.
+	RestartNo RestartPolicy = "no"
+	// RestartOnFailure restarts a service after a non-zero exit, a crash or a
+	// kill from outside the runtime.
+	RestartOnFailure RestartPolicy = "on_failure"
+	// RestartAlways restarts a service after any exit, a clean one included.
+	RestartAlways RestartPolicy = "always"
+
+	// DefaultRestartPolicy applies to a service that sets no restart.
+	DefaultRestartPolicy = RestartOnFailure
+)
+
+// NormalizedRestart returns the service's restart policy, or
+// DefaultRestartPolicy when it sets none. It never mutates the manifest, so an
+// omitted restart stays omitted when the manifest is saved again.
+func (s Service) NormalizedRestart() RestartPolicy {
+	if s.Restart == "" {
+		return DefaultRestartPolicy
+	}
+	return s.Restart
 }
 
 type Route struct {
@@ -753,6 +785,11 @@ func (s *Stack) validateServiceRuntime() error {
 			if err != nil || duration <= 0 {
 				return fmt.Errorf("service %q: stop_grace_period must be a positive duration", name)
 			}
+		}
+		switch service.Restart {
+		case "", RestartNo, RestartOnFailure, RestartAlways:
+		default:
+			return fmt.Errorf("service %q: restart must be no, on_failure or always, not %q", name, service.Restart)
 		}
 	}
 	return nil

@@ -228,6 +228,63 @@ func TestServiceListShowsFailedServicesAsFailed(t *testing.T) {
 	}
 }
 
+// restartingServiceStatus has a local service in its restart backoff after
+// exit 1, one running again after two restarts, and a container Docker is
+// restarting, which reports neither its exit nor a count.
+func restartingServiceStatus() api.StackStatusResponse {
+	return api.StackStatusResponse{
+		Name: "dev",
+		Root: "/stack",
+		Services: map[string]api.ServiceState{
+			"celery-worker": {Name: "celery-worker", Runtime: "local", Status: "Restarting", Outcome: api.ServiceRestarting, ExitCode: exitCodePtr(1), Restarts: 3},
+			"django":        {Name: "django", Runtime: "local", Status: "Running", Outcome: api.JobRunning, Restarts: 2},
+			"edge":          {Name: "edge", Runtime: "container", Status: "restarting", Outcome: api.ServiceRestarting},
+		},
+		Jobs: map[string]api.JobState{},
+		Summary: api.StackSummary{
+			Services: api.StatusCounts{Total: 3, Running: 1, Restarting: 2},
+		},
+	}
+}
+
+func TestStatusNamesRestartingServices(t *testing.T) {
+	server := fakeOperator(t, restartingServiceStatus())
+	stdout, _, err := runCLI(t, "--operator", server.URL, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	want := "dev\nroot: /stack\nservices: 3 (1 running, 2 restarting)\n" +
+		"  celery-worker\trestarting (exit 1, 3 restarts)\n" +
+		"  edge\trestarting\n" +
+		"jobs: 0\nworkspaces: 0\n"
+	if stdout != want {
+		t.Fatalf("status output = %q, want %q", stdout, want)
+	}
+}
+
+func TestServiceListShowsRestartsAndRestartingServices(t *testing.T) {
+	status := restartingServiceStatus()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := api.ServiceListResponse{}
+		for _, name := range []string{"celery-worker", "django", "edge"} {
+			resp.Nodes = append(resp.Nodes, status.Services[name])
+		}
+		resp.TotalCount = len(resp.Nodes)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(server.Close)
+	stdout, _, err := runCLI(t, "--operator", server.URL, "service", "list")
+	if err != nil {
+		t.Fatalf("service list: %v", err)
+	}
+	want := "celery-worker\tlocal\trestarting (exit 1, 3 restarts)\n" +
+		"django\tlocal\tRunning (2 restarts)\n" +
+		"edge\tcontainer\trestarting\n"
+	if stdout != want {
+		t.Fatalf("service list = %q, want %q", stdout, want)
+	}
+}
+
 // `-n`/`--tail` on the logs commands reaches the operator as `?tail=`, and no
 // flag sends none, so the operator's default applies.
 func TestLogsCommandsPassTheTail(t *testing.T) {

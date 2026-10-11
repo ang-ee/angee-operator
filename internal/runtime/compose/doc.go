@@ -23,6 +23,7 @@ type Service struct {
 	Healthcheck     *Healthcheck                 `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	DependsOn       map[string]ServiceDependency `yaml:"depends_on,omitempty"`
 	StopGracePeriod string                       `yaml:"stop_grace_period,omitempty"`
+	Restart         string                       `yaml:"restart,omitempty"`
 }
 
 type Healthcheck struct {
