@@ -1,10 +1,14 @@
 // Package gitdriver is the vcs.Driver for git checkouts: worktree and clone
-// slots, and the source caches they come from.
+// slots, and the source caches they come from. It creates and removes slots
+// too (lifecycle.go); the source caches themselves are cloned and fetched by
+// the service.
 package gitdriver
 
 import (
 	"context"
 	"fmt"
+	"iter"
+	"slices"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
@@ -177,17 +181,34 @@ func commitsBeyondBase(ctx context.Context, client git.Client, dir, base, baseRe
 // baseRefs returns the refs at dir that hold base: base itself when it exists,
 // then its remote counterpart when that is another ref.
 func baseRefs(ctx context.Context, client git.Client, dir, base, baseRemote string) []string {
-	if base == "" {
-		return nil
+	return slices.Collect(eachBaseRef(ctx, client, dir, base, baseRemote))
+}
+
+// startRef is the ref a worktree cut from the cache at dir starts at: the
+// first of baseRefs, the one Status counts a slot without an upstream
+// against. remote reports that it is base's remote counterpart. When neither
+// exists, base itself is returned for git to resolve.
+func startRef(ctx context.Context, client git.Client, dir, base, baseRemote string) (ref string, remote bool) {
+	for ref := range eachBaseRef(ctx, client, dir, base, baseRemote) {
+		return ref, ref != base
 	}
-	var refs []string
-	if client.RefExists(ctx, dir, base) {
-		refs = append(refs, base)
+	return base, false
+}
+
+// eachBaseRef yields the refs baseRefs lists, in its order, looking the
+// remote counterpart up only when the caller goes on past base.
+func eachBaseRef(ctx context.Context, client git.Client, dir, base, baseRemote string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		if base == "" {
+			return
+		}
+		if client.RefExists(ctx, dir, base) && !yield(base) {
+			return
+		}
+		if remote, err := client.SyncBaseRef(ctx, dir, base, baseRemote); err == nil && remote != base {
+			yield(remote)
+		}
 	}
-	if remote, err := client.SyncBaseRef(ctx, dir, base, baseRemote); err == nil && remote != base {
-		refs = append(refs, remote)
-	}
-	return refs
 }
 
 func countBeyond(ctx context.Context, client git.Client, dir string, bases []string) (int, bool) {

@@ -190,7 +190,7 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, workspaceName
 	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws); err != nil {
 		return err
 	}
-	cleanup := &workspaceSourceCleanup{gitClient: p.gitClient()}
+	cleanup := &workspaceSourceCleanup{}
 	defer func() {
 		if retErr == nil {
 			_ = cleanup.Close()

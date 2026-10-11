@@ -11,22 +11,28 @@ This plan turns the proposal into mergeable pull requests. The proposal owns
 the *why* and the ownership split between jj and the operator; this file owns
 the *order*, the files, and the decisions the proposal left open or got wrong.
 
-**Where it stands (2026-10-11):** phase 1 is merged (#93) and released in
+**Where it stands (2026-10-12):** phase 1 is merged (#93) and released in
 v0.16.0. Phase 4a (reads behind the driver) is merged as #107
-(`cb27d2e`), and phase 2 steps 1-4 (remotes, push default, canonical
-remote, cache reconcile) as #116 (`12e69d1`), and 4b (verbs behind the
-driver) as #117 (`86fc88d`). 4d (driver-owned push and publish rules) is
-#120, and phase 2 step 5 (publish's default remote, the `branches`
-allow-list and a remote the slot doesn't have) is stacked on it in the PR
-that updates this paragraph; both land before the release after v0.21.3.
-4c (lifecycle) follows before phase 5. Phase 4 is the
-critical path. Q1 (jj slots are created in place), Q2 (2026-10-09:
+(`cb27d2e`), phase 2 steps 1-4 (remotes, push default, canonical remote,
+cache reconcile) as #116 (`12e69d1`), 4b (verbs behind the driver) as #117
+(`86fc88d`), 4d (driver-owned push and publish rules) as #120 (`adcc2a2`),
+and phase 2 step 5 (publish's default remote, the `branches` allow-list and
+a remote the slot doesn't have) as #122 (`a242891`), which completes phase
+2. 4d and step 5 land in the release after v0.21.3. Phase 5 steps 1-5, 7
+and 8 (the `jjdriver` package, the doctor probe and the jj CI job) are
+merged as #126 (`6315a53`). 4c (the slot lifecycle behind the driver, and
+the primary lock of D9) is in review in the PR that updates this paragraph,
+and completes phase 4; phase 5 step 6 (the jj slot lifecycle) follows it.
+Q1 (jj slots are created in place), Q2 (2026-10-09:
 `<stack>--<workspace>`, a clash is refused), Q6 (2026-10-10: slot state is
 read on demand, so every read snapshots and there is no interval, which
 drops phase 10), and Q3 to Q5 (2026-10-11: `link` mode is dropped, sync
-runs only on request, and CI pins jj in `.github/jj-rev`) are answered;
-Q7 (`workspace push` and clone slots with no mode) is open. Phase 6 waits
-only on phase 5.
+runs only on request, and CI pins jj in `.github/jj-rev`) are answered.
+Q8 (a jj slot pushes to git's push remote) and Q9 (the runner passes
+`snapshot.auto-update-stale` on every call) are built as recommended in
+#126, pending the owner's confirmation. Q7 (`workspace push` and clone
+slots with no mode) and Q10 (files jj will not snapshot) are open; phase 6
+must settle Q10. Phase 6 waits on phase 5 step 6.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -70,7 +76,7 @@ changes what gets built, so challenge them here rather than in a PR:
 | D6 | Publish pre-checks the commits it is about to push for conflicts and missing descriptions, and returns any other refusal as a typed push-refused error carrying jj's message. | `jj git push` exits 1 with only stderr text (probe). The pre-check cannot mirror every jj push policy (private commits, future ones), so the plan does not promise to. |
 | D7 | On a jj slot, "dirty" means the working-copy commit `@` is non-empty, and **every status read snapshots the working copy**: slot reads never pass `--ignore-working-copy`. Mutating verbs and the destroy guard snapshot first too (jj does this itself before any command that does not skip the working copy). Slot state is read on demand only (owner, 2026-10-10, Q6), so every read is an explicit request and nothing snapshots on a timer. | A read with `--ignore-working-copy` does not see edits made since the last snapshot (probe), so a never-snapshotting status would report `clean` over unsaved work, and destroy could delete it. A snapshot costs about what the `git status` the git path runs on every read costs. Measured: a snapshot that finds no change writes nothing to the operation log; one that finds a change writes one `snapshot working copy` operation (40 to 200 ms on a small repo, depending on machine load). |
 | D8 | Slot mutations run with the slot as working directory, and every primary gets `snapshot.auto-update-stale = true`. *As built in phase 5:* the jj runner also passes `--config snapshot.auto-update-stale=true` on every command, since jj keeps repository config per user (Q9). | Rewriting a slot's commits from elsewhere leaves it stale and its next plain `jj` command fails; with the setting it repairs itself (probe). |
-| D9 | Every operator mutation of a primary, git or jj, takes one cross-process file lock for that primary, at `<parent>/.<name>.angee.lock` beside the primary. | `beginMutation` is an in-process, per-`Platform` try-lease (`platform.go:105`). It does not serialize two stacks, or the CLI and the operator, on one shared primary. The lock sits outside the primary because `.jj` does not exist before initialization. Order: stack mutation lease, then the root lock, then the primary lock. |
+| D9 | The operator takes one cross-process file lock for a primary, git or jj, at `<parent>/.<name>.angee.lock` beside the primary, around its registrations, clone, fetch, pull and push: adding and pruning git worktrees (jj: workspace add and forget), cloning or fetching the primary, and pulling or pushing it. The verbs on a slot take none. (Narrowed 2026-10-11, review of #125, from "every mutation of a primary".) | `beginMutation` is an in-process, per-`Platform` try-lease (`platform.go:105`). It does not serialize two stacks, or the CLI and the operator, on one shared primary. What interleaves badly is a registration being added while another process prunes, and two clones or fetches of one primary; a slot verb is safe without the lock, because git's ref transactions keep each ref update whole and no verb prunes a registration, and jj's operation log merges concurrent commands, so jj needs the lock only around workspace add and forget. The lock sits outside the primary because `.jj` does not exist before initialization. Order: stack mutation lease, then the root lock, then the primary lock. |
 | D10 | The jj driver uses `jj rebase --onto`. | `-d/--destination` is no longer in `jj rebase --help`; it still parses as a legacy alias. |
 | D11 | `sync-base` treats an unset method as "the driver's default": merge for git slots, rebase for jj slots. An explicit `--merge` on a workspace that has a jj slot is refused before any slot is touched. | The CLI hardcodes `method := "merge"` (`cli/root.go:1231`), so the service cannot tell a default from an explicit choice. Silently rebasing when merge was asked for is worse than refusing. |
 | D12 | A rebase on a jj slot is refused when the commits it would rewrite, `(B..N@)::`, include another workspace's working copy or the checked-out branch of a git worktree of the same primary. | `jj rebase -b` rewrites descendants too, so one Angee workspace's sync could rewrite another's commits. For a git worktree the moved branch ref shows up as a dirty tree. |
@@ -145,9 +151,9 @@ entry; and a pass of the `go-code-reviewer` agent.
 ```text
 0  landed
 1  mode validation + branchless worktree slots      (git only, can start now)
-2  remotes with roles                               (git only; steps 1-4 merged, 5 in review)
-4a..4d  vcs.Driver seam, git driver only            (after 1; 4a, 4b merged, 4d in review, 4c next)
-5  jj driver package + doctor probe + CI            (after 4)
+2  remotes with roles                               (git only; merged)
+4a..4d  vcs.Driver seam, git driver only            (after 1; 4a, 4b, 4d merged, 4c in review)
+5  jj driver package + doctor probe + CI            (after 4; all but step 6 merged in #126)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5)
 7  status fields and topology                       (after 6)
 8  sync-base, publish, push, merge on jj slots      (after 7; needs 2)
@@ -368,7 +374,7 @@ is idempotent; publish to a canonical remote is refused; allow-list refusal.
 - **Gaps recorded here.**
   - No primary lock: D9 arrives in 4c. The reconcile runs under the stack's
     mutation lease, as `materializeSource` did, so two stacks sharing one
-    cache are not serialized.
+    cache are not serialized. (4c adds the lock; see "As built in 4c".)
   - A remote the manifest stops declaring stays in the cache: removing
     remotes is out of scope.
   - Step 5 must also make publish refuse a remote that the slot does not
@@ -563,6 +569,7 @@ The four PRs:
   `materializeSource`. The worktree start point ("the local `<ref>`, else
   its remote counterpart", `workspaces.go` in the worktree add path) and
   `gitdriver.baseRefs` make the same choice; the move makes them one.
+  Built as described below ("As built in 4c").
 - **4d. Driver-owned push and publish rules.** Before phase 5. 4b leaves the
   push and publish rules in the service, asking the driver git-shaped
   questions; 4d hands each driver its rules (review of #117, 2026-10-11):
@@ -686,6 +693,119 @@ answers the reads those rules need.
   `86fc88d`, put a recording git on PATH and pin every git command each
   push and publish case runs (directory, committer, arguments, order) and
   what it returns; they pass unchanged after the move.
+
+**As built in 4c (2026-10-11).** The slot lifecycle is the driver's; the
+service keeps the manifest facts, the destination checks, the `--sync`
+decision, the cache refresh, the primary lock and every message.
+
+- `Driver` gains `Exists`, `Add` and `Remove`: 20 methods become 23.
+  `gitdriver/lifecycle.go` carries the worktree stage, install and
+  registration repair, the clone, and removal with `git worktree prune`, as
+  they were. `Add` leaves nothing behind when it fails; `Remove` prunes even
+  when the removal failed, as rollback and destroy always did.
+- `vcs.Slot` gains `Mode` (`worktree`, or `clone` for any other git slot,
+  D3), `Primary` (a worktree's cache) and `CloneURL` (a clone's remote, named
+  by `BaseRemote`). Only `workspaceLifecycleSlot` sets them, on top of
+  `workspaceVCSSlot`; reads and verbs get the 4a facts until phase 6 has
+  `slotDriver` choose by mode. `Name` waits for jj.
+- `vcs.Dest` has what the git driver uses: `Lstat`, `ReplaceFrom`,
+  `VerifyPathIdentity`, `RemoveAll`. `IsEmptyDirectory` stays with the
+  service, which checks the destination before it calls `Add`; jj's in-place
+  add (phase 6) brings it. `copierx.GuardedPath` satisfies it (a
+  compile-time check in the service).
+- **`Add` takes a `configure` step**, which the sketch lacked. A clone slot
+  is configured from the manifest's remotes (`syncSourceRemotes`, fresh
+  mode) in its staging directory, before it is installed, so it never sits
+  at its path able to push to the canonical remote. The reconcile is the
+  service's, so the service passes it in; worktrees pass nil.
+- `--sync` (`addWorktreeSlot`): a leftover the cache lists (`Exists`) is
+  removed through `Remove`, an unlisted populated directory is refused, and
+  then `Add` runs, all under one hold of the primary lock.
+- `workspaceSourceCleanup` entries hold the guard, the driver and the slot;
+  rollback and destroy remove a git slot through `driver.Remove`.
+- **A `kind: local` source's symlink stays in the service.** It is not
+  version control, and making it needs nothing a driver knows; such entries
+  have no driver. Phase 6 decides what a local source with `mode: jj` is.
+- **One start point.** `gitdriver.startRef` is the first of `baseRefs`,
+  through one iterator that resolves the remote counterpart only when the
+  local base is missing, so the commands are unchanged.
+- The registration repair still writes the cache's `gitdir` file through a
+  `copierx` guard rooted at `.git/worktrees` (`gitdriver` now imports
+  `copierx`). **Follow-up, the next PR:** run `git -C <cache> worktree
+  repair <slot>` instead, so git owns its files, and add worktrees with `git
+  -c worktree.useRelativePaths=false worktree add …`; that drops the
+  `copierx` import and `strictlyInside`. It also fixes a bug older than 4c,
+  found in the review of #125: with `worktree.useRelativePaths=true` (git
+  2.48+), staging and then copying leaves the slot's `.git` relative to the
+  temporary stage, and git calls the slot "not a git repository".
+- The "branch already exists; checking it out" warning is logged by the
+  driver, which is where that choice is made.
+- **The primary lock (D9, narrowed in the review of #125)** is
+  `withPrimaryLock` in the service: `fslock` at `<parent>/.<name>.angee.lock`,
+  beside the target when the cache path is a symlink, and beside the path
+  only when the cache does not exist yet (any other failure to resolve it
+  refuses the lock rather than locking another file). It is held around
+  `materializeSource` for a git source (bring-up, `StackCompile`, `source
+  fetch`); around `source pull`'s refresh and pull together; around `source
+  push`'s clean check and push; around a worktree slot's refresh, `Exists`,
+  `Remove` and `Add` together (the repair must come before anything else can
+  prune); and around `Remove` in rollback and destroy. Clone slots, local
+  sources and the slot verbs take none (D9 says why). Order: the mutation
+  lease, then the root lock (bring-up only), then the primary lock; nothing
+  under it takes another lock, and code under it calls
+  `materializeSourceLocked`.
+- **Waiting.** `fslock` gains `ReportWait` and `ErrTimeout`. The primary
+  lock warns, at the default verbosity, after a second: "waiting for source
+  cache <path>: another angee process is changing it", with the holder.
+  `ANGEE_LOCK_TIMEOUT` running out is a `CONFLICT` to retry, and a lock file
+  that cannot be created (a `cache_path` bind-mounted on its own) is a
+  precondition that says to mount the parent directory. Every failure to
+  take the lock matches `errPrimaryLockNotHeld`.
+- **A rollback or destroy that cannot get the lock still removes the slot**
+  through its guard, warns, and leaves the registration for the cache's next
+  prune. Removing our own guarded path needs no lock; only the prune does.
+  A first version waited for the lock before removing anything, so a
+  rollback that timed out left the slot on disk, which `a242891` never did
+  (review of #125).
+- **Behaviour.** The git commands, their arguments, order and environment
+  are unchanged, with two exceptions found while pinning them. With several
+  worktree slots of one cache, destroy and rollback now prune once per slot,
+  where they pruned once per cache: `Remove` is per slot, as jj's forget
+  will be. And destroy no longer prunes the cache of a slot whose path it
+  cannot open a guard on; it skips that slot, whose own registration a prune
+  would have kept anyway.
+- Tests. Characterization tests, written first and passing unchanged on
+  `a242891`: a create that fails at a later slot rolls back the worktree
+  (removed and pruned), the clone and the link, leaving no staging
+  directory; `--sync` reclaims a listed leftover, refuses an unlisted one and
+  a listed one without `--sync`, and reclaims a listing whose directory is
+  gone; a slot whose parent is swapped for a symlink while git runs never
+  reaches the symlink's target, for a worktree and a clone; and a recording
+  git pins create (new branch, existing branch, detached, remote-only base),
+  destroy and the rollback. New:
+  - five cache changes (create, destroy, `source fetch`, `pull`, `push`)
+    wait while a second `fslock` holder has the cache's lock, warn naming the
+    cache, and go on once it is released;
+  - a git wrapper tries the cache's lock without waiting before every
+    command that changes the cache or lists its worktrees, and records any
+    that ran unlocked, across create, a reclaim, destroy, a rollback and the
+    source verbs. The waiting test alone missed a lock moved in to
+    `driver.Add` only;
+  - a rollback whose cache lock another holder keeps removes the slot and
+    leaves a prunable registration that the next create drops;
+  - a held lock past `ANGEE_LOCK_TIMEOUT` is a `CONFLICT`, an unwritable
+    cache directory names the fix, and a cache path that will not resolve is
+    not locked elsewhere;
+  - a fake driver proves create, rollback and destroy dispatch through the
+    driver with no git on PATH, and `startRef` is the first of `baseRefs`.
+
+  Eighteen mutants are caught: the lock taken nowhere, or not around a
+  worktree add (or only around `driver.Add`), a removal, a fetch, a pull or a
+  push; rollback bypassing the driver, doing nothing, or leaving the slot
+  when the lock is held; a lock failure not marked as one; create or destroy
+  bypassing `slotDriver`; the leftover check skipped; the fallback to the
+  unresolved path on any error; no `CONFLICT`, no permission hint, and the
+  wait reported only at `-v`.
 
 `git.Client` remains for what is not a slot: source cache clone/fetch,
 template repositories (`templates.go`), `commits.go`. (Since 4a, a cache's

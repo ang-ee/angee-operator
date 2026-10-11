@@ -9,13 +9,16 @@ import (
 )
 
 // TestVerbsNotImplementedYet refuses every verb phase 8 has not implemented,
-// and the reads that guard them, with vcs.ErrUnsupported, before running
-// anything: no jj is needed.
+// the reads that guard them, and the slot lifecycle phase 5 step 6 adds, with
+// vcs.ErrUnsupported, before running anything: no jj is needed.
 func TestVerbsNotImplementedYet(t *testing.T) {
 	ctx := context.Background()
 	d := driver()
 	s := vcs.Slot{Path: t.TempDir()}
 	for name, call := range map[string]func() error{
+		"Exists":         func() error { _, err := d.Exists(ctx, s); return err },
+		"Add":            func() error { return d.Add(ctx, s, nil, nil) },
+		"Remove":         func() error { return d.Remove(ctx, s, nil) },
 		"BranchMismatch": func() error { _, err := d.BranchMismatch(ctx, s); return err },
 		"DirtyPaths":     func() error { _, err := d.DirtyPaths(ctx, s); return err },
 		"ResolveBase":    func() error { _, err := d.ResolveBase(ctx, s); return err },

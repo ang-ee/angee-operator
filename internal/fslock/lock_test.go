@@ -125,6 +125,38 @@ func TestLockTimeoutNamesHolder(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("second Lock() error = %v, want %q", err, want)
 	}
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("second Lock() error = %v, want it to match ErrTimeout", err)
+	}
+}
+
+// ReportWait chooses the level and message of the wait report, so a caller
+// can make a wait visible at the default (warnings only) verbosity.
+func TestReportWaitSetsTheLevelAndMessage(t *testing.T) {
+	oldDelay := lockWaitLogDelay
+	lockWaitLogDelay = 10 * time.Millisecond
+	t.Cleanup(func() { lockWaitLogDelay = oldDelay })
+
+	path := filepath.Join(t.TempDir(), "cache.lock")
+	first := New(path)
+	if err := first.Lock(WithCommand(t.Context(), "angee dev")); err != nil {
+		t.Fatalf("first Lock() error = %v", err)
+	}
+	defer first.Unlock()
+
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(
+		logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelWarn))),
+		50*time.Millisecond,
+	)
+	defer cancel()
+	err := New(path).ReportWait(slog.LevelWarn, "waiting for the cache").Lock(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Lock() error = %v, want deadline exceeded", err)
+	}
+	if got := logs.String(); !strings.Contains(got, "waiting for the cache path="+path) || !strings.Contains(got, `cmd="angee dev"`) {
+		t.Fatalf("wait report = %q, want the message with the path and holder at Warn", got)
+	}
 }
 
 func TestLockLogsAcquisitionAndReleaseAtDebug(t *testing.T) {

@@ -15,7 +15,6 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
-	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
@@ -1433,14 +1432,17 @@ func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.Source
 	}
 }
 
+// workspaceSourceCleanupEntry is one slot a create or repair cut: the guard on
+// its path and, for a git slot, the slot as its driver was handed it, so a
+// rollback removes it through the same driver.
 type workspaceSourceCleanupEntry struct {
-	dest      *copierx.GuardedPath
-	cachePath string
+	dest   *copierx.GuardedPath
+	driver vcs.Driver // nil for a local source's link
+	slot   vcs.Slot
 }
 
 type workspaceSourceCleanup struct {
-	entries   []workspaceSourceCleanupEntry
-	gitClient git.Client
+	entries []workspaceSourceCleanupEntry
 }
 
 func (c *workspaceSourceCleanup) Close() error {
@@ -1457,26 +1459,19 @@ func (c *workspaceSourceCleanup) Close() error {
 	return result
 }
 
+// Rollback removes the slots in the reverse of the order they were cut, and
+// the parent directories their guards created.
 func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
 	var result error
-	prune := map[string]struct{}{}
 	for index := len(c.entries) - 1; index >= 0; index-- {
 		entry := c.entries[index]
-		if err := entry.dest.RemoveAll(); err != nil && result == nil {
+		if err := removeWorkspaceSlot(ctx, entry.driver, entry.slot, entry.dest); err != nil && result == nil {
 			result = err
 		}
 		if err := entry.dest.RemoveMissingParents(); err != nil && result == nil {
-			result = err
-		}
-		if entry.cachePath != "" {
-			prune[entry.cachePath] = struct{}{}
-		}
-	}
-	for cachePath := range prune {
-		if err := c.gitClient.WorktreePrune(ctx, cachePath); err != nil && result == nil {
 			result = err
 		}
 	}
@@ -1486,9 +1481,32 @@ func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 	return result
 }
 
+// removeWorkspaceSlot removes the slot at dest: a git slot through its
+// driver, under its primary's lock when it has one, and a local source's
+// link (no driver) by removing the link.
+//
+// Only what the primary keeps of the slot needs its lock, not the slot's own
+// path. When the lock cannot be taken (another process holds it past the
+// rollback's deadline or ANGEE_LOCK_TIMEOUT), the slot is still removed
+// through dest, and the primary keeps its record until its next prune.
+func removeWorkspaceSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath) error {
+	switch {
+	case driver == nil:
+		return dest.RemoveAll()
+	case slot.Primary == "":
+		return driver.Remove(ctx, slot, dest)
+	}
+	err := withPrimaryLock(ctx, slot.Primary, func() error { return driver.Remove(ctx, slot, dest) })
+	if !errors.Is(err, errPrimaryLockNotHeld) {
+		return err
+	}
+	logctx.From(ctx).Warn(fmt.Sprintf("removing %s without deregistering it from source cache %s (%v); the cache drops the registration when it is next pruned", slot.Path, slot.Primary, err))
+	return dest.RemoveAll()
+}
+
 func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int, sync bool) (map[string]manifest.WorkspaceSource, *workspaceSourceCleanup, error) {
 	result := map[string]manifest.WorkspaceSource{}
-	cleanup := &workspaceSourceCleanup{gitClient: p.gitClient()}
+	cleanup := &workspaceSourceCleanup{}
 	items := []workspaceSourceMaterialization{}
 	for _, slot := range sortedKeys(metadata.Sources) {
 		spec := metadata.Sources[slot]
@@ -1600,10 +1618,15 @@ func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *worksp
 }
 
 // removeWorkspaceSources removes only source destinations materialized for the
-// workspace and prunes registrations for linked worktrees. Every destination
-// is removed through a stack-rooted capability; per-source cleanup is best effort.
+// workspace: git slots through their drivers, which also deregister linked
+// worktrees from their caches, and local links directly. Every destination is
+// removed through a stack-rooted capability; per-source cleanup is best effort.
 func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspacePath string, sources map[string]manifest.WorkspaceSource) {
-	type materializedSource struct{ cachePath, dest string }
+	type materializedSource struct {
+		dest   string
+		driver vcs.Driver // nil for a local source's link
+		slot   vcs.Slot
+	}
 	var materialized []materializedSource
 	for slot, ws := range sources {
 		subpath := ws.Subpath
@@ -1611,20 +1634,16 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 			subpath = slot
 		}
 		item := materializedSource{dest: filepath.Join(workspacePath, filepath.FromSlash(subpath))}
-		if source, ok := stack.Sources[ws.Source]; ok && source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree {
-			item.cachePath = p.sourcePath(ws.Source, source)
+		if source, ok := stack.Sources[ws.Source]; ok && source.Kind == "git" {
+			item.slot = p.workspaceLifecycleSlot(item.dest, source, ws)
+			item.driver = p.slotDriver(item.slot)
 		}
 		materialized = append(materialized, item)
 	}
 	// Remove deepest paths first so a source rooted at the workspace does not
-	// erase nested destinations before their worktree registrations are pruned.
+	// erase nested destinations before their own drivers remove them.
 	sort.Slice(materialized, func(i, j int) bool { return len(materialized[i].dest) > len(materialized[j].dest) })
-	client := p.gitClient()
-	prune := map[string]struct{}{}
 	for _, item := range materialized {
-		if item.cachePath != "" {
-			prune[item.cachePath] = struct{}{}
-		}
 		rel, err := filepath.Rel(p.root, item.dest)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
@@ -1633,11 +1652,8 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 		if err != nil {
 			continue
 		}
-		_ = dest.RemoveAll()
+		_ = removeWorkspaceSlot(ctx, item.driver, item.slot, dest)
 		_ = dest.Close()
-	}
-	for cachePath := range prune {
-		_ = client.WorktreePrune(ctx, cachePath)
 	}
 }
 
@@ -1750,9 +1766,9 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			_ = destGuard.Close()
 		}
 	}()
-	complete := func(cachePath string) (*workspaceSourceCleanupEntry, error) {
+	complete := func(driver vcs.Driver, slot vcs.Slot) (*workspaceSourceCleanupEntry, error) {
 		retainGuard = true
-		return &workspaceSourceCleanupEntry{dest: destGuard, cachePath: cachePath}, nil
+		return &workspaceSourceCleanupEntry{dest: destGuard, driver: driver, slot: slot}, nil
 	}
 	destExists, destEmpty := false, false
 	if info, exists, err := destGuard.Lstat(); err != nil {
@@ -1775,149 +1791,34 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 	}
 	switch source.Kind {
 	case "git":
-		if ws.Mode == manifest.WorkspaceSourceModeWorktree {
-			cachePath := p.sourcePath(sourceName, source)
-			insideDest, err := sameOrNestedPath(dest, cachePath)
+		slot := p.workspaceLifecycleSlot(dest, source, ws)
+		driver := p.slotDriver(slot)
+		if slot.Mode == vcs.ModeWorktree {
+			insideDest, err := sameOrNestedPath(dest, slot.Primary)
 			if err != nil {
 				return nil, err
 			}
 			if insideDest {
-				return nil, fmt.Errorf("workspace source cache path %s cannot be inside destination %s", cachePath, dest)
+				return nil, fmt.Errorf("workspace source cache path %s cannot be inside destination %s", slot.Primary, dest)
 			}
-			if err := p.materializeSource(ctx, sourceName, source, true); err != nil {
+			if err := withPrimaryLock(ctx, slot.Primary, func() error {
+				return p.addWorktreeSlot(ctx, driver, slot, destGuard, sourceName, source, destExists && !destEmpty)
+			}); err != nil {
 				return nil, err
 			}
-			client := p.gitClient()
-			ref := ws.Ref
-			if ref == "" {
-				ref = source.DefaultRef
-			}
-			registered, err := client.WorktreeRegistered(ctx, cachePath, dest)
-			if err != nil {
-				return nil, err
-			}
-			if destExists && !destEmpty {
-				if !registered {
-					return nil, fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
-				}
-				if err := destGuard.RemoveAll(); err != nil {
-					return nil, err
-				}
-				if err := client.WorktreePrune(ctx, cachePath); err != nil {
-					return nil, err
-				}
-				destExists = false
-			} else if registered {
-				if destExists {
-					if err := destGuard.RemoveAll(); err != nil {
-						return nil, err
-					}
-					destExists = false
-				}
-				if err := client.WorktreePrune(ctx, cachePath); err != nil {
-					return nil, err
-				}
-			}
-
-			stageRoot, err := os.MkdirTemp("", "angee-worktree-stage-*")
-			if err != nil {
-				return nil, err
-			}
-			defer func() { _ = os.RemoveAll(stageRoot) }()
-			stage := filepath.Join(stageRoot, "source")
-			installed := false
-			defer func() {
-				if !installed {
-					_ = os.RemoveAll(stage)
-					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-					_ = client.WorktreePrune(cleanupCtx, cachePath)
-					cancel()
-				}
-			}()
-			useExisting := ws.Branch != "" && client.RefExists(ctx, cachePath, "refs/heads/"+ws.Branch)
-			if useExisting {
-				logctx.From(ctx).Warn(fmt.Sprintf("branch %q already exists in %s; checking it out into worktree without creating a new branch", ws.Branch, cachePath))
-			}
-			// The cache is cloned on its default ref only, so another base may
-			// exist only as <clone remote>/<ref>. Start from that explicitly:
-			// given the bare name, git creates and checks out a local tracking
-			// branch of that name (even with -b), and --detach refuses it.
-			start, startIsRemote := ref, false
-			if ref != "" && !client.RefExists(ctx, cachePath, ref) {
-				if remote, err := client.SyncBaseRef(ctx, cachePath, ref, sourceBaseRemote(source)); err == nil && remote != ref {
-					start, startIsRemote = remote, true
-				}
-			}
-			addWorktree := func() error {
-				switch {
-				case ws.Branch == "":
-					// A slot without a branch starts detached at its base, so an
-					// untouched slot never leaves a branch behind; publish
-					// creates the branch. Without --detach git would check out
-					// ref itself, failing when the cache has it checked out.
-					return client.WorktreeAddDetached(ctx, cachePath, stage, start)
-				case useExisting:
-					return client.WorktreeAdd(ctx, cachePath, stage, ws.Branch)
-				default:
-					// A branch cut from a remote-tracking ref would track it, and
-					// a push would then aim at the base branch.
-					return client.WorktreeAddBranch(ctx, cachePath, stage, ws.Branch, start, !startIsRemote)
-				}
-			}
-			if err := addWorktree(); err != nil {
-				return nil, err
-			}
-			if destExists {
-				if err := destGuard.RemoveAll(); err != nil {
-					return nil, err
-				}
-			}
-			if err := destGuard.ReplaceFrom(ctx, stage); err != nil {
-				return nil, err
-			}
-			if err := destGuard.VerifyPathIdentity(dest); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			if err := repairStagedWorktreeRegistration(stage, dest, cachePath); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			if err := os.RemoveAll(stage); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			if err := destGuard.VerifyPathIdentity(dest); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			installed = true
-			return complete(cachePath)
+			return complete(driver, slot)
 		}
-		ref := ws.Ref
-		if ref == "" {
-			ref = source.DefaultRef
-		}
-		stageRoot, err := os.MkdirTemp("", "angee-clone-stage-*")
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = os.RemoveAll(stageRoot) }()
-		stage := filepath.Join(stageRoot, "source")
 		// A clone slot is a repository of its own, so it gets the source's
-		// remotes as the cache does, the canonical push block included.
-		cloneRemote, remote, _ := source.CloneRemote()
-		if err := p.gitClient().CloneRef(ctx, remote.URL, stage, ref, cloneRemote); err != nil {
+		// remotes as the cache does, the canonical push block included, before
+		// it is installed. Fresh mode only writes, so the holder needs only the
+		// source for errors.
+		configure := func(ctx context.Context, checkout string) error {
+			return syncSourceRemotes(ctx, p.gitClient(), remoteHolder{source: sourceName}, checkout, source, remoteSyncFresh)
+		}
+		if err := driver.Add(ctx, slot, destGuard, configure); err != nil {
 			return nil, err
 		}
-		// Fresh mode only writes, so the holder needs only the source for errors.
-		if err := syncSourceRemotes(ctx, p.gitClient(), remoteHolder{source: sourceName}, stage, source, remoteSyncFresh); err != nil {
-			return nil, err
-		}
-		if err := destGuard.ReplaceFrom(ctx, stage); err != nil {
-			return nil, err
-		}
-		return complete("")
+		return complete(driver, slot)
 	case "local":
 		target, err := workspaceLocalSymlinkTarget(p.sourcePath(sourceName, source), dest)
 		if err != nil {
@@ -1926,48 +1827,34 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		if err := destGuard.Symlink(target); err != nil {
 			return nil, err
 		}
-		return complete("")
+		return complete(nil, vcs.Slot{})
 	default:
 		return nil, fmt.Errorf("workspace source kind %q is not implemented", source.Kind)
 	}
 }
 
-func repairStagedWorktreeRegistration(stage, dest, cachePath string) error {
-	pointer, err := os.ReadFile(filepath.Join(stage, ".git"))
-	if err != nil {
-		return fmt.Errorf("read staged worktree gitdir: %w", err)
+// addWorktreeSlot cuts a worktree slot under its cache's primary lock: it
+// refreshes the cache, settles what an earlier create left at the slot path,
+// and has the driver add the worktree. A worktree the cache still lists at
+// the path is a leftover, deregistered with whatever is left of its checkout
+// (populated reaches here only with --sync). A populated directory the cache
+// does not list is not a leftover, and is refused.
+func (p *Platform) addWorktreeSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath, sourceName string, source manifest.Source, populated bool) error {
+	if err := p.materializeSourceLocked(ctx, sourceName, source, true); err != nil {
+		return err
 	}
-	line := strings.TrimSpace(string(pointer))
-	if !strings.HasPrefix(line, "gitdir: ") {
-		return fmt.Errorf("staged worktree .git has invalid gitdir pointer")
-	}
-	adminPath := strings.TrimSpace(strings.TrimPrefix(line, "gitdir: "))
-	if !filepath.IsAbs(adminPath) {
-		adminPath = filepath.Join(stage, adminPath)
-	}
-	adminPath, err = filepath.EvalSymlinks(adminPath)
-	if err != nil {
-		return fmt.Errorf("resolve staged worktree gitdir: %w", err)
-	}
-	worktreesRoot, err := filepath.EvalSymlinks(filepath.Join(cachePath, ".git", "worktrees"))
-	if err != nil {
-		return fmt.Errorf("resolve worktree administration root: %w", err)
-	}
-	contained, err := sameOrNestedPath(worktreesRoot, adminPath)
-	if err != nil || !contained || filepath.Clean(adminPath) == filepath.Clean(worktreesRoot) {
-		return fmt.Errorf("staged worktree gitdir %q escapes administration root %q", adminPath, worktreesRoot)
-	}
-	controlPath := filepath.Join(adminPath, "gitdir")
-	rel, err := filepath.Rel(worktreesRoot, controlPath)
+	registered, err := driver.Exists(ctx, slot)
 	if err != nil {
 		return err
 	}
-	control, err := copierx.OpenGuardedPath(worktreesRoot, worktreesRoot, filepath.ToSlash(rel), nil)
-	if err != nil {
-		return fmt.Errorf("open worktree administration link: %w", err)
+	if registered {
+		if err := driver.Remove(ctx, slot, dest); err != nil {
+			return err
+		}
+	} else if populated {
+		return fmt.Errorf("workspace source destination %s already exists and is not empty", slot.Path)
 	}
-	defer func() { _ = control.Close() }()
-	return control.WriteFile([]byte(filepath.Join(dest, ".git")+"\n"), 0o644)
+	return driver.Add(ctx, slot, dest, nil)
 }
 
 func normalizeWorkspaceSubpath(subpath string) (string, error) {
