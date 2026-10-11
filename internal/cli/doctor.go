@@ -19,6 +19,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 	"github.com/spf13/cobra"
 )
 
@@ -135,6 +136,9 @@ type doctorTool struct {
 	// missingHint replaces hint when bin itself is absent, so a plugin check
 	// does not tell you to install a plugin for a binary you do not have.
 	missingHint string
+	// short says how a found version falls short, and what to do about it,
+	// or returns "" when it does not. Nil checks nothing.
+	short func(version string) (detail, hint string)
 }
 
 func (t doctorTool) binary() string {
@@ -146,7 +150,7 @@ func (t doctorTool) binary() string {
 
 func doctorTools() []doctorTool {
 	return []doctorTool{
-		{name: "git", args: []string{"--version"}, hint: "Required for source and workspace commands."},
+		{name: "git", args: []string{"--version"}, hint: "Required for source and workspace commands.", short: gitBelowJJFloor},
 		{name: "go", args: []string{"version"}, hint: "Required to build angee-go and to auto-install process-compose."},
 		{name: "uv", args: []string{"--version"}, hint: "Required by the bundled Django dev stack."},
 		{name: "node", args: []string{"--version"}, hint: "Required by the bundled React/Vite dev stack."},
@@ -184,8 +188,44 @@ func (r *doctorRunner) checkTools(ctx context.Context) {
 		if version == "" {
 			version = path
 		}
+		if tool.short != nil {
+			if detail, hint := tool.short(version); detail != "" {
+				r.add("tool."+tool.name, doctorWarn, detail, hint)
+				continue
+			}
+		}
 		r.add("tool."+tool.name, doctorOK, version, "")
 	}
+	r.checks = append(r.checks, jjDoctorCheck(jjdriver.Probe(ctx)))
+}
+
+// gitBelowJJFloor reports a git older than jj slots need. Only a jj slot
+// needs that git, and no manifest can declare one yet, so it is a warning.
+func gitBelowJJFloor(version string) (string, string) {
+	if jjdriver.GitSupported(version) {
+		return "", ""
+	}
+	return fmt.Sprintf("%s is older than %s, which jj slots need", version, jjdriver.MinGitVersion),
+		"Upgrade git to " + jjdriver.MinGitVersion + " or later before using jj slots."
+}
+
+// jjDoctorCheck reports the jj that jj slots would run, and whether it can
+// create them (`jj workspace add --colocate`). Only a jj slot needs it, and
+// no manifest can declare one yet, so a missing jj or capability is a
+// warning.
+func jjDoctorCheck(caps jjdriver.Capabilities) doctorCheck {
+	check := doctorCheck{Name: "tool.jj", Status: doctorWarn}
+	switch {
+	case caps.JJErr != nil:
+		check.Detail = caps.JJErr.Error()
+		check.Hint = jjdriver.InstallHint + " Only jj slots need it."
+	case caps.OSErr != nil:
+		check.Detail = caps.JJ + ": " + caps.OSErr.Error()
+	default:
+		check.Status = doctorOK
+		check.Detail = caps.JJ + " (workspace add --colocate)"
+	}
+	return check
 }
 
 // commandVersionTimeout bounds a single version probe. Node-based tools

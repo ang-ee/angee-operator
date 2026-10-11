@@ -182,6 +182,38 @@ func TestPushRemoteResolution(t *testing.T) {
 	}
 }
 
+// PushRemoteFor resolves in git's order for the branch it is given, on a
+// checkout that is not on it: a jj slot's detached HEAD.
+func TestPushRemoteForANamedBranch(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", repo)
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "switch", "--detach")
+	runGit(t, repo, "remote", "add", "origin", filepath.Join(base, "origin.git"))
+	runGit(t, repo, "remote", "add", "fork", filepath.Join(base, "fork.git"))
+	runGit(t, repo, "remote", "add", "mirror", filepath.Join(base, "mirror.git"))
+	runGit(t, repo, "config", "remote.pushDefault", "mirror")
+	runGit(t, repo, "config", "branch.feature.pushRemote", "fork")
+	client := New()
+
+	for branch, want := range map[string]string{"feature": "fork", "other": "mirror", "": "mirror"} {
+		got, err := client.PushRemoteFor(ctx, repo, branch)
+		if err != nil || got != want {
+			t.Fatalf("PushRemoteFor(%q) = %q, %v; want %q", branch, got, err, want)
+		}
+	}
+	if got := pushRemote(t, client, ctx, repo); got != "mirror" {
+		t.Fatalf("PushRemote() on a detached HEAD = %q, want mirror", got)
+	}
+}
+
 func TestPushRemoteUsesNativeGitConfigFallbacks(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()

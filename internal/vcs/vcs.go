@@ -29,7 +29,10 @@ type Status struct {
 	Upstream   string // empty without an upstream
 	Dirty      bool
 	// Ahead and Behind count against Upstream when it is set, else against
-	// BaseRef, or BaseRef's remote counterpart when there is no local one.
+	// the base, which each driver resolves from BaseRef its own way: git
+	// counts against the local BaseRef, or its remote counterpart when there
+	// is no local one; jj against the bookmark on BaseRemote, else the local
+	// bookmark.
 	Ahead, Behind int
 	// MismatchReason is set when the checkout is not on Slot.Branch.
 	MismatchReason string
@@ -38,6 +41,20 @@ type Status struct {
 	// not.
 	Pushed         bool
 	UnpushedReason string
+
+	// The fields below are read from jj slots only; the git driver leaves
+	// them unset, and the API does not carry them yet.
+
+	// ChangeID is the change id of the slot's working-copy commit.
+	ChangeID string
+	// BaseBehind counts the commits the base has that the slot lacks, so a
+	// moved base shows even when Behind counts against an upstream.
+	BaseBehind int
+	// Conflicted reports a conflicted commit among the slot's own (jj records
+	// a conflict in the commit and goes on), and ConflictPaths lists the
+	// conflicted files, sorted.
+	Conflicted    bool
+	ConflictPaths []string
 }
 
 // Sync methods for Driver.SyncBase. SyncDefault leaves the choice to the

@@ -88,21 +88,30 @@ var isolatedEnvKeys = []string{
 	"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GIT_ASKPASS",
 }
 
-// RunIsolated runs git in dir with only isolatedEnvKeys from the environment,
-// then extraEnv, and never prompts, whatever c.NonInteractive says. It returns
-// standard output, and combined: standard output then standard error,
-// trimmed. A failure is a *CommandError whose Output is combined, redacted.
-// Only key names are traced, never values.
-func (c Client) RunIsolated(ctx context.Context, dir string, extraEnv []string, args ...string) (stdout []byte, combined string, err error) {
-	env := make([]string, 0, len(isolatedEnvKeys)+len(extraEnv)+2)
+// IsolatedEnv is the whole environment for a command that runs git on a slot
+// without prompting: only isolatedEnvKeys from the process environment, then
+// extra, made non-interactive (NonInteractiveEnv). RunIsolated runs git in
+// it, and the jj driver runs jj in it, since jj runs git for its fetches and
+// pushes and must reach the same ssh agent and credential helpers.
+func IsolatedEnv(extra ...string) []string {
+	env := make([]string, 0, len(isolatedEnvKeys)+len(extra)+2)
 	for _, key := range isolatedEnvKeys {
 		if v, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+v)
 		}
 	}
 	env = append(env, "GIT_TERMINAL_PROMPT=0")
-	env = append(env, extraEnv...)
-	cmd, trace := c.command(ctx, dir, NonInteractiveEnv(env), args)
+	env = append(env, extra...)
+	return NonInteractiveEnv(env)
+}
+
+// RunIsolated runs git in dir in IsolatedEnv(extraEnv...), so it never
+// prompts, whatever c.NonInteractive says. It returns standard output, and
+// combined: standard output then standard error, trimmed. A failure is a
+// *CommandError whose Output is combined, redacted. Only key names are
+// traced, never values.
+func (c Client) RunIsolated(ctx context.Context, dir string, extraEnv []string, args ...string) (stdout []byte, combined string, err error) {
+	cmd, trace := c.command(ctx, dir, IsolatedEnv(extraEnv...), args)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -775,6 +784,12 @@ func (c Client) Config(ctx context.Context, dir, key string) (string, bool, erro
 	return c.configCLI(ctx, dir, key)
 }
 
+// Version returns what `git --version` prints, such as
+// "git version 2.50.1 (Apple Git-155)".
+func (c Client) Version(ctx context.Context) (string, error) {
+	return c.runText(ctx, "", "--version")
+}
+
 func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, error) {
 	value, err := c.runText(ctx, dir, "config", "--get", key)
 	if err != nil || value == "" {
@@ -906,11 +921,28 @@ func (c Client) PushRemote(ctx context.Context, dir string) (string, error) {
 	return remote, networkResult(ctx, timedCtx, "git resolve push remote", dir, timeout, err)
 }
 
+// PushRemoteFor is PushRemote for a push of branch, whatever the checkout at
+// dir is on: a jj slot's HEAD is detached, but its bookmark is pushed as a
+// branch. An empty branch resolves as a detached HEAD does.
+func (c Client) PushRemoteFor(ctx context.Context, dir, branch string) (string, error) {
+	timedCtx, cancel, timeout, err := networkContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	remote, err := c.pushRemoteFor(timedCtx, dir, branch, branch != "")
+	return remote, networkResult(ctx, timedCtx, "git resolve push remote", dir, timeout, err)
+}
+
 func (c Client) pushRemote(ctx context.Context, dir string) (string, error) {
 	branch, hasBranch, err := c.CurrentBranch(ctx, dir)
 	if err != nil {
 		return "", err
 	}
+	return c.pushRemoteFor(ctx, dir, branch, hasBranch)
+}
+
+func (c Client) pushRemoteFor(ctx context.Context, dir, branch string, hasBranch bool) (string, error) {
 	if hasBranch {
 		if remote, ok, err := c.Config(ctx, dir, "branch."+branch+".pushRemote"); err != nil {
 			return "", err

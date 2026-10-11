@@ -1,4 +1,4 @@
-package gitdriver
+package vcs
 
 import (
 	"bytes"
@@ -8,6 +8,17 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
+
+// DiffFiles converts a parsed git-format diff into the API's shape. git and
+// jj (`jj diff --git`) both print that format, so every driver's Diff ends
+// here.
+func DiffFiles(files []*gitdiff.File) []api.DiffFile {
+	out := make([]api.DiffFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, convertDiffFile(f))
+	}
+	return out
+}
 
 func convertDiffFile(f *gitdiff.File) api.DiffFile {
 	mode := ""

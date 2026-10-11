@@ -1,0 +1,293 @@
+// Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces,
+// colocated with git, of a source's primary. It reads a slot's status and
+// diff; every other verb waits for phase 8 of
+// .agents/plans/jj-native-operator.md and reports vcs.ErrUnsupported. No
+// manifest can name a jj slot yet, so nothing selects this driver.
+//
+// jj owns the slot: the driver runs the jj CLI and interprets what it prints
+// through the templates in templates.go, and never reads or writes jj's files.
+// Which remote a slot's branch is pushed to is git's answer, from the slot's
+// colocated git config, as it is for git slots.
+package jjdriver
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
+	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
+)
+
+// Driver reads and acts on jj slots through the jj CLI on PATH, and asks git
+// for the push remote.
+type Driver struct {
+	jj  runner
+	git git.Client
+}
+
+var _ vcs.Driver = Driver{}
+
+// New returns a driver that runs jj from PATH, and git through client.
+func New(client git.Client) Driver {
+	return Driver{git: client}
+}
+
+// target is a revision Status counts against: its revset, and the name a
+// message gives it.
+type target struct {
+	revset revset
+	name   string
+}
+
+// Status reads the slot. Its first read snapshots the slot's working copy,
+// so edits jj has recorded nothing of yet count (plan D7), except files jj
+// refuses to snapshot (open question Q10); every read after it is pinned to
+// the operation that snapshot recorded, so they agree with each other
+// whatever agents do meanwhile. A slot whose working copy another workspace
+// rewrote updates itself (D8).
+//
+// For slot branch X (Slot.Branch), base B (Slot.BaseRef on Slot.BaseRemote,
+// else origin, else the local bookmark) and R, the remote git pushes X to
+// from the slot (git.Client.PushRemoteFor, as publish resolves it for git
+// slots; a jj git.push setting plays no part):
+//   - Dirty: the working-copy commit `@` is not empty.
+//   - Upstream: X@R when the slot has a branch, git names R, and that remote
+//     bookmark exists.
+//   - Ahead and Behind: from `@-`, against Upstream when set, else B.
+//   - BaseBehind: the commits of B that `@-` lacks.
+//   - Conflicted and ConflictPaths: the conflicted commits of B..@.
+//   - CurrentRef: X when local bookmark X points into B..@, else the short
+//     commit id of `@-` (its first parent, if it has two).
+//   - ChangeID: the change id of `@`.
+//   - Pushed: not dirty and nothing ahead.
+//
+// A base that exists neither on its remote nor locally is an error wrapping
+// vcs.ErrBaseNotFound, returned with what was read before it.
+func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
+	var status vcs.Status
+	op, err := d.snapshot(ctx, s.Path)
+	if err != nil {
+		return status, err
+	}
+	wc, err := d.workingCopy(ctx, s.Path, op)
+	if err != nil {
+		return status, err
+	}
+	status.ChangeID = wc.Commit.ChangeID
+	status.Dirty = !wc.Empty
+	if len(wc.ParentsShort) > 0 {
+		status.CurrentRef = wc.ParentsShort[0]
+	}
+
+	marks, err := d.bookmarks(ctx, s.Path, op, s.BaseRef, s.Branch)
+	if err != nil {
+		return status, err
+	}
+	base, err := resolveBase(marks, s.BaseRef, s.BaseRemote)
+	if err != nil {
+		return status, err
+	}
+	counted := base
+	upstream, hasUpstream, err := d.upstream(ctx, s.Path, s.Branch, marks)
+	if err != nil {
+		return status, err
+	}
+	if hasUpstream {
+		status.Upstream = upstream.name
+		counted = upstream
+	}
+
+	own, err := d.commits(ctx, s.Path, op, base.revset.to(workingCopy))
+	if err != nil {
+		return status, err
+	}
+	var conflictPaths []string
+	for _, c := range own {
+		if c.Conflict {
+			status.Conflicted = true
+			conflictPaths = append(conflictPaths, c.ConflictedFiles...)
+		}
+		if s.Branch != "" && c.hasLocalBookmark(s.Branch) {
+			status.CurrentRef = s.Branch
+		}
+	}
+	if status.Conflicted {
+		slices.Sort(conflictPaths)
+		status.ConflictPaths = slices.Compact(conflictPaths)
+	}
+
+	from := workingCopy.parents()
+	if status.Ahead, err = d.count(ctx, s.Path, op, counted.revset.to(from)); err != nil {
+		return status, err
+	}
+	if status.Behind, err = d.count(ctx, s.Path, op, from.to(counted.revset)); err != nil {
+		return status, err
+	}
+	status.BaseBehind = status.Behind
+	if hasUpstream {
+		if status.BaseBehind, err = d.count(ctx, s.Path, op, from.to(base.revset)); err != nil {
+			return status, err
+		}
+	}
+
+	switch {
+	case status.Dirty:
+		status.UnpushedReason = "uncommitted changes"
+	case status.Ahead > 0 && hasUpstream:
+		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", status.Ahead, upstream.name)
+	case status.Ahead > 0:
+		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", status.Ahead, base.name)
+	default:
+		status.Pushed = true
+	}
+	return status, nil
+}
+
+// resolveBase picks the slot's base from the bookmarks listed for it: ref on
+// remote (origin when remote is empty), else the local bookmark ref. jj's
+// git pseudo-remote, which mirrors the colocated repository's own branches,
+// is never the base's remote.
+func resolveBase(marks []bookmark, ref, remote string) (target, error) {
+	if ref == "" {
+		return target{}, fmt.Errorf("the slot has no base ref: %w", vcs.ErrBaseNotFound)
+	}
+	if remote == "" {
+		remote = "origin"
+	}
+	if remote != gitRemote && hasBookmark(marks, ref, remote) {
+		return target{revset: remoteBookmark(ref, remote), name: ref + "@" + remote}, nil
+	}
+	if hasBookmark(marks, ref, "") {
+		return target{revset: localBookmark(ref), name: ref}, nil
+	}
+	return target{}, fmt.Errorf("no bookmark %q on %s or locally: %w", ref, remote, vcs.ErrBaseNotFound)
+}
+
+// upstream returns branch on the remote git pushes it to from the slot, when
+// that remote bookmark exists. It reports none when git names no push remote
+// for it (several remotes, none of them origin, and no push default).
+func (d Driver) upstream(ctx context.Context, dir, branch string, marks []bookmark) (target, bool, error) {
+	if branch == "" {
+		return target{}, false, nil
+	}
+	remote, err := d.git.PushRemoteFor(ctx, dir, branch)
+	var none *git.NoPushRemoteError
+	if errors.As(err, &none) {
+		return target{}, false, nil
+	}
+	if err != nil {
+		return target{}, false, fmt.Errorf("resolve the push remote of %q in %s: %w", branch, dir, err)
+	}
+	if remote == gitRemote || !hasBookmark(marks, branch, remote) {
+		return target{}, false, nil
+	}
+	return target{revset: remoteBookmark(branch, remote), name: branch + "@" + remote}, true, nil
+}
+
+// hasBookmark reports whether marks holds bookmark name on remote (local
+// when remote is empty), pointing somewhere.
+func hasBookmark(marks []bookmark, name, remote string) bool {
+	return slices.ContainsFunc(marks, func(m bookmark) bool {
+		return m.Name == name && m.Remote == remote && m.present()
+	})
+}
+
+// snapshot snapshots the slot's working copy and returns the operation that
+// recorded it: `jj op log` snapshots before it reads. It is the one command of
+// a call that may snapshot; the reads after it are pinned to its operation.
+func (d Driver) snapshot(ctx context.Context, dir string) (string, error) {
+	out, err := d.jj.snapshot(ctx, dir, "op", "log", "--no-graph", "-n", "1", "-T", operationTemplate)
+	if err != nil {
+		return "", err
+	}
+	op := strings.TrimSpace(string(out))
+	if op == "" || strings.ContainsAny(op, " \n") {
+		return "", fmt.Errorf("jj op log in %s printed %q, want one operation id", dir, out)
+	}
+	return op, nil
+}
+
+// workingCopy reads the slot's working-copy commit at operation op.
+func (d Driver) workingCopy(ctx context.Context, dir, op string) (commitEntry, error) {
+	entries, err := d.commits(ctx, dir, op, workingCopy)
+	if err != nil {
+		return commitEntry{}, err
+	}
+	if len(entries) != 1 {
+		return commitEntry{}, fmt.Errorf("jj log -r @ in %s printed %d commits, want 1", dir, len(entries))
+	}
+	return entries[0], nil
+}
+
+// bookmarks lists the local and remote bookmarks named in names, on every
+// remote, at operation op. Empty names are skipped; with none left it lists
+// nothing.
+func (d Driver) bookmarks(ctx context.Context, dir, op string, names ...string) ([]bookmark, error) {
+	args := []string{"bookmark", "list", "--all-remotes", "-T", bookmarksTemplate}
+	listed := false
+	for _, name := range names {
+		if name != "" {
+			args = append(args, exact(name))
+			listed = true
+		}
+	}
+	if !listed {
+		return nil, nil
+	}
+	out, err := d.jj.read(ctx, dir, op, args...)
+	if err != nil {
+		return nil, err
+	}
+	return decodeLines[bookmark](out)
+}
+
+// commits lists the commits of r at operation op.
+func (d Driver) commits(ctx context.Context, dir, op string, r revset) ([]commitEntry, error) {
+	out, err := d.jj.read(ctx, dir, op, "log", "--no-graph", "-r", r.String(), "-T", commitsTemplate)
+	if err != nil {
+		return nil, err
+	}
+	return decodeLines[commitEntry](out)
+}
+
+// count counts the commits of r at operation op.
+func (d Driver) count(ctx context.Context, dir, op string, r revset) (int, error) {
+	out, err := d.jj.read(ctx, dir, op, "log", "--no-graph", "-r", r.String(), "-T", countTemplate)
+	if err != nil {
+		return 0, err
+	}
+	return len(out), nil
+}
+
+// Diff returns the slot's uncommitted changes (its working-copy commit
+// against its parents) when ref is empty, else the committed range from the
+// slot to ref: the tree of `@`'s first parent against ref's, leaving
+// uncommitted changes out, as the git driver leaves out the working tree.
+// ref is one revision as jj resolves a name (a bookmark, tag, commit or
+// change id), quoted, so a remote bookmark cannot be named through it yet.
+// The slot is snapshotted first either way.
+func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFile, error) {
+	op, err := d.snapshot(ctx, s.Path)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"diff", "--git"}
+	if ref != "" {
+		args = append(args, "--from", workingCopy.firstParent().String(), "--to", symbol(ref).String())
+	}
+	out, err := d.jj.read(ctx, s.Path, op, args...)
+	if err != nil {
+		return nil, err
+	}
+	files, _, err := gitdiff.Parse(bytes.NewReader(out))
+	if err != nil {
+		return nil, fmt.Errorf("parse jj diff in %s: %w", s.Path, err)
+	}
+	return vcs.DiffFiles(files), nil
+}

@@ -151,11 +151,7 @@ func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFil
 	if err != nil {
 		return nil, err
 	}
-	out := make([]api.DiffFile, 0, len(files))
-	for _, f := range files {
-		out = append(out, convertDiffFile(f))
-	}
-	return out, nil
+	return vcs.DiffFiles(files), nil
 }
 
 // branchMismatch says how a checkout on currentRef differs from the branch it
