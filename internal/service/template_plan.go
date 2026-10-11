@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,12 +101,15 @@ func (p *Platform) buildWorkspaceRenderPlan(workspacePath, templatePath string, 
 	}, nil
 }
 
-func (p *Platform) buildStackRenderPlan(ctx context.Context, templatePath, target string, inputs copierx.Inputs, statePath string) (copierx.RenderPlan, []stackDocument, error) {
-	layers, documents, err := p.buildStackChainLayers(ctx, templatePath, target, inputs)
+// buildStackRenderPlan plans a stack render. inputs holds every input of the
+// render. recorded holds those a template update replays from the stack's
+// copier answers; stack init passes none.
+func (p *Platform) buildStackRenderPlan(ctx context.Context, templatePath, target string, inputs, recorded copierx.Inputs, statePath string) (copierx.RenderPlan, []stackDocument, error) {
+	layers, documents, err := p.buildStackChainLayers(ctx, templatePath, target, inputs, recorded)
 	if err != nil {
 		return copierx.RenderPlan{}, nil, err
 	}
-	resolved, err := copierx.ResolvePathInputs(templatePath, inputs, target, inputs["ANGEE_ROOT"])
+	resolved, err := resolveUnrecordedPathInputs(templatePath, inputs, recorded, target)
 	if err != nil {
 		return copierx.RenderPlan{}, nil, err
 	}
@@ -135,8 +139,33 @@ func (p *Platform) buildStackRenderPlan(ctx context.Context, templatePath, targe
 	}, stackDocuments, nil
 }
 
-func (p *Platform) buildStackChainLayers(ctx context.Context, stackTemplatePath, target string, stackInputs copierx.Inputs) ([]copierx.RenderLayer, map[string]stackDocument, error) {
+// resolveUnrecordedPathInputs resolves a render's path inputs with
+// copierx.ResolvePathInputs, except those in recorded: copier recorded them at
+// an earlier render, already relative to ANGEE_ROOT. Resolving one again would
+// read it as relative to destDir and move it up a level on every update (#121).
+// Only the keys of recorded are consulted.
+func resolveUnrecordedPathInputs(templatePath string, inputs, recorded copierx.Inputs, destDir string) (copierx.Inputs, error) {
+	unrecorded := make(copierx.Inputs, len(inputs))
+	for key, value := range inputs {
+		if _, ok := recorded[key]; !ok {
+			unrecorded[key] = value
+		}
+	}
+	resolved, err := copierx.ResolvePathInputs(templatePath, unrecorded, destDir, inputs["ANGEE_ROOT"])
+	if err != nil {
+		return nil, err
+	}
+	out := maps.Clone(inputs)
+	maps.Copy(out, resolved)
+	return out, nil
+}
+
+func (p *Platform) buildStackChainLayers(ctx context.Context, stackTemplatePath, target string, stackInputs, recorded copierx.Inputs) ([]copierx.RenderLayer, map[string]stackDocument, error) {
 	metadata, err := copierx.ReadMetadata(stackTemplatePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	stackPathInputs, err := copierx.PathInputNames(stackTemplatePath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,6 +194,17 @@ func (p *Platform) buildStackChainLayers(ctx context.Context, stackTemplatePath,
 		for key, value := range stackInputs {
 			renderInputs[key] = value
 		}
+		// A recorded answer to one of the stack template's own path inputs is
+		// already resolved, so a chained template that inherits it unchanged
+		// takes it as it is, like the stack layer. Any other recorded answer
+		// is the value as given, and an input the chain entry sets is new to
+		// this layer: both are resolved for it, as at init.
+		inherited := copierx.Inputs{}
+		for key, value := range recorded {
+			if _, set := entry.Inputs[key]; !set && stackPathInputs[key] {
+				inherited[key] = value
+			}
+		}
 		for key, value := range entry.Inputs {
 			resolved, err := substitute.Resolve(value, subCtx)
 			if err != nil {
@@ -183,7 +223,7 @@ func (p *Platform) buildStackChainLayers(ctx context.Context, stackTemplatePath,
 			return nil, nil, fmt.Errorf("chained template %q inputs: %w", entry.Template, err)
 		}
 		dest := filepath.Join(target, filepath.FromSlash(destRoot))
-		resolved, err := copierx.ResolvePathInputs(chainTemplate, merged, dest, merged["ANGEE_ROOT"])
+		resolved, err := resolveUnrecordedPathInputs(chainTemplate, merged, inherited, dest)
 		if err != nil {
 			return nil, nil, fmt.Errorf("chained template %q inputs: %w", entry.Template, err)
 		}

@@ -63,10 +63,19 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	}
 
 	// The stack's own answers file holds its inputs, ports included: a stack
-	// inside a workspace's directory is a stack like any other (#110).
+	// inside a workspace's directory is a stack like any other (#110). copier
+	// recorded them as the last render resolved them, so an answer the caller
+	// does not change is replayed as recorded, and only the caller's other
+	// inputs and the defaults of unrecorded questions are resolved (#121). A
+	// value passed equal to the recorded one is that answer unchanged, as the
+	// -i form and the immutability check take it.
 	renderInputs := copierx.Inputs{}
+	recorded := copierx.Inputs{}
 	for key, value := range answers {
 		renderInputs[key] = value
+		if override, overridden := opts.Inputs[key]; !overridden || override == value {
+			recorded[key] = value
+		}
 	}
 	for key, value := range opts.Inputs {
 		renderInputs[key] = value
@@ -76,7 +85,7 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	plan, stackDocuments, err := p.buildStackRenderPlan(ctx, templatePath, renderTarget, mergedInputs, renderPlanStatePath(p.root, "stack", ""))
+	plan, stackDocuments, err := p.buildStackRenderPlan(ctx, templatePath, renderTarget, mergedInputs, recorded, renderPlanStatePath(p.root, "stack", ""))
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}

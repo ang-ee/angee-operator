@@ -43,6 +43,9 @@ const PathInputType = "path"
 // destDir must be the dir copier renders into (the parent of ANGEE_ROOT).
 // angeeRoot must be the ANGEE_ROOT value as stored in inputs (e.g. ".angee");
 // it can also be an absolute path.
+//
+// Pass only values that are new to this render. An answer copier recorded at
+// an earlier render is already resolved; resolving it again moves it.
 func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot string) (Inputs, error) {
 	if len(inputs) == 0 {
 		return inputs, nil
@@ -51,15 +54,8 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 	if err != nil {
 		return nil, err
 	}
-	defs := mergeInputDefs(cfg)
-	hasPathInput := false
-	for _, def := range defs {
-		if def.Type == PathInputType {
-			hasPathInput = true
-			break
-		}
-	}
-	if !hasPathInput {
+	names := pathInputNames(cfg)
+	if len(names) == 0 {
 		return inputs, nil
 	}
 	absDest, err := filepath.Abs(destDir)
@@ -79,10 +75,7 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 	for key, value := range inputs {
 		out[key] = value
 	}
-	for name, def := range defs {
-		if def.Type != PathInputType {
-			continue
-		}
+	for name := range names {
 		value := out[name]
 		if value == "" {
 			continue
@@ -106,6 +99,27 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 		out[name] = rel
 	}
 	return out, nil
+}
+
+// PathInputNames returns the names of the template's `type: path` inputs:
+// the ones ResolvePathInputs rewrites, and so the ones whose recorded answers
+// a render has already resolved.
+func PathInputNames(templatePath string) (map[string]bool, error) {
+	cfg, err := readConfig(templatePath)
+	if err != nil {
+		return nil, err
+	}
+	return pathInputNames(cfg), nil
+}
+
+func pathInputNames(cfg config) map[string]bool {
+	names := map[string]bool{}
+	for name, def := range mergeInputDefs(cfg) {
+		if def.Type == PathInputType {
+			names[name] = true
+		}
+	}
+	return names
 }
 
 // mergeInputDefs returns the union of top-level copier.yml questions

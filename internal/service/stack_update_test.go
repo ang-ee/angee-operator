@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -604,6 +605,173 @@ func TestStackUpdateFromTemplateSkipRejectsManagedDocument(t *testing.T) {
 	}
 	if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Skip: []string{"angee.yaml"}}); err == nil || !strings.Contains(err.Error(), "managed reconciliation path") {
 		t.Fatalf("StackUpdateFromTemplate skip managed document error = %v", err)
+	}
+}
+
+// pathInputStackCopier is a stack template that renders under ANGEE_ROOT=.angee
+// with a `type: path` input, so its recorded answer is relative to the .angee
+// root rather than to the project directory copier renders into.
+const pathInputStackCopier = `_subdirectory: template
+_templates_suffix: .jinja
+_angee:
+  kind: stack
+  name: dev
+ANGEE_ROOT:
+  type: str
+  default: .angee
+PROJECT_PATH:
+  type: path
+  default: "."
+`
+
+// writePathInputStackTemplate writes a stack template with the given copier.yml
+// (pathInputStackCopier or a variant), rendering each named path input into
+// <ANGEE_ROOT>/<name>.txt.
+func writePathInputStackTemplate(t *testing.T, project, copierYML string, pathInputs ...string) {
+	t.Helper()
+	dir := writeStackTemplate(t, project, oneServiceTemplate)
+	if err := os.WriteFile(filepath.Join(dir, "copier.yml"), []byte(copierYML), 0o644); err != nil {
+		t.Fatalf("write copier.yml: %v", err)
+	}
+	for _, name := range pathInputs {
+		file := filepath.Join(dir, "template", "{{ ANGEE_ROOT }}", name+".txt.jinja")
+		if err := os.WriteFile(file, []byte("{{ "+name+" }}\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", file, err)
+		}
+	}
+}
+
+// assertStackPathInput checks a path input both where copier recorded it, the
+// answers file in the project directory, and where the stack rendered it.
+func assertStackPathInput(t *testing.T, project, stackRoot, name, want string) {
+	t.Helper()
+	_, answers, err := readTemplateAnswers(filepath.Join(project, ".copier-answers.yml"))
+	if err != nil {
+		t.Fatalf("read answers: %v", err)
+	}
+	if got := answers[name]; got != want {
+		t.Fatalf("recorded %s = %q, want %q", name, got, want)
+	}
+	rendered, err := os.ReadFile(filepath.Join(stackRoot, name+".txt"))
+	if err != nil {
+		t.Fatalf("read rendered %s: %v", name, err)
+	}
+	if got := strings.TrimSuffix(string(rendered), "\n"); got != want {
+		t.Fatalf("rendered %s = %q, want %q", name, got, want)
+	}
+}
+
+func initPathInputStack(t *testing.T, ctx context.Context, project string) *Platform {
+	t.Helper()
+	p, err := New(project)
+	if err != nil {
+		t.Fatalf("New(project): %v", err)
+	}
+	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	if err != nil {
+		t.Fatalf("StackInit: %v", err)
+	}
+	stackPlatform, err := New(initialized.Root)
+	if err != nil {
+		t.Fatalf("New(stack root): %v", err)
+	}
+	return stackPlatform
+}
+
+// The answers file records a path input as the last render resolved it,
+// relative to ANGEE_ROOT. An update replays it as it is: resolving it again
+// as fresh input moved it one level further up on every update (#121).
+func TestStackUpdateFromTemplateKeepsRecordedPathInputs(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	writePathInputStackTemplate(t, project, pathInputStackCopier, "PROJECT_PATH")
+	stack := initPathInputStack(t, ctx, project)
+	assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+
+	for run := 1; run <= 2; run++ {
+		if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+			t.Fatalf("StackUpdateFromTemplate run %d: %v", run, err)
+		}
+		assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+	}
+}
+
+// A path input passed on the update is read like one passed to stack init,
+// relative to the directory copier renders into (here the project directory,
+// the parent of ANGEE_ROOT), and resolved once. The next update replays the
+// recorded value.
+func TestStackUpdateFromTemplateResolvesGivenPathInputOnce(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	writePathInputStackTemplate(t, project, pathInputStackCopier, "PROJECT_PATH")
+	stack := initPathInputStack(t, ctx, project)
+
+	if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Inputs: map[string]string{"PROJECT_PATH": "app"}}); err != nil {
+		t.Fatalf("StackUpdateFromTemplate with input: %v", err)
+	}
+	assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "../app")
+	if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+		t.Fatalf("StackUpdateFromTemplate replay: %v", err)
+	}
+	assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "../app")
+}
+
+// A path question added to the template after the stack was created has no
+// recorded answer, so its default is resolved as stack init would have
+// resolved it; from then on its recorded answer is replayed.
+func TestStackUpdateFromTemplateResolvesDefaultOfNewPathQuestion(t *testing.T) {
+	ctx := context.Background()
+	project := t.TempDir()
+	writePathInputStackTemplate(t, project, pathInputStackCopier, "PROJECT_PATH")
+	stack := initPathInputStack(t, ctx, project)
+
+	writePathInputStackTemplate(t, project, pathInputStackCopier+"DATA_PATH:\n  type: path\n  default: data\n", "PROJECT_PATH", "DATA_PATH")
+	for run := 1; run <= 2; run++ {
+		if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+			t.Fatalf("StackUpdateFromTemplate run %d: %v", run, err)
+		}
+		assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+		assertStackPathInput(t, project, stack.root, "DATA_PATH", "../data")
+	}
+}
+
+// A value passed on an update that equals the recorded answer is that answer
+// unchanged, as the -i form and the immutability check take it, so it is
+// replayed rather than resolved as new input. For an immutable path input,
+// passing the recorded value is the one override the check accepts.
+func TestStackUpdateFromTemplateReplaysAnInputEqualToTheRecordedAnswer(t *testing.T) {
+	immutable := strings.Replace(pathInputStackCopier, "  name: dev\n", "  name: dev\n  inputs:\n    PROJECT_PATH:\n      immutable: true\n", 1)
+	for _, tc := range []struct {
+		name      string
+		copierYML string
+		immutable bool
+	}{
+		{name: "plain", copierYML: pathInputStackCopier},
+		{name: "immutable", copierYML: immutable, immutable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			project := t.TempDir()
+			writePathInputStackTemplate(t, project, tc.copierYML, "PROJECT_PATH")
+			stack := initPathInputStack(t, ctx, project)
+			assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+
+			for run := 1; run <= 2; run++ {
+				if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Inputs: map[string]string{"PROJECT_PATH": ".."}}); err != nil {
+					t.Fatalf("StackUpdateFromTemplate run %d with the recorded value: %v", run, err)
+				}
+				assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+			}
+			if !tc.immutable {
+				return
+			}
+			_, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{Inputs: map[string]string{"PROJECT_PATH": "app"}})
+			var invalid *InvalidInputError
+			if !errors.As(err, &invalid) || invalid.Field != "PROJECT_PATH" {
+				t.Fatalf("StackUpdateFromTemplate with another value: error = %v, want InvalidInputError on PROJECT_PATH", err)
+			}
+			assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+		})
 	}
 }
 
