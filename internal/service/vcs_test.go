@@ -60,7 +60,7 @@ func TestWorkspaceSlotReadsDispatchToTheSlotDriver(t *testing.T) {
 		t.Fatalf("WorkspaceDestroy() error = %v, want the fake driver's unpushed reason", err)
 	}
 
-	want := vcs.Slot{Path: filepath.Join(platform.Root(), "workspaces", workspaceName, "app"), Branch: workspaceName, BaseRef: "main"}
+	want := vcs.Slot{Path: filepath.Join(platform.Root(), "workspaces", workspaceName, "app"), Branch: workspaceName, BaseRef: "main", BaseRemote: "origin"}
 	if len(fake.slots) != 3 {
 		t.Fatalf("driver was asked about %d slots, want 3 (status, diff, destroy guard)", len(fake.slots))
 	}

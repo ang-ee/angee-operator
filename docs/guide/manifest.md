@@ -411,16 +411,100 @@ sources:
 
 Git commands use the host git environment.
 
-A git source's `repo` is cloned into its cache once. When the cache
-already exists, `angee source fetch` and `angee source pull` first set the
-cache's `origin` remote to the declared `repo` (adding `origin` if it is
-missing) and log a warning when that changes it, so an edited `repo` takes
-effect; a remote with several URLs is refused rather than rewritten. Stack
-bring-up, `angee workspace create` and `angee workspace repair` leave
-`origin` alone and only warn when it differs: a `cache_path` can be shared
-by several stacks or be your own clone. Worktree slots share the cache's
-remotes. Remotes other than `origin` are never changed, and a relative
+### Remotes
+
+`repo` declares one remote, `origin`. A git source with more than one remote
+lists them under `remotes` instead; setting both is an error:
+
+```yaml
+sources:
+  app:
+    kind: git
+    remotes:
+      origin: git@github.com:me/app.git        # a bare URL
+      upstream:
+        url: https://github.com/acme/app.git
+        canonical: true                        # fetch-only
+      staging:
+        url: git@example.com:acme/app.git
+        branches: ["release/*"]
+    push_default: origin
+    default_ref: main
+```
+
+- **`canonical`** marks the remote the project lives in. The cache is cloned
+  from it, under its own name, and git is set up so that nothing can push to
+  it: its push URL becomes `angee-fetch-only://<name>`, a scheme no git
+  remote helper serves, and every push to it fails. At most one remote is
+  canonical.
+- **The clone remote** is the canonical remote, else `origin`, else the only
+  remote. A source with several remotes where none qualifies is an error.
+- **`push_default`** names the remote a push goes to when the branch names
+  no `pushRemote`. It becomes the cache's `remote.pushDefault`, must be
+  declared, and cannot be the canonical remote.
+- **`branches`** lists the branch patterns (`path.Match` syntax) a publish to
+  that remote may create or update. The manifest validates the patterns, but
+  publish does not enforce them yet. The canonical remote takes none, since
+  nothing is published to it.
+- Remote names start with a letter or digit and hold only letters, digits,
+  `.`, `_` and `-`, and no two differ only in case.
+- A URL under `remotes` is a URL, an `host:path` address or an absolute
+  path, never a relative path. No URL, `repo` included, may hold a control
+  character or start or end with a space.
+
+**The base.** A slot's base ref (its `ref`, else the source's `default_ref`)
+is read from, in order: the remote branch git has the local branch of that
+name track, the clone remote's branch, then the other remotes' branches by
+remote name. For `repo:` that is `origin`'s, unless the local branch tracks
+another remote. The same base is used for a new worktree slot's start, for
+status counts and for `sync-base`.
+
+### How the cache follows the manifest
+
+A missing cache is cloned from the clone remote, named as in the manifest
+whatever git's `clone.defaultRemoteName` says, into a staging directory beside
+the cache path. It is given every other declared remote, the canonical push
+block and the push default there, and only then moved to the cache path, so
+nothing can use it while it could still push to the canonical remote. Its
+permissions are those of a plain `git clone`.
+
+- A `cache_path` that is a symlink is cloned into the symlink's target.
+- A `cache_path` that is an existing empty directory (a mount point, say) is
+  cloned in place, as `git clone` does, and configured right after. For that
+  short moment the canonical remote is not yet blocked.
+- A path that holds anything other than a git checkout is refused.
+
+A clone slot (`mode: clone`, or a git slot with no `mode`) is set up the same
+way, since it is a repository of its own. Worktree slots share the cache's
+config.
+
+When the cache already exists, `angee source fetch` and `angee source pull`
+first reconcile it with the declared remotes, logging a warning for each
+change, so an edited remote takes effect:
+
+- each declared remote's URL, added when the remote is missing;
+- under `remotes`, the canonical remote's push block, which a remote declared
+  without `canonical` loses;
+- `remote.pushDefault`, when `push_default` is set;
+- under `remotes`, after the fetch, the branch `default_ref` tracks: it is
+  set to the clone remote's, as a fresh clone has it. A cache cloned under
+  `repo:` tracks `origin`, which `remotes` may now name a fork.
+
+A remote with several URLs is refused rather than rewritten. Stack bring-up,
+`angee workspace create` and `angee workspace repair` change nothing and
+only warn about each difference, because a `cache_path` can be shared by
+several stacks or be your own clone. A source declared with `repo` never
+reads or changes push URLs or tracking, so it cannot lift a block another
+stack sharing the cache set. Remotes the manifest does not declare are never
+read or changed, and one it stops declaring stays in the cache. A relative
 `repo` path is not compared.
+
+A clone slot is configured only when it is created. `angee workspace status`
+and `angee workspace repair` compare it with the declared remotes whenever
+they read it, and warn about each difference, such as a remote marked
+canonical since. They change nothing, so the warning says to use git in the
+slot, and it repeats on every read until the slot is fixed. A slot without
+its own `.git` is not compared.
 
 ## Workspaces
 

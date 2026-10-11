@@ -301,18 +301,22 @@ func dereferenceYAMLNode(node *yaml.Node) *yaml.Node {
 }
 
 type TemplateSource struct {
-	Source     string `yaml:"source"`
-	Kind       string `yaml:"kind"`
-	Repo       string `yaml:"repo"`
-	URL        string `yaml:"url"`
-	Path       string `yaml:"path"`
-	DefaultRef string `yaml:"default_ref"`
-	CachePath  string `yaml:"cache_path"`
-	Mode       string `yaml:"mode"`
-	Ref        string `yaml:"ref"`
-	Branch     string `yaml:"branch"`
-	Subpath    string `yaml:"subpath"`
-	Optional   bool   `yaml:"optional"`
+	Source string `yaml:"source"`
+	Kind   string `yaml:"kind"`
+	Repo   string `yaml:"repo"`
+	// Remotes and PushDefault declare an inline source's remotes, as in
+	// angee.yaml (manifest.Source); their strings are input-substitutable.
+	Remotes     map[string]manifest.SourceRemote `yaml:"remotes"`
+	PushDefault string                           `yaml:"push_default"`
+	URL         string                           `yaml:"url"`
+	Path        string                           `yaml:"path"`
+	DefaultRef  string                           `yaml:"default_ref"`
+	CachePath   string                           `yaml:"cache_path"`
+	Mode        string                           `yaml:"mode"`
+	Ref         string                           `yaml:"ref"`
+	Branch      string                           `yaml:"branch"`
+	Subpath     string                           `yaml:"subpath"`
+	Optional    bool                             `yaml:"optional"`
 }
 
 type ChainEntry struct {

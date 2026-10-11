@@ -358,6 +358,144 @@ func TestRemoteWithSeveralURLs(t *testing.T) {
 	}
 }
 
+// SyncBaseRef's order: git's own tracking of the local branch, then the base
+// remote (origin when none is given), then the other remotes by name, never
+// by the order git happens to list them in.
+func TestSyncBaseRefOrder(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	seed := filepath.Join(base, "seed")
+	runGit(t, "", "init", seed)
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	runGit(t, seed, "config", "user.name", "Test User")
+	runGit(t, seed, "commit", "--allow-empty", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	remotes := map[string]string{}
+	for _, name := range []string{"upstream", "origin", "afork", "zfork"} {
+		remotes[name] = filepath.Join(base, name+".git")
+		runGit(t, "", "init", "--bare", remotes[name])
+		runGit(t, seed, "commit", "--allow-empty", "-m", "release on "+name)
+		runGit(t, seed, "push", remotes[name], "main", "HEAD:refs/heads/release")
+	}
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "clone", "--origin", "upstream", remotes["upstream"], repo)
+	for _, name := range []string{"origin", "zfork", "afork"} {
+		runGit(t, repo, "remote", "add", name, remotes[name])
+	}
+	runGit(t, repo, "fetch", "--all")
+	client := New()
+	resolve := func(ref, baseRemote string) string {
+		t.Helper()
+		got, err := client.SyncBaseRef(ctx, repo, ref, baseRemote)
+		if err != nil {
+			t.Fatalf("SyncBaseRef(%q, %q) error = %v", ref, baseRemote, err)
+		}
+		return got
+	}
+
+	if got := resolve("release", "upstream"); got != "upstream/release" {
+		t.Fatalf("SyncBaseRef(release, upstream) = %q, want the base remote's", got)
+	}
+	if got := resolve("release", ""); got != "origin/release" {
+		t.Fatalf("SyncBaseRef(release, none) = %q, want origin's", got)
+	}
+	if got := resolve("upstream/release", "origin"); got != "upstream/release" {
+		t.Fatalf("SyncBaseRef(upstream/release) = %q, want it as given", got)
+	}
+	runGit(t, repo, "branch", "--track", "release", "zfork/release")
+	if got := resolve("release", "upstream"); got != "zfork/release" {
+		t.Fatalf("SyncBaseRef(release) with release tracking zfork = %q, want git's own tracking", got)
+	}
+	runGit(t, repo, "branch", "-D", "release")
+
+	runGit(t, repo, "remote", "remove", "origin")
+	runGit(t, repo, "remote", "remove", "upstream")
+	for range 20 {
+		if got := resolve("release", "upstream"); got != "afork/release" {
+			t.Fatalf("SyncBaseRef(release) without the base remote = %q, want the first remote by name", got)
+		}
+	}
+}
+
+// CloneRef names the remote it clones from when asked, whatever the user's
+// clone.defaultRemoteName says, and leaves git's default otherwise.
+func TestCloneRefNamesTheRemote(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	client := New()
+
+	named := filepath.Join(base, "named")
+	if err := client.CloneRef(ctx, remote, named, "", "upstream"); err != nil {
+		t.Fatalf("CloneRef(upstream) error = %v", err)
+	}
+	if got := configValue(t, named, "remote.upstream.url"); got != remote {
+		t.Fatalf("remote.upstream.url = %q, want %q", got, remote)
+	}
+	if urls, err := client.remoteURLs(ctx, named, "origin"); err != nil || len(urls) != 0 {
+		t.Fatalf("origin URLs = (%q, %v), want none", urls, err)
+	}
+	plain := filepath.Join(base, "plain")
+	if err := client.CloneRef(ctx, remote, plain, "", ""); err != nil {
+		t.Fatalf("CloneRef(default) error = %v", err)
+	}
+	if got := configValue(t, plain, "remote.origin.url"); got != remote {
+		t.Fatalf("remote.origin.url = %q, want %q", got, remote)
+	}
+
+	runGit(t, "", "config", "--global", "clone.defaultRemoteName", "upstream")
+	asOrigin := filepath.Join(base, "as-origin")
+	if err := client.CloneRef(ctx, remote, asOrigin, "", "origin"); err != nil {
+		t.Fatalf("CloneRef(origin) error = %v", err)
+	}
+	if got := configValue(t, asOrigin, "remote.origin.url"); got != remote {
+		t.Fatalf("remote.origin.url under clone.defaultRemoteName = %q, want %q", got, remote)
+	}
+}
+
+// The push URL and push default setters: SetPushURL leaves one push URL however
+// many there were, UnsetPushURL removes them all, and neither touches the fetch
+// URL.
+func TestPushURLAndPushDefault(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repo)
+	runGit(t, repo, "remote", "add", "upstream", "https://example.com/up.git")
+	client := New()
+
+	if urls, err := client.PushURLs(ctx, repo, "upstream"); err != nil || len(urls) != 0 {
+		t.Fatalf("PushURLs(none) = (%q, %v), want none", urls, err)
+	}
+	runGit(t, repo, "config", "--add", "remote.upstream.pushurl", "https://example.com/a.git")
+	runGit(t, repo, "config", "--add", "remote.upstream.pushurl", "https://example.com/b.git")
+	if err := client.SetPushURL(ctx, repo, "upstream", "angee-fetch-only://upstream"); err != nil {
+		t.Fatalf("SetPushURL() error = %v", err)
+	}
+	if urls, err := client.PushURLs(ctx, repo, "upstream"); err != nil || len(urls) != 1 || urls[0] != "angee-fetch-only://upstream" {
+		t.Fatalf("PushURLs(set) = (%q, %v), want the one guard URL", urls, err)
+	}
+	if got := configValue(t, repo, "remote.upstream.url"); got != "https://example.com/up.git" {
+		t.Fatalf("remote.upstream.url = %q, want it unchanged", got)
+	}
+	if err := client.UnsetPushURL(ctx, repo, "upstream"); err != nil {
+		t.Fatalf("UnsetPushURL() error = %v", err)
+	}
+	if urls, err := client.PushURLs(ctx, repo, "upstream"); err != nil || len(urls) != 0 {
+		t.Fatalf("PushURLs(unset) = (%q, %v), want none", urls, err)
+	}
+
+	if err := client.SetPushDefault(ctx, repo, "upstream"); err != nil {
+		t.Fatalf("SetPushDefault() error = %v", err)
+	}
+	if got := configValue(t, repo, "remote.pushDefault"); got != "upstream" {
+		t.Fatalf("remote.pushDefault = %q, want upstream", got)
+	}
+}
+
 func configValue(t *testing.T, dir, key string) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
@@ -402,7 +540,7 @@ func TestSyncBaseRefPrefersRemoteForSlashBranchNames(t *testing.T) {
 	if err := client.Fetch(ctx, repo); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
-	got, err := client.SyncBaseRef(ctx, repo, "release/2026-05")
+	got, err := client.SyncBaseRef(ctx, repo, "release/2026-05", "")
 	if err != nil {
 		t.Fatalf("SyncBaseRef() error = %v", err)
 	}

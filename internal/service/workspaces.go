@@ -433,6 +433,9 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.State = "ready"
 		return status
 	}
+	if wsSource.Mode != manifest.WorkspaceSourceModeWorktree {
+		p.reportCloneSlotRemotes(ctx, workspaceName, slot, path, source, wsSource)
+	}
 	target := workspaceVCSSlot(path, source, wsSource)
 	read, err := p.slotDriver(target).Status(ctx, target)
 	status.CurrentRef = read.CurrentRef
@@ -1362,7 +1365,7 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 // its base ref (gitdriver.CommitsBeyondBase), and returns that base.
 func workspaceGitSourceCommitsBeyondBase(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (ahead int, base string, known bool) {
 	base = workspaceSourceBaseRef(source, wsSource)
-	ahead, known = gitdriver.CommitsBeyondBase(ctx, client, path, base)
+	ahead, known = gitdriver.CommitsBeyondBase(ctx, client, path, base, sourceBaseRemote(source))
 	return ahead, base, known
 }
 
@@ -1421,7 +1424,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 		if err := client.Fetch(ctx, target.path); err != nil {
 			return nil, gitFailure(err, fetch)
 		}
-		syncRef, err := client.SyncBaseRef(ctx, target.path, baseRefs[i])
+		syncRef, err := client.SyncBaseRef(ctx, target.path, baseRefs[i], sourceBaseRemote(target.source))
 		if err != nil {
 			var command *git.CommandError
 			if errors.As(err, &command) {
@@ -1575,6 +1578,9 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 				return nil, cleanup, err
 			}
 			if source.Kind != "" {
+				if err := manifest.ValidateSource(sourceName, source); err != nil {
+					return nil, cleanup, fmt.Errorf("workspace source %q: %w", slot, err)
+				}
 				if stack.Sources == nil {
 					stack.Sources = map[string]manifest.Source{}
 				}
@@ -1737,15 +1743,37 @@ func resolveWorkspaceTemplateSource(spec copierx.TemplateSource, inputs map[stri
 	if err != nil {
 		return manifest.Source{}, err
 	}
+	pushDefault, err := substitute.Resolve(spec.PushDefault, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	var remotes map[string]manifest.SourceRemote
+	for name, declared := range spec.Remotes {
+		remote := manifest.SourceRemote{Canonical: declared.Canonical}
+		if remote.URL, err = substitute.Resolve(declared.URL, ctx); err != nil {
+			return manifest.Source{}, fmt.Errorf("remote %q url: %w", name, err)
+		}
+		for _, pattern := range declared.Branches {
+			resolved, err := substitute.Resolve(pattern, ctx)
+			if err != nil {
+				return manifest.Source{}, fmt.Errorf("remote %q branches: %w", name, err)
+			}
+			remote.Branches = append(remote.Branches, resolved)
+		}
+		if remotes == nil {
+			remotes = map[string]manifest.SourceRemote{}
+		}
+		remotes[name] = remote
+	}
 	if kind == "" {
 		switch {
-		case repo != "":
+		case repo != "" || len(remotes) > 0:
 			kind = "git"
 		case path != "":
 			kind = "local"
 		}
 	}
-	return manifest.Source{Kind: kind, Repo: repo, URL: url, Path: path, DefaultRef: defaultRef, CachePath: cachePath}, nil
+	return manifest.Source{Kind: kind, Repo: repo, Remotes: remotes, PushDefault: pushDefault, URL: url, Path: path, DefaultRef: defaultRef, CachePath: cachePath}, nil
 }
 
 func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceName string, inputs map[string]string, workspaceName string, alloc map[string]int) (manifest.WorkspaceSource, error) {
@@ -1879,12 +1907,12 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 				logctx.From(ctx).Warn(fmt.Sprintf("branch %q already exists in %s; checking it out into worktree without creating a new branch", ws.Branch, cachePath))
 			}
 			// The cache is cloned on its default ref only, so another base may
-			// exist only as origin/<ref>. Start from that explicitly: given the
-			// bare name, git creates and checks out a local tracking branch of
-			// that name (even with -b), and --detach refuses it.
+			// exist only as <clone remote>/<ref>. Start from that explicitly:
+			// given the bare name, git creates and checks out a local tracking
+			// branch of that name (even with -b), and --detach refuses it.
 			start, startIsRemote := ref, false
 			if ref != "" && !client.RefExists(ctx, cachePath, ref) {
-				if remote, err := client.SyncBaseRef(ctx, cachePath, ref); err == nil && remote != ref {
+				if remote, err := client.SyncBaseRef(ctx, cachePath, ref, sourceBaseRemote(source)); err == nil && remote != ref {
 					start, startIsRemote = remote, true
 				}
 			}
@@ -1944,7 +1972,14 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		}
 		defer func() { _ = os.RemoveAll(stageRoot) }()
 		stage := filepath.Join(stageRoot, "source")
-		if err := p.gitClient().CloneRef(ctx, source.Repo, stage, ref); err != nil {
+		// A clone slot is a repository of its own, so it gets the source's
+		// remotes as the cache does, the canonical push block included.
+		cloneRemote, remote, _ := source.CloneRemote()
+		if err := p.gitClient().CloneRef(ctx, remote.URL, stage, ref, cloneRemote); err != nil {
+			return nil, err
+		}
+		// Fresh mode only writes, so the holder needs only the source for errors.
+		if err := syncSourceRemotes(ctx, p.gitClient(), remoteHolder{source: sourceName}, stage, source, remoteSyncFresh); err != nil {
 			return nil, err
 		}
 		if err := destGuard.ReplaceFrom(ctx, stage); err != nil {

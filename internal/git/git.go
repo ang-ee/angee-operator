@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -289,8 +290,15 @@ func (c Client) Clone(ctx context.Context, repo, dest string, args ...string) er
 	return err
 }
 
-func (c Client) CloneRef(ctx context.Context, repo, dest, ref string) error {
+// CloneRef clones repo into dest with ref checked out (the remote's default
+// branch when empty), naming the remote remote. Callers name it, origin
+// included: without --origin git takes the name from the user's
+// clone.defaultRemoteName, which the caller does not know.
+func (c Client) CloneRef(ctx context.Context, repo, dest, ref, remote string) error {
 	args := []string{}
+	if remote != "" {
+		args = append(args, "--origin", remote)
+	}
 	if ref != "" {
 		args = append(args, "--branch", ref)
 	}
@@ -489,7 +497,13 @@ func (c Client) RefExists(ctx context.Context, dir, ref string) bool {
 	return true
 }
 
-func (c Client) SyncBaseRef(ctx context.Context, dir, ref string) (string, error) {
+// SyncBaseRef returns the ref at dir that the base ref is synced from: ref
+// itself when it is a full or remote-qualified ref; otherwise, in order, the
+// remote branch the local branch ref tracks (git's own <ref>@{upstream}),
+// <baseRemote>/<ref>, <remote>/<ref> for the other remotes in name order, and
+// the local ref. baseRemote is the remote the base comes from, the source's
+// clone remote; empty means origin.
+func (c Client) SyncBaseRef(ctx context.Context, dir, ref, baseRemote string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", fmt.Errorf("base ref is empty")
@@ -498,14 +512,22 @@ func (c Client) SyncBaseRef(ctx context.Context, dir, ref string) (string, error
 	if err != nil {
 		return "", err
 	}
+	slices.Sort(remotes)
+	if baseRemote == "" {
+		baseRemote = "origin"
+	}
 	candidates := []string{}
 	if strings.HasPrefix(ref, "refs/") || remoteQualifiedRef(ref, remotes) {
 		candidates = append(candidates, ref)
 	} else {
+		if upstream, ok := c.trackedRemoteBranch(ctx, dir, ref); ok {
+			candidates = append(candidates, upstream)
+		}
+		if slices.Contains(remotes, baseRemote) {
+			candidates = append(candidates, baseRemote+"/"+ref)
+		}
 		for _, remote := range remotes {
-			if remote == "origin" {
-				candidates = append([]string{remote + "/" + ref}, candidates...)
-			} else {
+			if remote != baseRemote {
 				candidates = append(candidates, remote+"/"+ref)
 			}
 		}
@@ -522,6 +544,43 @@ func (c Client) SyncBaseRef(ctx context.Context, dir, ref string) (string, error
 		}
 	}
 	return "", fmt.Errorf("base ref %q was not found after fetch", ref)
+}
+
+// trackedRemoteBranch returns the remote branch the local branch branch tracks,
+// as <remote>/<branch>, and false when it tracks none or a local branch, or no
+// local branch has that name. git reads <name>@{upstream} only with the short
+// branch name, not refs/heads/<name>.
+func (c Client) trackedRemoteBranch(ctx context.Context, dir, branch string) (string, bool) {
+	out, err := c.runText(ctx, dir, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", EndOfOptions, branch+"@{upstream}")
+	if err != nil {
+		return "", false
+	}
+	upstream, ok := strings.CutPrefix(out, "refs/remotes/")
+	return upstream, ok && upstream != ""
+}
+
+// SetUpstream makes the local branch branch track upstream, a remote-tracking
+// ref; pass it in full (refs/remotes/origin/main), since a local branch can
+// have the short name.
+func (c Client) SetUpstream(ctx context.Context, dir, branch, upstream string) error {
+	if _, err := c.Run(ctx, dir, "branch", "--set-upstream-to", upstream, EndOfOptions, branch); err != nil {
+		return fmt.Errorf("set the upstream of %s to %s: %w", branch, upstream, err)
+	}
+	return nil
+}
+
+// BranchUpstream returns the remote and the merge ref the local branch branch
+// tracks (branch.<name>.remote and .merge), empty when unset.
+func (c Client) BranchUpstream(ctx context.Context, dir, branch string) (remote, merge string, err error) {
+	remotes, err := c.configValues(ctx, dir, "branch."+branch+".remote")
+	if err != nil || len(remotes) == 0 {
+		return "", "", err
+	}
+	merges, err := c.configValues(ctx, dir, "branch."+branch+".merge")
+	if err != nil || len(merges) == 0 {
+		return remotes[0], "", err
+	}
+	return remotes[0], merges[0], nil
 }
 
 func remoteQualifiedRef(ref string, remotes []string) bool {
@@ -694,7 +753,13 @@ func (c Client) RemoteURL(ctx context.Context, dir, remote string) (string, bool
 }
 
 func (c Client) remoteURLs(ctx context.Context, dir, remote string) ([]string, error) {
-	value, err := c.runText(ctx, dir, "config", "--get-all", "remote."+remote+".url")
+	return c.configValues(ctx, dir, "remote."+remote+".url")
+}
+
+// configValues returns every value of key in the repository at dir, and none
+// when the key is unset.
+func (c Client) configValues(ctx context.Context, dir, key string) ([]string, error) {
+	value, err := c.runText(ctx, dir, "config", "--get-all", EndOfOptions, key)
 	if err != nil {
 		// `git config` exits 1 for a missing key; anything else (an
 		// unreadable config, a cancelled context) is an error.
@@ -702,12 +767,43 @@ func (c Client) remoteURLs(ctx context.Context, dir, remote string) ([]string, e
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && ctx.Err() == nil {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read remote.%s.url: %w", remote, err)
+		return nil, fmt.Errorf("read %s: %w", key, err)
 	}
 	if value == "" {
 		return nil, nil
 	}
 	return strings.Split(value, "\n"), nil
+}
+
+// PushURLs returns remote's configured push URLs (remote.<name>.pushurl), and
+// none when pushes go to its fetch URL.
+func (c Client) PushURLs(ctx context.Context, dir, remote string) ([]string, error) {
+	return c.configValues(ctx, dir, "remote."+remote+".pushurl")
+}
+
+// SetPushURL makes rawURL remote's only push URL.
+func (c Client) SetPushURL(ctx context.Context, dir, remote, rawURL string) error {
+	if _, err := c.Run(ctx, dir, "config", "--replace-all", EndOfOptions, "remote."+remote+".pushurl", rawURL); err != nil {
+		return fmt.Errorf("set remote.%s.pushurl: %w", remote, err)
+	}
+	return nil
+}
+
+// UnsetPushURL removes remote's push URLs, so pushes go to its fetch URL.
+func (c Client) UnsetPushURL(ctx context.Context, dir, remote string) error {
+	if _, err := c.Run(ctx, dir, "config", "--unset-all", EndOfOptions, "remote."+remote+".pushurl"); err != nil {
+		return fmt.Errorf("unset remote.%s.pushurl: %w", remote, err)
+	}
+	return nil
+}
+
+// SetPushDefault sets remote.pushDefault, the remote a push goes to when the
+// branch names no pushRemote.
+func (c Client) SetPushDefault(ctx context.Context, dir, remote string) error {
+	if _, err := c.Run(ctx, dir, "config", EndOfOptions, "remote.pushDefault", remote); err != nil {
+		return fmt.Errorf("set remote.pushDefault: %w", err)
+	}
+	return nil
 }
 
 // EnsureRemoteURL makes rawURL the URL remote fetches from in the repository
