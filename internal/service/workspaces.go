@@ -24,6 +24,8 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/substitute"
+	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
 )
 
 const (
@@ -431,83 +433,44 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.State = "ready"
 		return status
 	}
-	client := p.gitClient()
-	currentRef, err := client.CurrentRef(ctx, path)
+	target := workspaceVCSSlot(path, source, wsSource)
+	read, err := p.slotDriver(target).Status(ctx, target)
+	status.CurrentRef = read.CurrentRef
+	status.Dirty = read.Dirty
+	status.Upstream = read.Upstream
+	status.Ahead = read.Ahead
+	status.Behind = read.Behind
 	if err != nil {
 		status.State = "error"
 		status.Pushed = false
 		status.Error = err.Error()
 		return status
 	}
-	status.CurrentRef = currentRef
-	dirty, err := client.Dirty(ctx, path)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	status.Dirty = dirty
-	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
-		status.State = workspaceSourceStateBranchMismatch
-		status.Pushed = false
-		status.UnpushedReason = reason
-		return status
-	}
-	if dirty {
-		status.State = "dirty"
-		status.Pushed = false
-		status.UnpushedReason = "uncommitted changes"
-		return status
-	}
-	base, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	if hasUpstream {
-		status.Upstream = base
-	}
-	if base == "" {
-		base = wsSource.Ref
-	}
-	if base == "" {
-		base = source.DefaultRef
-	}
-	if base == "" {
-		status.State = "clean"
-		return status
-	}
-	ahead, behind, err := client.AheadBehind(ctx, path, base)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	status.Ahead = ahead
-	status.Behind = behind
-	switch {
-	case ahead > 0 && behind > 0:
-		status.State = "diverged"
-		status.Pushed = false
-		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
-	case ahead > 0:
-		status.State = "ahead"
-		status.Pushed = false
-		if hasUpstream {
-			status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
-		} else {
-			status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base)
-		}
-	case behind > 0:
-		status.State = "behind"
-	default:
-		status.State = "clean"
-	}
+	status.State = workspaceSourceStateOf(read)
+	status.Pushed = read.Pushed
+	status.UnpushedReason = read.UnpushedReason
 	return status
+}
+
+// workspaceSourceStateOf names the state a slot's driver status puts it in.
+// Ahead and behind describe the slot against its upstream or base; whether
+// the slot holds work of its own is Pushed, which can be true while it is
+// ahead (after sync-base, its new commits are the base's).
+func workspaceSourceStateOf(read vcs.Status) string {
+	switch {
+	case read.MismatchReason != "":
+		return workspaceSourceStateBranchMismatch
+	case read.Dirty:
+		return "dirty"
+	case read.Ahead > 0 && read.Behind > 0:
+		return "diverged"
+	case read.Ahead > 0:
+		return "ahead"
+	case read.Behind > 0:
+		return "behind"
+	default:
+		return "clean"
+	}
 }
 
 func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool) error {
@@ -589,7 +552,7 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
+	if reason := gitdriver.BranchMismatch(currentRef, wsSource.Branch); reason != "" {
 		hint := fmt.Sprintf("Switch it back with `git -C %s switch %s`, then retry.", path, wsSource.Branch)
 		return &OperationError{
 			Code:      CodePreconditionFailed,
@@ -605,19 +568,15 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 	return nil
 }
 
+// workspaceSourceRequiresBranch reports whether a slot must stay on its
+// manifest branch: a worktree slot that names one.
 func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
 	return wsSource.Mode == manifest.WorkspaceSourceModeWorktree && wsSource.Branch != ""
 }
 
-func workspaceGitBranchMismatchReason(currentRef string, wsSource manifest.WorkspaceSource) string {
-	if !workspaceSourceRequiresBranch(wsSource) || currentRef == wsSource.Branch {
-		return ""
-	}
-	return fmt.Sprintf("current branch/ref %q, expected workspace branch %q", currentRef, wsSource.Branch)
-}
-
+// ensureWorkspaceGitSourcesPushed refuses to let a workspace go while a slot
+// holds work nothing else does, as its driver's status reports it.
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
-	client := p.gitClient()
 	unpushed := []string{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
@@ -638,74 +597,22 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 			}
 			return err
 		}
-		reason, err := workspaceGitSourceUnpushedReason(ctx, client, path, source, wsSource)
-		if err != nil {
+		target := workspaceVCSSlot(path, source, wsSource)
+		read, err := p.slotDriver(target).Status(ctx, target)
+		// A slot whose base no longer resolves, such as a deleted branch, can
+		// still be let go: the driver decided Pushed without counting.
+		var countErr *vcs.CountError
+		if err != nil && !errors.As(err, &countErr) {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
-		if reason != "" {
-			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, reason))
+		if !read.Pushed {
+			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, read.UnpushedReason))
 		}
 	}
 	if len(unpushed) > 0 {
 		return fmt.Errorf("workspace %q has git sources that have not been pushed: %s", workspaceName, strings.Join(unpushed, ", "))
 	}
 	return nil
-}
-
-func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (string, error) {
-	dirty, err := client.Dirty(ctx, path)
-	if err != nil {
-		return "", err
-	}
-	if dirty {
-		return "uncommitted changes", nil
-	}
-	// Commits on a detached HEAD are held only by the worktree, so purging it
-	// loses whatever no branch, remote branch or tag also holds.
-	if _, onBranch, err := client.CurrentBranch(ctx, path); err != nil {
-		return "", err
-	} else if !onBranch {
-		held, err := client.CountNotOnAnyRef(ctx, path)
-		if err != nil {
-			return "", err
-		}
-		if held > 0 {
-			return fmt.Sprintf("%d commit(s) on a detached HEAD that no branch holds", held), nil
-		}
-		return "", nil
-	}
-	base, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil {
-		return "", err
-	}
-	if !hasUpstream {
-		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known {
-			if ahead == 0 {
-				return "", nil
-			}
-			return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
-		}
-	}
-	if base == "" {
-		base = wsSource.Ref
-	}
-	if base == "" {
-		base = source.DefaultRef
-	}
-	if base == "" {
-		return "", nil
-	}
-	ahead, err := client.AheadCount(ctx, path, base)
-	if err != nil {
-		return "", err
-	}
-	if ahead == 0 {
-		return "", nil
-	}
-	if hasUpstream {
-		return fmt.Sprintf("%d commit(s) ahead of %s", ahead, base), nil
-	}
-	return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
 }
 
 func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error) {
@@ -1451,33 +1358,12 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 	}
 }
 
-// workspaceGitSourceCommitsBeyondBase counts the slot's own commits: those
-// reachable from HEAD but from neither its base ref nor that ref's remote
-// counterpart (origin/<ref>). The cache's local base only moves on `source
-// pull`, while sync-base moves a slot to the remote one, so counting against
-// either alone would take the remote's commits for the slot's work. known is
-// false when the slot names no base or the count cannot be read; callers then
-// keep their previous behaviour.
+// workspaceGitSourceCommitsBeyondBase counts the slot's own commits beyond
+// its base ref (gitdriver.CommitsBeyondBase), and returns that base.
 func workspaceGitSourceCommitsBeyondBase(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (ahead int, base string, known bool) {
 	base = workspaceSourceBaseRef(source, wsSource)
-	if base == "" {
-		return 0, "", false
-	}
-	var bases []string
-	if client.RefExists(ctx, path, base) {
-		bases = append(bases, base)
-	}
-	if remote, err := client.SyncBaseRef(ctx, path, base); err == nil && remote != base {
-		bases = append(bases, remote)
-	}
-	if len(bases) == 0 {
-		return 0, base, false
-	}
-	ahead, err := client.CountNotOn(ctx, path, bases...)
-	if err != nil {
-		return 0, base, false
-	}
-	return ahead, base, true
+	ahead, known = gitdriver.CommitsBeyondBase(ctx, client, path, base)
+	return ahead, base, known
 }
 
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (states []api.SourceState, err error) {

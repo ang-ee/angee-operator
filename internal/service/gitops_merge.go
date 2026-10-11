@@ -180,7 +180,7 @@ func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpR
 	cmd.Stderr = stderr
 	trace := logctx.TraceExec(ctx, "git", args, workdir, slog.Any("env", logctx.EnvKeys(env)))
 	runErr := cmd.Run()
-	trace(combineCapturedOutput(stdout.Bytes(), stderr.Bytes()), runErr)
+	trace(logctx.CombinedOutput(stdout.Bytes(), stderr.Bytes()), runErr)
 	combined := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
 
 	result := api.GitOpResult{
@@ -205,16 +205,6 @@ func runGitOpAt(ctx context.Context, workdir string, args ...string) (api.GitOpR
 	// to start the merge at all" (unexpected). It carries git's output so
 	// the failure can be classified and quoted.
 	return result, &git.CommandError{Args: logctx.RedactArgs(args), Output: logctx.RedactText(combined), Err: runErr}
-}
-
-func combineCapturedOutput(stdout, stderr []byte) []byte {
-	if len(stdout) == 0 {
-		return stderr
-	}
-	if len(stderr) == 0 {
-		return stdout
-	}
-	return append(append([]byte(nil), stdout...), stderr...)
 }
 
 func runGitCapture(ctx context.Context, workdir string, args ...string) (string, error) {

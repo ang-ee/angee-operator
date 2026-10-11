@@ -494,10 +494,19 @@ upstream tracking. Publish without `--branch` also reports `nothing to
 publish` for a source with no upstream and no commits beyond its base.
 
 "Commits of its own" are commits that neither the base ref nor its remote
-counterpart (`origin/<ref>`) holds, so commits a source gained from
-`sync-base` do not count. `workspace destroy` uses the same measure, and for
-a source on a detached HEAD it refuses only commits that no branch, remote
-branch or tag holds.
+counterpart (`<remote>/<ref>`, origin's when it has one) holds, so commits a
+source gained from `sync-base` do not count. `workspace destroy` and the
+`pushed` flag in `workspace status` and `source status` use the same measure,
+and for a source on a detached HEAD they count only commits that no branch,
+remote branch or tag holds. A `clone` source, like a source cache, is a
+repository of its own whose branches go with it, so without an upstream, or
+on a detached HEAD, it counts every commit that no remote branch or tag holds
+(git keeps fetched tags with local ones). Only commits reachable from the
+checked-out commit are counted, not other local branches or a stash. After
+`sync-base`, a source can therefore be `ahead` of its local base and still
+`pushed`. The `ahead`, `behind` and `diverged` states count against the
+source's upstream, else its base ref, or its remote counterpart when the
+cache has no local `<ref>`.
 
 ### Repairing missing source slots
 

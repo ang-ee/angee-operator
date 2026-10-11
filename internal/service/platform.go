@@ -27,6 +27,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/runtime/proccompose"
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +36,7 @@ type Platform struct {
 	composeBackend  runtime.Backend
 	procBackend     runtime.Backend
 	portUnavailable func(int) bool
+	slotDrivers     func(vcs.Slot) vcs.Driver // nil selects slotDriver's default
 	jobOutput       *jobOutputSink
 	interactive     bool
 	jobRunsMu       sync.RWMutex

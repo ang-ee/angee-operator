@@ -6,6 +6,49 @@ latest tag.
 
 ## Unreleased
 
+### Changed
+
+- **Workspace and source status agree with `workspace destroy` on whether a
+  source is pushed.** They computed it separately. Status now uses destroy's
+  rule from v0.16.0: a source on a detached HEAD counts only commits that no
+  branch, remote branch or tag holds, and a source without an upstream
+  counts only commits that neither its base ref nor its remote counterpart
+  (`<remote>/<ref>`, origin's first) holds.
+  - After `sync-base`, a source reads `ahead` of its local base but
+    `pushed`, where it used to read unpushed while push and destroy had
+    nothing to do.
+  - The unpushed reason follows the same rule. A diverged source without an
+    upstream says "N commit(s) ahead of base ref main with no upstream", and
+    a detached one "N commit(s) on a detached HEAD that no branch holds".
+  - The topology's unpushed count and `workspace repair` go by `pushed`, so
+    a `clean` detached source with commits of its own is counted and named.
+    Repair describes an ahead-but-pushed source as "ahead by N commit(s)".
+  - The `ahead`, `behind` and `diverged` states are unchanged.
+- Slot reads go through a driver interface (`internal/vcs`, with a git
+  driver), the first step towards jj-backed slots (phase 4a of
+  `.agents/plans/jj-native-operator.md`, now committed). Source caches are
+  read through the same git driver.
+- A failing source diff is reported as `GIT_FAILED` with git's message,
+  where it was `INTERNAL`; the HTTP status is unchanged.
+
+### Fixed
+
+- **`workspace destroy` let a `clone` source go while commits only its own
+  branches held**, on a detached HEAD or without an upstream. A clone is a
+  repository of its own, so its branches go with it. Destroy and status now
+  count, for a clone, every commit that no remote branch or tag holds ("N
+  commit(s) on a detached HEAD that no remote branch or tag holds", "N
+  commit(s) that no remote branch or tag holds, with no upstream"). Tags
+  count because git keeps fetched tags with local ones, so a clone pinned
+  at a release tag still reads pushed. Source cache status uses the same
+  rule. Worktree sources keep the rule above: their branches stay in the
+  source cache. A clone without an upstream whose base branch was deleted
+  can now be destroyed when every commit is on a remote branch; it used to
+  be refused.
+- `workspace status` reported a source whose base exists only on a remote
+  (`origin/<ref>`) in the cache as an error; it now counts against that
+  remote ref.
+
 ## v0.21.2 — 2026-10-09
 
 ### Security

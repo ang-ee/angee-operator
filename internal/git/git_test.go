@@ -560,3 +560,70 @@ func TestClientReadsValuesAsArgumentsOnly(t *testing.T) {
 		t.Errorf("CountNotOnAnyRef() at origin/main = %d, %v, want 0", held, err)
 	}
 }
+
+// A ref is read as a revision only: one that looks like an option is refused
+// by git rather than run as one (--output would write a file on the host).
+func TestDiffReadsRefAsRevisionOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", "--initial-branch=main", repo)
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "hello again\n")
+	runGit(t, repo, "commit", "-am", "second")
+
+	client := New()
+	files, err := client.Diff(ctx, repo, "HEAD~1")
+	if err != nil || len(files) != 1 || files[0].NewName != "README.md" {
+		t.Fatalf("Diff(HEAD~1) = %v, %v, want README.md", files, err)
+	}
+	written := filepath.Join(t.TempDir(), "written.diff")
+	if _, err := client.Diff(ctx, repo, "--output="+written); err == nil {
+		t.Fatal("Diff() accepted an option as its ref")
+	}
+	if _, err := os.Stat(written); !os.IsNotExist(err) {
+		t.Fatalf("Diff() with an option as ref wrote %s (stat error = %v)", written, err)
+	}
+}
+
+// LinkedWorktree tells a worktree added from a repository from a repository of
+// its own, also when the checkout is reached from a subdirectory through a
+// symlink, where git prints the two directories in different forms.
+func TestLinkedWorktree(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "--initial-branch=main", repo)
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "readme\n")
+	if err := os.Mkdir(filepath.Join(repo, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(repo, "sub", "file.txt"), "file\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "-m", "init")
+	worktree := filepath.Join(base, "worktree")
+	runGit(t, repo, "worktree", "add", "--detach", worktree)
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+
+	client := New()
+	for _, tc := range []struct {
+		dir  string
+		want bool
+	}{
+		{dir: repo, want: false},
+		{dir: filepath.Join(link, "sub"), want: false},
+		{dir: worktree, want: true},
+		{dir: filepath.Join(worktree, "sub"), want: true},
+	} {
+		got, err := client.LinkedWorktree(ctx, tc.dir)
+		if err != nil || got != tc.want {
+			t.Fatalf("LinkedWorktree(%s) = %v, %v, want %v", tc.dir, got, err, tc.want)
+		}
+	}
+}

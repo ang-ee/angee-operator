@@ -1,16 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
-	gitx "github.com/ang-ee/angee-operator/internal/git"
-	"github.com/ang-ee/angee-operator/internal/logctx"
-	"github.com/bluekeyes/go-gitdiff/gitdiff"
+	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
 )
 
 // SourceDiff returns the unified-diff hunks for a top-level source. With
@@ -28,98 +24,16 @@ func (p *Platform) SourceDiff(ctx context.Context, name, ref string) ([]api.Diff
 	if source.Kind != "git" {
 		return nil, &InvalidInputError{Field: "name", Reason: fmt.Sprintf("source %q is %s, only git sources can be diffed", name, source.Kind)}
 	}
-	return runDiffAt(ctx, p.sourcePath(name, source), ref)
+	return gitdriver.New(p.gitClient()).Diff(ctx, vcs.Slot{Path: p.sourcePath(name, source)}, ref)
 }
 
 // WorkspaceSourceDiff returns the unified-diff hunks for a per-workspace
 // source slot. Semantics for ref mirror SourceDiff.
 func (p *Platform) WorkspaceSourceDiff(ctx context.Context, workspace, slot, ref string) ([]api.DiffFile, error) {
-	stack, _, _, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
+	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
 	if err != nil {
 		return nil, err
 	}
-	_ = stack
-	return runDiffAt(ctx, path, ref)
-}
-
-func runDiffAt(ctx context.Context, workdir, ref string) ([]api.DiffFile, error) {
-	if workdir == "" {
-		return nil, &NotFoundError{Kind: "worktree", Name: workdir}
-	}
-	args := []string{"diff", "--no-color", "--no-ext-diff"}
-	// Empty ref = "working tree vs HEAD" (uncommitted changes).
-	// Non-empty ref = "HEAD vs ref" (committed range). Use the
-	// two-argument form so any uncommitted local edits don't leak
-	// into ref-to-ref output — `git diff <ref>` (single-arg) would
-	// compare the working tree against ref, which is the wrong
-	// surface for clients asking for a committed diff.
-	// The ref follows --end-of-options, so git refuses one such as
-	// `--output=<path>` as a bad revision instead of writing that file.
-	if ref != "" {
-		args = append(args, gitx.EndOfOptions, "HEAD", ref, "--")
-	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = workdir
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	trace := logctx.TraceExec(ctx, "git", args, workdir)
-	runErr := cmd.Run()
-	trace(combineCapturedOutput(stdout.Bytes(), stderr.Bytes()), runErr)
-	if runErr != nil {
-		return nil, fmt.Errorf("git %s in %s: %w (%s)", strings.Join(args, " "), workdir, runErr, strings.TrimSpace(stderr.String()))
-	}
-	files, _, err := gitdiff.Parse(stdout)
-	if err != nil {
-		return nil, fmt.Errorf("parse diff: %w", err)
-	}
-	out := make([]api.DiffFile, 0, len(files))
-	for _, f := range files {
-		out = append(out, convertDiffFile(f))
-	}
-	return out, nil
-}
-
-func convertDiffFile(f *gitdiff.File) api.DiffFile {
-	mode := ""
-	switch {
-	case f.NewMode != 0:
-		mode = fmt.Sprintf("%o", f.NewMode)
-	case f.OldMode != 0:
-		mode = fmt.Sprintf("%o", f.OldMode)
-	}
-	hunks := make([]api.DiffHunk, 0, len(f.TextFragments))
-	for _, frag := range f.TextFragments {
-		hunks = append(hunks, convertFragment(frag))
-	}
-	return api.DiffFile{
-		OldPath:   f.OldName,
-		NewPath:   f.NewName,
-		Mode:      mode,
-		IsBinary:  f.IsBinary,
-		IsNew:     f.IsNew,
-		IsDeleted: f.IsDelete,
-		IsRename:  f.IsRename,
-		Hunks:     hunks,
-	}
-}
-
-func convertFragment(frag *gitdiff.TextFragment) api.DiffHunk {
-	body := &bytes.Buffer{}
-	for _, line := range frag.Lines {
-		body.WriteString(line.Op.String())
-		body.WriteString(line.Line)
-		if !strings.HasSuffix(line.Line, "\n") {
-			body.WriteByte('\n')
-		}
-	}
-	return api.DiffHunk{
-		OldStart: int(frag.OldPosition),
-		OldLines: int(frag.OldLines),
-		NewStart: int(frag.NewPosition),
-		NewLines: int(frag.NewLines),
-		Header:   strings.TrimSpace(frag.Comment),
-		Body:     body.String(),
-	}
+	target := workspaceVCSSlot(path, source, wsSource)
+	return p.slotDriver(target).Diff(ctx, target, ref)
 }
