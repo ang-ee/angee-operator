@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,8 +24,8 @@ type fakeDriver struct {
 	slots  []vcs.Slot
 
 	calls      []fakeCall
-	detached   bool             // CurrentBranch reports no branch
-	upstream   string           // Upstream's answer; "" for none
+	detached   bool             // the checkout is on no branch
+	upstream   string           // the branch it tracks; "" for none
 	syncResult *api.GitOpResult // SyncBase's result; nil for OK
 	resolveErr error            // returned by ResolveBase
 	fail       map[string]error // an error for a method by name
@@ -65,24 +66,6 @@ func (f *fakeDriver) DirtyPaths(_ context.Context, s vcs.Slot) ([]string, error)
 	return nil, f.fail["DirtyPaths"]
 }
 
-func (f *fakeDriver) CurrentBranch(_ context.Context, s vcs.Slot) (string, bool, error) {
-	f.call("CurrentBranch", s)
-	if f.detached {
-		return "", false, nil
-	}
-	return s.Branch, true, nil
-}
-
-func (f *fakeDriver) Upstream(_ context.Context, s vcs.Slot) (string, bool, error) {
-	f.call("Upstream", s)
-	return f.upstream, f.upstream != "", nil
-}
-
-func (f *fakeDriver) CommitsBeyondBase(_ context.Context, s vcs.Slot) (int, bool) {
-	f.call("CommitsBeyondBase", s)
-	return 1, true
-}
-
 func (f *fakeDriver) FetchURL(_ context.Context, s vcs.Slot) string {
 	f.call("FetchURL", s)
 	return "fake://fetch"
@@ -111,13 +94,28 @@ func (f *fakeDriver) Pull(_ context.Context, s vcs.Slot) error {
 	return nil
 }
 
-func (f *fakeDriver) Push(_ context.Context, s vcs.Slot, ref string) error {
-	f.call("Push", s, ref)
-	return nil
+// PlanPush plans as the git driver does for a checkout with commits of its
+// own: the ref, else the upstream, else refused when detached, else the
+// branch to track.
+func (f *fakeDriver) PlanPush(_ context.Context, s vcs.Slot, ref, branch string) (vcs.PushPlan, error) {
+	f.call("PlanPush", s, ref, branch)
+	switch {
+	case ref != "":
+		return vcs.PushPlan{Ref: ref}, nil
+	case f.upstream != "":
+		return vcs.PushPlan{}, nil
+	case f.detached:
+		return vcs.PushPlan{}, vcs.ErrDetachedWithWork
+	}
+	return vcs.PushPlan{Track: branch}, nil
 }
 
-func (f *fakeDriver) PushSetUpstream(_ context.Context, s vcs.Slot, branch string) error {
-	f.call("PushSetUpstream", s, branch)
+func (f *fakeDriver) Push(_ context.Context, s vcs.Slot, plan vcs.PushPlan) error {
+	if plan.Track != "" {
+		f.call("Push", s, "-u "+plan.Track)
+	} else {
+		f.call("Push", s, plan.Ref)
+	}
 	return nil
 }
 
@@ -157,13 +155,24 @@ func (f *fakeDriver) RebaseContinue(_ context.Context, s vcs.Slot) (api.GitOpRes
 	return f.result("RebaseContinue"), nil
 }
 
-func (f *fakeDriver) CreateBranch(_ context.Context, s vcs.Slot, branch string) error {
-	f.call("CreateBranch", s, branch)
+// PlanPublish publishes the intent's branch, else the one the checkout is on
+// (the slot's), creating it when detached.
+func (f *fakeDriver) PlanPublish(_ context.Context, s vcs.Slot, intent vcs.PublishIntent) (vcs.PublishPlan, error) {
+	f.call("PlanPublish", s, intent.Remote, intent.Branch, strconv.FormatBool(intent.Explicit))
+	branch := intent.Branch
+	if branch == "" && !f.detached {
+		branch = s.Branch
+	}
+	return vcs.PublishPlan{Remote: intent.Remote, Branch: branch, Create: f.detached}, nil
+}
+
+func (f *fakeDriver) PreparePublish(_ context.Context, s vcs.Slot, plan vcs.PublishPlan) error {
+	f.call("PreparePublish", s, plan.Branch, strconv.FormatBool(plan.Create))
 	return nil
 }
 
-func (f *fakeDriver) Publish(_ context.Context, s vcs.Slot, remote, branch string) (api.GitOpResult, error) {
-	f.call("Publish", s, remote, branch)
+func (f *fakeDriver) Publish(_ context.Context, s vcs.Slot, plan vcs.PublishPlan) (api.GitOpResult, error) {
+	f.call("Publish", s, plan.Remote, plan.Branch)
 	return f.result("Publish"), nil
 }
 
@@ -292,19 +301,23 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "push to the upstream", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSourcePush(ctx, ws, "app", "")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "CurrentBranch", "Upstream", "Push()"}},
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "PlanPush(,feature-a)", "Push()"}},
 		{name: "push a new branch", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSourcePush(ctx, ws, "app", "")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "CurrentBranch", "Upstream", "CommitsBeyondBase", "PushSetUpstream(feature-a)"}},
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "PlanPush(,feature-a)", "Push(-u feature-a)"}},
 		{name: "push a ref", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSourcePush(ctx, ws, "app", "v1")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "Push(v1)"}},
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "PlanPush(v1,feature-a)", "Push(v1)"}},
 		{name: "workspace push", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspacePush(ctx, ws, "")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "CurrentBranch", "Upstream", "Push()"}},
+		}, want: []string{"BranchMismatch", "DirtyPaths", "PushURL()", "PlanPush(,feature-a)", "Push()"}},
+		{name: "sync-base by default", run: func(p *Platform, ws string) (string, error) {
+			_, err := p.WorkspaceSyncBase(ctx, ws, "")
+			return "", err
+		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,)"}},
 		{name: "sync-base by merge", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "merge")
 			return "", err
@@ -336,11 +349,11 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "publish", upstream: "origin/feature-a", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourcePublish(ctx, ws, "app", "", "")
 			return result.Message, err
-		}, want: []string{"CurrentBranch", "Upstream", "PushURL(origin)", "Publish(origin,feature-a)"}, wantMsg: "fake Publish"},
+		}, want: []string{"PlanPublish(origin,feature-a,false)", "PreparePublish(feature-a,false)", "PushURL(origin)", "Publish(origin,feature-a)"}, wantMsg: "fake Publish"},
 		{name: "publish from a detached HEAD", detached: true, run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourcePublish(ctx, ws, "app", "fork", "new")
 			return result.Message, err
-		}, want: []string{"CurrentBranch", "CreateBranch(new)", "PushURL(fork)", "Publish(fork,new)"}, wantMsg: "fake Publish"},
+		}, want: []string{"PlanPublish(fork,new,true)", "PreparePublish(new,true)", "PushURL(fork)", "Publish(fork,new)"}, wantMsg: "fake Publish"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			platform, workspaceName, _, _ := setupGitWorkspace(t)
@@ -451,6 +464,10 @@ func TestUnsupportedSlotVerbsAreInvalidInput(t *testing.T) {
 			if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodeInvalidInput || !errors.As(err, &invalid) ||
 				err.Error() != "slot: not supported for this slot: this slot never stops mid-merge" {
 				t.Fatalf("error = %v (%+v), want invalid input on the slot", err, opErr)
+			}
+			// Reported as invalid input, it is still the driver's refusal.
+			if !errors.Is(err, vcs.ErrUnsupported) || !errors.Is(err, unsupported) {
+				t.Fatalf("error = %v, want it to still match vcs.ErrUnsupported and the driver's error", err)
 			}
 		})
 	}

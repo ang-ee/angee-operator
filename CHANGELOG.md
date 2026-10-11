@@ -60,7 +60,8 @@ latest tag.
   (phase 4b of `.agents/plans/jj-native-operator.md`), with no change in
   behaviour, except that a failed fetch (in a slot fetch, pull or sync-base)
   names the source's clone remote rather than `origin` when the source
-  declares `remotes:`.
+  declares `remotes:`. The slot driver also decides what a push and a
+  publish do (phase 4d), with no change in behaviour.
 - **A workspace no longer renders a stack (#110).** A workspace and a stack
   are separate concerns: a workspace is files (its rendered template and its
   source slots), and a stack's services and jobs reach it through

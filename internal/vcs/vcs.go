@@ -39,16 +39,71 @@ type Status struct {
 	UnpushedReason string
 }
 
-// Sync methods for Driver.SyncBase.
+// Sync methods for Driver.SyncBase. SyncDefault leaves the choice to the
+// driver: its version control system's natural way to bring a base in (git:
+// a merge).
 const (
-	SyncMerge  = "merge"
-	SyncRebase = "rebase"
+	SyncDefault = ""
+	SyncMerge   = "merge"
+	SyncRebase  = "rebase"
 )
 
+// PushPlan is what pushing a slot will do, decided by Driver.PlanPush before
+// anything is pushed, so a push of several slots can refuse before any of
+// them is pushed.
+type PushPlan struct {
+	// Ref is pushed as it is when the caller named one.
+	Ref string
+	// Track is the branch to push and track there, for a checkout whose
+	// branch has nothing it pushes to yet.
+	Track string
+	// Skip reports that the checkout has nothing of its own to push: no
+	// upstream, and no commits beyond its base.
+	Skip bool
+}
+
+// PublishIntent is what a caller asked publish for.
+type PublishIntent struct {
+	// Remote is the remote to publish to.
+	Remote string
+	// Branch is the branch to publish under; empty publishes the branch the
+	// checkout is on.
+	Branch string
+	// Explicit reports that the caller named Branch, rather than the manifest
+	// supplying it; a checkout with nothing of its own is then published
+	// anyway.
+	Explicit bool
+	// Unmanaged marks a checkout the operator does not manage as a
+	// repository, such as a local source's directory: publish pushes its
+	// branch as it stands, without the nothing-to-publish check and without
+	// creating a branch.
+	Unmanaged bool
+}
+
+// PublishPlan is what publishing a slot does, decided by Driver.PlanPublish
+// before anything changes.
+type PublishPlan struct {
+	Remote string
+	Branch string
+	// Create reports that Branch does not exist yet and PreparePublish creates
+	// it where the checkout stands.
+	Create bool
+}
+
 var (
-	// ErrBranchExists is returned by Driver.CreateBranch when the branch
-	// exists.
+	// ErrBranchExists is returned by Driver.PlanPublish when the branch to
+	// create already exists.
 	ErrBranchExists = errors.New("branch already exists")
+	// ErrNoBranch is returned by Driver.PlanPublish when the checkout is on no
+	// branch and the caller named none.
+	ErrNoBranch = errors.New("no branch to publish")
+	// ErrNothingToPublish is returned by Driver.PlanPublish when the checkout
+	// has nothing of its own: no upstream and no commits beyond its base.
+	ErrNothingToPublish = errors.New("nothing to publish")
+	// ErrDetachedWithWork is returned by Driver.PlanPush when the checkout is
+	// on no branch but holds commits of its own, so there is no branch to
+	// push them on.
+	ErrDetachedWithWork = errors.New("no branch to push")
 	// ErrBaseNotFound is wrapped by Driver.ResolveBase when the slot's base
 	// exists neither locally nor on a remote.
 	ErrBaseNotFound = errors.New("base not found")
@@ -76,15 +131,6 @@ type Driver interface {
 	BranchMismatch(ctx context.Context, s Slot) (string, error)
 	// DirtyPaths lists the checkout's uncommitted changes.
 	DirtyPaths(ctx context.Context, s Slot) ([]string, error)
-	// CurrentBranch returns the branch the checkout is on; onBranch is false
-	// when it is on none.
-	CurrentBranch(ctx context.Context, s Slot) (branch string, onBranch bool, err error)
-	// Upstream returns the branch the checkout's branch tracks, if any.
-	Upstream(ctx context.Context, s Slot) (upstream string, ok bool, err error)
-	// CommitsBeyondBase counts the checkout's commits that neither Slot.BaseRef
-	// nor its remote counterpart holds. known is false when that cannot be
-	// counted.
-	CommitsBeyondBase(ctx context.Context, s Slot) (ahead int, known bool)
 	// FetchURL is the URL of the remote a fetch or pull names in a message,
 	// or "" when no single one does.
 	FetchURL(ctx context.Context, s Slot) string
@@ -100,14 +146,17 @@ type Driver interface {
 	Fetch(ctx context.Context, s Slot) error
 	// Pull fast-forwards the checkout's branch to its upstream.
 	Pull(ctx context.Context, s Slot) error
-	// Push pushes ref to the push remote, or the branch to its upstream when
-	// ref is empty.
-	Push(ctx context.Context, s Slot, ref string) error
-	// PushSetUpstream pushes branch to the push remote and tracks it there.
-	PushSetUpstream(ctx context.Context, s Slot, branch string) error
+	// PlanPush decides what pushing the checkout does without pushing: ref as
+	// it is when the caller named one, else the checkout's branch to what it
+	// tracks, or, untracked, branch (the manifest's branch for the slot) to
+	// track. A checkout with nothing of its own is skipped; one on no branch
+	// with commits of its own is refused with ErrDetachedWithWork.
+	PlanPush(ctx context.Context, s Slot, ref, branch string) (PushPlan, error)
+	// Push carries out a plan PlanPush returned.
+	Push(ctx context.Context, s Slot, plan PushPlan) error
 	// SyncBase brings onto, a ref ResolveBase returned, into the checkout's
-	// branch by method (SyncMerge or SyncRebase). A conflict is a result, not
-	// an error.
+	// branch by method (SyncMerge, SyncRebase, or SyncDefault for the
+	// driver's own choice). A conflict is a result, not an error.
 	SyncBase(ctx context.Context, s Slot, onto, method string) (api.GitOpResult, error)
 	// Merge merges ref into the checkout's branch, always recording a merge.
 	// A conflict is a result, not an error.
@@ -124,11 +173,18 @@ type Driver interface {
 	MergeAbort(ctx context.Context, s Slot) (api.GitOpResult, error)
 	RebaseAbort(ctx context.Context, s Slot) (api.GitOpResult, error)
 	RebaseContinue(ctx context.Context, s Slot) (api.GitOpResult, error)
-	// CreateBranch creates branch at the checkout's current commit and
-	// switches to it, or returns ErrBranchExists.
-	CreateBranch(ctx context.Context, s Slot, branch string) error
-	// Publish pushes branch to remote under the same name and tracks it.
-	Publish(ctx context.Context, s Slot, remote, branch string) (api.GitOpResult, error)
+	// PlanPublish decides what publishing the checkout does without changing
+	// anything: the branch to publish (the intent's, else the checkout's)
+	// and whether it must be created. It refuses with ErrNothingToPublish,
+	// ErrNoBranch or ErrBranchExists.
+	PlanPublish(ctx context.Context, s Slot, intent PublishIntent) (PublishPlan, error)
+	// PreparePublish gets the checkout ready for a plan PlanPublish returned:
+	// it creates the plan's branch where the checkout stands when the plan
+	// says so. Its errors are the checkout's, not the remote's.
+	PreparePublish(ctx context.Context, s Slot, plan PublishPlan) error
+	// Publish pushes the plan's branch to its remote under the same name and
+	// tracks it there.
+	Publish(ctx context.Context, s Slot, plan PublishPlan) (api.GitOpResult, error)
 }
 
 // CountError reports that Status decided whether a checkout is pushed but

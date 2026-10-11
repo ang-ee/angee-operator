@@ -70,7 +70,8 @@ func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace,
 // publishing a workspace branch for the first time so an external
 // reviewer can open a PR against it.
 //
-// For a git source, two cases differ from a plain push. Without an explicit
+// The slot's driver decides what is published (vcs.Driver.PlanPublish). For
+// a git source, two cases differ from a plain push. Without an explicit
 // branch, a slot with no upstream and no commits beyond its base has nothing
 // to publish and is left alone (naming the branch publishes it anyway). A slot
 // on a detached HEAD gets the named branch created at HEAD first; if the push
@@ -90,48 +91,30 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		remote = "origin"
 	}
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
-	currentBranch, onBranch, err := driver.CurrentBranch(ctx, target)
-	if err != nil {
-		return api.GitOpResult{}, fmt.Errorf("resolve HEAD branch in %s: %w", path, err)
+	intent := vcs.PublishIntent{Remote: remote, Branch: branch, Explicit: branch != "", Unmanaged: source.Kind != "git"}
+	if intent.Branch == "" {
+		intent.Branch = wsSource.Branch
 	}
-	explicit := branch != ""
-	if branch == "" {
-		branch = wsSource.Branch
-	}
-	if branch == "" && onBranch {
-		branch = currentBranch
-	}
-	isGit := source.Kind == "git"
-	// The count is of HEAD, so it only speaks for the push when HEAD is what
-	// would be pushed.
-	if isGit && !explicit && (!onBranch || branch == currentBranch) {
-		_, hasUpstream, err := driver.Upstream(ctx, target)
-		if err != nil {
-			return api.GitOpResult{}, err
-		}
-		if !hasUpstream {
-			if ahead, known := driver.CommitsBeyondBase(ctx, target); known && ahead == 0 {
-				return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: fmt.Sprintf("nothing to publish: no commits beyond %s; pass a branch to publish anyway", target.BaseRef)}, nil
-			}
-		}
-	}
-	if branch == "" {
-		// Detached HEAD has no branch name to fall back on, and publishing
-		// it as "HEAD" would create refs/heads/HEAD on the remote, so the
-		// caller must name the branch.
+	plan, err := driver.PlanPublish(ctx, target, intent)
+	switch {
+	case errors.Is(err, vcs.ErrNothingToPublish):
+		return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: fmt.Sprintf("nothing to publish: no commits beyond %s; pass a branch to publish anyway", target.BaseRef)}, nil
+	case errors.Is(err, vcs.ErrNoBranch):
+		// A detached HEAD has no branch name to fall back on, so the caller
+		// must name the branch.
 		return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
+	case errors.Is(err, vcs.ErrBranchExists):
+		return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("worktree is in detached HEAD and branch %q already exists; switch to it or pass another branch", intent.Branch)}
+	case err != nil:
+		return api.GitOpResult{}, err
 	}
-	if isGit && !onBranch {
-		// A slot cut without a branch starts detached; publishing names its
-		// branch, so create it at HEAD for the push below to track.
-		if err := driver.CreateBranch(ctx, target, branch); errors.Is(err, vcs.ErrBranchExists) {
-			return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("worktree is in detached HEAD and branch %q already exists; switch to it or pass another branch", branch)}
-		} else if err != nil {
-			return api.GitOpResult{}, fmt.Errorf("create branch %q in %s: %w", branch, path, err)
-		}
+	// A slot cut without a branch starts detached; publishing names its
+	// branch, so the driver creates it for the push below to track.
+	if err := driver.PreparePublish(ctx, target, plan); err != nil {
+		return api.GitOpResult{}, err
 	}
-	step := gitStep{action: fmt.Sprintf("pushing branch %q of", branch), object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, remote), cause: CausePushFailed, slot: slot, source: wsSource.Source}
-	result, err = driver.Publish(ctx, target, remote, branch)
+	step := gitStep{action: fmt.Sprintf("pushing branch %q of", plan.Branch), object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, plan.Remote), cause: CausePushFailed, slot: slot, source: wsSource.Source}
+	result, err = driver.Publish(ctx, target, plan)
 	return result, gitFailure(err, step)
 }
 

@@ -1250,62 +1250,44 @@ func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath
 	return opErr
 }
 
-// workspaceGitPush is what a push of one clean git slot does. An explicit ref
-// is pushed as given. Otherwise the slot pushes to its upstream, or sets one
-// on its branch; a slot with no upstream and no commits beyond its base is
-// left alone (skip says why), since the push would only create a remote
-// branch with no work on it.
+// workspaceGitPush is a push of one clean git slot, as its driver planned it
+// (vcs.Driver.PlanPush): an explicit ref as given, else the slot's branch to
+// its upstream or to a new one. A slot with nothing of its own is left alone
+// (skip says why), since the push would only create a remote branch with no
+// work on it.
 type workspaceGitPush struct {
-	driver   vcs.Driver
-	target   vcs.Slot
-	ref      string // an explicit ref, or "" for the upstream
-	upstream string // the branch to push and track, when it has no upstream
-	skip     string
-	step     gitStep
+	driver vcs.Driver
+	target vcs.Slot
+	plan   vcs.PushPlan
+	skip   string
+	step   gitStep
 }
 
 // planWorkspaceGitPush decides a slot's push without pushing, so an
 // aggregate push can refuse before any slot is pushed: a slot on a detached
 // HEAD with commits of its own has no branch to push.
 func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slot, workspaceName, slot string, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
-	plan := workspaceGitPush{driver: driver, target: target, ref: ref, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, ""), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
-	if ref != "" {
-		return plan, nil
+	push := workspaceGitPush{driver: driver, target: target, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, ""), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
+	plan, err := driver.PlanPush(ctx, target, ref, wsSource.Branch)
+	if errors.Is(err, vcs.ErrDetachedWithWork) {
+		return push, detachedHeadPushError(workspaceName, slot, wsSource)
+	} else if err != nil {
+		return push, err
 	}
-	current, onBranch, err := driver.CurrentBranch(ctx, target)
-	if err != nil {
-		return plan, err
+	push.plan = plan
+	if plan.Skip {
+		push.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, target.BaseRef)
 	}
-	_, hasUpstream, err := driver.Upstream(ctx, target)
-	if err != nil || hasUpstream {
-		return plan, err
-	}
-	// The count is of HEAD, so it only speaks for the push when HEAD is what
-	// would be pushed.
-	if !onBranch || wsSource.Branch == "" || current == wsSource.Branch {
-		if ahead, known := driver.CommitsBeyondBase(ctx, target); known && ahead == 0 {
-			plan.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, target.BaseRef)
-			return plan, nil
-		}
-	}
-	if !onBranch {
-		return plan, detachedHeadPushError(workspaceName, slot, wsSource)
-	}
-	plan.upstream = wsSource.Branch
-	return plan, nil
+	return push, nil
 }
 
 // run carries out the push the plan decided.
-func (plan workspaceGitPush) run(ctx context.Context) error {
-	switch {
-	case plan.skip != "":
-		logctx.From(ctx).Warn(plan.skip)
+func (push workspaceGitPush) run(ctx context.Context) error {
+	if push.skip != "" {
+		logctx.From(ctx).Warn(push.skip)
 		return nil
-	case plan.upstream != "":
-		return gitFailure(plan.driver.PushSetUpstream(ctx, plan.target, plan.upstream), plan.step)
-	default:
-		return gitFailure(plan.driver.Push(ctx, plan.target, plan.ref), plan.step)
 	}
+	return gitFailure(push.driver.Push(ctx, push.target, push.plan), push.step)
 }
 
 func detachedHeadPushError(workspaceName, slot string, wsSource manifest.WorkspaceSource) error {
@@ -1336,8 +1318,8 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	method = normalizeWorkspaceSyncBaseMethod(method)
-	if method == "" {
+	method, ok = normalizeWorkspaceSyncBaseMethod(method)
+	if !ok {
 		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", vcs.SyncMerge, vcs.SyncRebase)}
 	}
 	// Check the slots are materialized first: the branch check reads git in
@@ -1407,14 +1389,15 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	return states, nil
 }
 
-func normalizeWorkspaceSyncBaseMethod(method string) string {
-	switch strings.ToLower(strings.TrimSpace(method)) {
-	case "", vcs.SyncMerge:
-		return vcs.SyncMerge
-	case vcs.SyncRebase:
-		return vcs.SyncRebase
+// normalizeWorkspaceSyncBaseMethod reads a requested sync-base method. No
+// method is vcs.SyncDefault, which each slot's driver resolves to its own
+// natural sync (git: a merge).
+func normalizeWorkspaceSyncBaseMethod(method string) (string, bool) {
+	switch method = strings.ToLower(strings.TrimSpace(method)); method {
+	case vcs.SyncDefault, vcs.SyncMerge, vcs.SyncRebase:
+		return method, true
 	default:
-		return ""
+		return "", false
 	}
 }
 

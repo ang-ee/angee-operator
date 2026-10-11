@@ -144,7 +144,10 @@ func TestOperationsRunGitWithTheirArgumentsAndEnvironment(t *testing.T) {
 					{func() error { _, err := d.MergeAbort(ctx, s); return err }, []string{"merge", "--abort"}},
 					{func() error { _, err := d.RebaseAbort(ctx, s); return err }, []string{"rebase", "--abort"}},
 					{func() error { _, err := d.RebaseContinue(ctx, s); return err }, []string{"-c", "core.editor=true", "rebase", "--continue"}},
-					{func() error { _, err := d.Publish(ctx, s, "fork", "feature"); return err }, []string{"push", "--set-upstream", "--end-of-options", "fork", "refs/heads/feature:refs/heads/feature"}},
+					{func() error {
+						_, err := d.Publish(ctx, s, vcs.PublishPlan{Remote: "fork", Branch: "feature"})
+						return err
+					}, []string{"push", "--set-upstream", "--end-of-options", "fork", "refs/heads/feature:refs/heads/feature"}},
 				} {
 					if err := tc.run(); err != nil {
 						t.Fatalf("%v error = %v", tc.args, err)
