@@ -163,6 +163,46 @@ latest tag.
     the same `--input` repair fixes it; spell the value differently from the
     recorded string (`./app` for `app`), since an equal value is kept as
     recorded.
+- **A log read's byte limit keeps the newest whole lines of the whole read
+  (#118).** `stackLogs(services: [api, worker], limit: 60)`
+  returned `api    | api-1495 … api   \n[truncated]`: cut mid-line, with
+  nothing from `worker`. The process-compose backend capped each process
+  before labelling it, the GraphQL field then kept the start of the joined
+  text, and the container backend kept the oldest bytes of its output.
+  - The limit now applies once, to the labelled read of both runtimes, in the
+    platform: the runtimes return every line the tail asks for. It keeps the
+    last whole lines, cut at a line boundary. A read it shortens starts with
+    a `[truncated]` line, which counts toward the limit. The marker used to
+    come last, after the limit. A limit of 12 bytes or less has room only for
+    the marker, so a read it shortens is the marker alone, longer than a
+    limit below 12.
+  - "Newest" means last in read order, not in time. Container lines come
+    first, as docker compose orders them, then local lines grouped by service
+    in the order requested. So with `[worker, api]` and a small limit, `api`'s
+    last lines are kept and `worker` can be left out.
+  - `angee job run` keeps a local job's output within 1 MiB by the same rule.
+    The remote client's limited read, served by `/stack/logs`, does too.
+  - The platform holds only the last `limit + 1` bytes of a read while it
+    collects it, and a failed docker command's error carries the last 4 KiB
+    of its output, cut on a line boundary, instead of all of it.
+  - The CLI and the REST log endpoints take no byte limit, as before.
+- **The process-compose API token is also read from `PC_API_TOKEN_PATH`
+  (#118).** Only `PC_API_TOKEN` was read, so a supervisor given its token
+  through a file answered 401 to log reads, to process updates and to
+  `GET /live`, and the stack could not be brought up. angee now reads the
+  token as process-compose v1.120.0 does (`GetApiToken` in
+  `src/config/config.go`): `PC_API_TOKEN` when it is set and not empty, as it
+  is; else the contents of the file `PC_API_TOKEN_PATH` names, with
+  surrounding whitespace trimmed. A file that can't be read gives no token,
+  as in process-compose, and the supervisor answers as it will. A relative
+  path is read from the stack root, where angee runs the supervisor. When the
+  env file sets a key twice, the last one counts, as it does for the
+  supervisor.
+- **`process-compose down` and `list` get the stack's env file.** They ran
+  with angee's inherited environment alone, so a token set only in the
+  stack's env file never reached them. `angee status` showed local services
+  as unknown, a local `job run` failed, `angee down` failed, and `angee dev`
+  waited for the supervisor forever. A missing env file behaves as before.
 
 ## v0.21.3 — 2026-10-11
 

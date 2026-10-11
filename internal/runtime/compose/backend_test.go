@@ -15,6 +15,29 @@ import (
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
+// A failed command's error carries the last lines of its output, within
+// maxErrorOutputBytes, cut on a line boundary, rather than all of it: a failed
+// `docker compose logs` would otherwise put its whole output into the error.
+func TestExecRunnerErrorKeepsTheOutputsLastLines(t *testing.T) {
+	const script = `i=0; while [ $i -lt 2000 ]; do echo "line-$i"; i=$((i+1)); done; exit 3`
+	out, err := (ExecRunner{}).Run(t.Context(), "", nil, "sh", "-c", script)
+	if err == nil {
+		t.Fatal("Run() error = nil, want exit status 3")
+	}
+	if !strings.Contains(string(out), "line-0\n") {
+		t.Fatalf("Run() output lost its start: %q", out[:min(len(out), 20)])
+	}
+	prefix := "sh -c " + script + ": exit status 3: "
+	detail, ok := strings.CutPrefix(err.Error(), prefix)
+	if !ok {
+		t.Fatalf("error = %q, want it to start %q", err.Error()[:min(len(err.Error()), 200)], prefix)
+	}
+	if len(detail) > maxErrorOutputBytes || !strings.HasPrefix(detail, runtime.LogTruncatedMarker+"line-") || !strings.HasSuffix(detail, "\nline-1999") {
+		t.Fatalf("error detail = %d bytes from %q to %q, want at most %d: the marker, then whole lines ending at line-1999",
+			len(detail), detail[:min(len(detail), 30)], detail[max(len(detail)-30, 0):], maxErrorOutputBytes)
+	}
+}
+
 func TestExecRunnerTracesCommandWithRedactedArgs(t *testing.T) {
 	var logs bytes.Buffer
 	ctx := logctx.With(t.Context(), slog.New(logctx.NewCLIHandler(&logs, slog.LevelDebug)))

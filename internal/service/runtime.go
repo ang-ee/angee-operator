@@ -328,7 +328,7 @@ func (p *Platform) awaitSupervisor(ctx context.Context, stack *manifest.Stack) b
 	ticker := time.NewTicker(awaitJobsInterval)
 	defer ticker.Stop()
 	for {
-		if _, err := p.procBackend.Status(ctx, runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}); err == nil {
+		if _, err := p.procBackend.Status(ctx, runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}); err == nil {
 			return true
 		}
 		select {
@@ -419,7 +419,7 @@ func (p *Platform) StackDown(ctx context.Context) (err error) {
 		downErrors = append(downErrors, statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(p.root, "process-compose.yaml")); statErr == nil {
-		downErrors = append(downErrors, p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)}))
+		downErrors = append(downErrors, p.procBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}))
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		downErrors = append(downErrors, statErr)
 	}
@@ -447,8 +447,13 @@ func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool
 }
 
 // StackLogsLimited reads the last tail lines of each service or job (0:
-// runtime.DefaultLogTail; see logTail), or replays them before following live,
-// and caps a buffered read of each runtime at maxBytes (0: no cap).
+// runtime.DefaultLogTail; see logTail), or replays them before following live.
+// A buffered read is kept within maxBytes (0: no limit) as a whole, once both
+// runtimes' lines are labelled and joined, its last whole lines in read order
+// kept (runtime.LimitLogBytes). Read order is the container lines, then the
+// local lines grouped by service in the order requested, so a small limit can
+// leave out the services read first. Only the last maxBytes+1 bytes are held
+// while the read is collected. A follow is not limited.
 func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, tail, maxBytes int) (<-chan string, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
@@ -484,7 +489,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	}
 	var channels []<-chan string
 	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) && len(container) > 0 {
-		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, Tail: tail})
+		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail})
 		if err != nil {
 			return nil, err
 		}
@@ -493,7 +498,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) && len(local) > 0 {
 		// Lines are labelled with their service whenever the read covers
 		// more than one, as docker compose labels its own.
-		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, Tail: tail, NoPrefix: len(container)+len(local) == 1, ControlPort: processComposeControlPort(stack)})
+		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail, NoPrefix: len(container)+len(local) == 1, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
 		}
@@ -512,11 +517,21 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	out := make(chan string)
 	go func() {
 		defer close(out)
+		if maxBytes <= 0 {
+			for _, ch := range channels {
+				for line := range ch {
+					out <- line
+				}
+			}
+			return
+		}
+		read := runtime.NewLimitedLogRead(maxBytes)
 		for _, ch := range channels {
 			for line := range ch {
-				out <- line
+				read.Add(line)
 			}
 		}
+		out <- read.String()
 	}()
 	return out, nil
 }

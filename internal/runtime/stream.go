@@ -132,6 +132,80 @@ func PrefixLines(text, label string, width int) string {
 	return b.String()
 }
 
+// LogTruncatedMarker is the first line of a log read LimitLogBytes shortened:
+// the lines before it were dropped.
+const LogTruncatedMarker = "[truncated]\n"
+
+// LimitLogBytes keeps a log read, labelled as it is delivered, within maxBytes
+// (0 or less: no limit). It keeps the last lines in read order, whole: the read
+// is cut at a line boundary, and a line that would cross the limit is dropped
+// with every line before it. A read it shortens starts with LogTruncatedMarker,
+// which counts toward maxBytes. When not even the last line fits beside the
+// marker the result is the marker alone, which is longer than a maxBytes below
+// its 12 bytes. Limiting the result again changes nothing. Every log read with
+// a byte limit goes through it, once, after labelling.
+func LimitLogBytes(text string, maxBytes int) string {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		return text
+	}
+	budget := maxBytes - len(LogTruncatedMarker)
+	if budget <= 0 {
+		return LogTruncatedMarker
+	}
+	start := len(text) - budget
+	if text[start-1] != '\n' {
+		cut := strings.IndexByte(text[start:], '\n')
+		if cut < 0 {
+			return LogTruncatedMarker
+		}
+		start += cut + 1
+	}
+	return LogTruncatedMarker + text[start:]
+}
+
+// LimitedLogRead collects a log read chunk by chunk for LimitLogBytes, holding
+// only the bytes that can reach its result: the last maxBytes+1 (the extra
+// byte tells whether the cut falls on a line boundary). Its String is
+// LimitLogBytes of everything added.
+type LimitedLogRead struct {
+	maxBytes int
+	buf      []byte
+}
+
+// NewLimitedLogRead collects a read to keep within maxBytes (0 or less: no
+// limit, and every byte is held).
+func NewLimitedLogRead(maxBytes int) *LimitedLogRead {
+	return &LimitedLogRead{maxBytes: maxBytes}
+}
+
+// Add appends the next chunk of the read, dropping what no longer counts.
+func (r *LimitedLogRead) Add(chunk string) {
+	if r.maxBytes <= 0 {
+		r.buf = append(r.buf, chunk...)
+		return
+	}
+	keep := r.maxBytes + 1
+	if len(chunk) >= keep {
+		r.buf = append(r.buf[:0], chunk[len(chunk)-keep:]...)
+		return
+	}
+	r.buf = append(r.buf, chunk...)
+	// Compact once the buffer holds twice what counts, so each byte is
+	// copied a bounded number of times.
+	if len(r.buf) > 2*keep {
+		r.buf = append(r.buf[:0], r.buf[len(r.buf)-keep:]...)
+	}
+}
+
+// String returns the read so far, kept within maxBytes by LimitLogBytes.
+func (r *LimitedLogRead) String() string {
+	text := r.buf
+	if keep := r.maxBytes + 1; r.maxBytes > 0 && len(text) > keep {
+		text = text[len(text)-keep:]
+	}
+	return LimitLogBytes(string(text), r.maxBytes)
+}
+
 // ReplayLines turns already-captured output into a line channel, mirroring
 // StreamCommand's framing. Backends use it when a non-exec (test) Runner stands
 // in for a live process and can only return captured bytes.

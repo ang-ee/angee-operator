@@ -269,6 +269,17 @@ GraphQL `stackLogs`, `serviceLogs` and `onServiceLogs` take `tail: Int`: the
 lines from the end of each service's or job's log, `0` or omitted for the last
 200, at most 10000 (a larger value is capped).
 
+`stackLogs` and `serviceLogs` also take `limit: Int`, a byte limit on the whole
+read (`0`, omitted or above 1 MiB: 1 MiB). It applies once the lines are
+labelled, and keeps the last whole lines in read order. That order is not time:
+container lines come first, as docker compose orders them, then local lines
+grouped by service in the order the services were requested (by name when none
+is named). So a read of `[worker, api]` with a small limit keeps `api`'s last
+lines and can leave `worker` out. A read the limit shortens starts with a
+`[truncated]` line, which counts toward the limit. A limit of 12 bytes or less
+has room only for that line, so a read it shortens is the marker alone, longer
+than a limit below 12. The REST log endpoints take no byte limit.
+
 A local service or job is read from the process-compose supervisor, which holds
 its last 1000 lines; its full output is in `run/logs/<name>.log` under the stack
 root. A read while process-compose replaces a service with its updated

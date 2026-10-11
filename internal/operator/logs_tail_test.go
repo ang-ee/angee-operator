@@ -5,14 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/manifest"
 	opgql "github.com/ang-ee/angee-operator/internal/operator/gql"
+	"github.com/ang-ee/angee-operator/internal/runtime/proccompose"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -96,6 +103,52 @@ func TestGraphQLLogsFieldsPassTheTail(t *testing.T) {
 	}
 	if got, want := platform.tails, []int{50, 7, 0}; !slices.Equal(got, want) {
 		t.Fatalf("tails = %v, want %v", got, want)
+	}
+}
+
+// `stackLogs(services: [api, worker], limit: 60)` returns the newest whole,
+// labelled lines of the read, behind one marker, within 60 bytes (#118). It
+// used to return `api    | api-1495 … api   \n[truncated]`: cut mid-line, with
+// nothing from worker. This runs the platform and the process-compose backend
+// against a fake supervisor's log range endpoint.
+func TestGraphQLStackLogsKeepsTheNewestWholeLines(t *testing.T) {
+	api := make([]string, 1500)
+	for i := range api {
+		api[i] = "api-" + strconv.Itoa(i)
+	}
+	lines := map[string][]string{"api": api, "worker": {"worker-1"}}
+	supervisor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/process/logs/"), "/")
+		process := lines[name]
+		if limit, _ := strconv.Atoi(path.Base(r.URL.Path)); limit > 0 && limit < len(process) {
+			process = process[len(process)-limit:]
+		}
+		_ = json.NewEncoder(w).Encode(map[string][]string{"logs": process})
+	}))
+	t.Cleanup(supervisor.Close)
+	root := t.TempDir()
+	if err := manifest.SaveFile(manifest.Path(root), &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "logs",
+		Ports:   map[string]manifest.Port{"process_compose": {Value: supervisor.Listener.Addr().(*net.TCPAddr).Port}},
+		Services: map[string]manifest.Service{
+			"api":    {Runtime: manifest.RuntimeLocal, Command: []string{"serve"}},
+			"worker": {Runtime: manifest.RuntimeLocal, Command: []string{"work"}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "process-compose.yaml"), []byte("generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	platform, err := service.NewWithBackends(root, nil, proccompose.Backend{})
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	data := fakeGraphQL(t, platform, `{ stackLogs(services: ["api", "worker"], limit: 60) }`)
+	if got, want := data["stackLogs"], "[truncated]\napi    | api-1499\nworker | worker-1\n"; got != want {
+		t.Fatalf("stackLogs = %q, want %q", got, want)
 	}
 }
 

@@ -37,10 +37,16 @@ func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string
 	out, err := cmd.CombinedOutput()
 	trace(out, err)
 	if err != nil {
-		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, runtime.LimitLogBytes(strings.TrimSpace(string(out)), maxErrorOutputBytes))
 	}
 	return out, nil
 }
+
+// maxErrorOutputBytes bounds the output a failed docker command's error
+// carries: its last lines, where docker reports the failure
+// (runtime.LimitLogBytes). A failed `docker compose logs` would otherwise put
+// its whole output into the error.
+const maxErrorOutputBytes = 4 << 10
 
 func (ExecRunner) RunInput(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -179,6 +185,9 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 	return err
 }
 
+// Logs runs `docker compose logs --tail N` and returns its output, every line
+// the tail asks for, labelled by docker compose. A caller's byte limit applies
+// to the whole read (runtime.LimitLogBytes), not here.
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
 	args := b.baseArgs(req.Root, req.EnvFile)
 	args = append(args, "logs")
@@ -189,15 +198,7 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 		args = append(args, "--tail", strconv.Itoa(req.Tail))
 	}
 	args = append(args, req.Services...)
-	var (
-		out []byte
-		err error
-	)
-	if req.MaxBytes > 0 {
-		out, err = b.runLimited(ctx, req.Root, req.EnvFile, req.MaxBytes, args...)
-	} else {
-		out, err = b.run(ctx, req.Root, req.EnvFile, args...)
-	}
+	out, err := b.run(ctx, req.Root, req.EnvFile, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -285,31 +286,6 @@ func (b Backend) run(ctx context.Context, root string, envFile string, args ...s
 		return nil, err
 	}
 	return b.Runner.Run(ctx, root, env, "docker", args...)
-}
-
-func (b Backend) runLimited(ctx context.Context, root string, envFile string, maxBytes int, args ...string) ([]byte, error) {
-	if b.Runner != nil {
-		if !isExecRunner(b.Runner) {
-			return b.run(ctx, root, envFile, args...)
-		}
-	}
-	env, err := runtime.ReadEnvFile(envFile)
-	if err != nil {
-		return nil, err
-	}
-	buf := &limitedBuffer{remaining: maxBytes}
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Dir = root
-	cmd.Env = runtime.ChildEnviron(env)
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-	trace := logctx.TraceExec(ctx, "docker", args, root, slog.Any("env", logctx.EnvKeys(env)))
-	runErr := cmd.Run()
-	trace(buf.Bytes(), runErr)
-	if runErr != nil {
-		return buf.Bytes(), fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), runErr, strings.TrimSpace(string(buf.Bytes())))
-	}
-	return buf.Bytes(), nil
 }
 
 func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, graceful bool, args ...string) error {
@@ -431,36 +407,4 @@ func isExecRunner(r Runner) bool {
 	default:
 		return false
 	}
-}
-
-type limitedBuffer struct {
-	data      []byte
-	remaining int
-	truncated bool
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	accepted := len(p)
-	if b.remaining <= 0 {
-		b.truncated = true
-		return accepted, nil
-	}
-	if len(p) > b.remaining {
-		b.data = append(b.data, p[:b.remaining]...)
-		b.remaining = 0
-		b.truncated = true
-		return accepted, nil
-	}
-	b.data = append(b.data, p...)
-	b.remaining -= len(p)
-	return accepted, nil
-}
-
-func (b *limitedBuffer) Bytes() []byte {
-	if !b.truncated {
-		return b.data
-	}
-	out := append([]byte{}, b.data...)
-	out = append(out, []byte("\n[truncated]\n")...)
-	return out
 }

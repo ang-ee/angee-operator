@@ -1037,8 +1037,7 @@ func TestBackendLogsReadsEachProcess(t *testing.T) {
 }
 
 // A buffered read asks the range endpoint for the tail, which returns the
-// newest lines whole, sends the supervisor's token, and keeps the newest
-// MaxBytes when a cap is set.
+// newest lines whole, and sends the supervisor's token.
 func TestBackendLogsTail(t *testing.T) {
 	lines := make([]string, 1500)
 	for i := range lines {
@@ -1066,13 +1065,183 @@ func TestBackendLogsTail(t *testing.T) {
 	if got := read(runtime.LogsRequest{Tail: 500}); strings.Count(got, "\n") != 500 || !strings.HasPrefix(got, "line-1000\n") || !strings.HasSuffix(got, "line-1499\n") {
 		t.Fatalf("Logs(tail 500) = %d lines from %q, want lines 1000 to 1499", strings.Count(got, "\n"), got[:min(len(got), 12)])
 	}
-	for _, maxBytes := range []int{20, 25} {
-		if got := read(runtime.LogsRequest{Tail: 200, MaxBytes: maxBytes}); got != "line-1498\nline-1499\n" {
-			t.Fatalf("Logs(tail 200, %d bytes) = %q, want the newest whole lines", maxBytes, got)
-		}
-	}
 	if got := supervisor.paths()[0]; got != "/process/logs/web/0/500" {
 		t.Fatalf("first request = %q, want /process/logs/web/0/500", got)
+	}
+}
+
+// The supervisor's API token is read as process-compose v1.120.0 reads it
+// (GetApiToken in src/config/config.go): PC_API_TOKEN when set and not empty,
+// as it is; else the contents of the file PC_API_TOKEN_PATH names, trimmed;
+// else none. A file that can't be read gives none, as in process-compose
+// (#118).
+func TestProcessComposeTokenReadsAsProcessComposeDoes(t *testing.T) {
+	const fromVariable = "dummy-variable-token-0123456789"
+	const fromFile = "dummy-file-token-0123456789"
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "pc-token")
+	if err := os.WriteFile(tokenFile, []byte(" \t"+fromFile+"\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		envFile   string
+		inherited map[string]string
+		want      string
+	}{
+		{name: "variable", envFile: "PC_API_TOKEN=" + fromVariable, want: fromVariable},
+		{name: "file", envFile: "PC_API_TOKEN_PATH=" + tokenFile, want: fromFile},
+		{name: "variable before file", envFile: "PC_API_TOKEN=" + fromVariable + "\nPC_API_TOKEN_PATH=" + tokenFile, want: fromVariable},
+		{name: "empty variable falls back to the file", envFile: "PC_API_TOKEN=\nPC_API_TOKEN_PATH=" + tokenFile, want: fromFile},
+		{name: "relative file from the stack root", envFile: "PC_API_TOKEN_PATH=pc-token", want: fromFile},
+		{name: "file from the inherited environment", inherited: map[string]string{"PC_API_TOKEN_PATH": tokenFile}, want: fromFile},
+		{name: "inherited variable kept as it is", inherited: map[string]string{"PC_API_TOKEN": " " + fromVariable + " ", "PC_API_TOKEN_PATH": tokenFile}, want: " " + fromVariable + " "},
+		{name: "missing file", envFile: "PC_API_TOKEN_PATH=" + filepath.Join(root, "missing"), want: ""},
+		{name: "neither", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PC_API_TOKEN", "")
+			t.Setenv("PC_API_TOKEN_PATH", "")
+			for key, value := range tt.inherited {
+				t.Setenv(key, value)
+			}
+			envFile := filepath.Join(t.TempDir(), "runtime.env")
+			if err := os.WriteFile(envFile, []byte(tt.envFile+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := processComposeToken(t.Context(), root, envFile); got != tt.want {
+				t.Fatalf("processComposeToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// When the env file sets a key twice, the setting is the last one, as os/exec
+// passes the last of duplicate entries to the supervisor.
+func TestProcessComposeSettingTakesTheLastOfADuplicatedKey(t *testing.T) {
+	t.Setenv("PC_API_TOKEN", "")
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PC_API_TOKEN=dummy-first-token-0123456789\nPC_API_TOKEN=dummy-last-token-0123456789\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := processComposeSetting(envFile, "PC_API_TOKEN"), "dummy-last-token-0123456789"; got != want {
+		t.Fatalf("processComposeSetting() = %q, want %q", got, want)
+	}
+}
+
+// envRunner records the env file entries every process-compose command runs
+// with, by the command's first argument after the client flags. It hands each
+// command to next, or answers `list` with no processes when next is nil.
+type envRunner struct {
+	next Runner
+	mu   sync.Mutex
+	envs map[string][][]string
+}
+
+func (r *envRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	command := args[len(Backend{}.clientArgs(0))]
+	r.envs[command] = append(r.envs[command], slices.Clone(env))
+	r.mu.Unlock()
+	if r.next != nil {
+		return r.next.Run(ctx, dir, env, name, args...)
+	}
+	if command == "list" {
+		return []byte("[]"), nil
+	}
+	return nil, nil
+}
+
+// `down` and `list -o json` (status, RunJob's baseline and its polling) run
+// with the stack's env file over the inherited environment, as `up` and the
+// other client commands do, so a token set only there reaches process-compose's
+// client instead of a 401. A missing env file runs them with the inherited
+// environment alone, as before.
+func TestClientCommandsRunWithTheStackEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	written := filepath.Join(dir, "runtime.env")
+	if err := os.WriteFile(written, []byte("PC_API_TOKEN_PATH=/stack/pc-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for envFile, want := range map[string][]string{
+		written:                       {"PC_API_TOKEN_PATH=/stack/pc-token"},
+		filepath.Join(dir, "missing"): nil,
+	} {
+		runner := &envRunner{envs: map[string][][]string{}}
+		backend := Backend{Runner: runner}
+		if err := backend.Down(t.Context(), runtime.Target{Root: dir, EnvFile: envFile, ControlPort: 28100}); err != nil {
+			t.Fatalf("Down() error = %v", err)
+		}
+		if _, err := backend.Status(t.Context(), runtime.StatusRequest{Root: dir, EnvFile: envFile, ControlPort: 28100}); err != nil {
+			t.Fatalf("Status() error = %v", err)
+		}
+
+		// RunJob lists the processes for its baseline, then polls the list
+		// until the re-run completes.
+		ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+		supervisor := &fakeSupervisor{
+			name:   "job",
+			config: `{"name":"job","command":"run"}`,
+			state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ProcessEndTime: &ended},
+		}
+		server := httptest.NewServer(supervisor)
+		jobRunner := &envRunner{next: supervisor, envs: runner.envs}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		_, err := Backend{Runner: jobRunner}.RunJob(ctx, runtime.Target{Root: dir, EnvFile: envFile, ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "job", Configuration: jobConfiguration})
+		cancel()
+		server.Close()
+		if err != nil {
+			t.Fatalf("RunJob() error = %v", err)
+		}
+
+		if got := len(runner.envs["list"]); got < 3 {
+			t.Fatalf("env file %s: %d `list` commands, want status, the baseline and a poll", filepath.Base(envFile), got)
+		}
+		for _, command := range []string{"down", "list"} {
+			for i, got := range runner.envs[command] {
+				if !slices.Equal(got, want) {
+					t.Errorf("env file %s: `%s` #%d ran with %q, want %q", filepath.Base(envFile), command, i+1, got, want)
+				}
+			}
+		}
+	}
+}
+
+// A supervisor whose token comes from PC_API_TOKEN_PATH alone serves a log
+// read, rather than answering 401; with the file missing, angee sends no token
+// and the supervisor's 401 stands.
+func TestBackendLogsSendsTheTokenFromPCAPITokenPath(t *testing.T) {
+	const token = "dummy-file-token-0123456789"
+	t.Setenv("PC_API_TOKEN", "")
+	t.Setenv("PC_API_TOKEN_PATH", "")
+	port := startLogSupervisor(t, &logSupervisor{lines: map[string][]string{"web": {"up"}}, token: token})
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "pc-token")
+	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func(path string) (string, error) {
+		t.Helper()
+		envFile := filepath.Join(dir, "runtime.env")
+		if err := os.WriteFile(envFile, []byte("PC_API_TOKEN_PATH="+path+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		logs, err := Backend{}.Logs(t.Context(), runtime.LogsRequest{Root: dir, Services: []string{"web"}, Tail: 200, NoPrefix: true, EnvFile: envFile, ControlPort: port})
+		if err != nil {
+			return "", err
+		}
+		var got strings.Builder
+		for chunk := range logs {
+			got.WriteString(chunk)
+		}
+		return got.String(), nil
+	}
+	if got, err := read(tokenFile); err != nil || got != "up\n" {
+		t.Fatalf("Logs() with the token file = %q, %v; want up", got, err)
+	}
+	if _, err := read(filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("Logs() with a missing token file error = %v, want the supervisor's 401", err)
 	}
 }
 
@@ -1858,6 +2027,37 @@ func TestRunJobReadsTheLastLinesAndNamesTheLogFile(t *testing.T) {
 	supervisor.mu.Unlock()
 	if logsPath != "/process/logs/job/0/0" {
 		t.Fatalf("logs request = %q, want every buffered line of job", logsPath)
+	}
+}
+
+// RunJob keeps a run's output within maxJobOutputBytes (1 MiB): the newest
+// whole lines behind the marker. The supervisor here holds 1100 lines of 1 KiB.
+func TestRunJobKeepsTheNewestMiBOfOutput(t *testing.T) {
+	var logs strings.Builder
+	for i := range 1100 {
+		line := fmt.Sprintf("line-%04d ", i)
+		logs.WriteString(line + strings.Repeat("x", 1023-len(line)) + "\n")
+	}
+	ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:   "job",
+		config: `{"name":"job","command":"run"}`,
+		state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ExitCode: 1, ProcessEndTime: &ended},
+		logs:   []byte(logs.String()),
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := Backend{Runner: supervisor}.RunJob(ctx, runtime.Target{ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "job", Configuration: jobConfiguration})
+	if err == nil || !strings.Contains(err.Error(), "exited with status 1") {
+		t.Fatalf("RunJob() error = %v, want the exit status", err)
+	}
+	// 1 MiB less the 12-byte marker holds 1023 whole 1 KiB lines: 77 to 1099.
+	got := string(out)
+	if len(got) > maxJobOutputBytes || !strings.HasPrefix(got, runtime.LogTruncatedMarker+"line-0077 ") || !strings.Contains(got, "\nline-1099 ") || strings.Count(got, "\n") != 1024 {
+		t.Fatalf("RunJob() output = %d bytes, %d lines, from %q; want at most %d: the marker, then lines 77 to 1099",
+			len(got), strings.Count(got, "\n"), got[:min(len(got), 30)], maxJobOutputBytes)
 	}
 }
 

@@ -71,8 +71,9 @@ type RuntimeAPI interface {
 	// a local service or job is refused a tail above
 	// runtime.MaxLocalFollowTail.
 	StackLogs(ctx context.Context, services []string, follow bool, tail int) (<-chan string, error)
-	// StackLogsLimited is StackLogs with each runtime's buffered read capped at
-	// maxBytes (0: no cap).
+	// StackLogsLimited is StackLogs with a buffered read kept within maxBytes
+	// (0: no limit) as a whole, after labelling, its newest whole lines kept
+	// (runtime.LimitLogBytes).
 	StackLogsLimited(ctx context.Context, services []string, follow bool, tail, maxBytes int) (<-chan string, error)
 	// StreamServiceLogs opens a live, structured per-service log stream,
 	// replaying the last `tail` lines first (0 = runtime.DefaultLogTail), with
