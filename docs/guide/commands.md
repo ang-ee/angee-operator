@@ -576,6 +576,15 @@ instead with `angee workspace source publish <workspace> <slot> --branch
 upstream tracking. Publish without `--branch` also reports `nothing to
 publish` for a source with no upstream and no commits beyond its base.
 
+Publish without `--remote` goes where git itself would push the branch: its
+`pushRemote`, else `remote.pushDefault` (which the source's `push_default`
+sets), else the remote it tracks, else `origin`, else the only remote. When
+git names none, as with several remotes and no push default, publish asks
+for `--remote` and quotes git's reason. A remote the slot doesn't have is
+refused, and so are the canonical remote and a branch that matches none of
+the target remote's `branches` patterns, all before anything changes: on a
+detached slot, a refused publish creates no branch.
+
 "Commits of its own" are commits that neither the base ref nor its remote
 counterpart (`<remote>/<ref>`, origin's when it has one) holds, so commits a
 source gained from `sync-base` do not count. `workspace destroy` and the
@@ -655,7 +664,7 @@ angee workspace source rebase <workspace> <slot> <ref>
 angee workspace source merge-abort <workspace> <slot>
 angee workspace source rebase-abort <workspace> <slot>
 angee workspace source rebase-continue <workspace> <slot>
-angee workspace source publish <workspace> <slot> [--remote origin] [--branch name]
+angee workspace source publish <workspace> <slot> [--remote name] [--branch name]
 ```
 
 Convergence ops (`merge`/`rebase`/aborts/continue/publish) return a

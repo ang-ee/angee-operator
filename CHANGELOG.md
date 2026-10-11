@@ -43,11 +43,31 @@ latest tag.
     several remotes with no clone remote. A workspace template's inline
     source is checked the same way before anything is cloned. The mapping
     form accepts `<<` merge keys, as the rest of the manifest does.
-  - Publish does not use `push_default` or enforce `branches` yet; that is
-    step 5, after the git verbs move behind the driver (4b).
+  - `angee workspace source publish` keeps to the remotes (step 5): see
+    Changed.
 
 ### Changed
 
+- **Publish picks its remote from the source and keeps to its rules**
+  (phase 2 step 5 of `.agents/plans/jj-native-operator.md`).
+  - Without `--remote` (REST and GraphQL: no `remote`), publish goes where
+    git itself would push the branch: its `pushRemote`, else
+    `remote.pushDefault` (which `push_default` sets in the cache and in clone
+    slots), else the remote it tracks, else `origin`, else the only remote.
+    It used to go to `origin` whatever the source declared. When git names
+    no remote, as with several remotes and no push default, publish is
+    refused with git's reason (`INVALID_INPUT`, field `remote`) instead of
+    guessing.
+  - A remote the slot doesn't have is refused (`INVALID_INPUT`, field
+    `remote`); when the slot's own push configuration named it, the error
+    says so.
+  - A publish to the canonical remote is refused (`INVALID_INPUT`, field
+    `remote`). It used to fail at the remote's push block, after creating a
+    detached slot's branch, which a retry then tripped over.
+  - A branch that matches none of the target remote's `branches` patterns is
+    refused (`INVALID_INPUT`, field `branch`).
+  - All of these are checked before a detached slot's branch is created or
+    anything is pushed.
 - **The base ref is read from the source's clone remote.** A slot's base
   (its `ref`, else `default_ref`) was read from `origin/<ref>` first and then
   from the other remotes in an unspecified order, which varied between

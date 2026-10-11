@@ -16,9 +16,10 @@ v0.16.0. Phase 4a (reads behind the driver) is merged as #107
 (`cb27d2e`), and phase 2 steps 1-4 (remotes, push default, canonical
 remote, cache reconcile) as #116 (`12e69d1`), and 4b (verbs behind the
 driver) as #117 (`86fc88d`). 4d (driver-owned push and publish rules) is
-the PR that updates this paragraph, with phase 2 step 5 (publish) stacked
-on it; both land before the release after v0.21.3. 4c (lifecycle) follows
-before phase 5. Phase 4 is the
+#120, and phase 2 step 5 (publish's default remote, the `branches`
+allow-list and a remote the slot doesn't have) is stacked on it in the PR
+that updates this paragraph; both land before the release after v0.21.3.
+4c (lifecycle) follows before phase 5. Phase 4 is the
 critical path. Q1 (jj slots are created in place), Q2 (2026-10-09:
 `<stack>--<workspace>`, a clash is refused), Q6 (2026-10-10: slot state is
 read on demand, so every read snapshots and there is no interval, which
@@ -144,7 +145,7 @@ entry; and a pass of the `go-code-reviewer` agent.
 ```text
 0  landed
 1  mode validation + branchless worktree slots      (git only, can start now)
-2  remotes with roles                               (git only, can start now)
+2  remotes with roles                               (git only; steps 1-4 merged, 5 in review)
 4a..4d  vcs.Driver seam, git driver only            (after 1; 4a, 4b merged, 4d in review, 4c next)
 5  jj driver package + doctor probe + CI            (after 4)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5)
@@ -257,7 +258,8 @@ Steps:
    `origin`. Refuse a branch that matches no pattern in the target remote's
    `branches` (`path.Match`), with an `InvalidInputError`. This step lands
    with or after 4d, which moves the publish rules into the driver, and
-   before the next release after v0.21.3.
+   before the next release after v0.21.3. Built on 4d; see "As built:
+   step 5" below.
 
 Tests: YAML round-trip of both forms; clone-URL resolution table; reconcile
 is idempotent; publish to a canonical remote is refused; allow-list refusal.
@@ -371,6 +373,51 @@ is idempotent; publish to a canonical remote is refused; allow-list refusal.
     remotes is out of scope.
   - Step 5 must also make publish refuse a remote that the slot does not
     have configured.
+
+**As built: step 5 (2026-10-11),** stacked on 4d.
+
+- **Default remote.** The service passes the caller's remote as is; the
+  driver resolves an empty one with git's own push-remote order
+  (`git.Client.PushRemote`: the branch's `pushRemote`, `remote.pushDefault`,
+  the branch's remote, `origin`, the only remote). `push_default` reaches it
+  as the `remote.pushDefault` the cache and clone slots carry, so publish and
+  plain `git push` agree, and the branch's own `pushRemote` comes first. When
+  git names none (`git.NoPushRemoteError`), `PlanPublish` returns
+  `*vcs.NoPushRemoteError` with git's reason and the service asks for a
+  remote; there is no `origin` guess. A first version passed `push_default`
+  from the service and fell back to `origin` on any lookup error; the review
+  of #122 showed that overrode a branch's `pushRemote` against the docs and
+  hid git's reason.
+- **A remote the slot doesn't have** is refused: `PlanPublish` reads the
+  remote's URL and returns `*vcs.UnknownRemoteError` without one, and the
+  service reports it as invalid input on `remote`, saying so when the slot's
+  own push configuration named it (`Resolved`). The URL travels in the plan,
+  so the push step's message no longer reads it a second time.
+- **The manifest's rules for the target remote** are checked between
+  `PlanPublish` and `PreparePublish`, so a refused publish never creates a
+  detached slot's branch: the canonical remote is refused, and so is a
+  branch that matches none of a declared remote's `branches` patterns
+  (`path.Match`, where `*` does not cross `/`). git's push block stays the
+  enforcement for pushes made outside angee.
+- **Tests.** Real repositories, worktree and clone slots:
+  - the default follows `remote.pushDefault` (from `push_default`), and a
+    branch's `pushRemote` comes first;
+  - a `repo:` source publishes to `origin`; a clone slot to its own push
+    default;
+  - a remote the slot lacks, by name or in a URL's form, is refused with
+    nothing changed, and one its push configuration names is reported as
+    the slot's;
+  - several remotes and no push default ask for a remote with git's reason;
+  - a named remote is judged by its own patterns and wins over the default;
+  - the canonical remote is refused with no branch created, while git's
+    push block still refuses a direct push;
+  - a refused branch on a detached slot is never created, and an allowed
+    one is created and pushed.
+
+  Six mutants are caught: `push_default` injected ahead of git, git's
+  reason swallowed for an `origin` guess, a resolved remote reported as
+  input, no canonical refusal, the wrong remote's patterns, and the branch
+  created before the rules.
 
 ### Phase 3. `link` slot mode
 
