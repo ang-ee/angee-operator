@@ -50,9 +50,9 @@ latest tag.
   `jj --version` and whether `jj workspace add --colocate` exists, and
   `tool.git` warns when git is older than 2.42. Both are warnings, never
   errors, since no stack can declare a jj slot yet. The jj driver behind
-  them (`internal/vcs/jjdriver`) reads a slot's status and diff, is tested
-  in CI against the jj commit in `.github/jj-rev`, and is not reachable from
-  a manifest.
+  them (`internal/vcs/jjdriver`) reads a slot's status and diff and makes
+  and removes a slot, is tested in CI against the jj commit in
+  `.github/jj-rev`, and is not reachable from a manifest.
 
 ### Changed
 
