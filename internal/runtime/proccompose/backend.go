@@ -53,6 +53,10 @@ const defaultSupervisorReadyTimeout = 10 * time.Second
 // supervisorPollInterval spaces the liveness probes while Up waits.
 const supervisorPollInterval = 100 * time.Millisecond
 
+// maxJobOutputBytes bounds the output RunJob returns of a run, its newest
+// lines kept (runtime.LimitLogBytes).
+const maxJobOutputBytes = 1 << 20
+
 type Runner interface {
 	Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
 }
@@ -155,10 +159,12 @@ func (b Backend) Down(ctx context.Context, target runtime.Target) error {
 	// `down` is a CLIENT command in process-compose v2 — it connects to
 	// the running supervisor and asks it to terminate. Do NOT pass -f
 	// (config-file flag is for `up`, the server command); doing so makes
-	// process-compose print --help and exit 0.
+	// process-compose print --help and exit 0. Like every client command it
+	// runs with the stack's env file, which may hold the API token the
+	// supervisor requires.
 	args := b.clientArgs(target.ControlPort)
 	args = append(args, "down")
-	_, err := b.run(ctx, target.Root, "", args...)
+	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
@@ -349,7 +355,7 @@ func (b Backend) supervisorServing(ctx context.Context, target runtime.Target) (
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -386,7 +392,7 @@ func (b Backend) checkSupervisorProject(ctx context.Context, target runtime.Targ
 	if err != nil {
 		return err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("get supervisor project state: %w", err)
@@ -515,7 +521,7 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
-			entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+			entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, EnvFile: target.EnvFile, ControlPort: target.ControlPort})
 			if err != nil {
 				continue
 			}
@@ -553,16 +559,16 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 					continue
 				}
 				// Every line the supervisor's buffer holds of the run (1000 by
-				// default), newest last; the whole output is in the job's log
-				// file.
-				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, MaxBytes: 1 << 20, NoPrefix: true, ControlPort: target.ControlPort})
+				// default), newest last, within maxJobOutputBytes; the whole
+				// output is in the job's log file.
+				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, NoPrefix: true, ControlPort: target.ControlPort})
 				var captured strings.Builder
 				if logErr == nil {
 					for chunk := range logs {
 						captured.WriteString(chunk)
 					}
 				}
-				out := []byte(captured.String())
+				out := []byte(runtime.LimitLogBytes(captured.String(), maxJobOutputBytes))
 				seeLog := ""
 				if process.LogLocation != "" {
 					seeLog = "; full output in " + process.LogLocation
@@ -690,7 +696,7 @@ func (b Backend) processState(ctx context.Context, target runtime.Target, name s
 	if err != nil {
 		return nil, err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -727,7 +733,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return false, err
@@ -819,7 +825,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 		return false, err
 	}
 	post.Header.Set("Content-Type", "application/json")
-	setProcessToken(post, target.EnvFile)
+	setProcessToken(post, target.Root, target.EnvFile)
 	result, err := controlPlaneClient.Do(post)
 	if err != nil {
 		return false, err
@@ -870,7 +876,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(list, target.EnvFile)
+	setProcessToken(list, target.Root, target.EnvFile)
 	response, err := controlPlaneClient.Do(list)
 	if err != nil {
 		return false, err
@@ -893,7 +899,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 		if err != nil {
 			return false, err
 		}
-		setProcessToken(info, target.EnvFile)
+		setProcessToken(info, target.Root, target.EnvFile)
 		current, err := controlPlaneClient.Do(info)
 		if err != nil {
 			return false, err
@@ -941,7 +947,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 		return false, err
 	}
 	post.Header.Set("Content-Type", "application/json")
-	setProcessToken(post, target.EnvFile)
+	setProcessToken(post, target.Root, target.EnvFile)
 	result, err := controlPlaneClient.Do(post)
 	if err != nil {
 		return false, err
@@ -962,10 +968,48 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 	}
 	return true, nil
 }
-func setProcessToken(req *http.Request, envFile string) {
-	if token := processComposeSetting(envFile, "PC_API_TOKEN"); token != "" {
+
+// setProcessToken sends the supervisor's API token, when process-compose has
+// one, in the header its API checks (config.TokenHeader).
+func setProcessToken(req *http.Request, root, envFile string) {
+	if token := processComposeToken(req.Context(), root, envFile); token != "" {
 		req.Header.Set("X-PC-Token-Key", token)
 	}
+}
+
+// processComposeToken returns the API token as process-compose reads it, for
+// the supervisor angee starts and for its client commands alike: GetApiToken
+// and getApiTokenPathDefault in src/config/config.go (v1.120.0, commit
+// 0f3a8e6).
+//   - PC_API_TOKEN, when set and not empty, as it is.
+//   - Else the contents of the file PC_API_TOKEN_PATH names, with surrounding
+//     whitespace trimmed (strings.TrimSpace).
+//   - Else none.
+//
+// A file process-compose can't read gives no token: it logs the error and goes
+// on without one, so its supervisor serves the API unauthenticated and its
+// client sends nothing. Here too a file that can't be read sends no token, and
+// the supervisor answers as it will. A relative path is read from the stack
+// root, the directory angee runs the supervisor and its client commands in.
+// process-compose's --token-file flag would take precedence over
+// PC_API_TOKEN_PATH; angee never passes it.
+func processComposeToken(ctx context.Context, root, envFile string) string {
+	if token := processComposeSetting(envFile, "PC_API_TOKEN"); token != "" {
+		return token
+	}
+	path := processComposeSetting(envFile, "PC_API_TOKEN_PATH")
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		logctx.From(ctx).DebugContext(ctx, "process-compose API token file unreadable; sending no token, as process-compose does", "path", path, "error", err)
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // supervisorLogFile returns where target's supervisor logs: PC_LOG_FILE when the
@@ -982,10 +1026,11 @@ func supervisorLogFile(target runtime.Target) (path string, explicit bool) {
 // processComposeSetting returns a process-compose environment setting as the
 // supervisor sees it: from the stack's env file, which the backend layers over
 // the inherited environment for every process-compose command, or else from
-// that environment.
+// that environment. When the env file sets a key twice the last one counts, as
+// os/exec keeps the last of duplicate entries in the environment it passes.
 func processComposeSetting(envFile string, key string) string {
 	env, _ := runtime.ReadEnvFile(envFile)
-	for _, entry := range env {
+	for _, entry := range slices.Backward(env) {
 		if value, ok := strings.CutPrefix(entry, key+"="); ok {
 			return value
 		}
@@ -1140,7 +1185,7 @@ func processUpdates(process Process) (map[string]any, error) {
 // tell the re-run's completion (a fresh end time or a fresh pid) apart from a
 // lingering terminal sample of the previous run.
 func (b Backend) processEntry(ctx context.Context, target runtime.Target, name string) (*processListEntry, error) {
-	entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+	entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, EnvFile: target.EnvFile, ControlPort: target.ControlPort})
 	if err != nil {
 		return nil, err
 	}
@@ -1184,7 +1229,8 @@ func logLabelWidth(req runtime.LogsRequest) int {
 // endpoint, the processes concurrently, and returns them in request order.
 // `process logs` costs about a second a call and never returns for a process
 // the supervisor has not loaded; the endpoint answers in milliseconds, whole,
-// and refuses an unknown process at once.
+// and refuses an unknown process at once. The lines are labelled unless
+// req.NoPrefix; a caller's byte limit applies to the whole read afterwards.
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
 	width := logLabelWidth(req)
 	chunks := make([]string, len(req.Services))
@@ -1212,9 +1258,10 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 }
 
 // processLogTail reads the last req.Tail lines of one process from the
-// supervisor's buffer (GET /process/logs/{name}/0/{tail}), newest last, kept
-// to their last req.MaxBytes bytes when that is set. A process the supervisor
-// has not loaded is a *runtime.ProcessNotLoadedError. While the supervisor
+// supervisor's buffer (GET /process/logs/{name}/0/{tail}), newest last. A
+// caller's byte limit applies to the whole labelled read, not to each process
+// (runtime.LimitLogBytes). A process the supervisor has not loaded is a
+// *runtime.ProcessNotLoadedError. While the supervisor
 // replaces a process with an updated definition, the log endpoint reports it
 // missing for as long as the old one takes to stop, but the process endpoint
 // still serves it; that error is marked Replacing.
@@ -1225,7 +1272,7 @@ func (b Backend) processLogTail(ctx context.Context, req runtime.LogsRequest, na
 	if err != nil {
 		return "", err
 	}
-	setProcessToken(httpReq, req.EnvFile)
+	setProcessToken(httpReq, req.Root, req.EnvFile)
 	resp, err := controlPlaneClient.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("read logs of process %s: %w", name, err)
@@ -1253,18 +1300,7 @@ func (b Backend) processLogTail(ctx context.Context, req runtime.LogsRequest, na
 		text.WriteString(line)
 		text.WriteByte('\n')
 	}
-	out := text.String()
-	if req.MaxBytes > 0 && len(out) > req.MaxBytes {
-		start := len(out) - req.MaxBytes
-		// Start at a whole line, unless a single line is longer than the cap.
-		if out[start-1] != '\n' {
-			if cut := strings.IndexByte(out[start:], '\n'); cut >= 0 && start+cut+1 < len(out) {
-				start += cut + 1
-			}
-		}
-		out = out[start:]
-	}
-	return out, nil
+	return text.String(), nil
 }
 
 // requireLoaded refuses a follow of a process the supervisor has not loaded,
@@ -1419,11 +1455,13 @@ type processListEntry struct {
 // processList runs `process-compose list -o json` and returns the decoded native
 // process entries. Status maps these to runtime.ServiceStatus; RunJob consumes
 // the raw entries directly so it can gate job completion on the native end time,
-// which the generation string does not losslessly round-trip.
+// which the generation string does not losslessly round-trip. It runs with the
+// stack's env file, as the supervisor does, so a token set only there reaches
+// the client.
 func (b Backend) processList(ctx context.Context, req runtime.StatusRequest) ([]processListEntry, error) {
 	args := b.clientArgs(req.ControlPort)
 	args = append(args, "list", "-o", "json")
-	out, err := b.run(ctx, req.Root, "", args...)
+	out, err := b.run(ctx, req.Root, req.EnvFile, args...)
 	if err != nil {
 		return nil, err
 	}

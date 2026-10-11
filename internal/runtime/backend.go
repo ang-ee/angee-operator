@@ -63,12 +63,14 @@ func (e *ProcessNotLoadedError) Error() string {
 	return fmt.Sprintf("process-compose supervisor on 127.0.0.1:%d has not loaded %s; restart the supervisor to load processes the stack declared after it started", e.ControlPort, e.Name)
 }
 
+// LogsRequest asks a backend for the logs of its services. A backend returns
+// every line the tail asks for; a byte limit applies to the whole read, once
+// its lines are labelled, through LimitLogBytes in the caller.
 type LogsRequest struct {
 	Root     string
 	Services []string
 	Follow   bool
 	EnvFile  string
-	MaxBytes int
 	// NoPrefix asks the backend to omit its per-line service-name prefix
 	// (docker compose `--no-log-prefix`). Used for single-service streams
 	// where the service is already known from the request. Backends without
@@ -86,7 +88,9 @@ type StatusRequest struct {
 	Root string
 	// EnvFile is the stack env file whose current values the backend exports
 	// to the status command, so `docker compose ps` interpolates the compose
-	// file from the same fresh values as every other compose invocation.
+	// file from the same fresh values as every other compose invocation, and
+	// `process-compose list` reads the same API token settings
+	// (PC_API_TOKEN, PC_API_TOKEN_PATH) as the supervisor.
 	EnvFile       string
 	ControlPort   int
 	Configuration []byte

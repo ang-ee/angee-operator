@@ -338,6 +338,14 @@ process-compose rotates the file at 10 MB and keeps three rotated files beside
 it. The supervisor writes its own log to `run/process-compose.log`, unless
 `PC_LOG_FILE` names another file.
 
+When the stack's env file or angee's environment sets `PC_API_TOKEN`, or
+`PC_API_TOKEN_PATH` naming a file that holds the token, the supervisor requires
+that token on its API, and angee sends it. angee reads it as process-compose
+does: `PC_API_TOKEN` when it is set and not empty, else the contents of the
+file, with surrounding whitespace trimmed. A relative path is from the stack
+root. A file that can't be read gives no token, in process-compose and angee
+alike. process-compose refuses a token shorter than 20 characters.
+
 ## Services
 
 ```sh

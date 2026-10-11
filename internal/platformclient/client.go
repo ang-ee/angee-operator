@@ -24,6 +24,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -240,11 +241,25 @@ func (p *RemoteClient) StackLogs(ctx context.Context, services []string, _ bool,
 	return p.stream(ctx, "/stack/logs", query)
 }
 
-// StackLogsLimited delegates to the operator's /stack/logs stream. The
-// operator emits a finite, already-bounded snapshot, so follow and maxBytes
-// are not forwarded — the same degradation StackLogs applies to follow.
-func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, _ bool, tail, _ int) (<-chan string, error) {
-	return p.StackLogs(ctx, services, false, tail)
+// StackLogsLimited reads the operator's /stack/logs stream, a finite read
+// (follow is not forwarded, as in StackLogs), and keeps it within maxBytes as
+// the local platform does (runtime.LimitLogBytes): /stack/logs takes no byte
+// limit.
+func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, _ bool, tail, maxBytes int) (<-chan string, error) {
+	logs, err := p.StackLogs(ctx, services, false, tail)
+	if err != nil || maxBytes <= 0 {
+		return logs, err
+	}
+	out := make(chan string, 1)
+	go func() {
+		defer close(out)
+		read := runtime.NewLimitedLogRead(maxBytes)
+		for chunk := range logs {
+			read.Add(chunk)
+		}
+		out <- read.String()
+	}()
+	return out, nil
 }
 
 // StreamServiceLogs is not proxied by the HTTP remote client: the per-service

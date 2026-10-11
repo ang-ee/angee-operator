@@ -639,7 +639,7 @@ func (p *Platform) runtimeServiceStates(ctx context.Context, stack *manifest.Sta
 		}
 	}
 	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) {
-		procReq := runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}
+		procReq := runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
 		if statuses, err := p.procBackend.Status(ctx, procReq); err == nil {
 			for _, s := range statuses {
 				states[s.Name] = s

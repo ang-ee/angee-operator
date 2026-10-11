@@ -953,8 +953,14 @@ type Query {
   workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
   """
   The last `tail` lines of each service or job (0 or absent: 200, at most
-  10000), capped at `limit` bytes. A local service or job holds its last 1000
-  lines in the process-compose supervisor; its full output is in
+  10000). Container lines come first, as docker compose orders them, then
+  local lines grouped by service in the order requested (by name when none is
+  named). The read is kept within `limit` bytes (0, absent or above 1 MiB:
+  1 MiB) by its last whole lines in that order, so a small limit can leave out
+  the services read first. A read the limit shortens starts with a
+  `[truncated]` line, counted in the limit; a limit of 12 bytes or less leaves
+  that line alone, longer than a limit below 12. A local service or job holds
+  its last 1000 lines in the process-compose supervisor; its full output is in
   run/logs/<name>.log under the stack root.
   """
   stackLogs(services: [String!], limit: Int, tail: Int): String!

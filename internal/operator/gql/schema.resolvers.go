@@ -777,7 +777,7 @@ func (r *queryResolver) StackLogs(ctx context.Context, services []string, limit 
 	if err != nil {
 		return "", err
 	}
-	return collectLogStream(logs, maxBytes), nil
+	return collectLogStream(logs), nil
 }
 
 // ServiceLogs is the resolver for the serviceLogs field.
@@ -787,7 +787,7 @@ func (r *queryResolver) ServiceLogs(ctx context.Context, name string, limit *int
 	if err != nil {
 		return "", err
 	}
-	return collectLogStream(logs, maxBytes), nil
+	return collectLogStream(logs), nil
 }
 
 // WorkspaceLogs is the resolver for the workspaceLogs field.
@@ -797,7 +797,7 @@ func (r *queryResolver) WorkspaceLogs(ctx context.Context, name string, limit *i
 	if err != nil {
 		return "", err
 	}
-	return collectLogStream(logs, maxBytes), nil
+	return collectLogStream(logs), nil
 }
 
 // McpDescriptor is the resolver for the mcpDescriptor field.

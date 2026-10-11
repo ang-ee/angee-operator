@@ -196,6 +196,39 @@ func TestStreamTraceCompletesWhenConsumerCancels(t *testing.T) {
 	}
 }
 
+// StackLogsLimited keeps the operator's /stack/logs read, which takes no byte
+// limit, within maxBytes as the local platform does: the newest whole lines
+// behind one marker (#118).
+func TestStackLogsLimitedKeepsTheNewestWholeLines(t *testing.T) {
+	const read = "api    | api-1\napi    | api-2\nworker | worker-1\n"
+	client := &RemoteClient{
+		baseURL: "https://example.invalid",
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/stack/logs" || req.URL.Query().Get("tail") != "50" {
+				t.Errorf("request = %s, want /stack/logs?tail=50", req.URL)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(read))}, nil
+		})},
+	}
+	for maxBytes, want := range map[int]string{
+		0:  read,
+		45: "[truncated]\napi    | api-2\nworker | worker-1\n",
+		40: "[truncated]\nworker | worker-1\n",
+	} {
+		logs, err := client.StackLogsLimited(t.Context(), []string{"api", "worker"}, false, 50, maxBytes)
+		if err != nil {
+			t.Fatalf("StackLogsLimited(%d bytes) error = %v", maxBytes, err)
+		}
+		var got strings.Builder
+		for chunk := range logs {
+			got.WriteString(chunk)
+		}
+		if got.String() != want {
+			t.Errorf("StackLogsLimited(%d bytes) = %q, want %q", maxBytes, got.String(), want)
+		}
+	}
+}
+
 func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {
 	body, err := json.Marshal(api.ErrorResponse{
 		Error:     `workspace "missing" is not declared`,
