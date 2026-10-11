@@ -33,6 +33,63 @@ latest tag.
 
 ### Fixed
 
+- **A service that exits non-zero reads as failed (#112).** process-compose
+  reports a process that exited as `Completed` whatever its exit status, and
+  the service state passed that through, so a service that exited 1 looked
+  finished while the summary counted it as failed.
+  - Service states keep the runtime's `status` and add `outcome`, the verdict
+    the summary counts (`running`, `completed`, `failed`, `stopped`,
+    `skipped`, `pending`, `never-run` or `unknown`), and `exit_code`. This is
+    additive in REST and GraphQL (`outcome`, `exitCode`). `outcome` can be
+    filtered, ordered and grouped on like `status`.
+  - A failed service whose command could not start has the reason
+    `could not start`.
+  - `angee status` lists each failed service under the counts, and
+    `angee service list` shows `failed (exit 1)` in place of the runtime's
+    status.
+  - A local service killed by a signal still reads as `stopped`:
+    process-compose reports exit code -1 for a crash by signal, a `SIGKILL`
+    (the OOM killer's included) and a deliberate stop alike.
+- **`angee logs` shows the newest lines (#113).** With no `--tail`,
+  `process-compose process logs` replays the supervisor's whole 1000-line
+  buffer over a websocket that drops lines once a client falls about 256 lines
+  behind. The read returned the oldest ~256 lines and missed the newest.
+  - A local service or job is read through the supervisor's log range
+    endpoint (`GET /process/logs/{name}/0/{n}`), which returns the newest
+    lines whole in milliseconds; `process logs` took about a second per
+    process. Several local services are read at once. A follow still runs
+    `process logs --follow --tail N`.
+  - Log reads and follows, from the CLI and the operator, ask both runtimes
+    for the last 200 lines by default. Container logs used to return the
+    whole history. The log stream endpoint's default backlog is 200 lines too.
+  - `angee logs`, `service logs` and `job logs` take `-n`/`--tail`, the REST
+    `/stack/logs` and `/services/{name}/logs` take `?tail=`, and the GraphQL
+    `stackLogs`, `serviceLogs` and `onServiceLogs` take `tail`, up to 10000.
+    A local service holds its last 1000 lines. Following a local service or
+    job replays at most 256 lines; a larger tail is refused with an error
+    naming its log file. The log socket refuses a `tail` that is not a number
+    instead of reading it as the default.
+  - A local service the running supervisor has not loaded (declared after it
+    started) is reported at once as not found (`NOT_FOUND`, REST 404), where
+    `process logs` waited on it forever. A read while process-compose
+    replaces a service with its updated definition is a `CONFLICT` that asks
+    for a retry.
+  - `angee job run` shows every line the supervisor holds of a local job's
+    run (the last 1000), where it showed the oldest 256, and a failure names
+    the job's log file.
+  - Logs of several local services show every one of them. Only the first
+    was shown, because `process-compose process logs` reads one process.
+    When a read covers more than one service, every local line is labelled
+    with its service as docker compose labels its own.
+  - Each stack's process-compose supervisor logs to `run/process-compose.log`
+    under the stack root, without color codes, unless `PC_LOG_FILE` names
+    another file. Before, every stack logged to one shared file in `$TMPDIR`.
+  - Each local service and job also writes its output to
+    `run/logs/<name>.log` through process-compose's `log_location`: one
+    plain text line per output line with its time and level, flushed as it
+    arrives and rotated by process-compose at 10 MB with three rotated files
+    kept. Output past the 1000-line buffer, or after the supervisor exits, is
+    no longer lost.
 - **`workspace destroy` let a `clone` source go while commits only its own
   branches held**, on a detached HEAD or without an upstream. A clone is a
   repository of its own, so its branches go with it. Destroy and status now

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -166,6 +167,91 @@ func TestServiceListShowsSkipReason(t *testing.T) {
 		"storybook\tlocal\tskipped\tjob deps failed (exit 1)\n"
 	if stdout != want {
 		t.Fatalf("service list = %q, want %q", stdout, want)
+	}
+}
+
+// crashedServiceStatus has a local service that exited 1, which process-compose
+// reports as Completed, and one whose command could not start (#112).
+func crashedServiceStatus() api.StackStatusResponse {
+	return api.StackStatusResponse{
+		Name: "dev",
+		Root: "/stack",
+		Services: map[string]api.ServiceState{
+			"django":        {Name: "django", Runtime: "local", Status: "Running", Outcome: api.JobRunning},
+			"celery-worker": {Name: "celery-worker", Runtime: "local", Status: "Completed", Outcome: api.JobFailed, ExitCode: exitCodePtr(1)},
+			"flower":        {Name: "flower", Runtime: "local", Status: "Error", Outcome: api.JobFailed, Reason: "could not start"},
+			"postgres":      {Name: "postgres", Runtime: "container", Status: "exited", Outcome: "stopped", ExitCode: exitCodePtr(143)},
+		},
+		Jobs: map[string]api.JobState{},
+		Summary: api.StackSummary{
+			Services: api.StatusCounts{Total: 4, Running: 1, Failed: 2},
+		},
+	}
+}
+
+func TestStatusNamesFailedServices(t *testing.T) {
+	server := fakeOperator(t, crashedServiceStatus())
+	stdout, _, err := runCLI(t, "--operator", server.URL, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	want := "dev\nroot: /stack\nservices: 4 (1 running, 2 failed)\n" +
+		"  celery-worker\tfailed (exit 1)\n" +
+		"  flower\tfailed\tcould not start\n" +
+		"jobs: 0\nworkspaces: 0\n"
+	if stdout != want {
+		t.Fatalf("status output = %q, want %q", stdout, want)
+	}
+}
+
+func TestServiceListShowsFailedServicesAsFailed(t *testing.T) {
+	status := crashedServiceStatus()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := api.ServiceListResponse{}
+		for _, name := range []string{"celery-worker", "django", "flower", "postgres"} {
+			resp.Nodes = append(resp.Nodes, status.Services[name])
+		}
+		resp.TotalCount = len(resp.Nodes)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(server.Close)
+	stdout, _, err := runCLI(t, "--operator", server.URL, "service", "list")
+	if err != nil {
+		t.Fatalf("service list: %v", err)
+	}
+	want := "celery-worker\tlocal\tfailed (exit 1)\n" +
+		"django\tlocal\tRunning\n" +
+		"flower\tlocal\tfailed\tcould not start\n" +
+		"postgres\tcontainer\texited\n"
+	if stdout != want {
+		t.Fatalf("service list = %q, want %q", stdout, want)
+	}
+}
+
+// `-n`/`--tail` on the logs commands reaches the operator as `?tail=`, and no
+// flag sends none, so the operator's default applies.
+func TestLogsCommandsPassTheTail(t *testing.T) {
+	var tails []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/stack/logs" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		tails = append(tails, r.URL.Query().Get("tail"))
+		_, _ = w.Write([]byte("line\n"))
+	}))
+	t.Cleanup(server.Close)
+	for _, args := range [][]string{
+		{"logs", "-n", "50", "web"},
+		{"service", "logs", "--tail", "7", "web"},
+		{"job", "logs", "-n", "300", "deps"},
+		{"logs", "web"},
+	} {
+		if _, _, err := runCLI(t, append([]string{"--operator", server.URL}, args...)...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	if want := []string{"50", "7", "300", ""}; !slices.Equal(tails, want) {
+		t.Fatalf("tails = %q, want %q", tails, want)
 	}
 }
 

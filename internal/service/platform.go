@@ -575,9 +575,14 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		if status == "" {
 			status = "declared"
 		}
-		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Health: observed.Health}
-		if outcomes[name] == api.JobSkipped {
+		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Outcome: outcomes[name], ExitCode: runtimeExitCode(observed), Health: observed.Health}
+		switch state.Outcome {
+		case api.JobSkipped:
 			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		case api.JobFailed:
+			if startFailed(observed) {
+				state.Reason = couldNotStart
+			}
 		}
 		resp.Services[name] = state
 		countOutcome(&resp.Summary.Services, outcomes[name])
@@ -773,6 +778,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			if err != nil {
 				return nil, fmt.Errorf("service %s ready: %w", name, err)
 			}
+			logLocation, logConfig := processLogFile(root, name)
 			compiled.ProcessCompose.Processes[name] = proccompose.Process{
 				Command:        shellCommand(command),
 				Environment:    envList(env),
@@ -780,6 +786,8 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				ReadinessProbe: readinessProbe,
 				DependsOn:      processDependsOn(append(service.After, service.DependsOn...), stack),
 				Shutdown:       stopTimeout,
+				LogLocation:    logLocation,
+				LogConfig:      logConfig,
 			}
 		}
 	}
@@ -837,6 +845,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 		if err != nil {
 			return nil, fmt.Errorf("job %s default stop grace: %w", name, err)
 		}
+		logLocation, logConfig := processLogFile(root, name)
 		compiled.ProcessCompose.Processes[name] = proccompose.Process{
 			Command:     shellCommand(command),
 			Environment: envList(env),
@@ -844,7 +853,9 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			DependsOn:   processDependsOn(job.DependsOn, stack),
 			// Local jobs share the runtime's default bounded shutdown so the
 			// foreground supervisor can honor every process before its own exit.
-			Shutdown: shutdown,
+			Shutdown:    shutdown,
+			LogLocation: logLocation,
+			LogConfig:   logConfig,
 		}
 	}
 
@@ -857,6 +868,28 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 	}
 
 	return compiled, nil
+}
+
+// processLogFile returns the file process-compose keeps a local service's or
+// job's output in, run/logs/<name>.log, and its log configuration. The
+// supervisor's in-memory buffer holds only the last 1000 lines and ends with
+// it; the file keeps the rest as plain text lines, each with its time and
+// level, flushed line by line and rotated by process-compose at 10 MB with
+// three rotated files kept (40 MB at most per process). A name with a path
+// separator gets no file.
+func processLogFile(root, name string) (string, *proccompose.LogConfig) {
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, filepath.Separator) {
+		return "", nil
+	}
+	return filepath.Join(root, "run", "logs", name+".log"), &proccompose.LogConfig{
+		FlushEachLine:   true,
+		DisableJSON:     true,
+		NoColor:         true,
+		NoMetadata:      true,
+		AddTimestamp:    true,
+		TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+		Rotation:        &proccompose.LogRotation{MaxSizeMB: 10, MaxBackups: 3},
+	}
 }
 
 func envList(env map[string]string) []string {

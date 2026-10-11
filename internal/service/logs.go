@@ -11,6 +11,32 @@ import (
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
+// logTail resolves the tail a log read or follow asks the runtimes for: 0 means
+// runtime.DefaultLogTail, and a tail above runtime.MaxLogTail is capped at it.
+// A follow of a local (process-compose) service is refused a backlog above
+// runtime.MaxLocalFollowTail, because process-compose drops the newest lines of
+// a longer replay; its whole output is in run/logs/<name>.log. A buffered read
+// of a local service is bounded only by the supervisor's buffer.
+func logTail(tail int, local []string, follow bool) (int, error) {
+	switch {
+	case tail < 0:
+		return 0, &InvalidInputError{Field: "tail", Reason: "must not be negative"}
+	case tail == 0:
+		return runtime.DefaultLogTail, nil
+	case follow && tail > runtime.MaxLocalFollowTail && len(local) > 0:
+		files := make([]string, 0, len(local))
+		for _, name := range local {
+			files = append(files, "run/logs/"+name+".log")
+		}
+		return 0, &InvalidInputError{Field: "tail", Reason: fmt.Sprintf(
+			"%d is above %d, the most lines process-compose replays whole when following a local service; read without following, or read %s under the stack root",
+			tail, runtime.MaxLocalFollowTail, strings.Join(files, ", "))}
+	case tail > runtime.MaxLogTail:
+		return runtime.MaxLogTail, nil
+	}
+	return tail, nil
+}
+
 // StreamServiceLogs opens a live, line-by-line log stream for a single service
 // and wraps each line into a structured LogLine. Because the call is scoped to
 // one named service, attribution is exact — the service name comes from the
@@ -19,8 +45,8 @@ import (
 // is done; cancelling ctx tears down the upstream follow process.
 //
 // tail, when > 0, replays the last N lines before the live follow begins
-// (docker compose / process-compose `--tail`); 0 defers to the backend's
-// default backlog.
+// (docker compose / process-compose `--tail`); 0 replays runtime.DefaultLogTail.
+// See logTail for its limits.
 func (p *Platform) StreamServiceLogs(ctx context.Context, service string, tail int) (<-chan api.LogLine, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
@@ -29,6 +55,13 @@ func (p *Platform) StreamServiceLogs(ctx context.Context, service string, tail i
 	svc, ok := stack.Services[service]
 	if !ok {
 		return nil, fmt.Errorf("service %q not found", service)
+	}
+	var local []string
+	if svc.Runtime == manifest.RuntimeLocal {
+		local = []string{service}
+	}
+	if tail, err = logTail(tail, local, true); err != nil {
+		return nil, err
 	}
 	req := runtime.LogsRequest{
 		Root:     p.root,

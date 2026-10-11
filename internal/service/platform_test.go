@@ -662,9 +662,63 @@ processes:
         shutdown:
             timeout_seconds: 10
             signal: 15
+        log_location: /stack/run/logs/local.log
+        log_configuration:
+            flush_each_line: true
+            disable_json: true
+            no_color: true
+            no_metadata: true
+            add_timestamp: true
+            timestamp_format: 2006-01-02T15:04:05.000Z07:00
+            rotation:
+                max_size_mb: 10
+                max_backups: 3
 `
 	if !bytes.Equal(processYAML, []byte(wantProcess)) {
 		t.Fatalf("process-compose output changed without ready\ngot:\n%s\nwant:\n%s", processYAML, wantProcess)
+	}
+}
+
+// Every local service and job keeps its output in run/logs/<name>.log, past the
+// supervisor's 1000-line buffer: plain text lines with a dated timestamp and the
+// level, flushed per line and rotated by process-compose (#113). A name with a
+// path separator gets no file, even one that would resolve back into run/logs.
+func TestCompileKeepsLocalOutputInRunLogs(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version:  manifest.VersionCurrent,
+		Kind:     manifest.KindStack,
+		Name:     "demo",
+		Services: map[string]manifest.Service{"web": {Runtime: manifest.RuntimeLocal, Command: []string{"serve"}}},
+		Jobs:     map[string]manifest.Job{"deps": {Runtime: manifest.RuntimeLocal, Command: []string{"install"}}},
+	}
+	stack.Defaults()
+	compiled, err := Compile(stack, root, nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	wantConfig := &proccompose.LogConfig{
+		FlushEachLine:   true,
+		DisableJSON:     true,
+		NoColor:         true,
+		NoMetadata:      true,
+		AddTimestamp:    true,
+		TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+		Rotation:        &proccompose.LogRotation{MaxSizeMB: 10, MaxBackups: 3},
+	}
+	for _, name := range []string{"web", "deps"} {
+		process := compiled.ProcessCompose.Processes[name]
+		if want := filepath.Join(root, "run", "logs", name+".log"); process.LogLocation != want {
+			t.Errorf("%s log_location = %q, want %q", name, process.LogLocation, want)
+		}
+		if !reflect.DeepEqual(process.LogConfig, wantConfig) {
+			t.Errorf("%s log_configuration = %+v, want %+v", name, process.LogConfig, wantConfig)
+		}
+	}
+	for _, name := range []string{"../escape", "nested/name", "x/../web"} {
+		if path, config := processLogFile(root, name); path != "" || config != nil {
+			t.Errorf("processLogFile(%q) = %q, %+v; want no file", name, path, config)
+		}
 	}
 }
 

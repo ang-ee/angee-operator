@@ -125,6 +125,7 @@ func TestExecRunnerDoesNotWaitForDaemonPipes(t *testing.T) {
 // waits until it answers, and a start slower than the first probes still
 // succeeds.
 func TestBackendUpCommand(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
 	port := freePort(t)
 	project := newFakeProject("/stack", nil)
 	project.onUp = func() { project.serveLater(t, port, 300*time.Millisecond) }
@@ -133,7 +134,7 @@ func TestBackendUpCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := [][]string{{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", strconv.Itoa(port), "up", "-D", "--keep-project", "--tui=false", "web"}}
+	want := [][]string{{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", strconv.Itoa(port), "--log-file", "/stack/run/process-compose.log", "--log-no-color", "up", "-D", "--keep-project", "--tui=false", "web"}}
 	if got := project.upCommands(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("up commands = %v, want %v", got, want)
 	}
@@ -785,24 +786,288 @@ func writeCompiledConfig(t *testing.T, config string) string {
 // stack whose processes all completed or were skipped keeps the states `angee
 // dev` reports.
 func TestBackendUpForegroundKeepsProject(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
 	got := Backend{}.upArgs(runtime.Target{Root: "/stack", ControlPort: 10002}, false)
-	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "--keep-project", "--tui=false"}
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "--log-file", "/stack/run/process-compose.log", "--log-no-color", "up", "--keep-project", "--tui=false"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("foreground up args = %v, want %v", got, want)
 	}
 }
 
+// Each stack's supervisor logs to the stack's own run/process-compose.log
+// rather than the $TMPDIR file every stack of the user shares (#113), unless the
+// stack names a log with PC_LOG_FILE, which process-compose then reads itself.
+func TestBackendUpLogsToTheStackOrToPCLogFile(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PC_LOG_FILE=/srv/stack/run/process-compose.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		envFile string
+		want    []string
+	}{
+		{name: "stack log", want: []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "--log-file", "/stack/run/process-compose.log", "--log-no-color", "up", "-D", "--keep-project", "--tui=false"}},
+		{name: "PC_LOG_FILE", envFile: envFile, want: []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--keep-project", "--tui=false"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Backend{}.upArgs(runtime.Target{Root: "/stack", EnvFile: tt.envFile, ControlPort: 10002}, true)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("up args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// logSupervisor serves the parts of process-compose's API a log read uses, as
+// v1.120.0 answers them: a process's state, and the last lines of its buffer
+// (GET /process/logs/{name}/0/{limit}, newest last, limit 0 for all). An unknown
+// process is a 400, as the supervisor answers one. Each request waits delay.
+type logSupervisor struct {
+	lines map[string][]string
+	delay time.Duration
+	token string
+	// replacing names processes the supervisor is swapping for an updated
+	// definition: its log endpoint reports them missing while its process
+	// endpoint still serves them, as process-compose v1.120.0 does.
+	replacing map[string]bool
+
+	mu       sync.Mutex
+	requests []string
+}
+
+func (s *logSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.requests = append(s.requests, r.URL.Path)
+	s.mu.Unlock()
+	time.Sleep(s.delay)
+	if s.token != "" && r.Header.Get("X-PC-Token-Key") != s.token {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/process/logs/"); ok {
+		parts := strings.Split(rest, "/")
+		lines, known := s.lines[parts[0]]
+		if !known || s.replacing[parts[0]] {
+			http.Error(w, `{"error":"process `+parts[0]+` doesn't exist"}`, http.StatusBadRequest)
+			return
+		}
+		if limit, _ := strconv.Atoi(parts[2]); limit > 0 && limit < len(lines) {
+			lines = lines[len(lines)-limit:]
+		}
+		_ = json.NewEncoder(w).Encode(map[string][]string{"logs": lines})
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/process/")
+	if _, known := s.lines[name]; !known {
+		http.Error(w, `{"error":"can't get state of process `+name+`: no such process"}`, http.StatusBadRequest)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(processListEntry{Name: name, Status: "Running", IsRunning: true})
+}
+
+// writeLogPage answers a log range request with output's lines.
+func writeLogPage(w http.ResponseWriter, output []byte) {
+	lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+	if len(output) == 0 {
+		lines = []string{}
+	}
+	_ = json.NewEncoder(w).Encode(map[string][]string{"logs": lines})
+}
+
+func (s *logSupervisor) paths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.requests)
+}
+
+func startLogSupervisor(t *testing.T, s *logSupervisor) int {
+	t.Helper()
+	server := httptest.NewServer(s)
+	t.Cleanup(server.Close)
+	return serverPort(t, server)
+}
+
+// A follow runs `process logs --follow --tail N` once the supervisor confirms
+// it has loaded the process.
 func TestBackendStreamLogsTail(t *testing.T) {
+	supervisor := &logSupervisor{lines: map[string][]string{"web": nil}}
+	port := startLogSupervisor(t, supervisor)
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}
 	if _, err := backend.StreamLogs(context.Background(), runtime.LogsRequest{
-		Root: "/stack", Services: []string{"web"}, Follow: true, Tail: 50, ControlPort: 10004,
+		Root: "/stack", Services: []string{"web"}, Follow: true, Tail: 50, NoPrefix: true, ControlPort: port,
 	}); err != nil {
 		t.Fatalf("StreamLogs() error = %v", err)
 	}
-	want := []string{"--address", "127.0.0.1", "--port", "10004", "process", "logs", "--follow", "--tail", "50", "web"}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "logs", "--follow", "--tail", "50", "web"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
+	}
+	if got := supervisor.paths(); !slices.Equal(got, []string{"/process/web"}) {
+		t.Fatalf("supervisor requests = %v, want the state of web", got)
+	}
+}
+
+// perProcessLogs answers `process logs <name>` with that process's output and
+// records each command, as process-compose reads one process per command.
+type perProcessLogs struct {
+	mu       sync.Mutex
+	output   map[string]string
+	commands [][]string
+}
+
+func (r *perProcessLogs) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands = append(r.commands, append([]string(nil), args...))
+	return []byte(r.output[args[len(args)-1]]), nil
+}
+
+// A buffered read of several local services reads each from the supervisor's
+// log range endpoint, all at once, and returns them in request order with
+// every line labelled and padded as docker compose labels services (#114). A
+// follow runs one `process logs` per process and labels them the same way.
+func TestBackendLogsReadsEachProcess(t *testing.T) {
+	const delay = 300 * time.Millisecond
+	supervisor := &logSupervisor{
+		lines: map[string][]string{"api": {"listening", "ready"}, "worker": {"started"}, "db": {"up"}, "cache": {"warm"}},
+		delay: delay,
+	}
+	port := startLogSupervisor(t, supervisor)
+	backend := Backend{}
+	req := runtime.LogsRequest{Root: "/stack", Services: []string{"api", "worker", "db", "cache"}, Tail: 200, ControlPort: port}
+
+	started := time.Now()
+	logs, err := backend.Logs(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Logs() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*delay {
+		t.Fatalf("Logs() of four processes took %s, want them read at once (each read takes %s)", elapsed, delay)
+	}
+	var got strings.Builder
+	for chunk := range logs {
+		got.WriteString(chunk)
+	}
+	if want := "api    | listening\napi    | ready\nworker | started\ndb     | up\ncache  | warm\n"; got.String() != want {
+		t.Fatalf("Logs() = %q, want %q", got.String(), want)
+	}
+	paths := supervisor.paths()
+	slices.Sort(paths)
+	if want := []string{"/process/logs/api/0/200", "/process/logs/cache/0/200", "/process/logs/db/0/200", "/process/logs/worker/0/200"}; !slices.Equal(paths, want) {
+		t.Fatalf("supervisor requests = %v, want %v", paths, want)
+	}
+
+	runner := &perProcessLogs{output: map[string]string{"api": "listening\nready\n", "worker": "started\n"}}
+	supervisor.delay = 0
+	stream, err := Backend{Runner: runner}.StreamLogs(t.Context(), runtime.LogsRequest{Root: "/stack", Services: []string{"api", "worker"}, Follow: true, Tail: 200, ControlPort: port})
+	if err != nil {
+		t.Fatalf("StreamLogs() error = %v", err)
+	}
+	var lines []string
+	for line := range stream {
+		lines = append(lines, line)
+	}
+	slices.Sort(lines)
+	if want := []string{"api    | listening\n", "api    | ready\n", "worker | started\n"}; !slices.Equal(lines, want) {
+		t.Fatalf("StreamLogs() lines = %q, want %q", lines, want)
+	}
+
+	logs, err = backend.Logs(t.Context(), runtime.LogsRequest{Services: []string{"api", "worker"}, NoPrefix: true, ControlPort: port})
+	if err != nil {
+		t.Fatalf("Logs(NoPrefix) error = %v", err)
+	}
+	got.Reset()
+	for chunk := range logs {
+		got.WriteString(chunk)
+	}
+	if want := "listening\nready\nstarted\n"; got.String() != want {
+		t.Fatalf("Logs(NoPrefix) = %q, want %q", got.String(), want)
+	}
+}
+
+// A buffered read asks the range endpoint for the tail, which returns the
+// newest lines whole, sends the supervisor's token, and keeps the newest
+// MaxBytes when a cap is set.
+func TestBackendLogsTail(t *testing.T) {
+	lines := make([]string, 1500)
+	for i := range lines {
+		lines[i] = "line-" + strconv.Itoa(i)
+	}
+	supervisor := &logSupervisor{lines: map[string][]string{"web": lines}, token: "secret"}
+	port := startLogSupervisor(t, supervisor)
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PC_API_TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func(req runtime.LogsRequest) string {
+		t.Helper()
+		req.Services, req.NoPrefix, req.ControlPort, req.EnvFile = []string{"web"}, true, port, envFile
+		logs, err := Backend{}.Logs(t.Context(), req)
+		if err != nil {
+			t.Fatalf("Logs(%+v) error = %v", req, err)
+		}
+		var got strings.Builder
+		for chunk := range logs {
+			got.WriteString(chunk)
+		}
+		return got.String()
+	}
+	if got := read(runtime.LogsRequest{Tail: 500}); strings.Count(got, "\n") != 500 || !strings.HasPrefix(got, "line-1000\n") || !strings.HasSuffix(got, "line-1499\n") {
+		t.Fatalf("Logs(tail 500) = %d lines from %q, want lines 1000 to 1499", strings.Count(got, "\n"), got[:min(len(got), 12)])
+	}
+	for _, maxBytes := range []int{20, 25} {
+		if got := read(runtime.LogsRequest{Tail: 200, MaxBytes: maxBytes}); got != "line-1498\nline-1499\n" {
+			t.Fatalf("Logs(tail 200, %d bytes) = %q, want the newest whole lines", maxBytes, got)
+		}
+	}
+	if got := supervisor.paths()[0]; got != "/process/logs/web/0/500" {
+		t.Fatalf("first request = %q, want /process/logs/web/0/500", got)
+	}
+}
+
+// A process the supervisor has not loaded fails at once, in both modes, as a
+// *runtime.ProcessNotLoadedError: `process logs` would wait on it forever
+// (#114), and a follow never starts its command.
+func TestBackendLogsUnknownProcessFailsFast(t *testing.T) {
+	supervisor := &logSupervisor{lines: map[string][]string{"web": {"up"}}}
+	port := startLogSupervisor(t, supervisor)
+	runner := &perProcessLogs{}
+	backend := Backend{Runner: runner}
+	for _, follow := range []bool{false, true} {
+		req := runtime.LogsRequest{Root: "/stack", Services: []string{"web", "late"}, Follow: follow, Tail: 200, ControlPort: port}
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		var err error
+		if follow {
+			_, err = backend.StreamLogs(ctx, req)
+		} else {
+			_, err = backend.Logs(ctx, req)
+		}
+		cancel()
+		var notLoaded *runtime.ProcessNotLoadedError
+		if !errors.As(err, &notLoaded) || notLoaded.Name != "late" || !strings.Contains(err.Error(), "has not loaded late") {
+			t.Fatalf("follow=%v: error = %v, want late not loaded", follow, err)
+		}
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("ran %v, want no `process logs` for a follow with an unknown process", runner.commands)
+	}
+}
+
+// A read while the supervisor replaces a process with an updated definition
+// says so and asks for a retry, rather than reporting it unloaded and
+// suggesting a supervisor restart (which would restart every local service).
+func TestBackendLogsDuringReplacementAsksForRetry(t *testing.T) {
+	supervisor := &logSupervisor{lines: map[string][]string{"web": {"up"}}, replacing: map[string]bool{"web": true}}
+	port := startLogSupervisor(t, supervisor)
+	backend := Backend{Runner: &perProcessLogs{}}
+	_, err := backend.Logs(t.Context(), runtime.LogsRequest{Root: "/stack", Services: []string{"web"}, Tail: 200, ControlPort: port})
+	var notLoaded *runtime.ProcessNotLoadedError
+	if !errors.As(err, &notLoaded) || !notLoaded.Replacing || !strings.Contains(err.Error(), "is replacing web") || strings.Contains(err.Error(), "restart the supervisor") {
+		t.Fatalf("error = %v, want web being replaced, with a retry", err)
 	}
 }
 
@@ -853,6 +1118,74 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
+	}
+}
+
+// A process started through a running supervisor gets its log file as a fresh
+// `up` would, in process-compose's native field names (logLocation,
+// loggerConfig, maxSize). A process compiled without one leaves the
+// supervisor's setting alone.
+func TestProcessUpdatesIncludesLogFile(t *testing.T) {
+	updates, err := processUpdates(Process{
+		LogLocation: "/stack/run/logs/web.log",
+		LogConfig: &LogConfig{
+			FlushEachLine: true, DisableJSON: true, NoColor: true, NoMetadata: true, AddTimestamp: true,
+			TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+			Rotation:        &LogRotation{MaxSizeMB: 10, MaxBackups: 3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("processUpdates() error = %v", err)
+	}
+	wantLogger := map[string]any{
+		"flushEachLine": true, "disableJSON": true, "noColor": true, "noMetadata": true, "addTimestamp": true,
+		"timestampFormat": "2006-01-02T15:04:05.000Z07:00",
+		"rotation":        map[string]any{"maxSize": 10, "maxBackups": 3},
+	}
+	if updates["logLocation"] != "/stack/run/logs/web.log" || !reflect.DeepEqual(updates["loggerConfig"], wantLogger) {
+		t.Fatalf("log updates = %v, %#v; want the log file and %#v", updates["logLocation"], updates["loggerConfig"], wantLogger)
+	}
+	updates, err = processUpdates(Process{})
+	if err != nil {
+		t.Fatalf("processUpdates() error = %v", err)
+	}
+	if _, ok := updates["logLocation"]; ok {
+		t.Fatalf("updates = %v, want no logLocation for a process without a log file", updates)
+	}
+	if _, ok := updates["loggerConfig"]; ok {
+		t.Fatalf("updates = %v, want no loggerConfig for a process without a log file", updates)
+	}
+}
+
+// PC_LOG_FILE in the operator's own environment counts as the stack's choice
+// too: process-compose reads it there, so no --log-file overrides it, and the
+// error names it.
+func TestBackendUpLeavesPCLogFileFromTheEnvironment(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "/env/process-compose.log")
+	got := Backend{}.upArgs(runtime.Target{Root: "/stack", ControlPort: 10002}, true)
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--keep-project", "--tui=false"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("up args = %v, want %v", got, want)
+	}
+	port := freePort(t)
+	project := newFakeProject("/stack", nil)
+	backend := Backend{Runner: project, SupervisorReadyTimeout: 300 * time.Millisecond}
+	err := backend.Up(t.Context(), runtime.Target{Root: "/stack", ControlPort: port})
+	if err == nil || !strings.Contains(err.Error(), "the process-compose log /env/process-compose.log") {
+		t.Fatalf("Up() error = %v, want it to name /env/process-compose.log", err)
+	}
+}
+
+// Without PC_LOG_FILE, the error for a supervisor that never answered points at
+// the stack's own log, which upArgs passed to it.
+func TestUpFailureNamesTheStackLog(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
+	port := freePort(t)
+	project := newFakeProject("/stack", nil)
+	backend := Backend{Runner: project, SupervisorReadyTimeout: 300 * time.Millisecond}
+	err := backend.Up(t.Context(), runtime.Target{Root: "/stack", ControlPort: port})
+	if err == nil || !strings.Contains(err.Error(), "the process-compose log /stack/run/process-compose.log") {
+		t.Fatalf("Up() error = %v, want it to name /stack/run/process-compose.log", err)
 	}
 }
 
@@ -1033,17 +1366,6 @@ func TestBackendStatusIncludesNativeGeneration(t *testing.T) {
 	}
 }
 
-func TestRunLimitedReturnsOnlyProcessLogStdout(t *testing.T) {
-	backend := Backend{LookupPath: func(string) (string, error) { return "/bin/sh", nil }}
-	out, err := backend.runLimited(context.Background(), t.TempDir(), "", 1024, "-c", "printf 'job-output\\n'; printf 'update-notice\\n' >&2")
-	if err != nil {
-		t.Fatalf("runLimited() error = %v", err)
-	}
-	if got, want := string(out), "job-output\n"; got != want {
-		t.Fatalf("output = %q, want %q", got, want)
-	}
-}
-
 func intPointer(value int) *int { return &value }
 
 func TestBackendStatusPropagatesErrors(t *testing.T) {
@@ -1065,15 +1387,11 @@ func TestBackendStatusPropagatesErrors(t *testing.T) {
 // invocations so a test can tell which trigger spawned the re-run.
 type scriptedJobRunner struct {
 	lists    [][]byte
-	logs     []byte
 	listIdx  int
 	restarts int
 }
 
 func (r *scriptedJobRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
-	if hasArg(args, "logs") {
-		return r.logs, nil
-	}
 	if hasArg(args, "list") {
 		out := r.lists[r.listIdx]
 		if r.listIdx < len(r.lists)-1 {
@@ -1108,7 +1426,6 @@ func TestRunJobReportsCompletionNotLaunchWindow(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion, captured before the re-run.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1159,6 +1476,8 @@ func replacingJobServer(t *testing.T) *httptest.Server {
 	var replaced atomic.Bool
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/job/"):
+			writeLogPage(w, []byte("job log line\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
 			_, _ = io.WriteString(w, `{"name":"job","command":"old"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/process/job":
@@ -1184,6 +1503,8 @@ func restartFallbackServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/job/"):
+			writeLogPage(w, []byte("job log line\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
 			_, _ = io.WriteString(w, `{"name":"job","command":"run","workingDir":""}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/process":
@@ -1222,7 +1543,6 @@ func TestRunJobDetectsRestartPathCompletionWithUnchangedEndTime(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion, captured before the re-run.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1262,7 +1582,6 @@ func TestRunJobDetectsFastRestartCompletionByPid(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1301,7 +1620,6 @@ func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1330,6 +1648,42 @@ func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
 	}
 	if runner.restarts != 0 {
 		t.Fatalf("RunJob() restarted the job %d times; want the applied update to be its only trigger", runner.restarts)
+	}
+}
+
+// A job's output is read from the supervisor's log range endpoint, every line
+// its buffer holds, newest last, so a long job shows its last lines rather than
+// the oldest; a failure points at the job's log file for the whole output
+// (#114).
+func TestRunJobReadsTheLastLinesAndNamesTheLogFile(t *testing.T) {
+	ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:   "job",
+		config: `{"name":"job","command":"run","logLocation":"/stack/run/logs/job.log","loggerConfig":{}}`,
+		state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ExitCode: 1, ProcessEndTime: &ended},
+		logs:   []byte("last line\n"),
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := backend.RunJob(ctx, runtime.Target{ControlPort: serverPort(t, server)}, runtime.JobSpec{
+		Name:          "job",
+		Configuration: []byte("version: \"0.5\"\nprocesses:\n  job:\n    command: run\n    log_location: /stack/run/logs/job.log\n"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exited with status 1; full output in /stack/run/logs/job.log") {
+		t.Fatalf("RunJob() error = %v, want the exit status and the log file", err)
+	}
+	if string(out) != "last line\n" {
+		t.Fatalf("RunJob() output = %q, want the job's logs", out)
+	}
+	supervisor.mu.Lock()
+	logsPath := supervisor.logsPath
+	supervisor.mu.Unlock()
+	if logsPath != "/process/logs/job/0/0" {
+		t.Fatalf("logs request = %q, want every buffered line of job", logsPath)
 	}
 }
 
@@ -1391,6 +1745,7 @@ type fakeSupervisor struct {
 	state       processListEntry
 	afterUpdate *processListEntry
 	logs        []byte
+	logsPath    string
 	posted      []map[string]any
 	restarts    int
 }
@@ -1399,6 +1754,9 @@ func (s *fakeSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/"+s.name+"/"):
+		s.logsPath = r.URL.Path
+		writeLogPage(w, s.logs)
 	case s.missing && r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
 		http.Error(w, `{"error":"no such process: `+s.name+`"}`, http.StatusBadRequest)
 	case s.missing && r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
@@ -1441,8 +1799,6 @@ func (s *fakeSupervisor) Run(_ context.Context, _ string, _ []string, _ string, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
-	case hasArg(args, "logs"):
-		return s.logs, nil
 	case hasArg(args, "list"):
 		return json.Marshal([]processListEntry{s.state})
 	case hasArg(args, "restart"):

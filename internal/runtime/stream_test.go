@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,5 +118,37 @@ func TestStreamCommandTearsDownOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("channel did not close after cancel killed the process")
+	}
+}
+
+func TestPrefixLines(t *testing.T) {
+	tests := []struct {
+		text, label string
+		width       int
+		want        string
+	}{
+		{"a\nb\n", "api", 6, "api    | a\napi    | b\n"},
+		{"unterminated", "worker", 6, "worker | unterminated"},
+		{"", "api", 6, ""},
+		{"x\n", "longer", 3, "longer | x\n"},
+	}
+	for _, tt := range tests {
+		if got := PrefixLines(tt.text, tt.label, tt.width); got != tt.want {
+			t.Errorf("PrefixLines(%q, %q, %d) = %q, want %q", tt.text, tt.label, tt.width, got, tt.want)
+		}
+	}
+}
+
+func TestMergeStreamsDeliversEveryLineAndCloses(t *testing.T) {
+	a, b := make(chan string, 2), make(chan string, 1)
+	a <- "a1\n"
+	a <- "a2\n"
+	b <- "b1\n"
+	close(a)
+	close(b)
+	got := collect(t, MergeStreams(t.Context(), a, b), 3)
+	slices.Sort(got)
+	if want := []string{"a1\n", "a2\n", "b1\n"}; !slices.Equal(got, want) {
+		t.Fatalf("merged = %q, want %q", got, want)
 	}
 }

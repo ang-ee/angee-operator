@@ -185,6 +185,9 @@ func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan stri
 	if req.Follow {
 		args = append(args, "--follow")
 	}
+	if req.Tail > 0 {
+		args = append(args, "--tail", strconv.Itoa(req.Tail))
+	}
 	args = append(args, req.Services...)
 	var (
 		out []byte

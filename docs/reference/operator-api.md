@@ -261,8 +261,22 @@ optional `level`) per frame, as the runtime produces them. Because the socket
 is scoped to one service the attribution is exact and no log prefix is parsed.
 
 Pass `?tail=<n>` (alias `?n=<n>`) to replay the last `n` lines that are still
-available before the live follow begins (maps to the backends' `--tail`); it is
-clamped to `[0, 10000]`, and `0` / omitted means no backlog cap.
+available before the live follow begins (maps to the backends' `--tail`); `0`
+or omitted replays the last 200 lines. A value that is not a number is a `400`.
+
+`GET /stack/logs` and `GET /services/{name}/logs` take `?tail=<n>`, and the
+GraphQL `stackLogs`, `serviceLogs` and `onServiceLogs` take `tail: Int`: the
+lines from the end of each service's or job's log, `0` or omitted for the last
+200, at most 10000 (a larger value is capped).
+
+A local service or job is read from the process-compose supervisor, which holds
+its last 1000 lines; its full output is in `run/logs/<name>.log` under the stack
+root. A read while process-compose replaces a service with its updated
+definition is `CONFLICT`; retry it once the service has restarted. A follow of one (`onServiceLogs`, the log socket) is refused a tail above
+256 with `INVALID_INPUT`, naming that file: process-compose drops the newest
+lines of a longer replay. The socket refuses it before the upgrade. A local
+service the running supervisor has not loaded, such as one declared after it
+started, is `NOT_FOUND` at once.
 
 Like the `GET /graphql` upgrade it carries no `Authorization` header, so auth
 runs in the handshake: present a per-service route token (`aud=svc:<name>`, see

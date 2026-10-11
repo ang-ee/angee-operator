@@ -137,7 +137,7 @@ jobs:
 	resp := doGraphQL(t, server, map[string]any{
 		"query": `{ stackStatus {
 			summary { services { total running completed failed skipped } jobs { total running completed failed skipped } }
-			services { name status reason }
+			services { name status outcome exitCode reason }
 			jobs { name status exitCode reason }
 		} }`,
 	})
@@ -156,8 +156,8 @@ jobs:
 	if job["name"] != "migrate" || job["status"] != "never-run" || job["exitCode"] != nil || job["reason"] != "" {
 		t.Fatalf("job = %#v, want migrate never-run", job)
 	}
-	if service := status["services"].([]any)[0].(map[string]any); service["reason"] != "" {
-		t.Fatalf("service = %#v, want no reason", service)
+	if service := status["services"].([]any)[0].(map[string]any); service["reason"] != "" || service["status"] != "declared" || service["outcome"] != "never-run" || service["exitCode"] != nil {
+		t.Fatalf("service = %#v, want declared, never-run, no exit code and no reason", service)
 	}
 }
 

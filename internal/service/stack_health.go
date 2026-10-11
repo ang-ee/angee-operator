@@ -15,21 +15,18 @@ import (
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
-// serviceStopped is the outcome of a service that ended without failing: it was
-// stopped by a signal, or is a container that exists without running. It is
-// internal to the summary; jobs use the api.Job* values.
-const serviceStopped = "stopped"
-
 // stopSignalExits are the exit statuses of a process ended by the signals
 // `angee stop`, `angee down` and Ctrl-C deliver (SIGINT, SIGKILL after the
 // grace period, SIGTERM). A service ending with one was stopped, not failed.
 var stopSignalExits = map[int]bool{130: true, 137: true, 143: true}
 
 // runtimeOutcome classifies one runtime status sample as one of the api.Job*
-// values, or serviceStopped. process-compose and docker compose states are both
-// understood. A job fails on any non-zero exit, as the runtime's own
+// values, or api.ServiceStopped. process-compose and docker compose states are
+// both understood. A job fails on any non-zero exit, as the runtime's own
 // completed-successfully dependency conditions do; a service ended by a stop
 // signal (a negative process-compose exit, or 130/137/143) is stopped instead.
+// process-compose reports -1 for any signal, so a local service a signal
+// crashed or killed reads as stopped too.
 func runtimeOutcome(observed runtime.ServiceStatus, job bool) string {
 	exit := 0
 	if observed.ExitCode != nil {
@@ -48,7 +45,7 @@ func runtimeOutcome(observed runtime.ServiceStatus, job bool) string {
 		if job {
 			return api.JobNeverRun
 		}
-		return serviceStopped
+		return api.ServiceStopped
 	case "pending":
 		return api.JobPending
 	case "running", "launching", "launched", "restarting", "foreground", "terminating":
@@ -60,7 +57,7 @@ func runtimeOutcome(observed runtime.ServiceStatus, job bool) string {
 		case job:
 			return api.JobFailed
 		case exit < 0 || stopSignalExits[exit]:
-			return serviceStopped
+			return api.ServiceStopped
 		}
 		return api.JobFailed
 	case "error", "dead":
@@ -71,7 +68,7 @@ func runtimeOutcome(observed runtime.ServiceStatus, job bool) string {
 	if job {
 		return api.JobUnknown
 	}
-	return serviceStopped
+	return api.ServiceStopped
 }
 
 // runtimeExitCode returns the exit status a sample reports for a finished run,

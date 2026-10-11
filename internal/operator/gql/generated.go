@@ -288,7 +288,7 @@ type ComplexityRoot struct {
 		SecretsAggregate        func(childComplexity int, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) int
 		SecretsByPk             func(childComplexity int, id string) int
 		ServiceEndpoint         func(childComplexity int, name string) int
-		ServiceLogs             func(childComplexity int, name string, limit *int) int
+		ServiceLogs             func(childComplexity int, name string, limit *int, tail *int) int
 		ServiceTemplateInputs   func(childComplexity int, name string) int
 		Services                func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
 		ServicesAggregate       func(childComplexity int, where *model.ServicesBoolExp, orderBy []*model.ServicesOrderBy, limit *int, offset *int) int
@@ -299,7 +299,7 @@ type ComplexityRoot struct {
 		SourcesAggregate        func(childComplexity int, where *model.SourcesBoolExp, orderBy []*model.SourcesOrderBy, limit *int, offset *int) int
 		SourcesByPk             func(childComplexity int, id string) int
 		SourcesGroups           func(childComplexity int, groupBy []*model.SourcesGroupBySpec, where *model.SourcesBoolExp, having *model.SourcesHaving, orderBy []*model.SourcesGroupOrder, limit *int, offset *int) int
-		StackLogs               func(childComplexity int, services []string, limit *int) int
+		StackLogs               func(childComplexity int, services []string, limit *int, tail *int) int
 		StackStatus             func(childComplexity int) int
 		StackTemplateInputs     func(childComplexity int) int
 		Templates               func(childComplexity int, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) int
@@ -345,12 +345,14 @@ type ComplexityRoot struct {
 	}
 
 	ServiceState struct {
-		Health  func(childComplexity int) int
-		ID      func(childComplexity int) int
-		Name    func(childComplexity int) int
-		Reason  func(childComplexity int) int
-		Runtime func(childComplexity int) int
-		Status  func(childComplexity int) int
+		ExitCode func(childComplexity int) int
+		Health   func(childComplexity int) int
+		ID       func(childComplexity int) int
+		Name     func(childComplexity int) int
+		Outcome  func(childComplexity int) int
+		Reason   func(childComplexity int) int
+		Runtime  func(childComplexity int) int
+		Status   func(childComplexity int) int
 	}
 
 	ServiceTemplateUpdateResult struct {
@@ -363,6 +365,7 @@ type ComplexityRoot struct {
 
 	ServicesGroupKey struct {
 		Health  func(childComplexity int) int
+		Outcome func(childComplexity int) int
 		Runtime func(childComplexity int) int
 		Status  func(childComplexity int) int
 	}
@@ -439,7 +442,7 @@ type ComplexityRoot struct {
 	Subscription struct {
 		Jobs                    func(childComplexity int, where *model.JobsBoolExp, orderBy []*model.JobsOrderBy, limit *int, offset *int) int
 		OnGitOpsTopologyChange  func(childComplexity int) int
-		OnServiceLogs           func(childComplexity int, name string) int
+		OnServiceLogs           func(childComplexity int, name string, tail *int) int
 		OnStackSnapshotChange   func(childComplexity int) int
 		OnWorkspaceLogs         func(childComplexity int, name string) int
 		OnWorkspaceStatusChange func(childComplexity int, name string) int
@@ -768,8 +771,8 @@ type QueryResolver interface {
 	GitOpsTopology(ctx context.Context, withCommits *int) (*api.GitOpsTopologyResponse, error)
 	SourceDiff(ctx context.Context, name string, ref *string) ([]*api.DiffFile, error)
 	WorkspaceSourceDiff(ctx context.Context, workspace string, slot string, ref *string) ([]*api.DiffFile, error)
-	StackLogs(ctx context.Context, services []string, limit *int) (string, error)
-	ServiceLogs(ctx context.Context, name string, limit *int) (string, error)
+	StackLogs(ctx context.Context, services []string, limit *int, tail *int) (string, error)
+	ServiceLogs(ctx context.Context, name string, limit *int, tail *int) (string, error)
 	WorkspaceLogs(ctx context.Context, name string, limit *int) (string, error)
 	McpDescriptor(ctx context.Context) (map[string]any, error)
 	SecretValue(ctx context.Context, name string) (*api.SecretValueResponse, error)
@@ -797,7 +800,7 @@ type SubscriptionResolver interface {
 	Templates(ctx context.Context, where *model.TemplatesBoolExp, orderBy []*model.TemplatesOrderBy, limit *int, offset *int) (<-chan []*api.TemplateDescriptor, error)
 	Secrets(ctx context.Context, where *model.SecretsBoolExp, orderBy []*model.SecretsOrderBy, limit *int, offset *int) (<-chan []*api.SecretRef, error)
 	OnGitOpsTopologyChange(ctx context.Context) (<-chan *api.GitOpsTopologyResponse, error)
-	OnServiceLogs(ctx context.Context, name string) (<-chan string, error)
+	OnServiceLogs(ctx context.Context, name string, tail *int) (<-chan string, error)
 	OnWorkspaceLogs(ctx context.Context, name string) (<-chan string, error)
 	OnWorkspaceStatusChange(ctx context.Context, name string) (<-chan *api.WorkspaceStatusResponse, error)
 	OnStackSnapshotChange(ctx context.Context) (<-chan *model.StackSnapshot, error)
@@ -2172,7 +2175,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.ServiceLogs(childComplexity, args["name"].(string), args["limit"].(*int)), true
+		return e.ComplexityRoot.Query.ServiceLogs(childComplexity, args["name"].(string), args["limit"].(*int), args["tail"].(*int)), true
 	case "Query.serviceTemplateInputs":
 		if e.ComplexityRoot.Query.ServiceTemplateInputs == nil {
 			break
@@ -2293,7 +2296,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.StackLogs(childComplexity, args["services"].([]string), args["limit"].(*int)), true
+		return e.ComplexityRoot.Query.StackLogs(childComplexity, args["services"].([]string), args["limit"].(*int), args["tail"].(*int)), true
 	case "Query.stackStatus":
 		if e.ComplexityRoot.Query.StackStatus == nil {
 			break
@@ -2534,6 +2537,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceEndpoint.URL(childComplexity), true
 
+	case "ServiceState.exitCode":
+		if e.ComplexityRoot.ServiceState.ExitCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceState.ExitCode(childComplexity), true
 	case "ServiceState.health":
 		if e.ComplexityRoot.ServiceState.Health == nil {
 			break
@@ -2552,6 +2561,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServiceState.Name(childComplexity), true
+	case "ServiceState.outcome":
+		if e.ComplexityRoot.ServiceState.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceState.Outcome(childComplexity), true
 	case "ServiceState.reason":
 		if e.ComplexityRoot.ServiceState.Reason == nil {
 			break
@@ -2608,6 +2623,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServicesGroupKey.Health(childComplexity), true
+	case "ServicesGroupKey.outcome":
+		if e.ComplexityRoot.ServicesGroupKey.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServicesGroupKey.Outcome(childComplexity), true
 	case "ServicesGroupKey.runtime":
 		if e.ComplexityRoot.ServicesGroupKey.Runtime == nil {
 			break
@@ -2943,7 +2964,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Subscription.OnServiceLogs(childComplexity, args["name"].(string)), true
+		return e.ComplexityRoot.Subscription.OnServiceLogs(childComplexity, args["name"].(string), args["tail"].(*int)), true
 	case "Subscription.onStackSnapshotChange":
 		if e.ComplexityRoot.Subscription.OnStackSnapshotChange == nil {
 			break
@@ -4073,11 +4094,30 @@ type ServiceState {
   id: ID!
   name: String!
   runtime: String!
+  """
+  The runtime's own state, such as process-compose's ` + "`" + `Completed` + "`" + ` or docker
+  compose's ` + "`" + `exited` + "`" + `. ` + "`" + `outcome` + "`" + ` is the verdict.
+  """
   status: String!
+  """
+  The runtime state as the stack summary counts it: running, completed (exit
+  0), failed (a non-zero exit, or the command could not start), stopped (ended
+  by a stop signal), skipped (a dependency failed), pending, never-run (the
+  runtime holds no state for it) or unknown (the runtime could not be queried).
+  Empty when the runtime was not read, as in a create or update result.
+
+  A local service killed by any signal reads as stopped, not failed:
+  process-compose reports exit code -1 alike for a crash by signal, a SIGKILL
+  from outside (such as the OOM killer) and a deliberate stop.
+  """
+  outcome: String
+  "Exit status of a service that ended, when the runtime reports one."
+  exitCode: Int
   health: String
   """
   Why a skipped service did not run: the failed job or service its dependency
-  chain stopped at, such as ` + "`" + `job deps failed (exit 1)` + "`" + `.
+  chain stopped at, such as ` + "`" + `job deps failed (exit 1)` + "`" + `. For a failed service
+  whose command could not start, it says so.
   """
   reason: String
 }
@@ -4397,6 +4437,7 @@ input services_bool_exp {
   name: String_comparison_exp
   runtime: String_comparison_exp
   status: String_comparison_exp
+  outcome: String_comparison_exp
   health: String_comparison_exp
 }
 
@@ -4465,6 +4506,7 @@ input services_order_by {
   name: order_by
   runtime: order_by
   status: order_by
+  outcome: order_by
   health: order_by
 }
 
@@ -4629,6 +4671,7 @@ enum ServicesGroupableField {
   STATUS
   RUNTIME
   HEALTH
+  OUTCOME
 }
 
 input ServicesGroupBySpec {
@@ -4640,6 +4683,7 @@ type ServicesGroupKey {
   status: String
   runtime: String
   health: String
+  outcome: String
 }
 
 input ServicesHaving {
@@ -4917,8 +4961,15 @@ type Query {
   gitOpsTopology(withCommits: Int): GitOpsTopology
   sourceDiff(name: String!, ref: String): [DiffFile!]!
   workspaceSourceDiff(workspace: String!, slot: String!, ref: String): [DiffFile!]!
-  stackLogs(services: [String!], limit: Int): String!
-  serviceLogs(name: String!, limit: Int): String!
+  """
+  The last ` + "`" + `tail` + "`" + ` lines of each service or job (0 or absent: 200, at most
+  10000), capped at ` + "`" + `limit` + "`" + ` bytes. A local service or job holds its last 1000
+  lines in the process-compose supervisor; its full output is in
+  run/logs/<name>.log under the stack root.
+  """
+  stackLogs(services: [String!], limit: Int, tail: Int): String!
+  "The last ` + "`" + `tail` + "`" + ` lines of one service, as in ` + "`" + `stackLogs` + "`" + `."
+  serviceLogs(name: String!, limit: Int, tail: Int): String!
   workspaceLogs(name: String!, limit: Int): String!
   mcpDescriptor: JSON
   secretValue(name: String!): SecretValue
@@ -4985,7 +5036,12 @@ type Subscription {
   secrets(where: secrets_bool_exp, order_by: [secrets_order_by!], limit: Int, offset: Int): [SecretRef!]!
 
   onGitOpsTopologyChange: GitOpsTopology!
-  onServiceLogs(name: String!): String!
+  """
+  Follows a service's logs after replaying its last ` + "`" + `tail` + "`" + ` lines (0 or absent:
+  200). A local service replays at most 256: past that process-compose drops
+  the newest lines of the replay, so a larger tail is refused.
+  """
+  onServiceLogs(name: String!, tail: Int): String!
   onWorkspaceLogs(name: String!): String!
   onWorkspaceStatusChange(name: String!): WorkspaceStatus!
   "Emitted whenever the aggregate stack snapshot's hash changes."
@@ -5519,6 +5575,10 @@ func (ec *executionContext) childFields_ServiceState(ctx context.Context, field 
 		return ec.fieldContext_ServiceState_runtime(ctx, field)
 	case "status":
 		return ec.fieldContext_ServiceState_status(ctx, field)
+	case "outcome":
+		return ec.fieldContext_ServiceState_outcome(ctx, field)
+	case "exitCode":
+		return ec.fieldContext_ServiceState_exitCode(ctx, field)
 	case "health":
 		return ec.fieldContext_ServiceState_health(ctx, field)
 	case "reason":
@@ -5551,6 +5611,8 @@ func (ec *executionContext) childFields_ServicesGroupKey(ctx context.Context, fi
 		return ec.fieldContext_ServicesGroupKey_runtime(ctx, field)
 	case "health":
 		return ec.fieldContext_ServicesGroupKey_health(ctx, field)
+	case "outcome":
+		return ec.fieldContext_ServicesGroupKey_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServicesGroupKey", field.Name)
 }
@@ -7378,6 +7440,14 @@ func (ec *executionContext) field_Query_serviceLogs_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["limit"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "tail",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["tail"] = arg2
 	return args, nil
 }
 
@@ -7724,6 +7794,14 @@ func (ec *executionContext) field_Query_stackLogs_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["limit"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "tail",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["tail"] = arg2
 	return args, nil
 }
 
@@ -8050,6 +8128,14 @@ func (ec *executionContext) field_Subscription_onServiceLogs_args(ctx context.Co
 		return nil, err
 	}
 	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "tail",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["tail"] = arg1
 	return args, nil
 }
 
@@ -14384,7 +14470,7 @@ func (ec *executionContext) _Query_stackLogs(ctx context.Context, field graphql.
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().StackLogs(ctx, fc.Args["services"].([]string), fc.Args["limit"].(*int))
+			return ec.Resolvers.Query().StackLogs(ctx, fc.Args["services"].([]string), fc.Args["limit"].(*int), fc.Args["tail"].(*int))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
@@ -14428,7 +14514,7 @@ func (ec *executionContext) _Query_serviceLogs(ctx context.Context, field graphq
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().ServiceLogs(ctx, fc.Args["name"].(string), fc.Args["limit"].(*int))
+			return ec.Resolvers.Query().ServiceLogs(ctx, fc.Args["name"].(string), fc.Args["limit"].(*int), fc.Args["tail"].(*int))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
@@ -15185,6 +15271,52 @@ func (ec *executionContext) fieldContext_ServiceState_status(_ context.Context, 
 	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ServiceState_outcome(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceState_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceState_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServiceState_exitCode(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServiceState_exitCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExitCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServiceState_exitCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServiceState", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
 func (ec *executionContext) _ServiceState_health(ctx context.Context, field graphql.CollectedField, obj *api.ServiceState) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15439,6 +15571,29 @@ func (ec *executionContext) _ServicesGroupKey_health(ctx context.Context, field 
 	)
 }
 func (ec *executionContext) fieldContext_ServicesGroupKey_health(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ServicesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ServicesGroupKey_outcome(ctx context.Context, field graphql.CollectedField, obj *model.ServicesGroupKey) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServicesGroupKey_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServicesGroupKey_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ServicesGroupKey", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -16996,7 +17151,7 @@ func (ec *executionContext) _Subscription_onServiceLogs(ctx context.Context, fie
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Subscription().OnServiceLogs(ctx, fc.Args["name"].(string))
+			return ec.Resolvers.Subscription().OnServiceLogs(ctx, fc.Args["name"].(string), fc.Args["tail"].(*int))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
@@ -23307,7 +23462,7 @@ func (ec *executionContext) unmarshalInputservices_bool_exp(ctx context.Context,
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "id", "name", "runtime", "status", "health"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "id", "name", "runtime", "status", "outcome", "health"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -23363,6 +23518,13 @@ func (ec *executionContext) unmarshalInputservices_bool_exp(ctx context.Context,
 				return it, err
 			}
 			it.Status = data
+		case "outcome":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outcome"))
+			data, err := ec.unmarshalOString_comparison_exp2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringComparisonExp(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Outcome = data
 		case "health":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("health"))
 			data, err := ec.unmarshalOString_comparison_exp2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐStringComparisonExp(ctx, v)
@@ -23444,7 +23606,7 @@ func (ec *executionContext) unmarshalInputservices_order_by(ctx context.Context,
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "name", "runtime", "status", "health"}
+	fieldsInOrder := [...]string{"id", "name", "runtime", "status", "outcome", "health"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -23479,6 +23641,13 @@ func (ec *executionContext) unmarshalInputservices_order_by(ctx context.Context,
 				return it, err
 			}
 			it.Status = data
+		case "outcome":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outcome"))
+			data, err := ec.unmarshalOorder_by2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOrderBy(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Outcome = data
 		case "health":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("health"))
 			data, err := ec.unmarshalOorder_by2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐOrderBy(ctx, v)
@@ -26901,6 +27070,10 @@ func (ec *executionContext) _ServiceState(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "outcome":
+			out.Values[i] = ec._ServiceState_outcome(ctx, field, obj)
+		case "exitCode":
+			out.Values[i] = ec._ServiceState_exitCode(ctx, field, obj)
 		case "health":
 			out.Values[i] = ec._ServiceState_health(ctx, field, obj)
 		case "reason":
@@ -27004,6 +27177,8 @@ func (ec *executionContext) _ServicesGroupKey(ctx context.Context, sel ast.Selec
 			out.Values[i] = ec._ServicesGroupKey_runtime(ctx, field, obj)
 		case "health":
 			out.Values[i] = ec._ServicesGroupKey_health(ctx, field, obj)
+		case "outcome":
+			out.Values[i] = ec._ServicesGroupKey_outcome(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

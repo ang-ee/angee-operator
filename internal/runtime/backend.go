@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 )
@@ -29,6 +30,39 @@ type Target struct {
 	Configuration []byte
 }
 
+// DefaultLogTail is the number of last lines a log read returns, or a follow
+// replays, when the request names none, for both runtimes.
+const DefaultLogTail = 200
+
+// MaxLocalFollowTail is the largest backlog a process-compose follow is asked
+// to replay. `process logs --follow` (v1.120.0 to v1.122.0) replays a backlog
+// over a websocket that drops lines and disconnects once a client falls about
+// 256 lines behind, so a longer replay loses the newest lines. A buffered read
+// goes through the supervisor's log range endpoint and has no such limit.
+const MaxLocalFollowTail = 256
+
+// MaxLogTail caps the tail of a log read.
+const MaxLogTail = 10000
+
+// ProcessNotLoadedError reports a process the process-compose supervisor has
+// not loaded, such as a service the stack declared after the supervisor
+// started. Replacing marks a process the supervisor is replacing with an
+// updated definition: it drops the process from its log endpoint until the old
+// one has stopped, so the read is worth retrying and the supervisor needs no
+// restart.
+type ProcessNotLoadedError struct {
+	Name        string
+	ControlPort int
+	Replacing   bool
+}
+
+func (e *ProcessNotLoadedError) Error() string {
+	if e.Replacing {
+		return fmt.Sprintf("process-compose supervisor on 127.0.0.1:%d is replacing %s with its updated definition; retry once it has restarted", e.ControlPort, e.Name)
+	}
+	return fmt.Sprintf("process-compose supervisor on 127.0.0.1:%d has not loaded %s; restart the supervisor to load processes the stack declared after it started", e.ControlPort, e.Name)
+}
+
 type LogsRequest struct {
 	Root     string
 	Services []string
@@ -40,9 +74,10 @@ type LogsRequest struct {
 	// where the service is already known from the request. Backends without
 	// such a prefix ignore it.
 	NoPrefix bool
-	// Tail, when > 0, limits the initial backlog to the last N lines before a
-	// follow stream continues live (docker compose / process-compose `--tail`).
-	// Zero omits the flag and defers to the backend's default backlog.
+	// Tail, when > 0, limits a read, or the backlog a follow stream replays
+	// before it continues live, to the last N lines (docker compose /
+	// process-compose `--tail`). Zero omits the flag and defers to the
+	// backend's default backlog.
 	Tail        int
 	ControlPort int
 }

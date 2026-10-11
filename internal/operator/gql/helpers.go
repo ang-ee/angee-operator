@@ -124,6 +124,15 @@ func logLimitValue(value *int) int {
 	return *value
 }
 
+// logTailValue returns a logs field's tail argument, 0 (the default tail) when
+// absent. The platform validates it.
+func logTailValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 func collectLogStream(logs <-chan string, limit int) string {
 	var out strings.Builder
 	remaining := limit

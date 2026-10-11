@@ -70,6 +70,26 @@ could not start; a service stopped by `angee stop` or Ctrl-C is not failed.
 Skipped means the runtime did not run it because a dependency failed. `--json`
 carries the same counts under `summary`.
 
+Each failed service gets a line under the counts with its exit status, or the
+reason it failed:
+
+```text
+services: 14 (13 running, 1 failed)
+  celery-worker	failed (exit 1)
+```
+
+In `--json`, each service keeps the runtime's own `status` (process-compose
+reports an exited process as `Completed` whatever its exit status) and adds
+`outcome` (the verdict the counts use: `running`, `completed`, `failed`,
+`stopped`, `skipped`, `pending`, `never-run` or `unknown`) and `exit_code`.
+
+A local service killed by a signal reads as stopped, not failed.
+process-compose reports exit code `-1` for any signal: a crash such as a
+segmentation fault, a `SIGKILL` from the OOM killer and `angee stop` look the
+same. A container's exit code keeps the signal (`137` for `SIGKILL`), but `137`
+and `143` also read as stopped, since `angee stop` and `angee down` end
+containers with them.
+
 `angee init` renders the `dev` stack template by default. `--template` takes a
 name (`dev`), a pinned name (`dev@v1.2`), an `owner/repo//subpath` reference,
 a GitHub URL, or an absolute path; names resolve from the local template
@@ -239,7 +259,7 @@ angee down
 angee start <service>...
 angee stop <service>...
 angee restart <service>...
-angee logs [service-or-job...] [--follow]
+angee logs [service-or-job...] [--follow] [-n <lines>]
 ```
 
 `angee up` starts container services only. `angee dev` starts container services
@@ -272,6 +292,42 @@ so the states and logs of finished and skipped processes remain readable and
 
 `angee logs` also takes job names and shows the output of a job's last run.
 
+`angee logs` shows the last 200 lines of each service or job, and `--follow`
+replays those 200 before following live. `-n`/`--tail <lines>` asks for
+another number, up to 10000; `0` means the default. The operator's log reads
+and streams take the same `tail` (see the [Operator API](/operator/api)).
+
+A local service or job is read from its process-compose supervisor, which
+holds its last 1000 lines. With `--follow`, a local service replays at most
+256 of them: process-compose drops the newest lines of a longer replay, so a
+larger tail is refused with an error naming the service's log file. A service
+the running supervisor has not loaded, such as one declared after `angee dev`
+started, is reported at once as not found, rather than waited on. A read
+while process-compose replaces a service with its updated definition (during
+`angee up` or `angee restart`) fails with a conflict; retry it once the
+service has restarted.
+
+When a read covers more than one service, every line is labelled with its
+service name, as docker compose labels its services' lines:
+
+```text
+api    | listening on :8000
+worker | ready
+```
+
+The process-compose supervisor keeps only the last 1000 lines of each local
+process in memory, and loses them when it exits. Each local service and job
+also writes its output to `run/logs/<name>.log` under the stack root, one line
+per output line with its time and level, as it arrives:
+
+```text
+2026-10-11T08:38:56.120+02:00 INF Unrecoverable error: RuntimeError('generator raised StopIteration')
+```
+
+process-compose rotates the file at 10 MB and keeps three rotated files beside
+it. The supervisor writes its own log to `run/process-compose.log`, unless
+`PC_LOG_FILE` names another file.
+
 ## Services
 
 ```sh
@@ -302,13 +358,15 @@ angee service list  # alias: ls
 angee service start <service>...
 angee service stop <service>...
 angee service restart <service>...
-angee service logs <name> [--follow]
+angee service logs <name> [--follow] [-n <lines>]
 ```
 
-`service list` prints each service's name, runtime and status. A service the
-runtime skipped gets a fourth column naming the failed job or service its
-dependency chain stopped at, such as `job deps failed (exit 1)`; `--json`
-carries it as `reason`.
+`service list` prints each service's name, runtime and status. A failed service
+shows `failed (exit 1)`, or `failed` with the reason `could not start`, in
+place of the runtime's status. A service the runtime skipped gets a fourth
+column naming the failed job or service its dependency chain stopped at, such
+as `job deps failed (exit 1)`; `--json` carries it as `reason`, beside
+`outcome` and `exit_code`.
 
 `service init` builds a service from explicit flags (image, command,
 env, ports). `service create` renders a Copier template with
@@ -367,7 +425,7 @@ If `--runtime` is omitted, `--image` creates a container service and
 ```sh
 angee job list  # alias: ls
 angee job run <name> [--input key=value ...] [--chained-restart]
-angee job logs <name> [--follow]
+angee job logs <name> [--follow] [-n <lines>]
 ```
 
 `job list` shows the latest run the runtime holds for each job: `never-run`,
@@ -376,8 +434,13 @@ angee job logs <name> [--follow]
 column. The runtime keeps a run until the stack goes down (the process-compose
 supervisor exits, or the job's container is removed), so after `angee down`
 every job reads `never-run`. `--json` carries `status`, `exit_code` and
-`reason`. `job logs` shows the output of a job's last run for as long as the
-runtime keeps it.
+`reason`. `job logs` shows the last 200 lines of a job's last run (or `-n`
+lines) for as long as the runtime keeps it. A local job's output is also
+written to `run/logs/<name>.log`.
+
+`job run` writes the job's output when it ends; for a local job, that is every
+line the supervisor holds (the last 1000), and a failure names the job's log
+file, which holds all of it. Each run appends to the file.
 
 `job run` executes the declared job command and writes the job output to stdout.
 `--chained-restart` follows a successful run by restarting its downstream jobs

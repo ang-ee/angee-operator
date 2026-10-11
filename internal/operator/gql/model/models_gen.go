@@ -108,6 +108,7 @@ type ServicesGroupKey struct {
 	Status  *string `json:"status,omitempty"`
 	Runtime *string `json:"runtime,omitempty"`
 	Health  *string `json:"health,omitempty"`
+	Outcome *string `json:"outcome,omitempty"`
 }
 
 type ServicesGroupOrder struct {
@@ -364,6 +365,7 @@ type ServicesBoolExp struct {
 	Name    *StringComparisonExp `json:"name,omitempty"`
 	Runtime *StringComparisonExp `json:"runtime,omitempty"`
 	Status  *StringComparisonExp `json:"status,omitempty"`
+	Outcome *StringComparisonExp `json:"outcome,omitempty"`
 	Health  *StringComparisonExp `json:"health,omitempty"`
 }
 
@@ -385,6 +387,7 @@ type ServicesOrderBy struct {
 	Name    *OrderBy `json:"name,omitempty"`
 	Runtime *OrderBy `json:"runtime,omitempty"`
 	Status  *OrderBy `json:"status,omitempty"`
+	Outcome *OrderBy `json:"outcome,omitempty"`
 	Health  *OrderBy `json:"health,omitempty"`
 }
 
@@ -744,17 +747,19 @@ const (
 	ServicesGroupableFieldStatus  ServicesGroupableField = "STATUS"
 	ServicesGroupableFieldRuntime ServicesGroupableField = "RUNTIME"
 	ServicesGroupableFieldHealth  ServicesGroupableField = "HEALTH"
+	ServicesGroupableFieldOutcome ServicesGroupableField = "OUTCOME"
 )
 
 var AllServicesGroupableField = []ServicesGroupableField{
 	ServicesGroupableFieldStatus,
 	ServicesGroupableFieldRuntime,
 	ServicesGroupableFieldHealth,
+	ServicesGroupableFieldOutcome,
 }
 
 func (e ServicesGroupableField) IsValid() bool {
 	switch e {
-	case ServicesGroupableFieldStatus, ServicesGroupableFieldRuntime, ServicesGroupableFieldHealth:
+	case ServicesGroupableFieldStatus, ServicesGroupableFieldRuntime, ServicesGroupableFieldHealth, ServicesGroupableFieldOutcome:
 		return true
 	}
 	return false

@@ -777,7 +777,7 @@ func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, follow
 	if err != nil {
 		return nil, err
 	}
-	return inner.StackLogsLimited(ctx, nil, follow, maxBytes)
+	return inner.StackLogsLimited(ctx, nil, follow, 0, maxBytes)
 }
 
 func releaseWorkspacePorts(stack *manifest.Stack, workspaceName string) {

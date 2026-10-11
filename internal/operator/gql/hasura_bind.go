@@ -170,6 +170,9 @@ func bindServicesWhere(w *model.ServicesBoolExp) query.Filter {
 	if w.Status != nil {
 		out.Fields["status"] = stringCmp(w.Status)
 	}
+	if w.Outcome != nil {
+		out.Fields["outcome"] = stringCmp(w.Outcome)
+	}
 	if w.Health != nil {
 		out.Fields["health"] = stringCmp(w.Health)
 	}
@@ -348,6 +351,7 @@ func bindServicesOrderBy(in []*model.ServicesOrderBy) []query.Sort {
 		appendSort(&out, "name", ob.Name)
 		appendSort(&out, "runtime", ob.Runtime)
 		appendSort(&out, "status", ob.Status)
+		appendSort(&out, "outcome", ob.Outcome)
 		appendSort(&out, "health", ob.Health)
 	}
 	return out
@@ -563,6 +567,8 @@ func servicesGroupKey(kvs []query.KV) *model.ServicesGroupKey {
 			k.Runtime = &v
 		case "health":
 			k.Health = &v
+		case "outcome":
+			k.Outcome = &v
 		}
 	}
 	return k
