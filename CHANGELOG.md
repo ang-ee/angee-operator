@@ -138,6 +138,40 @@ latest tag.
 
 ### Fixed
 
+- **`stack update --template` finds the answers file of a stack whose
+  `ANGEE_ROOT` has more than one segment (#128).** copier writes the answers
+  file in the directory `ANGEE_ROOT` is relative to, two levels above the
+  stack root for `deploy/.angee`. The update looked only in the stack root and
+  its parent, so it refused such a stack with "missing answers file".
+  - It now walks up from the stack root, nearest first, and takes the first
+    answers file whose recorded `ANGEE_ROOT` puts the stack at the stack root
+    by the rule `stack init` places it with. No `ANGEE_ROOT` means the file's
+    own directory, an absolute one names the stack root itself, and a
+    relative one is joined to the file's directory, `./deploy/.angee` and
+    `deploy/.angee/` included. A relative one that climbs out with `..`,
+    which `stack init` refuses, never matches. `stack update --template -i`
+    reads the answers the same way.
+  - Any other answers file on the way is skipped, such as an unrelated
+    project's further up, or one in the stack root that names another root.
+    The update used to take a file in the stack root whatever it recorded.
+    Only a skipped file's `ANGEE_ROOT` is read, so its other answers can
+    hold anything, and files above the stack's own are never read.
+  - A file on the way that can't be read as a YAML mapping stops the update
+    with `INVALID_INPUT` on `template`, naming the file, since it might be the
+    stack's own answers, damaged. So does an answer in the stack's own file
+    that is neither a scalar nor a list, which used to be an internal error.
+  - This covers templates that declare `ANGEE_ROOT` as a copier question, and
+    templates that leave it out of the questions with the default `.`, as
+    angee-django's stack templates do: copier records no `ANGEE_ROOT` for
+    them, and the stack sits beside the answers file. A template that
+    declares `ANGEE_ROOT` only under `_angee.inputs` with another default,
+    such as `.angee`, records none either, and its answers still can't be
+    found, as before.
+  - Paths are compared cleaned, without resolving symlinks, as the parent
+    check did. A `--root` that runs through a symlink to a directory between
+    the stack root and the answers file does not find them. A stack root or
+    render directory that is itself a symlink is refused when the render opens
+    it, as before.
 - **`stack update --template` no longer moves path inputs (#121).** It read a
   `type: path` answer from the stack's answers file, where copier recorded it
   already relative to `ANGEE_ROOT`, and resolved it again as if it were new

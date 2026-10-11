@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -663,11 +664,18 @@ func assertStackPathInput(t *testing.T, project, stackRoot, name, want string) {
 
 func initPathInputStack(t *testing.T, ctx context.Context, project string) *Platform {
 	t.Helper()
+	return initStackWith(t, ctx, project, map[string]string{"ANGEE_ROOT": ".angee"})
+}
+
+// initStackWith runs stack init in project with the given inputs and returns
+// the platform of the stack root it created.
+func initStackWith(t *testing.T, ctx context.Context, project string, inputs map[string]string) *Platform {
+	t.Helper()
 	p, err := New(project)
 	if err != nil {
 		t.Fatalf("New(project): %v", err)
 	}
-	initialized, err := p.StackInit(ctx, "dev", "", map[string]string{"ANGEE_ROOT": ".angee"}, false)
+	initialized, err := p.StackInit(ctx, "dev", "", inputs, false)
 	if err != nil {
 		t.Fatalf("StackInit: %v", err)
 	}
@@ -771,6 +779,322 @@ func TestStackUpdateFromTemplateReplaysAnInputEqualToTheRecordedAnswer(t *testin
 				t.Fatalf("StackUpdateFromTemplate with another value: error = %v, want InvalidInputError on PROJECT_PATH", err)
 			}
 			assertStackPathInput(t, project, stack.root, "PROJECT_PATH", "..")
+		})
+	}
+}
+
+// copier writes the answers file in the directory ANGEE_ROOT is relative to,
+// which for deploy/.angee is two levels above the stack root. An update finds
+// it there, however ANGEE_ROOT is spelled, and replays the recorded path input
+// as it is (#128). The `.` and `.angee` layouts find it where they always did.
+func TestStackUpdateFromTemplateFindsAnswersAboveTheStackRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		angeeRoot string
+		stackRoot string
+		recorded  string
+	}{
+		{name: "dot", angeeRoot: ".", stackRoot: ".", recorded: "."},
+		{name: "dot-angee", angeeRoot: ".angee", stackRoot: ".angee", recorded: ".."},
+		{name: "nested", angeeRoot: "deploy/.angee", stackRoot: "deploy/.angee", recorded: "../.."},
+		{name: "nested-dot-prefix", angeeRoot: "./deploy/.angee", stackRoot: "deploy/.angee", recorded: "../.."},
+		{name: "nested-trailing-slash", angeeRoot: "deploy/.angee/", stackRoot: "deploy/.angee", recorded: "../.."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := t.TempDir()
+			writePathInputStackTemplate(t, base, pathInputStackCopier, "PROJECT_PATH")
+			project := filepath.Join(base, "project")
+			stack := initStackWith(t, ctx, project, map[string]string{"ANGEE_ROOT": tc.angeeRoot})
+			if want := filepath.Join(project, filepath.FromSlash(tc.stackRoot)); stack.root != want {
+				t.Fatalf("stack root = %q, want %q", stack.root, want)
+			}
+			assertStackUpdatesKeepPathInput(t, ctx, stack, project, tc.recorded)
+		})
+	}
+}
+
+// assertStackUpdatesKeepPathInput checks PROJECT_PATH after init, then as
+// StackTemplateInputs reports it (the -i form's lookup), then after each of two
+// template updates.
+func assertStackUpdatesKeepPathInput(t *testing.T, ctx context.Context, stack *Platform, project, want string) {
+	t.Helper()
+	assertStackPathInput(t, project, stack.root, "PROJECT_PATH", want)
+	described, err := stack.StackTemplateInputs(ctx)
+	if err != nil {
+		t.Fatalf("StackTemplateInputs: %v", err)
+	}
+	if got := described.Recorded["PROJECT_PATH"]; got != want {
+		t.Fatalf("StackTemplateInputs recorded PROJECT_PATH = %q, want %q", got, want)
+	}
+	for run := 1; run <= 2; run++ {
+		if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+			t.Fatalf("StackUpdateFromTemplate run %d: %v", run, err)
+		}
+		assertStackPathInput(t, project, stack.root, "PROJECT_PATH", want)
+	}
+}
+
+// writeTopLevelStackTemplate writes a stack template that renders angee.yaml
+// and PROJECT_PATH.txt at the top of its render target, where angee-django's
+// stack templates render angee.yaml.
+func writeTopLevelStackTemplate(t *testing.T, base, copierYML string) {
+	t.Helper()
+	dir := filepath.Join(base, ".templates", "stacks", "dev")
+	for name, body := range map[string]string{
+		"copier.yml":                      copierYML,
+		"template/angee.yaml.jinja":       oneServiceTemplate,
+		"template/PROJECT_PATH.txt.jinja": "{{ PROJECT_PATH }}\n",
+	} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A template that doesn't make ANGEE_ROOT a copier question records no
+// ANGEE_ROOT, since copier records question answers only: angee-django's
+// stacks/dev and stacks/local don't declare it at all. Here it sits under
+// _angee.inputs with the default `.`. The stack sits in the render target, so
+// an answers file there with no ANGEE_ROOT is the stack's.
+func TestStackUpdateFromTemplateFindsAnswersThatRecordNoAngeeRoot(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	writeTopLevelStackTemplate(t, base, `_subdirectory: template
+_templates_suffix: .jinja
+_angee:
+  kind: stack
+  name: dev
+  inputs:
+    ANGEE_ROOT:
+      type: string
+      default: "."
+PROJECT_PATH:
+  type: path
+  default: "."
+`)
+	project := filepath.Join(base, "project")
+	stack := initStackWith(t, ctx, project, nil)
+	if stack.root != project {
+		t.Fatalf("stack root = %q, want %q", stack.root, project)
+	}
+	_, answers, err := readTemplateAnswers(filepath.Join(project, ".copier-answers.yml"))
+	if err != nil {
+		t.Fatalf("read answers: %v", err)
+	}
+	if angeeRoot, recorded := answers["ANGEE_ROOT"]; recorded {
+		t.Fatalf("answers record ANGEE_ROOT = %q, want none", angeeRoot)
+	}
+	assertStackUpdatesKeepPathInput(t, ctx, stack, project, ".")
+}
+
+// An absolute ANGEE_ROOT names one stack root. A template that renders
+// angee.yaml at its top, initialized with its target as an absolute
+// ANGEE_ROOT, records that path, and its updates find the answers by it.
+func TestStackUpdateFromTemplateFindsAnswersByAnAbsoluteAngeeRoot(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	writeTopLevelStackTemplate(t, base, pathInputStackCopier)
+	project := filepath.Join(base, "project")
+	stack := initStackWith(t, ctx, project, map[string]string{"ANGEE_ROOT": project})
+	if stack.root != project {
+		t.Fatalf("stack root = %q, want %q", stack.root, project)
+	}
+	_, answers, err := readTemplateAnswers(filepath.Join(project, ".copier-answers.yml"))
+	if err != nil {
+		t.Fatalf("read answers: %v", err)
+	}
+	if got := answers["ANGEE_ROOT"]; got != project {
+		t.Fatalf("answers record ANGEE_ROOT = %q, want %q", got, project)
+	}
+	assertStackUpdatesKeepPathInput(t, ctx, stack, project, ".")
+}
+
+func writeAnswers(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".copier-answers.yml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The walk reads answers files nearest first and stops at the stack's own, so
+// a file above it is never read, even one that is not YAML. A file below it
+// that is not YAML stops the update instead: it may be the stack's own answers,
+// damaged, and the walk can't tell.
+func TestStackUpdateFromTemplateReadsAnswersNearestFirst(t *testing.T) {
+	for _, tc := range []struct{ name, angeeRoot string }{
+		{name: "above-dot", angeeRoot: "."},
+		{name: "above-dot-angee", angeeRoot: ".angee"},
+		{name: "above-nested", angeeRoot: "deploy/.angee"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := t.TempDir()
+			writePathInputStackTemplate(t, base, pathInputStackCopier, "PROJECT_PATH")
+			project := filepath.Join(base, "project")
+			stack := initStackWith(t, ctx, project, map[string]string{"ANGEE_ROOT": tc.angeeRoot})
+			writeAnswers(t, base, "{{{\n")
+			for run := 1; run <= 2; run++ {
+				if _, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+					t.Fatalf("StackUpdateFromTemplate run %d: %v", run, err)
+				}
+			}
+		})
+	}
+	t.Run("below-nested", func(t *testing.T) {
+		ctx := context.Background()
+		base := t.TempDir()
+		writePathInputStackTemplate(t, base, pathInputStackCopier, "PROJECT_PATH")
+		project := filepath.Join(base, "project")
+		stack := initStackWith(t, ctx, project, map[string]string{"ANGEE_ROOT": "deploy/.angee"})
+		writeAnswers(t, filepath.Join(project, "deploy"), "{{{\n")
+		_, err := stack.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{})
+		var invalid *InvalidInputError
+		bad := filepath.Join(project, "deploy", ".copier-answers.yml")
+		if !errors.As(err, &invalid) || invalid.Field != "template" || !strings.Contains(invalid.Reason, bad) {
+			t.Fatalf("StackUpdateFromTemplate error = %v, want an InvalidInputError on template naming %s", err, bad)
+		}
+	})
+}
+
+// An answers file nearer than the stack's own is skipped when it does not
+// name the stack root, whatever its other answers hold: only its ANGEE_ROOT is
+// read, so a mapping-valued answer, which no stack answer may be, doesn't stop
+// the update.
+func TestStackUpdateFromTemplateSkipsAnswersThatNameAnotherRoot(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	writePathInputStackTemplate(t, base, pathInputStackCopier, "PROJECT_PATH")
+	project := filepath.Join(base, "project")
+	stack := initStackWith(t, ctx, project, map[string]string{"ANGEE_ROOT": "deploy/.angee"})
+	for dir, angeeRoot := range map[string]string{
+		// Another stack's root, absolute.
+		stack.root: filepath.Join(base, "other", ".angee"),
+		// This stack's root, but only by climbing out of project/deploy, which
+		// stack init refuses.
+		filepath.Join(project, "deploy"): "../deploy/.angee",
+	} {
+		writeAnswers(t, dir, fmt.Sprintf("_src_path: stacks/other\nANGEE_ROOT: %q\nPROJECT_PATH: elsewhere\ncfg:\n  nested: true\n", angeeRoot))
+	}
+	assertStackUpdatesKeepPathInput(t, ctx, stack, project, "../..")
+}
+
+// locateStackAnswers walks from the stack root up to top, nearest first. Each
+// case bounds the walk at its temporary directory, so answers files above it
+// on the machine running the tests can't change the outcome.
+func TestLocateStackAnswersWalk(t *testing.T) {
+	const ours = "_src_path: stacks/dev\nANGEE_ROOT: deploy/.angee\nPROJECT_PATH: ours\n"
+	const directory = "<directory>" // a directory where the answers file would be
+	for _, tc := range []struct {
+		name  string
+		files map[string]string // answers file content by directory, relative to the top
+		// target is the directory relative to the top whose answers are found,
+		// "" for none; failing names the directory whose file the walk stops at.
+		target, failing string
+	}{
+		{name: "own", files: map[string]string{"project": ours}, target: "project"},
+		{name: "none", files: map[string]string{}},
+		{name: "only-unrelated", files: map[string]string{
+			"project/deploy/.angee": "ANGEE_ROOT: /elsewhere/.angee\n",
+			"project/deploy":        "ANGEE_ROOT: ../deploy/.angee\n",
+			"project":               "ANGEE_ROOT: .angee\n",
+			".":                     "ANGEE_ROOT: .\n",
+		}},
+		{name: "nearest-match", files: map[string]string{"project/deploy": "ANGEE_ROOT: .angee\n", "project": ours}, target: "project/deploy"},
+		{name: "unrelated-answers-not-judged", files: map[string]string{"project/deploy": "ANGEE_ROOT: elsewhere\ncfg:\n  nested: true\n", "project": ours}, target: "project"},
+		{name: "no-angee-root-above-the-stack-root", files: map[string]string{"project/deploy": "PROJECT_PATH: x\n", "project": ours}, target: "project"},
+		{name: "no-angee-root-in-the-stack-root", files: map[string]string{"project/deploy/.angee": "PROJECT_PATH: x\n"}, target: "project/deploy/.angee"},
+		{name: "list-angee-root-in-the-stack-root", files: map[string]string{"project/deploy/.angee": "ANGEE_ROOT: [a]\n", "project": ours}, target: "project"},
+		{name: "not-yaml-above-the-match", files: map[string]string{"project": ours, ".": "{{{\n"}, target: "project"},
+		{name: "not-yaml-below-the-match", files: map[string]string{"project/deploy": "{{{\n", "project": ours}, failing: "project/deploy"},
+		{name: "not-a-mapping-below-the-match", files: map[string]string{"project/deploy": "- a\n", "project": ours}, failing: "project/deploy"},
+		{name: "directory-below-the-match", files: map[string]string{"project/deploy": directory, "project": ours}, failing: "project/deploy"},
+		{name: "own-with-an-unsupported-answer", files: map[string]string{"project": ours + "cfg:\n  nested: true\n"}, failing: "project"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			top := t.TempDir()
+			root := filepath.Join(top, "project", "deploy", ".angee")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for dir, body := range tc.files {
+				dir = filepath.Join(top, filepath.FromSlash(dir))
+				if body == directory {
+					if err := os.MkdirAll(filepath.Join(dir, ".copier-answers.yml"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				writeAnswers(t, dir, body)
+			}
+			target, _, _, ok, err := locateStackAnswers(root, top, ".copier-answers.yml")
+			if tc.failing != "" {
+				path := filepath.Join(top, filepath.FromSlash(tc.failing), ".copier-answers.yml")
+				var invalid *InvalidInputError
+				if !errors.As(err, &invalid) || invalid.Field != "template" || strings.Count(invalid.Reason, path) != 1 {
+					t.Fatalf("locateStackAnswers error = %v, want an InvalidInputError on template naming %s once", err, path)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("locateStackAnswers: %v", err)
+			}
+			want := ""
+			if tc.target != "" {
+				want = filepath.Join(top, filepath.FromSlash(tc.target))
+			}
+			if target != want || ok != (want != "") {
+				t.Fatalf("locateStackAnswers = %q (found %v), want %q", target, ok, want)
+			}
+		})
+	}
+}
+
+func TestRendersStackRoot(t *testing.T) {
+	work := filepath.FromSlash("/work")
+	project := filepath.Join(work, "project")
+	deploy := filepath.Join(project, "deploy")
+	root := filepath.Join(deploy, ".angee")
+	for _, tc := range []struct {
+		name, dir, angeeRoot string
+		root                 string // the stack root, when not root
+		want                 bool
+	}{
+		{name: "empty-in-the-stack-root", dir: root, angeeRoot: "", want: true},
+		{name: "empty-above-the-stack-root", dir: project, angeeRoot: ""},
+		{name: "dot", dir: root, angeeRoot: ".", want: true},
+		{name: "dot-slash", dir: root, angeeRoot: "./", want: true},
+		{name: "dot-above-the-stack-root", dir: deploy, angeeRoot: "."},
+		{name: "one-segment", dir: deploy, angeeRoot: ".angee", want: true},
+		{name: "nested", dir: project, angeeRoot: "deploy/.angee", want: true},
+		{name: "nested-dot-prefix", dir: project, angeeRoot: "./deploy/.angee", want: true},
+		{name: "nested-trailing-slash", dir: project, angeeRoot: "deploy/.angee/", want: true},
+		{name: "nested-one-level-too-few", dir: deploy, angeeRoot: "deploy/.angee"},
+		{name: "nested-one-level-too-many", dir: work, angeeRoot: "deploy/.angee"},
+		{name: "dot-dot-inside", dir: project, angeeRoot: "deploy/../ops/.angee", root: filepath.Join(project, "ops", ".angee"), want: true},
+		{name: "dot-dot-inside-another-root", dir: project, angeeRoot: "deploy/../ops/.angee"},
+		{name: "climbs-out", dir: filepath.Join(deploy, "x"), angeeRoot: "../.angee"},
+		{name: "climbs-out-after-a-segment", dir: deploy, angeeRoot: "a/../../deploy/.angee"},
+		{name: "absolute-in-the-stack-root", dir: root, angeeRoot: root, want: true},
+		{name: "absolute-above-the-stack-root", dir: project, angeeRoot: root, want: true},
+		{name: "absolute-trailing-slash", dir: root, angeeRoot: root + string(filepath.Separator), want: true},
+		{name: "absolute-another-root", dir: root, angeeRoot: filepath.Join(work, "other", ".angee")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stackRoot := root
+			if tc.root != "" {
+				stackRoot = tc.root
+			}
+			if got := rendersStackRoot(tc.dir, tc.angeeRoot, stackRoot); got != tc.want {
+				t.Fatalf("rendersStackRoot(%q, %q, %q) = %v, want %v", tc.dir, tc.angeeRoot, stackRoot, got, tc.want)
+			}
 		})
 	}
 }

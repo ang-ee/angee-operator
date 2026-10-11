@@ -40,7 +40,8 @@ const PathInputType = "path"
 //     to <destDir>/<ANGEE_ROOT> via filepath.Rel — yielding the natural
 //     "../..." escape that ANGEE_ROOT introduces.
 //
-// destDir must be the dir copier renders into (the parent of ANGEE_ROOT).
+// destDir must be the dir copier renders into, the one ANGEE_ROOT is relative
+// to (the parent of `.angee`, two levels above `deploy/.angee`).
 // angeeRoot must be the ANGEE_ROOT value as stored in inputs (e.g. ".angee");
 // it can also be an absolute path.
 //

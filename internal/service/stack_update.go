@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,12 +319,12 @@ func (p *Platform) resolveStackTemplateOrigin(ctx context.Context) (stackTemplat
 		}
 		ref = ours.Template.Active
 	}
-	// The answers file is written by copier at the render target, which is the
-	// ANGEE_ROOT or its parent (e.g. <project>/.copier-answers.yml with the
-	// manifest at <project>/.angee/angee.yaml). Look in both — but only accept
-	// the parent's file if its recorded ANGEE_ROOT points back to this root, so
-	// an unrelated parent project's answers can't be picked up.
-	renderTarget, srcPath, answers, ok, err := p.locateStackAnswers(answersFile)
+	// The answers file is written by copier at the render target, the
+	// directory ANGEE_ROOT is relative to (e.g. <project>/.copier-answers.yml
+	// with the manifest at <project>/deploy/.angee/angee.yaml). Only a file
+	// whose recorded ANGEE_ROOT points back to this root is accepted, so an
+	// unrelated project's answers above it can't be picked up.
+	renderTarget, srcPath, answers, ok, err := locateStackAnswers(p.root, "", answersFile)
 	if err != nil {
 		return stackTemplateOrigin{}, err
 	}
@@ -491,28 +493,110 @@ func yamlEqual(a, b any) bool {
 	return bytes.Equal(ab, bb)
 }
 
-// locateStackAnswers reads the Copier answers for this stack. The answers file
-// sits at the render target, which is the stack root or — when ANGEE_ROOT is a
-// subdir like `.angee` — its parent. The parent file is only accepted when its
-// recorded ANGEE_ROOT answer names this root's basename, so an unrelated parent
-// project's answers can't be mistaken for ours.
-func (p *Platform) locateStackAnswers(answersFile string) (target string, srcPath string, inputs copierx.Inputs, ok bool, err error) {
-	rootPath := filepath.Join(p.root, answersFile)
-	if _, statErr := os.Stat(rootPath); statErr == nil {
-		srcPath, inputs, err = readTemplateAnswers(rootPath)
-		return p.root, srcPath, inputs, err == nil, err
-	}
-	parentPath := filepath.Join(filepath.Dir(p.root), answersFile)
-	if _, statErr := os.Stat(parentPath); statErr == nil {
-		srcPath, inputs, err = readTemplateAnswers(parentPath)
-		if err != nil {
-			return "", "", nil, false, err
+// locateStackAnswers reads the Copier answers of the stack at root and returns
+// the render target holding them. copier writes the answers file in the
+// directory a relative ANGEE_ROOT is relative to: the stack root for `.`, its
+// parent for `.angee`, two levels up for `deploy/.angee`. So it walks up from
+// root, nearest first, and takes the first answers file that rendersStackRoot
+// says put its stack at root. Files above that one are never read.
+//
+// Any other answers file on the way is skipped, so an unrelated project's
+// answers can't be mistaken for ours. Only its ANGEE_ROOT is read, so its
+// other answers may hold anything. A file on the way that can't be read as a
+// YAML mapping stops the walk with an *InvalidInputError naming it: it may be
+// this stack's own answers, damaged, and the walk can't tell.
+//
+// The walk ends at top when top is not empty, else at the filesystem root.
+func locateStackAnswers(root, top, answersFile string) (target string, srcPath string, inputs copierx.Inputs, ok bool, err error) {
+	for dir := root; ; dir = filepath.Dir(dir) {
+		path := filepath.Join(dir, answersFile)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+			return "", "", nil, false, unreadableAnswersError(path, readErr)
 		}
-		if inputs["ANGEE_ROOT"] == filepath.Base(p.root) {
-			return filepath.Dir(p.root), srcPath, inputs, true, nil
+		if readErr == nil {
+			angeeRoot, isPath, err := recordedAngeeRoot(data)
+			if err != nil {
+				return "", "", nil, false, unreadableAnswersError(path, err)
+			}
+			if isPath && rendersStackRoot(dir, angeeRoot, root) {
+				srcPath, inputs, err := parseTemplateAnswers(path, data)
+				if err != nil {
+					return "", "", nil, false, &InvalidInputError{Field: "template", Reason: err.Error()}
+				}
+				return dir, srcPath, inputs, true, nil
+			}
+		}
+		if dir == top || filepath.Dir(dir) == dir {
+			return "", "", nil, false, nil
 		}
 	}
-	return "", "", nil, false, nil
+}
+
+func unreadableAnswersError(path string, err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		err = pathErr.Err // the reason names the path once
+	}
+	return &InvalidInputError{
+		Field:  "template",
+		Reason: fmt.Sprintf("cannot read answers file %s: %v; fix or move it, since the update cannot tell whether it holds this stack's answers", path, err),
+	}
+}
+
+// rendersStackRoot reports whether a render into dir with the given recorded
+// ANGEE_ROOT put its stack at root, by the rule stack init places a stack with
+// (expectedStackRoot): an empty answer means dir itself, an absolute one names
+// root exactly, and a relative one is joined to dir, so `./deploy/.angee` and
+// `deploy/.angee/` count. A relative answer that climbs out of dir with `..`,
+// which stack init refuses, never matches. Paths compare cleaned, without
+// resolving symlinks.
+func rendersStackRoot(dir, angeeRoot, root string) bool {
+	if angeeRoot != "" && !filepath.IsAbs(angeeRoot) && !filepath.IsLocal(angeeRoot) {
+		return false
+	}
+	return expectedStackRoot(dir, map[string]string{"ANGEE_ROOT": angeeRoot}) == root
+}
+
+// recordedAngeeRoot reads only the ANGEE_ROOT answer of an answers file, as
+// parseTemplateAnswers would read it, leaving the file's other answers alone.
+// isPath is false when the answer is not a scalar, so it names no directory.
+// A file that records no ANGEE_ROOT answers "".
+func recordedAngeeRoot(data []byte) (angeeRoot string, isPath bool, err error) {
+	root, err := answersMapping(data)
+	if err != nil {
+		return "", false, err
+	}
+	if root == nil {
+		return "", true, nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "ANGEE_ROOT" {
+			continue
+		}
+		value, err := recordedAnswerValue(root.Content[i+1])
+		text, isScalar := value.(string)
+		return text, err == nil && isScalar, nil
+	}
+	return "", true, nil
+}
+
+var errAnswersNotMapping = errors.New("expected a YAML mapping")
+
+// answersMapping parses an answers file into its top-level mapping, which is
+// nil for an empty file.
+func answersMapping(data []byte) (*yaml.Node, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	if len(document.Content) == 0 {
+		return nil, nil
+	}
+	if root := document.Content[0]; root.Kind == yaml.MappingNode {
+		return root, nil
+	}
+	return nil, errAnswersNotMapping
 }
 
 // readTemplateAnswers parses a Copier answers file, returning its recorded
@@ -523,17 +607,21 @@ func readTemplateAnswers(path string) (srcPath string, inputs copierx.Inputs, er
 	if err != nil {
 		return "", nil, err
 	}
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
+	return parseTemplateAnswers(path, data)
+}
+
+// parseTemplateAnswers is readTemplateAnswers over the file's content.
+func parseTemplateAnswers(path string, data []byte) (srcPath string, inputs copierx.Inputs, err error) {
+	root, err := answersMapping(data)
+	if errors.Is(err, errAnswersNotMapping) {
+		return "", nil, fmt.Errorf("answers file %s: %w", path, err)
+	}
+	if err != nil {
 		return "", nil, err
 	}
 	inputs = copierx.Inputs{}
-	if len(document.Content) == 0 {
+	if root == nil {
 		return "", inputs, nil
-	}
-	root := document.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return "", nil, fmt.Errorf("answers file %s: expected a YAML mapping", path)
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key := root.Content[i].Value
