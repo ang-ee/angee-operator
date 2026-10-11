@@ -238,6 +238,30 @@ latest tag.
     `cache_path` bind-mounted on its own, whose parent the operator cannot
     write, now fails with an error saying to mount the parent directory
     instead.
+- **Worktree slots work when the user's git writes relative worktree
+  paths.** With `worktree.useRelativePaths = true` in git's config (git
+  2.48+), a `mode: worktree` slot got a `.git` file pointing relative to the
+  temporary directory it was staged in, so once installed at its path every
+  git command in it failed with "not a git repository". The add also set
+  `extensions.relativeWorktrees` and `core.repositoryformatversion = 1` on
+  the cache, and git before 2.48 and go-git refuse to open a repository with
+  that extension, the cache and every slot of it.
+  - Worktrees are now added with absolute links
+    (`git -c worktree.useRelativePaths=false worktree add`; older git ignores
+    the key), so the slot works and the cache's repository format is left as
+    it was.
+  - A cache hit before this fix keeps the extension, and its slots stay
+    broken: this release changes neither. To return the cache and its slots
+    to absolute links, run, in this order:
+
+    ```sh
+    git -c worktree.useRelativePaths=false -C <cache> worktree repair <slot>...
+    git -C <cache> config --unset extensions.relativeWorktrees
+    ```
+
+    Name each slot by its absolute path: with `-C`, git reads a relative
+    path from the cache's directory. Whichever slots it is given, the repair
+    checks every worktree registered in the cache and fixes each broken one.
 
 ## v0.21.3 — 2026-10-11
 

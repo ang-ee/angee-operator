@@ -373,8 +373,22 @@ func (c Client) Rebase(ctx context.Context, dir, ref string) error {
 	return err
 }
 
+// worktreeAdd is `git worktree add <args>` with absolute links: git writes the
+// new worktree's .git file, and the repository's gitdir file for it, as
+// absolute paths, whatever the user's worktree.useRelativePaths (git 2.48+)
+// says. Older git ignores the key. A worktree added in one directory and
+// installed in another (the git driver stages every worktree slot) then
+// still leads to its repository, and the repository's format is left as it
+// was: relative links make git set extensions.relativeWorktrees, which git
+// before 2.48 and go-git refuse to open.
+func worktreeAdd(args ...string) []string {
+	return append([]string{"-c", "worktree.useRelativePaths=false", "worktree", "add"}, args...)
+}
+
+// WorktreeAdd adds a worktree at dest with ref checked out. Its links are
+// absolute (worktreeAdd).
 func (c Client) WorktreeAdd(ctx context.Context, repoDir, dest, ref string) error {
-	args := []string{"worktree", "add", EndOfOptions, dest}
+	args := worktreeAdd(EndOfOptions, dest)
 	if ref != "" {
 		args = append(args, ref)
 	}
@@ -384,8 +398,9 @@ func (c Client) WorktreeAdd(ctx context.Context, repoDir, dest, ref string) erro
 
 // WorktreeAddDetached adds a worktree at dest on a detached HEAD at ref, so no
 // branch is created or checked out. An empty ref detaches at repoDir's HEAD.
+// Its links are absolute (worktreeAdd).
 func (c Client) WorktreeAddDetached(ctx context.Context, repoDir, dest, ref string) error {
-	args := []string{"worktree", "add", "--detach", EndOfOptions, dest}
+	args := worktreeAdd("--detach", EndOfOptions, dest)
 	if ref != "" {
 		args = append(args, ref)
 	}
@@ -395,9 +410,10 @@ func (c Client) WorktreeAddDetached(ctx context.Context, repoDir, dest, ref stri
 
 // WorktreeAddBranch adds a worktree at dest on a new branch cut from ref. With
 // track false the new branch gets no upstream even when ref is a
-// remote-tracking branch, which git would otherwise set.
+// remote-tracking branch, which git would otherwise set. Its links are
+// absolute (worktreeAdd).
 func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, ref string, track bool) error {
-	args := []string{"worktree", "add"}
+	args := worktreeAdd()
 	if !track {
 		args = append(args, "--no-track")
 	}

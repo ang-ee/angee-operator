@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -223,7 +224,7 @@ func TestWorkspaceCreateRollsBackEarlierSlotsWhenALaterOneFails(t *testing.T) {
 		"<cwd> [] clone --origin origin --branch main --end-of-options <base>/app/remote.git <base>/.angee/.cache/.app.clone-N/clone",
 		"<base>/.angee/.cache/.app.clone-N/clone [] config --get-all --end-of-options remote.origin.url",
 		"<base>/.angee/.cache/app [] worktree list --porcelain",
-		"<base>/.angee/.cache/app [] worktree add -b feature-a --end-of-options <base>/tmp/angee-worktree-stage-N/source main",
+		"<base>/.angee/.cache/app [] -c worktree.useRelativePaths=false worktree add -b feature-a --end-of-options <base>/tmp/angee-worktree-stage-N/source main",
 		"<cwd> [] clone --origin origin --branch main --end-of-options <base>/docs/remote.git <base>/tmp/angee-clone-stage-N/source",
 		"<base>/tmp/angee-clone-stage-N/source [] config --get-all --end-of-options remote.origin.url",
 		"<cwd> [] clone --origin origin --branch main --end-of-options <base>/missing.git <base>/tmp/angee-clone-stage-N/source",
@@ -244,6 +245,94 @@ func TestWorkspaceCreateRollsBackEarlierSlotsWhenALaterOneFails(t *testing.T) {
 		t.Fatalf("linked local source after rollback: Stat error = %v, want it intact", err)
 	}
 	f.assertNoStaging(t)
+}
+
+// A worktree slot works when the user's git is set to write worktree links as
+// relative paths (worktree.useRelativePaths, git 2.48+), however it is added:
+// on a new branch, on a branch that exists, or detached. A link relative to
+// the staging directory would break once the checkout is installed at the
+// slot path, so the worktree is added with absolute links, and the cache's
+// repository format is left as it was, without extensions.relativeWorktrees.
+func TestWorktreeSlotWorksWhenGitWritesRelativePaths(t *testing.T) {
+	ctx := context.Background()
+	f := newLifecycleFixture(t)
+	if usage, _ := exec.Command("git", "worktree", "add", "-h").CombinedOutput(); !strings.Contains(string(usage), "relative-paths") {
+		t.Skip("git before 2.48 has no worktree.useRelativePaths")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	useGlobalGitConfig(t, f.base, "[worktree]\n\tuseRelativePaths = true\n")
+	template := f.template(t, "worktree", "app")
+
+	for _, tc := range []struct {
+		name, branch string
+		setup        func()
+	}{
+		{name: "new-branch", branch: "new-branch"},
+		{name: "existing-branch", branch: "existing", setup: func() { runGit(t, f.cache(), "branch", "existing", "main") }},
+		{name: "detached", branch: ""},
+	} {
+		if tc.setup != nil {
+			tc.setup()
+		}
+		if _, err := f.platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: template, Name: tc.name, Inputs: map[string]string{"branch": tc.branch}}); err != nil {
+			t.Fatalf("WorkspaceCreate(%s) error = %v", tc.name, err)
+		}
+		slot := filepath.Join(f.workspace(tc.name), "app")
+		if out, err := exec.Command("git", "-C", slot, "status", "--short").CombinedOutput(); err != nil {
+			t.Fatalf("git status in the %s slot error = %v: %s", tc.name, err, out)
+		}
+	}
+	if list := runGitOutput(t, f.cache(), "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 4 || strings.Contains(list, "prunable") {
+		t.Fatalf("cache worktrees:\n%s\nwant the cache's own and the three slots', none prunable", list)
+	}
+	out, err := exec.Command("git", "-C", f.cache(), "config", "--get", "extensions.relativeWorktrees").CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("cache extensions.relativeWorktrees = %q (%v), want it unset", out, err)
+	}
+}
+
+// Creating a worktree slot touches no other slot of its cache. A slot whose
+// .git is broken (a directory where git wrote a file) neither fails the
+// create nor is changed by it.
+func TestWorktreeSlotCreateLeavesTheCachesOtherSlotsAlone(t *testing.T) {
+	ctx := context.Background()
+	f := newLifecycleFixture(t)
+	template := f.template(t, "worktree", "app")
+	create := func(name string) error {
+		_, err := f.platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: template, Name: name, Inputs: map[string]string{"branch": name}})
+		return err
+	}
+	if err := create("first"); err != nil {
+		t.Fatalf("WorkspaceCreate(first) error = %v", err)
+	}
+	dotGit := filepath.Join(f.workspace("first"), "app", ".git")
+	if err := os.Remove(dotGit); err != nil {
+		t.Fatalf("Remove(.git) error = %v", err)
+	}
+	mustMkdirAll(t, dotGit)
+	marker := filepath.Join(dotGit, "marker")
+	mustWriteFile(t, marker, "left as it was\n")
+
+	if err := create("second"); err != nil {
+		t.Fatalf("WorkspaceCreate(second) beside a broken slot error = %v", err)
+	}
+	if out, err := exec.Command("git", "-C", filepath.Join(f.workspace("second"), "app"), "status", "--short").CombinedOutput(); err != nil {
+		t.Fatalf("git status in the new slot error = %v: %s", err, out)
+	}
+	info, err := os.Lstat(dotGit)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("broken slot's .git after the create: Lstat = %v, %v, want the directory it was", info, err)
+	}
+	entries, err := os.ReadDir(dotGit)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "marker" {
+		t.Fatalf("broken slot's .git holds %v (%v), want only marker", entries, err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "left as it was\n" {
+		t.Fatalf("broken slot's marker = %q, %v, want it unchanged", got, err)
+	}
 }
 
 // --sync reclaims a leftover slot only when the cache has it registered as a
@@ -304,7 +393,7 @@ func TestWorkspaceCreateSyncReclaimsOnlyARegisteredLeftover(t *testing.T) {
 	want := []string{
 		cache + " worktree list --porcelain",
 		cache + " worktree prune",
-		cache + " worktree add --end-of-options <base>/tmp/angee-worktree-stage-N/source feature-a",
+		cache + " -c worktree.useRelativePaths=false worktree add --end-of-options <base>/tmp/angee-worktree-stage-N/source feature-a",
 	}
 	if strings.Join(ran, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("reclaim ran:\n%s\nwant:\n%s", strings.Join(ran, "\n"), strings.Join(want, "\n"))
@@ -464,6 +553,8 @@ func TestWorkspaceCreateAndDestroyRunTheirGit(t *testing.T) {
 	const (
 		cache = "<base>/.angee/.cache/app []"
 		stage = "<base>/tmp/angee-worktree-stage-N/source"
+		// A worktree is added with absolute links.
+		add = cache + " -c worktree.useRelativePaths=false worktree add"
 	)
 	// The clone slot is cloned into a staging directory and given its
 	// remotes there; then copier renders the template.
@@ -512,7 +603,7 @@ func TestWorkspaceCreateAndDestroyRunTheirGit(t *testing.T) {
 				"<cwd> [] clone --origin origin --branch main --end-of-options <base>/app/remote.git <base>/.angee/.cache/.app.clone-N/clone",
 				"<base>/.angee/.cache/.app.clone-N/clone [] config --get-all --end-of-options remote.origin.url",
 				cache + " worktree list --porcelain",
-				cache + " worktree add -b feature-a --end-of-options " + stage + " main",
+				add + " -b feature-a --end-of-options " + stage + " main",
 			}, cloneAndRender),
 		},
 		{
@@ -525,7 +616,7 @@ func TestWorkspaceCreateAndDestroyRunTheirGit(t *testing.T) {
 			verb: create("feature-a", map[string]string{"branch": "feature-a"}),
 			git: concat(refresh, []string{
 				cache + " worktree list --porcelain",
-				cache + " worktree add --end-of-options " + stage + " feature-a",
+				add + " --end-of-options " + stage + " feature-a",
 			}, cloneAndRender),
 		},
 		{
@@ -538,7 +629,7 @@ func TestWorkspaceCreateAndDestroyRunTheirGit(t *testing.T) {
 			verb: create("feature-b", map[string]string{"branch": ""}),
 			git: concat(refresh, []string{
 				cache + " worktree list --porcelain",
-				cache + " worktree add --detach --end-of-options " + stage + " main",
+				add + " --detach --end-of-options " + stage + " main",
 			}, cloneAndRender),
 		},
 		{
@@ -559,7 +650,7 @@ func TestWorkspaceCreateAndDestroyRunTheirGit(t *testing.T) {
 			git: concat(refresh, []string{
 				cache + " worktree list --porcelain",
 				cache + " rev-parse --verify --quiet --symbolic-full-name --end-of-options develop@{upstream}",
-				cache + " worktree add --no-track -b feature-c --end-of-options " + stage + " origin/develop",
+				add + " --no-track -b feature-c --end-of-options " + stage + " origin/develop",
 			}, cloneAndRender),
 		},
 		{
