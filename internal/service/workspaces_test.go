@@ -45,12 +45,14 @@ func TestWorkspaceSourceCleanupRetainsOriginalDestinationCapability(t *testing.T
 	}
 }
 
-func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing.T) {
+func TestWorkspaceCreateNoHostStackWithTemplateSource(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, ".angee")
 	sourceRoot := filepath.Join(base, "app-source")
 	workspaceTemplate := writeWorkspaceTemplate(t, base, sourceRoot)
-	writeChainedStackTemplate(t, sourceRoot)
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sourceRoot) error = %v", err)
+	}
 
 	platform, err := New(root)
 	if err != nil {
@@ -85,11 +87,8 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 	if workspace.Sources["app"].Subpath != "app" {
 		t.Fatalf("workspace source subpath = %q, want app", workspace.Sources["app"].Subpath)
 	}
-	if workspace.Resolved.ChainRoot != "app/.angee" {
-		t.Fatalf("chain root = %q, want app/.angee", workspace.Resolved.ChainRoot)
-	}
-	if len(workspace.Resolved.Chain) != 2 || workspace.Resolved.Chain[1] != "app/.templates/stacks/dev" {
-		t.Fatalf("resolved chain = %#v, want relative chained template", workspace.Resolved.Chain)
+	if workspace.Resolved.ChainRoot != "" || len(workspace.Resolved.Chain) != 0 {
+		t.Fatalf("resolved chain = %#v, root %q; want none recorded (#110)", workspace.Resolved.Chain, workspace.Resolved.ChainRoot)
 	}
 
 	readme, err := os.ReadFile(filepath.Join(root, "workspaces", "feature-a", "README.md"))
@@ -98,9 +97,6 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 	}
 	if !strings.Contains(string(readme), "feature-a") {
 		t.Fatalf("README was not rendered with workspace_name: %s", readme)
-	}
-	if _, err := os.Stat(filepath.Join(root, "workspaces", "feature-a", "app", ".angee", "angee.yaml")); err != nil {
-		t.Fatalf("chained stack manifest was not rendered: %v", err)
 	}
 	linkPath := filepath.Join(root, "workspaces", "feature-a", "app")
 	linkTarget, err := os.Readlink(linkPath)
@@ -165,7 +161,7 @@ func TestWorkspaceCreateRejectsSymlinkedWorkspacesRoot(t *testing.T) {
 	}
 }
 
-func TestWorkspaceUpdateRerendersOuterAndInnerTemplates(t *testing.T) {
+func TestWorkspaceUpdateRerendersTheTemplateAndKeepsAllocations(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
 	root := filepath.Join(base, ".angee")
@@ -183,7 +179,7 @@ func TestWorkspaceUpdateRerendersOuterAndInnerTemplates(t *testing.T) {
 	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
 		t.Fatalf("SaveFile(host): %v", err)
 	}
-	workspaceTemplate, stackTemplate := writeRerenderWorkspaceTemplates(t, base, "outer v1\n", "inner v1\n")
+	workspaceTemplate := writeRerenderWorkspaceTemplate(t, base, "outer v1\n")
 	platform, _ := New(root)
 	platform.portUnavailable = func(int) bool { return false }
 	created, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: workspaceTemplate, Name: "feature"})
@@ -197,9 +193,6 @@ func TestWorkspaceUpdateRerendersOuterAndInnerTemplates(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspaceTemplate, "template", "outer.txt.jinja"), []byte("outer v2\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(outer update): %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stackTemplate, "template", "{{ ANGEE_ROOT }}", "inner.txt.jinja"), []byte("inner v2\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(inner update): %v", err)
-	}
 	updated, err := platform.WorkspaceUpdate(ctx, "feature", api.WorkspaceUpdateRequest{})
 	if err != nil {
 		t.Fatalf("WorkspaceUpdate: %v", err)
@@ -210,17 +203,6 @@ func TestWorkspaceUpdateRerendersOuterAndInnerTemplates(t *testing.T) {
 	outer, _ := os.ReadFile(filepath.Join(created.Path, "outer.txt"))
 	if string(outer) != "outer v2\n" {
 		t.Fatalf("outer.txt = %q", outer)
-	}
-	inner, _ := os.ReadFile(filepath.Join(created.Path, ".angee", "inner.txt"))
-	if string(inner) != "inner v2\n" {
-		t.Fatalf("inner.txt = %q", inner)
-	}
-	innerStack, err := manifest.LoadFile(filepath.Join(created.Path, ".angee", "angee.yaml"))
-	if err != nil {
-		t.Fatalf("LoadFile(inner stack): %v", err)
-	}
-	if innerStack.Ports["web"].Value != 8123 {
-		t.Fatalf("inner stack web port = %d, want 8123", innerStack.Ports["web"].Value)
 	}
 }
 
@@ -237,7 +219,7 @@ func TestWorkspaceUpdatePreservesConflictUnlessOverwrite(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveFile(host): %v", err)
 	}
-	workspaceTemplate, _ := writeRerenderWorkspaceTemplates(t, base, "outer v1\n", "inner v1\n")
+	workspaceTemplate := writeRerenderWorkspaceTemplate(t, base, "outer v1\n")
 	platform, _ := New(root)
 	platform.portUnavailable = func(int) bool { return false }
 	created, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: workspaceTemplate, Name: "feature"})
@@ -284,67 +266,22 @@ func TestWorkspaceUpdatePreservesConflictUnlessOverwrite(t *testing.T) {
 	}
 }
 
-func writeRerenderWorkspaceTemplates(t *testing.T, base, outer, inner string) (string, string) {
+// writeRerenderWorkspaceTemplate writes a workspace template under base that
+// renders outer.txt with the given content.
+func writeRerenderWorkspaceTemplate(t *testing.T, base, outer string) string {
 	t.Helper()
 	workspaceTemplate := filepath.Join(base, ".templates", "workspaces", "rerender")
 	if err := os.MkdirAll(filepath.Join(workspaceTemplate, "template"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace template): %v", err)
 	}
-	workspaceCopier := `_subdirectory: template
-_templates_suffix: .jinja
-_answers_file: .copier-answers.yml
-_angee:
-  kind: workspace
-  name: rerender
-  chain_root: .angee
-  chain:
-    - template: stacks/rerender-inner
-      root: .
-      inputs:
-        web_port: "${alloc.web}"
-`
+	workspaceCopier := "_subdirectory: template\n_templates_suffix: .jinja\n_answers_file: .copier-answers.yml\n_angee:\n  kind: workspace\n  name: rerender\n"
 	if err := os.WriteFile(filepath.Join(workspaceTemplate, "copier.yml"), []byte(workspaceCopier), 0o644); err != nil {
 		t.Fatalf("WriteFile(workspace copier.yml): %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(workspaceTemplate, "template", "outer.txt.jinja"), []byte(outer), 0o644); err != nil {
 		t.Fatalf("WriteFile(outer template): %v", err)
 	}
-
-	stackTemplate := filepath.Join(base, ".templates", "stacks", "rerender-inner")
-	innerRoot := filepath.Join(stackTemplate, "template", "{{ ANGEE_ROOT }}")
-	if err := os.MkdirAll(innerRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll(stack template): %v", err)
-	}
-	stackCopier := `_subdirectory: template
-_templates_suffix: .jinja
-_answers_file: .copier-answers.yml
-_angee:
-  kind: stack
-  name: rerender-inner
-ANGEE_ROOT:
-  type: str
-  default: .angee
-web_port:
-  type: int
-  default: 9999
-`
-	if err := os.WriteFile(filepath.Join(stackTemplate, "copier.yml"), []byte(stackCopier), 0o644); err != nil {
-		t.Fatalf("WriteFile(stack copier.yml): %v", err)
-	}
-	manifestBody := `version: 1
-kind: stack
-name: inner
-ports:
-  web:
-    value: {{ web_port }}
-`
-	if err := os.WriteFile(filepath.Join(innerRoot, "angee.yaml.jinja"), []byte(manifestBody), 0o644); err != nil {
-		t.Fatalf("WriteFile(inner angee.yaml): %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(innerRoot, "inner.txt.jinja"), []byte(inner), 0o644); err != nil {
-		t.Fatalf("WriteFile(inner template): %v", err)
-	}
-	return workspaceTemplate, stackTemplate
+	return workspaceTemplate
 }
 
 func TestWorkspaceCreateAllowsGitSourceAtWorkspaceRoot(t *testing.T) {
@@ -362,8 +299,7 @@ func TestWorkspaceCreateAllowsGitSourceAtWorkspaceRoot(t *testing.T) {
 	runGit(t, seed, "config", "user.email", "test@example.com")
 	runGit(t, seed, "config", "user.name", "Test User")
 	mustWriteFile(t, filepath.Join(seed, "README.md"), "repo readme\n")
-	mustWriteFile(t, filepath.Join(seed, ".gitignore"), ".angee/\n.copier-answers.yml\n.dev-sibling\n")
-	writeRootSourceStackTemplate(t, seed)
+	mustWriteFile(t, filepath.Join(seed, ".gitignore"), ".copier-answers.yml\n.dev-sibling\n")
 	runGit(t, seed, "add", ".")
 	runGit(t, seed, "commit", "-m", "initial")
 	runGit(t, seed, "branch", "-M", "main")
@@ -406,9 +342,6 @@ func TestWorkspaceCreateAllowsGitSourceAtWorkspaceRoot(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspacePath, ".copier-answers.yml")); err != nil {
 		t.Fatalf("workspace root .copier-answers.yml was not rendered: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspacePath, ".angee", "angee.yaml")); err != nil {
-		t.Fatalf("inner stack manifest was not rendered under .angee: %v", err)
-	}
 	siblingLink := filepath.Join(workspacePath, ".dev-sibling")
 	if _, err := os.Stat(filepath.Join(siblingLink, "helper.txt")); err != nil {
 		t.Fatalf("sibling source was not materialized under root source: %v", err)
@@ -424,9 +357,6 @@ func TestWorkspaceCreateAllowsGitSourceAtWorkspaceRoot(t *testing.T) {
 	}
 	if workspace.Sources["helper"].Subpath != ".dev-sibling" {
 		t.Fatalf("workspace sibling subpath = %q, want .dev-sibling", workspace.Sources["helper"].Subpath)
-	}
-	if workspace.Resolved.ChainRoot != ".angee" {
-		t.Fatalf("chain root = %q, want .angee", workspace.Resolved.ChainRoot)
 	}
 	if got := strings.TrimSpace(runGitOutput(t, workspacePath, "branch", "--show-current")); got != "feature-a" {
 		t.Fatalf("workspace git branch = %q, want feature-a", got)
@@ -1208,10 +1138,6 @@ _angee:
       kind: local
       path: "${inputs.source_path}"
       subpath: app
-  chain_root: app/.angee
-  chain:
-    - template: app/.templates/stacks/dev
-      root: app
 topic:
   type: str
   default: dev-pr
@@ -1228,32 +1154,24 @@ source_path:
 	return templateRoot
 }
 
-func writeChainedStackTemplate(t *testing.T, sourceRoot string) {
+// writeChainingWorkspaceTemplate writes a workspace template under base that
+// declares the given `_angee` chain lines (#110 refuses such a template) and
+// renders README.md.
+func writeChainingWorkspaceTemplate(t *testing.T, base, chainLines string) string {
 	t.Helper()
-	manifestDir := filepath.Join(sourceRoot, ".templates", "stacks", "dev", "template", "{{ ANGEE_ROOT }}")
-	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(stack template) error = %v", err)
+	templateRoot := filepath.Join(base, ".templates", "workspaces", "chaining")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(chaining workspace template) error = %v", err)
 	}
-	copierYAML := `_subdirectory: template
-_templates_suffix: .jinja
-_answers_file: .copier-answers.yml
-_angee:
-  kind: stack
-  name: dev
-ANGEE_ROOT:
-  type: str
-  default: .angee
-`
-	if err := os.WriteFile(filepath.Join(sourceRoot, ".templates", "stacks", "dev", "copier.yml"), []byte(copierYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile(stack copier.yml) error = %v", err)
+	copierYAML := "_subdirectory: template\n_templates_suffix: .jinja\n_answers_file: .copier-answers.yml\n_angee:\n  kind: workspace\n  name: chaining\n" + chainLines
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(chaining workspace copier.yml) error = %v", err)
 	}
-	manifestYAML := `version: 1
-kind: stack
-name: chained
-`
-	if err := os.WriteFile(filepath.Join(manifestDir, "angee.yaml.jinja"), []byte(manifestYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile(angee.yaml.jinja) error = %v", err)
+	if err := os.WriteFile(filepath.Join(templateDir, "README.md.jinja"), []byte("workspace {{ workspace_name }}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md.jinja) error = %v", err)
 	}
+	return templateRoot
 }
 
 func writeRootGitWorkspaceTemplate(t *testing.T, base, repo, helperRepo string) string {
@@ -1290,10 +1208,6 @@ _angee:
       branch: "${inputs.branch}-helper"
       ref: main
       subpath: .dev-sibling
-  chain_root: .angee
-  chain:
-    - template: .templates/stacks/dev
-      root: .angee
 branch:
   type: str
   default: feature-a
@@ -1341,31 +1255,6 @@ branch:
 	return templateRoot
 }
 
-func writeRootSourceStackTemplate(t *testing.T, sourceRoot string) {
-	t.Helper()
-	templateDir := filepath.Join(sourceRoot, ".templates", "stacks", "dev", "template")
-	if err := os.MkdirAll(templateDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(root source stack template) error = %v", err)
-	}
-	copierYAML := `_subdirectory: template
-_templates_suffix: .jinja
-_answers_file: .copier-answers.yml
-_angee:
-  kind: stack
-  name: dev
-`
-	if err := os.WriteFile(filepath.Join(sourceRoot, ".templates", "stacks", "dev", "copier.yml"), []byte(copierYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile(root source stack copier.yml) error = %v", err)
-	}
-	manifestYAML := `version: 1
-kind: stack
-name: root-source-dev
-`
-	if err := os.WriteFile(filepath.Join(templateDir, "angee.yaml.jinja"), []byte(manifestYAML), 0o644); err != nil {
-		t.Fatalf("WriteFile(root source stack angee.yaml.jinja) error = %v", err)
-	}
-}
-
 func mustWriteFile(t *testing.T, path string, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
@@ -1389,81 +1278,6 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v error = %v: %s", args, err, out)
 	}
 	return string(out)
-}
-
-func TestChainTemplateSnapshotRoot(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		ref         string
-		includeRoot string
-		root        string
-		subpath     string
-	}{
-		// The default pins exactly the template directory, whatever the
-		// collection is called.
-		{"undeclared", "templates/stacks/dev", "", "templates/stacks/dev", "."},
-		{"explicit self", "templates/stacks/dev", ".", "templates/stacks/dev", "."},
-		{"single segment", "plain", "", "plain", "."},
-		// A template that reaches sideways declares how far it reaches.
-		{"collection root", "templates/stacks/dev", "../..", "templates", "stacks/dev"},
-		{"one level", "templates/stacks/dev", "..", "templates/stacks", "dev"},
-		{"nested collection", "a/b/c/workspaces/dev-pr", "../..", "a/b/c", "workspaces/dev-pr"},
-		// Directory names carry no meaning: an unconventional collection
-		// works exactly like a conventional one.
-		{"unconventional name", "templates/hosts/web", "../..", "templates", "hosts/web"},
-		{"guarded source", "app/.templates/stacks/dev", "../..", "app/.templates", "stacks/dev"},
-		// Trailing slashes and redundant segments normalize.
-		{"redundant segments", "templates/stacks/dev", "./../..", "templates", "stacks/dev"},
-		{"no-op traversal", "templates/stacks/dev", "foo/..", "templates/stacks/dev", "."},
-		// Whitespace is trimmed rather than treated as a path segment, which
-		// would cancel against a following `..` and silently pin only self.
-		{"padded value", "templates/stacks/dev", "  ../..  ", "templates", "stacks/dev"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root, subpath, err := chainTemplateSnapshotRoot(tc.ref, tc.includeRoot)
-			if err != nil {
-				t.Fatalf("chainTemplateSnapshotRoot(%q, %q): %v", tc.ref, tc.includeRoot, err)
-			}
-			if root != tc.root || subpath != tc.subpath {
-				t.Fatalf("chainTemplateSnapshotRoot(%q, %q) = (%q, %q), want (%q, %q)",
-					tc.ref, tc.includeRoot, root, subpath, tc.root, tc.subpath)
-			}
-		})
-	}
-}
-
-func TestChainTemplateSnapshotRootRejectsUnusableIncludeRoots(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		ref         string
-		includeRoot string
-	}{
-		// Reaching past the workspace is not something a chain entry may pin.
-		{"escapes workspace", "templates/stacks/dev", "../../.."},
-		{"escapes far", "templates/stacks/dev", "../../../../elsewhere"},
-		// The workspace root itself is far more than a chain entry should pin.
-		{"workspace root", "templates/stacks", "../.."},
-		{"single segment parent", "plain", ".."},
-		// An include root must contain the template, not sit beside it.
-		{"sibling", "templates/stacks/dev", "../other"},
-		{"descendant", "templates/stacks/dev", "template"},
-		{"absolute", "templates/stacks/dev", "/etc"},
-		// Backslashes are not path separators here; failing closed as
-		// not-an-ancestor is the behaviour to keep.
-		{"backslash", "templates/stacks/dev", `..\..`},
-		// The ref itself resolving to the workspace root is out of bounds even
-		// with no declaration to blame.
-		{"ref is workspace root", ".", ""},
-		{"ref is workspace root with declaration", ".", "../.."},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root, subpath, err := chainTemplateSnapshotRoot(tc.ref, tc.includeRoot)
-			if err == nil {
-				t.Fatalf("chainTemplateSnapshotRoot(%q, %q) = (%q, %q), want an error",
-					tc.ref, tc.includeRoot, root, subpath)
-			}
-		})
-	}
 }
 
 func TestWorkspaceCreateAndUpdatePreserveInTemplateSymlinks(t *testing.T) {

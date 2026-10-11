@@ -942,6 +942,49 @@ func TestWorkspaceStatusInfersCurrentWorkspace(t *testing.T) {
 	}
 }
 
+// A workspace recorded with a chain before #110 shows no chain_root,
+// inner_stack or inner_error lines in `workspace status`, and `workspace logs`
+// prints nothing but a deprecation note on stderr.
+func TestWorkspaceStatusAndLogsForAWorkspaceRecordedWithAChain(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".angee")
+	innerRoot := filepath.Join(root, "workspaces", "feature-a", ".angee")
+	if err := os.MkdirAll(innerRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(inner root) error = %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "parent-root",
+		Workspaces: map[string]manifest.Workspace{
+			"feature-a": {Template: "workspaces/dev-pr", Resolved: manifest.WorkspaceResolved{ChainRoot: ".angee"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	if err := manifest.SaveFile(manifest.Path(innerRoot), &manifest.Stack{Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "inner"}); err != nil {
+		t.Fatalf("SaveFile(inner angee.yaml) error = %v", err)
+	}
+
+	stdout, _, err := runCLI(t, "--root", root, "workspace", "status", "feature-a")
+	if err != nil {
+		t.Fatalf("workspace status: %v", err)
+	}
+	for _, key := range []string{"chain_root", "inner_stack", "inner_error"} {
+		if strings.Contains(stdout, key) {
+			t.Fatalf("workspace status output = %q, want no %s line", stdout, key)
+		}
+	}
+
+	stdout, stderr, err := runCLI(t, "--root", root, "workspace", "logs", "feature-a")
+	if err != nil {
+		t.Fatalf("workspace logs: %v", err)
+	}
+	if stdout != "" || !strings.Contains(stderr, "deprecated") || !strings.Contains(stderr, "#110") {
+		t.Fatalf("workspace logs stdout = %q, stderr = %q; want no output and a deprecation note naming #110", stdout, stderr)
+	}
+}
+
 func TestWorkspaceSyncBaseInfersCurrentWorkspace(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, ".angee")

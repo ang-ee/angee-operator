@@ -491,7 +491,7 @@ angee workspace update <name> [-i] [--ttl duration] [--answers <file> ...] [--in
 angee workspace list  # alias: ls
 angee workspace get <name>
 angee workspace status [name]
-angee workspace logs <name> [--follow]
+angee workspace logs <name> [--follow]  # deprecated: prints nothing (#110)
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
 angee workspace sync-base [name] [--merge|--rebase]
@@ -533,17 +533,24 @@ only reclaims a genuine git worktree at the destination and never touches
 sibling worktrees that share the same source cache. (A stale "missing but
 already registered" worktree is reclaimed automatically, without `--sync`.)
 
-Workspaces are a **pure file primitive**: `create`/`update` render Copier
-templates (including any chained inner-stack templates) and materialize git
-or local sources. They do **not** own service lifecycle. If a workspace
-renders an inner stack and you want to bring it up, run a stack operation
-against the inner root explicitly:
+Workspaces are a **pure file primitive**: `create`/`update` render a Copier
+template and materialize git or local sources. They do **not** own service
+lifecycle: a stack's services and jobs reach a workspace through
+`workspace://` mounts, `workdir` and env, and run as any other service (see
+[Workspaces and stacks](/operator/templates#workspaces-and-stacks)). A
+workspace template that declares `chain` or `chain_root` is refused
+([#110](https://github.com/ang-ee/angee-operator/issues/110)), and so is
+`workspace update` of a workspace created from such a template before then:
+destroy it and create it again. `workspace logs` is deprecated: a workspace
+has no logs of its own, so it prints only a note on stderr. Read the logs of
+the services and jobs that mount the workspace with `angee logs <service>`.
 
-```sh
-angee stack up --root workspaces/<name>/.angee
-# or point a second operator at it for HTTP/GraphQL access:
-angee operator --root workspaces/<name>/.angee --port 9100
-```
+`workspace destroy --purge` deletes the workspace's directory, everything in
+it included. The operator does not know about a stack that lives inside a
+workspace's directory, such as one a chaining template rendered before #110,
+and does not stop it. Stop any such stack first (`angee stack down --root
+<that stack's root>`), or its containers keep running, and with a restart
+policy keep restarting, after their files are gone.
 
 When run from inside `$ANGEE_ROOT/workspaces/<name>/...`,
 `angee workspace status`, `angee workspace sync-base` and

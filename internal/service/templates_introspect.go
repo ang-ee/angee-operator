@@ -113,6 +113,12 @@ func templateDescriptor(ref, templatePath string) (api.TemplateDescriptor, error
 	if err != nil {
 		return api.TemplateDescriptor{}, err
 	}
+	// A workspace template that chains a stack is unusable (#110), so it is
+	// refused here too: Template answers with the reason, and TemplateList,
+	// which skips templates it cannot describe, leaves it out.
+	if err := RefuseWorkspaceChain(ref, metadata); err != nil {
+		return api.TemplateDescriptor{}, err
+	}
 	questions, defaults, err := copierx.TemplateQuestions(templatePath)
 	if err != nil {
 		return api.TemplateDescriptor{}, err

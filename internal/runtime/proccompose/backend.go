@@ -145,9 +145,8 @@ func (b Backend) upArgs(target runtime.Target, detached bool) []string {
 	// the failed job `angee dev` and `angee job list` report; `angee down`
 	// and Ctrl-C still stop it. `--tui=false` prevents the supervisor from
 	// trying to attach a TUI on a process that has no controlling terminal
-	// (which is the normal case for `angee stack up --root ...` against a
-	// workspace's inner stack from a non-interactive shell or under another
-	// supervisor).
+	// (which is the normal case for `angee stack up --root ...` from a
+	// non-interactive shell or under another supervisor).
 	args = append(args, "--keep-project", "--tui=false")
 	return append(args, target.Services...)
 }

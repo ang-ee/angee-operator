@@ -61,6 +61,47 @@ latest tag.
   behaviour, except that a failed fetch (in a slot fetch, pull or sync-base)
   names the source's clone remote rather than `origin` when the source
   declares `remotes:`.
+- **A workspace no longer renders a stack (#110).** A workspace and a stack
+  are separate concerns: a workspace is files (its rendered template and its
+  source slots), and a stack's services and jobs reach it through
+  `workspace://` mounts, `workdir` and env.
+  - A workspace template that declares `chain` or `chain_root` is refused
+    with `INVALID_INPUT`, naming #110, before anything is materialized: on
+    `workspace create`, `workspace update`, create preflight and `template`.
+    `templates` leaves such a template out. A stack template's own `chain:`
+    is unchanged.
+  - The operator no longer reads a stack inside a workspace: workspace
+    status, the topology and the snapshot stop querying its Docker and
+    process-compose. That stack's own operator reports it.
+  - A stack inside a workspace no longer reads its parent: `stack update
+    --template` takes its ports from its own answers file, like any stack,
+    where it used to override them with the parent's workspace allocations.
+  - A workspace created from a chaining template keeps its files, the stack
+    inside included, now an ordinary stack at that path. Its status reports
+    no inner stack and `workspace destroy` works as before, but `workspace
+    update` refuses it with `INVALID_INPUT` naming #110: a render of the
+    workspace template alone would overwrite or delete what the chain
+    rendered, and an update cannot switch the recorded template. Destroy it
+    and create it again. The record is left as it is.
+  - `angee doctor` reports a chaining workspace template as an error.
+  - `workspace destroy --purge` deletes a workspace's directory without
+    stopping a stack that lives inside it, which the operator does not know
+    about; stop such a stack first. The guide now says so.
+
+### Deprecated
+
+- **Workspace inner-stack fields and workspace logs (#110)**, removed in a
+  later release once the consoles in use stop selecting them:
+  - `innerStack` (REST `inner_stack`) is always null, and `innerError`,
+    `chain` and `chainRoot` (REST `inner_error`, `chain`, `chain_root`) are
+    always empty, on workspace status and refs. REST and `--json` keep
+    sending `"chain": []` until the fields are removed; before, every
+    workspace sent its own template there;
+  - `workspaceLogs`, `onWorkspaceLogs`, `GET /workspaces/{name}/logs` and
+    `angee workspace logs` return nothing, since a workspace has no logs of
+    its own; the CLI command prints a deprecation note on stderr.
+  - `angee workspace status` no longer prints `chain_root`, `inner_stack` or
+    `inner_error` lines.
 
 ## v0.21.3 — 2026-10-11
 

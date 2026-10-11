@@ -332,6 +332,12 @@ name: inner
 	if link["workspace"] != workspaceName || link["slot"] != "app" || link["state"] != "ahead" || link["ahead"] != float64(1) || link["pushed"] != false {
 		t.Fatalf("link = %#v, want ahead unpushed app worktree", link)
 	}
+	// The record carries a chain_root from before #110; the deprecated
+	// innerStack still answers, always null.
+	workspaces := topology["workspaces"].([]any)
+	if len(workspaces) != 1 || workspaces[0].(map[string]any)["innerStack"] != nil {
+		t.Fatalf("topology workspaces = %#v, want one workspace with a null innerStack", workspaces)
+	}
 
 	resp = doGraphQL(t, server, map[string]any{
 		"query": `mutation {

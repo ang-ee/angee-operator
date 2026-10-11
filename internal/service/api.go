@@ -113,6 +113,9 @@ type WorkspaceAPI interface {
 	WorkspaceStatus(ctx context.Context, name string) (api.WorkspaceStatusResponse, error)
 	WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error)
 	WorkspaceDestroy(ctx context.Context, name string, purge bool) error
+	// WorkspaceLogs and WorkspaceLogsLimited serve the deprecated workspace
+	// logs surfaces: a workspace has no logs of its own (#110), so they answer
+	// a closed stream. They go with those surfaces in #110 step 2.
 	WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error)
 	WorkspaceLogsLimited(ctx context.Context, name string, follow bool, maxBytes int) (<-chan string, error)
 	WorkspaceCreatePreflight(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceCreatePreflightResponse, error)

@@ -344,8 +344,8 @@ func (h *EventHub) SubscribeServiceLogs(ctx context.Context, name string, tail i
 	return h.platform.StackLogs(ctx, []string{name}, true, tail)
 }
 
-// SubscribeWorkspaceLogs returns a follow-tail channel for the named
-// workspace. Same lifecycle semantics as SubscribeServiceLogs.
+// SubscribeWorkspaceLogs serves the deprecated onWorkspaceLogs: a workspace
+// has no logs of its own (#110), so the channel closes at once.
 func (h *EventHub) SubscribeWorkspaceLogs(ctx context.Context, name string) (<-chan string, error) {
 	return h.platform.WorkspaceLogs(ctx, name, true)
 }

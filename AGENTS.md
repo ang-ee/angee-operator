@@ -116,8 +116,9 @@ service.Platform
 - **Source**: reusable source material. Implemented materialization kinds are
   `git` and `local`.
 - **Workspace**: a rendered Copier template under
-  `$ANGEE_ROOT/workspaces/<name>`, optionally with materialized sources and an
-  inner stack.
+  `$ANGEE_ROOT/workspaces/<name>`, optionally with materialized sources. It
+  renders no stack; a stack's services and jobs reach it through
+  `workspace://` mounts, workdir and env.
 - **Operator**: the REST and GraphQL control-plane server for one root.
 
 ## Patterns
