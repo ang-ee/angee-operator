@@ -14,10 +14,11 @@ the *order*, the files, and the decisions the proposal left open or got wrong.
 **Where it stands (2026-10-11):** phase 1 is merged (#93) and released in
 v0.16.0. Phase 4a (reads behind the driver) is merged as #107
 (`cb27d2e`), and phase 2 steps 1-4 (remotes, push default, canonical
-remote, cache reconcile) as #116 (`12e69d1`). 4b (verbs behind the driver)
-is the PR that updates this paragraph; 4c (lifecycle) and 4d (driver-owned
-push and publish rules) follow before phase 5. Phase 2 step 5 (publish)
-lands with or after 4d, before the release after v0.21.3. Phase 4 is the
+remote, cache reconcile) as #116 (`12e69d1`), and 4b (verbs behind the
+driver) as #117 (`86fc88d`). 4d (driver-owned push and publish rules) is
+the PR that updates this paragraph, with phase 2 step 5 (publish) stacked
+on it; both land before the release after v0.21.3. 4c (lifecycle) follows
+before phase 5. Phase 4 is the
 critical path. Q1 (jj slots are created in place), Q2 (2026-10-09:
 `<stack>--<workspace>`, a clash is refused), Q6 (2026-10-10: slot state is
 read on demand, so every read snapshots and there is no interval, which
@@ -144,7 +145,7 @@ entry; and a pass of the `go-code-reviewer` agent.
 0  landed
 1  mode validation + branchless worktree slots      (git only, can start now)
 2  remotes with roles                               (git only, can start now)
-4a..4d  vcs.Driver seam, git driver only            (after 1; 4a merged, 4b in review)
+4a..4d  vcs.Driver seam, git driver only            (after 1; 4a, 4b merged, 4d in review, 4c next)
 5  jj driver package + doctor probe + CI            (after 4)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5)
 7  status fields and topology                       (after 6)
@@ -538,6 +539,9 @@ The four PRs:
   Phase 2 step 5 (the publish default remote and branch allow-list) lands
   with or after 4d, before the next release after v0.21.3.
 
+  Built as described below ("As built in 4d"), except the preconditions
+  and the wording, which change messages and move to phase 8.
+
 **As built in 4b (2026-10-11).** Every service verb on a workspace slot asks
 its driver (`Platform.workspaceSlotDriver`). The service keeps the mutation
 lease, the manifest lookups, the kind check, input validation, the push and
@@ -599,6 +603,42 @@ answers the reads those rules need.
   before syncing any; `workspace push` checks every slot is clean before
   pushing any. A fake driver proves each verb's calls and the slot facts it
   is handed, with no git on PATH.
+
+**As built in 4d (2026-10-11).** The driver owns the push and publish rules
+(design note 2); the service keeps the manifest facts and every message.
+
+- `PlanPush(s, ref, branch)` returns a `vcs.PushPlan` (`Ref`, `Track`, or
+  `Skip`) or `vcs.ErrDetachedWithWork`; `Push(s, plan)` carries it out.
+  `workspace push` still plans every slot before pushing any.
+- Publish is three calls. `PlanPublish(s, intent)` changes nothing and
+  returns a `vcs.PublishPlan` (remote, branch, whether to create it) or
+  `vcs.ErrNothingToPublish`, `vcs.ErrNoBranch` or `vcs.ErrBranchExists`.
+  `PreparePublish(s, plan)` creates the branch; `Publish(s, plan)` pushes.
+  Splitting creation from the push keeps the order git sees (create, read
+  the push URL, push) and keeps a failed creation reported as it is, not as
+  a failed push. It also gives step 5 a point between deciding and changing
+  anything, where the manifest's refusals go.
+- `vcs.PublishIntent` carries what the caller asked (remote, branch,
+  whether the caller named it) and `Unmanaged`: a slot whose source is not
+  kind `git` skips both publish rules, as the service did with its
+  `source.Kind == "git"` check. When local slots get a driver of their own
+  (or are refused), the flag goes.
+- `CurrentBranch`, `Upstream`, `CommitsBeyondBase`, `PushSetUpstream` and
+  `CreateBranch` leave the interface: 22 methods become 20.
+- The sync default reaches the driver (design note 5): an empty method is
+  `vcs.SyncDefault`, which git resolves to a merge. The failure wording
+  still says "merging" for it.
+- An unsupported verb, reported as invalid input, still matches
+  `vcs.ErrUnsupported` and the driver's error.
+- Not done here, because each changes messages, and carried to phase 8:
+  design note 3 (the preconditions answered per driver: `BranchMismatch` and
+  `DirtyPaths` stay git-shaped reads the service judges) and note 4
+  (VCS-neutral wording: the branch-mismatch hint still names `git -C …
+  switch`, and failures still quote a " git: " line).
+- No behaviour change. Characterization tests, written first and passing on
+  `86fc88d`, put a recording git on PATH and pin every git command each
+  push and publish case runs (directory, committer, arguments, order) and
+  what it returns; they pass unchanged after the move.
 
 `git.Client` remains for what is not a slot: source cache clone/fetch,
 template repositories (`templates.go`), `commits.go`. (Since 4a, a cache's
@@ -805,6 +845,15 @@ and rebase; then publish, push and merge).
    scope check, then `jj rebase -b @ --onto <ref>`.
 6. `MergeAbort`, `RebaseAbort`, `RebaseContinue` on a jj slot return an
    `InvalidInputError` saying a jj slot never has an operation in progress.
+   They wrap `vcs.ErrUnsupported`, which the service reports once.
+7. Carried from 4d (design notes 3 and 4), since each changes messages:
+   the preconditions are answered per driver ("may this verb run" instead
+   of the service judging `BranchMismatch` and `DirtyPaths`, so a jj slot's
+   working-copy commit can ride along), and failure wording is VCS-neutral
+   (the branch-mismatch hint stops naming `git -C … switch`, and the
+   driver supplies the tool's own line where failures quote " git: ").
+   Steps 3 and 4 live in the jj driver's `PlanPublish`, `PreparePublish`
+   (`jj bookmark set`), `Publish`, `PlanPush` and `Push`.
 
 Tests: base moves, sync-base rebases two slots, one conflicts and reports
 paths, the workspace stays usable; a slot stacked on another slot's commits

@@ -155,6 +155,17 @@ func fillEmpty(field *string, value string) {
 	}
 }
 
+// unsupportedInput reports a verb the slot's driver does not support as the
+// caller's invalid input, in the InvalidInputError's words, while still
+// matching vcs.ErrUnsupported and the driver's error.
+type unsupportedInput struct {
+	input  *InvalidInputError
+	driver error
+}
+
+func (e unsupportedInput) Error() string   { return e.input.Error() }
+func (e unsupportedInput) Unwrap() []error { return []error{e.input, e.driver} }
+
 // classifyOperationError wraps an error that is not yet an *OperationError.
 // A NotFound, Conflict or InvalidInput error keeps its message unchanged
 // (Summary stays empty, so no title is prefixed), and a NotFound names its
@@ -193,7 +204,7 @@ func classifyOperationError(err error) *OperationError {
 	}
 	// A verb the slot's version control does not support, as its driver says.
 	if errors.Is(err, vcs.ErrUnsupported) {
-		return &OperationError{Code: CodeInvalidInput, Err: &InvalidInputError{Field: "slot", Reason: err.Error()}}
+		return &OperationError{Code: CodeInvalidInput, Err: unsupportedInput{&InvalidInputError{Field: "slot", Reason: err.Error()}, err}}
 	}
 	// copier refusing an answer (a validator, a choice, a missing required
 	// input) is the caller's input at fault; its message names the question.

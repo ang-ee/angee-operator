@@ -24,24 +24,6 @@ func (d Driver) DirtyPaths(ctx context.Context, s vcs.Slot) ([]string, error) {
 	return d.git.DirtyPaths(ctx, s.Path)
 }
 
-// CurrentBranch returns the branch HEAD is on; onBranch is false on a
-// detached HEAD.
-func (d Driver) CurrentBranch(ctx context.Context, s vcs.Slot) (string, bool, error) {
-	return d.git.CurrentBranch(ctx, s.Path)
-}
-
-// Upstream returns the upstream of the checkout's branch, if it has one.
-func (d Driver) Upstream(ctx context.Context, s vcs.Slot) (string, bool, error) {
-	return d.git.Upstream(ctx, s.Path)
-}
-
-// CommitsBeyondBase counts the commits HEAD reaches that neither the slot's
-// base nor its remote counterpart on Slot.BaseRemote reaches
-// (commitsBeyondBase).
-func (d Driver) CommitsBeyondBase(ctx context.Context, s vcs.Slot) (int, bool) {
-	return commitsBeyondBase(ctx, d.git, s.Path, s.BaseRef, s.BaseRemote)
-}
-
 // FetchURL is the URL of the remote the slot's base comes from
 // (Slot.BaseRemote), else of origin, else of the checkout's only remote.
 func (d Driver) FetchURL(ctx context.Context, s vcs.Slot) string {
@@ -110,24 +92,57 @@ func (d Driver) Pull(ctx context.Context, s vcs.Slot) error {
 	return d.git.Pull(ctx, s.Path)
 }
 
-// Push pushes ref to the push remote, or the branch to its upstream when ref
-// is empty.
-func (d Driver) Push(ctx context.Context, s vcs.Slot, ref string) error {
-	return d.git.Push(ctx, s.Path, ref)
+// PlanPush decides a push without pushing. An explicit ref is pushed as
+// given. Otherwise a branch with an upstream pushes to it, and one without
+// pushes branch and tracks it, unless HEAD holds nothing of its own. The
+// count is of HEAD, so it only speaks for the push when HEAD is what would be
+// pushed: on no branch, or on the branch the manifest names (or any branch
+// when it names none).
+func (d Driver) PlanPush(ctx context.Context, s vcs.Slot, ref, branch string) (vcs.PushPlan, error) {
+	if ref != "" {
+		return vcs.PushPlan{Ref: ref}, nil
+	}
+	current, onBranch, err := d.git.CurrentBranch(ctx, s.Path)
+	if err != nil {
+		return vcs.PushPlan{}, err
+	}
+	_, hasUpstream, err := d.git.Upstream(ctx, s.Path)
+	if err != nil || hasUpstream {
+		return vcs.PushPlan{}, err
+	}
+	if !onBranch || branch == "" || current == branch {
+		if ahead, known := commitsBeyondBase(ctx, d.git, s.Path, s.BaseRef, s.BaseRemote); known && ahead == 0 {
+			return vcs.PushPlan{Skip: true}, nil
+		}
+	}
+	if !onBranch {
+		return vcs.PushPlan{}, vcs.ErrDetachedWithWork
+	}
+	return vcs.PushPlan{Track: branch}, nil
 }
 
-// PushSetUpstream pushes branch to the push remote and tracks it there.
-func (d Driver) PushSetUpstream(ctx context.Context, s vcs.Slot, branch string) error {
-	return d.git.PushSetUpstream(ctx, s.Path, branch)
+// Push carries out a plan: the branch to track pushed with -u, else the ref,
+// or the branch to its upstream when the plan names no ref. A skipped plan
+// pushes nothing.
+func (d Driver) Push(ctx context.Context, s vcs.Slot, plan vcs.PushPlan) error {
+	switch {
+	case plan.Skip:
+		return nil
+	case plan.Track != "":
+		return d.git.PushSetUpstream(ctx, s.Path, plan.Track)
+	default:
+		return d.git.Push(ctx, s.Path, plan.Ref)
+	}
 }
 
 // SyncBase merges onto into the checkout's branch, or rebases the branch onto
-// it. Unlike Merge and Rebase, it runs as whoever runs the operator, with
-// their environment: syncing replays or merges their own work.
+// it; vcs.SyncDefault merges. Unlike Merge and Rebase, it runs as whoever
+// runs the operator, with their environment: syncing replays or merges their
+// own work.
 func (d Driver) SyncBase(ctx context.Context, s vcs.Slot, onto, method string) (api.GitOpResult, error) {
 	var err error
 	switch method {
-	case vcs.SyncMerge:
+	case vcs.SyncDefault, vcs.SyncMerge:
 		err = d.git.Merge(ctx, s.Path, onto)
 	case vcs.SyncRebase:
 		err = d.git.Rebase(ctx, s.Path, onto)
@@ -164,27 +179,72 @@ func (d Driver) RebaseContinue(ctx context.Context, s vcs.Slot) (api.GitOpResult
 	return d.runOp(ctx, s.Path, "-c", "core.editor=true", "rebase", "--continue")
 }
 
-// CreateBranch creates branch at HEAD and switches to it. An existing branch
-// of that name is not reused: it may point elsewhere.
-func (d Driver) CreateBranch(ctx context.Context, s vcs.Slot, branch string) error {
-	if d.git.RefExists(ctx, s.Path, "refs/heads/"+branch) {
-		return vcs.ErrBranchExists
+// PlanPublish decides a publish without changing anything. The branch is the
+// intent's, else the one HEAD is on. Unless the caller named the branch, a
+// branch that tracks nothing and holds no commit beyond the slot's base has
+// nothing to publish; the count is of HEAD, so it only speaks when HEAD is
+// what would be pushed. On a detached HEAD the branch is created at HEAD
+// first, and an existing branch of that name is not reused: it may point
+// elsewhere. An unmanaged checkout skips both rules.
+func (d Driver) PlanPublish(ctx context.Context, s vcs.Slot, intent vcs.PublishIntent) (vcs.PublishPlan, error) {
+	current, onBranch, err := d.git.CurrentBranch(ctx, s.Path)
+	if err != nil {
+		return vcs.PublishPlan{}, fmt.Errorf("resolve HEAD branch in %s: %w", s.Path, err)
 	}
-	_, err := d.git.Run(ctx, s.Path, "switch", "-c", branch)
-	return err
+	branch := intent.Branch
+	if branch == "" && onBranch {
+		branch = current
+	}
+	if !intent.Unmanaged && !intent.Explicit && (!onBranch || branch == current) {
+		_, hasUpstream, err := d.git.Upstream(ctx, s.Path)
+		if err != nil {
+			return vcs.PublishPlan{}, err
+		}
+		if !hasUpstream {
+			if ahead, known := commitsBeyondBase(ctx, d.git, s.Path, s.BaseRef, s.BaseRemote); known && ahead == 0 {
+				return vcs.PublishPlan{}, vcs.ErrNothingToPublish
+			}
+		}
+	}
+	if branch == "" {
+		// Publishing a detached HEAD as "HEAD" would create refs/heads/HEAD
+		// on the remote.
+		return vcs.PublishPlan{}, vcs.ErrNoBranch
+	}
+	plan := vcs.PublishPlan{Remote: intent.Remote, Branch: branch}
+	if !intent.Unmanaged && !onBranch {
+		if d.git.RefExists(ctx, s.Path, "refs/heads/"+branch) {
+			return vcs.PublishPlan{}, vcs.ErrBranchExists
+		}
+		plan.Create = true
+	}
+	return plan, nil
 }
 
-// Publish pushes branch to remote and sets it as the branch's upstream. The
-// push is a network operation like any other: ANGEE_GIT_TIMEOUT bounds it, so
-// a stalled remote fails instead of hanging.
-func (d Driver) Publish(ctx context.Context, s vcs.Slot, remote, branch string) (api.GitOpResult, error) {
+// PreparePublish creates the plan's branch at HEAD and switches to it, when
+// the plan says to. If the push then fails, the checkout stays on that branch
+// and a retry pushes it.
+func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) error {
+	if !plan.Create {
+		return nil
+	}
+	if _, err := d.git.Run(ctx, s.Path, "switch", "-c", plan.Branch); err != nil {
+		return fmt.Errorf("create branch %q in %s: %w", plan.Branch, s.Path, err)
+	}
+	return nil
+}
+
+// Publish pushes the plan's branch to its remote and sets it as the branch's
+// upstream. The push is a network operation like any other:
+// ANGEE_GIT_TIMEOUT bounds it, so a stalled remote fails instead of hanging.
+func (d Driver) Publish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) (api.GitOpResult, error) {
 	var result api.GitOpResult
-	err := git.RunNetworkOperation(ctx, "git push --set-upstream "+remote+" "+branch, s.Path, func(ctx context.Context) error {
+	err := git.RunNetworkOperation(ctx, "git push --set-upstream "+plan.Remote+" "+plan.Branch, s.Path, func(ctx context.Context) error {
 		var runErr error
 		// A full refspec, so the branch is only ever a branch name: git refuses
 		// one that carries refspec syntax (":" deletes, "+" forces).
-		refspec := "refs/heads/" + branch + ":refs/heads/" + branch
-		result, runErr = d.runOp(ctx, s.Path, "push", "--set-upstream", git.EndOfOptions, remote, refspec)
+		refspec := "refs/heads/" + plan.Branch + ":refs/heads/" + plan.Branch
+		result, runErr = d.runOp(ctx, s.Path, "push", "--set-upstream", git.EndOfOptions, plan.Remote, refspec)
 		return runErr
 	})
 	return result, err
