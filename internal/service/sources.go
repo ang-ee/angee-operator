@@ -324,12 +324,17 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (state api.Sourc
 	if source.Kind != "git" {
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
 	}
-	if err := p.materializeSource(ctx, name, source, false); err != nil {
-		return api.SourceState{}, err
-	}
 	path := p.sourcePath(name, source)
-	if err := p.gitClient().Pull(ctx, path); err != nil {
-		return api.SourceState{}, gitFailure(err, gitStep{action: "pulling", object: fmt.Sprintf("source %q", name), remote: source.CloneURL(), cause: CauseFetchFailed, source: name})
+	if err := withPrimaryLock(ctx, path, func() error {
+		if err := p.materializeSourceLocked(ctx, name, source, false); err != nil {
+			return err
+		}
+		if err := p.gitClient().Pull(ctx, path); err != nil {
+			return gitFailure(err, gitStep{action: "pulling", object: fmt.Sprintf("source %q", name), remote: source.CloneURL(), cause: CauseFetchFailed, source: name})
+		}
+		return nil
+	}); err != nil {
+		return api.SourceState{}, err
 	}
 	return p.sourceState(ctx, name, source)
 }
@@ -370,12 +375,14 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 	client := p.gitClient()
 	// A cache is not a slot, but the git driver reads any git checkout.
 	cache, cacheSlot := gitdriver.New(client), vcs.Slot{Path: path}
-	if err := requireCleanSlot(ctx, cache, cacheSlot, fmt.Sprintf("source %q", name), "", name); err != nil {
+	if err := withPrimaryLock(ctx, path, func() error {
+		if err := requireCleanSlot(ctx, cache, cacheSlot, fmt.Sprintf("source %q", name), "", name); err != nil {
+			return err
+		}
+		step := gitStep{action: "pushing", object: fmt.Sprintf("source %q", name), remote: cache.PushURL(ctx, cacheSlot, ""), cause: CausePushFailed, source: name}
+		return gitFailure(client.Push(ctx, path, ref), step)
+	}); err != nil {
 		return api.SourceState{}, err
-	}
-	step := gitStep{action: "pushing", object: fmt.Sprintf("source %q", name), remote: cache.PushURL(ctx, cacheSlot, ""), cause: CausePushFailed, source: name}
-	if err := client.Push(ctx, path, ref); err != nil {
-		return api.SourceState{}, gitFailure(err, step)
 	}
 	return p.sourceState(ctx, name, source)
 }
@@ -393,7 +400,20 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 // in-container key — must not block them; the refresh is only a freshness
 // step, and a failure warns and keeps the existing cache. A cancelled or
 // timed-out context is never best-effort.
+//
+// A git source's cache is changed under its primary lock (withPrimaryLock).
 func (p *Platform) materializeSource(ctx context.Context, name string, source manifest.Source, bestEffortRefresh bool) error {
+	if source.Kind != "git" {
+		return p.materializeSourceLocked(ctx, name, source, bestEffortRefresh)
+	}
+	return withPrimaryLock(ctx, p.sourcePath(name, source), func() error {
+		return p.materializeSourceLocked(ctx, name, source, bestEffortRefresh)
+	})
+}
+
+// materializeSourceLocked is materializeSource for a caller that holds the
+// source's primary lock, or for a source that has none (a local one).
+func (p *Platform) materializeSourceLocked(ctx context.Context, name string, source manifest.Source, bestEffortRefresh bool) error {
 	path := p.sourcePath(name, source)
 	switch source.Kind {
 	case "git":
@@ -531,9 +551,8 @@ func cloneStagePrefix(base string) string {
 // removeCloneStages removes the staging directories an interrupted clone of
 // the cache named base left in parent: cloneStagePrefix followed by the digits
 // os.MkdirTemp appends, so a sibling directory that merely starts with the
-// prefix is left alone. Until the primary lock (D9), a clone of the same cache
-// running at the same time in another process loses its staging directory and
-// fails, as one of the two would at the rename.
+// prefix is left alone. The caller holds the cache's primary lock, so no other
+// clone of it is running.
 func removeCloneStages(parent, base string) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {

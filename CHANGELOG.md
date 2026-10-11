@@ -89,7 +89,11 @@ latest tag.
   behaviour, except that a failed fetch (in a slot fetch, pull or sync-base)
   names the source's clone remote rather than `origin` when the source
   declares `remotes:`. The slot driver also decides what a push and a
-  publish do (phase 4d), with no change in behaviour.
+  publish do (phase 4d), with no change in behaviour. It also creates and
+  removes slots (phase 4c): a worktree's staging, install and registration
+  repair, a clone, and removal with `git worktree prune`. The git commands
+  are the same, except that a workspace with several worktree slots of one
+  source prunes once per slot rather than once per source.
 - **A workspace no longer renders a stack (#110).** A workspace and a stack
   are separate concerns: a workspace is files (its rendered template and its
   source slots), and a stack's services and jobs reach it through
@@ -211,6 +215,29 @@ latest tag.
   stack's env file never reached them. `angee status` showed local services
   as unknown, a local `job run` failed, `angee down` failed, and `angee dev`
   waited for the supervisor forever. A missing env file behaves as before.
+
+- **Stacks and the CLI take turns on a shared source cache** (decision D9 of
+  `.agents/plans/jj-native-operator.md`). The operator holds a lock file
+  beside a git source's cache, `.<name>.angee.lock` (beside a symlinked
+  `cache_path`'s target), while it changes the cache's worktree
+  registrations or talks to its remotes: cloning or fetching the cache
+  (bring-up, `source fetch`), `source pull`, `source push`, and adding or
+  pruning workspace worktrees (`workspace create`, `repair`,
+  `destroy --purge`, and a failed create's rollback). Two stacks sharing a
+  cache, or a stack's operator and the CLI, could run these at the same
+  time, so one could prune a worktree the other was still installing, or
+  remove the other's clone staging directory.
+  - One now waits for the other, with a warning that another angee process
+    holds the cache, and gives up after `ANGEE_LOCK_TIMEOUT` when that is
+    set, with a `CONFLICT` error. A rollback that cannot get the lock still
+    removes what it created and leaves the prune to the next change.
+  - The verbs on a slot (fetch, pull, push, sync-base, merge, rebase,
+    publish) take no lock: git keeps each ref update whole, and they never
+    prune registrations.
+  - The directory holding the cache must be writable, for the lock file. A
+    `cache_path` bind-mounted on its own, whose parent the operator cannot
+    write, now fails with an error saying to mount the parent directory
+    instead.
 
 ## v0.21.3 — 2026-10-11
 

@@ -32,10 +32,24 @@ type Lock struct {
 	traceCtx   context.Context
 	logger     *slog.Logger
 	acquiredAt time.Time
+	waitLevel  slog.Level // the zero value is Info
+	waitMsg    string     // "" is "waiting for lock"
 }
+
+// ErrTimeout is wrapped by the error Lock returns when ANGEE_LOCK_TIMEOUT
+// runs out while another holder has the lock.
+var ErrTimeout = errors.New("timed out waiting for the lock")
 
 func New(path string) *Lock {
 	return &Lock{path: path}
+}
+
+// ReportWait sets how Lock says it is waiting for another holder, once it has
+// waited a second: at level, as msg, with the lock's path and its holder. By
+// default it says "waiting for lock" at Info.
+func (l *Lock) ReportWait(level slog.Level, msg string) *Lock {
+	l.waitLevel, l.waitMsg = level, msg
+	return l
 }
 
 func RootLock(root string) *Lock {
@@ -65,7 +79,7 @@ func (l *Lock) Lock(ctx context.Context) error {
 		return err
 	}
 	logger := logctx.From(ctx)
-	logWait := logger.Enabled(ctx, slog.LevelInfo)
+	logWait := logger.Enabled(ctx, l.waitLevel)
 	logHeld := logger.Enabled(ctx, slog.LevelDebug)
 	timeout, err := lockTimeout()
 	if err != nil {
@@ -103,7 +117,11 @@ func (l *Lock) Lock(ctx context.Context) error {
 			return fmt.Errorf("lock %s: %w", l.path, err)
 		}
 		if logWait && !waitLogged && time.Since(started) >= lockWaitLogDelay {
-			logWaiting(ctx, logger, l.path, readHolder(file))
+			msg := l.waitMsg
+			if msg == "" {
+				msg = "waiting for lock"
+			}
+			logWaiting(ctx, logger, l.waitLevel, msg, l.path, readHolder(file))
 			waitLogged = true
 		}
 		if timeout > 0 && time.Since(started) >= timeout {
@@ -196,7 +214,7 @@ func readHolder(file *os.File) holder {
 	return h
 }
 
-func logWaiting(ctx context.Context, logger *slog.Logger, path string, h holder) {
+func logWaiting(ctx context.Context, logger *slog.Logger, level slog.Level, msg, path string, h holder) {
 	attrs := []slog.Attr{slog.String("path", path)}
 	if h.pid > 0 {
 		attrs = append(attrs, slog.Int("pid", h.pid))
@@ -207,21 +225,28 @@ func logWaiting(ctx context.Context, logger *slog.Logger, path string, h holder)
 	if h.since != "" {
 		attrs = append(attrs, slog.String("since", h.since))
 	}
-	logger.LogAttrs(ctx, slog.LevelInfo, "waiting for lock", attrs...)
+	logger.LogAttrs(ctx, level, msg, attrs...)
 }
+
+// timeoutError names the holder of a lock Lock gave up waiting for, and
+// wraps ErrTimeout.
+type timeoutError struct{ text string }
+
+func (e *timeoutError) Error() string { return e.text }
+
+func (e *timeoutError) Unwrap() error { return ErrTimeout }
 
 func lockTimeoutError(path string, h holder, timeout time.Duration) error {
 	suffix := fmt.Sprintf("; waited %s (%s)", timeout, lockTimeoutEnv)
-	if h.pid > 0 && h.cmd != "" && h.since != "" {
-		return fmt.Errorf("%s held by pid %d (%s) since %s%s", path, h.pid, h.cmd, h.since, suffix)
+	switch {
+	case h.pid > 0 && h.cmd != "" && h.since != "":
+		return &timeoutError{fmt.Sprintf("%s held by pid %d (%s) since %s%s", path, h.pid, h.cmd, h.since, suffix)}
+	case h.pid > 0 && h.cmd != "":
+		return &timeoutError{fmt.Sprintf("%s held by pid %d (%s)%s", path, h.pid, h.cmd, suffix)}
+	case h.pid > 0:
+		return &timeoutError{fmt.Sprintf("%s held by pid %d%s", path, h.pid, suffix)}
 	}
-	if h.pid > 0 && h.cmd != "" {
-		return fmt.Errorf("%s held by pid %d (%s)%s", path, h.pid, h.cmd, suffix)
-	}
-	if h.pid > 0 {
-		return fmt.Errorf("%s held by pid %d%s", path, h.pid, suffix)
-	}
-	return fmt.Errorf("%s is held%s", path, suffix)
+	return &timeoutError{fmt.Sprintf("%s is held%s", path, suffix)}
 }
 
 func (l *Lock) Unlock() error {

@@ -1,26 +1,63 @@
 // Package vcs is the seam between the service and the version control system
 // behind a workspace slot. The service owns what the manifest says about a
 // slot (its path, its base, the branch it must be on) and which verbs may run;
-// a Driver owns how the slot's checkout answers for it and carries the verbs
-// out. Git is the only driver today; jj slots add a second one.
+// a Driver owns how the slot's checkout answers for it, carries the verbs out,
+// and makes and removes the checkout. Git is the only driver today; jj slots
+// add a second one.
 package vcs
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/ang-ee/angee-operator/api"
 )
 
+// Slot modes: how a slot's checkout is made, which Driver.Add and
+// Driver.Remove follow.
+const (
+	// ModeWorktree is a checkout linked to Slot.Primary, which keeps its
+	// branches and lists it among its checkouts.
+	ModeWorktree = "worktree"
+	// ModeClone is a repository of its own, cloned from Slot.CloneURL.
+	ModeClone = "clone"
+)
+
 // Slot identifies one slot checkout and the facts a driver needs about it.
 type Slot struct {
-	Path    string // the checkout
-	Branch  string // the branch the checkout must be on; empty when any ref will do
-	BaseRef string // the slot's ref, else its source's default ref; may be empty
+	Path string // the checkout
+	// Mode, Primary and CloneURL say how the checkout is made; only the
+	// lifecycle (Exists, Add, Remove) reads them. Mode is ModeWorktree or
+	// ModeClone. Primary is the repository a worktree is a checkout of, its
+	// source's cache; CloneURL is the URL a clone is cloned from, as the
+	// remote BaseRemote names.
+	Mode     string
+	Primary  string
+	CloneURL string
+	Branch   string // the branch the checkout must be on; empty when any ref will do
+	BaseRef  string // the slot's ref, else its source's default ref; may be empty
 	// BaseRemote is the remote BaseRef comes from: the source's clone remote.
 	// Empty lets the driver pick (git: origin).
 	BaseRemote string
+}
+
+// Dest is the capability a driver makes every write to a slot's path
+// through. The service opens it on Slot.Path, inside the stack root, before
+// it calls Driver.Add or Driver.Remove, and closes it; a driver never opens
+// the slot path itself. copierx.GuardedPath satisfies it.
+type Dest interface {
+	// Lstat returns the entry at the path as the capability holds it, and
+	// whether there is one; it fails when the entry changed since.
+	Lstat() (fs.FileInfo, bool, error)
+	// ReplaceFrom installs a copy of the tree at stage as the path.
+	ReplaceFrom(ctx context.Context, stage string) error
+	// VerifyPathIdentity confirms that path, looked up by name, still leads
+	// to the entry the capability installed.
+	VerifyPathIdentity(path string) error
+	// RemoveAll removes the entry at the path, if any.
+	RemoveAll() error
 }
 
 // Status is what a driver reads from a slot's checkout.
@@ -139,6 +176,24 @@ var (
 // it targets; the driver carries the verb out. Errors are the version control
 // system's own, for the service to report.
 type Driver interface {
+	// Exists reports whether Slot.Primary lists a checkout at Slot.Path, as a
+	// leftover of an earlier create can still be listed. A clone is a
+	// repository of its own, which nothing lists.
+	Exists(ctx context.Context, s Slot) (bool, error)
+	// Add makes the slot's checkout at Slot.Path, writing there only through
+	// d, which holds nothing or an empty directory: a worktree of
+	// Slot.Primary on Slot.Branch (created at the base unless it exists) or,
+	// without a branch, detached at the base; or a clone of Slot.CloneURL at
+	// the base. configure, when not nil, runs on the new checkout before it
+	// reaches Slot.Path, so nothing there can use it unconfigured. Add leaves
+	// nothing behind when it fails.
+	Add(ctx context.Context, s Slot, d Dest, configure func(ctx context.Context, checkout string) error) error
+	// Remove removes the checkout through d and drops whatever Slot.Primary
+	// keeps of it. For a git worktree that is `git worktree prune`, which
+	// drops every registration in the cache whose checkout is missing, not
+	// only this slot's.
+	Remove(ctx context.Context, s Slot, d Dest) error
+
 	// Status reads the checkout. On error, the returned Status holds what was
 	// read before the failure; with a *CountError, that includes Pushed and
 	// UnpushedReason.

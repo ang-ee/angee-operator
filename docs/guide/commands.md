@@ -44,7 +44,7 @@ sharing it, since a tool may print other data you consider sensitive.
 | `ANGEE_ACCESSIBLE` | unset | Set to `1` to use scripted line prompts for template inputs instead of the interactive form. |
 | `ANGEE_GIT_TIMEOUT` | `2m` | Deadline for network git clone, fetch, pull, and push operations. Accepts a Go duration; `0` disables the deadline. |
 | `ANGEE_JOB_TIMEOUT` | `30m` | Deadline for a job run, including the downstream jobs and service restarts of `--chained-restart`. Also bounds how long `angee dev -d` waits for the stack's jobs to finish. Accepts a Go duration; `0` disables the deadline. A run that hits it is recorded as failed and releases the stack for other lifecycle changes. |
-| `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
+| `ANGEE_LOCK_TIMEOUT` | `0` | Maximum wait for `run/operator.lock`, and for the `.<name>.angee.lock` beside a git source's cache. Accepts a Go duration; `0` keeps waiting until the caller is cancelled. |
 | `ANGEE_OPERATOR_TIMEOUT` | `30m` | Deadline for non-streaming requests to a remote operator. Accepts a Go duration; `0` disables the deadline. Streaming requests are not given this timeout. |
 
 Without `--root`, the CLI walks upward from the current directory, preferring

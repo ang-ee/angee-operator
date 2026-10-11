@@ -479,10 +479,23 @@ permissions are those of a plain `git clone`.
   cloned in place, as `git clone` does, and configured right after. For that
   short moment the canonical remote is not yet blocked.
 - A path that holds anything other than a git checkout is refused.
+- The directory that holds `cache_path` must be writable, for the cache's
+  lock file (below). To bind-mount a cache into a container, mount its parent
+  directory rather than the cache alone.
 
 A clone slot (`mode: clone`, or a git slot with no `mode`) is set up the same
 way, since it is a repository of its own. Worktree slots share the cache's
 config.
+
+A cache can be shared by several stacks, so angee holds a lock file beside
+it, `.<name>.angee.lock` (beside the target of a symlinked `cache_path`),
+while it changes the cache's worktree registrations or talks to its remotes:
+cloning or fetching the cache, `source pull` and `source push`, and adding or
+pruning workspace worktrees. A stack or the CLI that finds the lock held
+warns that another angee process is changing the cache and waits, up to
+`ANGEE_LOCK_TIMEOUT` when that is set. The verbs on a workspace slot (fetch,
+pull, push, sync-base, merge, rebase, publish) take no lock: git keeps each
+ref update whole, and they never prune registrations.
 
 When the cache already exists, `angee source fetch` and `angee source pull`
 first reconcile it with the declared remotes, logging a warning for each

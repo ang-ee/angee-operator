@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -29,6 +30,7 @@ type fakeDriver struct {
 	syncResult *api.GitOpResult // SyncBase's result; nil for OK
 	resolveErr error            // returned by ResolveBase
 	fail       map[string]error // an error for a method by name
+	emptyDir   string           // what Add installs
 }
 
 // fakeCall is one driver method the service called, with its arguments.
@@ -44,6 +46,28 @@ func (f *fakeDriver) call(method string, s vcs.Slot, args ...string) {
 
 func (f *fakeDriver) result(method string) api.GitOpResult {
 	return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: "fake " + method}
+}
+
+// Exists records the call and reports the slot unlisted.
+func (f *fakeDriver) Exists(_ context.Context, s vcs.Slot) (bool, error) {
+	f.call("Exists", s)
+	return false, f.fail["Exists"]
+}
+
+// Add records the call, whether it was handed a configure step, and installs
+// an empty directory through d, as a checkout would arrive.
+func (f *fakeDriver) Add(ctx context.Context, s vcs.Slot, d vcs.Dest, configure func(context.Context, string) error) error {
+	f.call("Add", s, "configure="+strconv.FormatBool(configure != nil))
+	if err := f.fail["Add"]; err != nil {
+		return err
+	}
+	return d.ReplaceFrom(ctx, f.emptyDir)
+}
+
+// Remove records the call and removes the slot through d.
+func (f *fakeDriver) Remove(_ context.Context, s vcs.Slot, d vcs.Dest) error {
+	f.call("Remove", s)
+	return d.RemoveAll()
 }
 
 func (f *fakeDriver) Status(_ context.Context, s vcs.Slot) (vcs.Status, error) {
@@ -390,6 +414,76 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 				t.Fatalf("driver calls = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Creating and destroying a workspace cuts and removes its git slots through
+// their driver, handed the manifest's facts about each, with no git on PATH:
+// a worktree slot is added once the driver reports nothing listed at its path,
+// a clone slot is added with the service's remote configuration to run before
+// it is installed, and a create that fails after cutting them, or a destroy,
+// removes them through the driver. A local source's link is the service's.
+func TestWorkspaceLifecycleDispatchesToTheSlotDriver(t *testing.T) {
+	ctx := context.Background()
+	f := newLifecycleFixture(t)
+	template := f.template(t, "lifecycle", "app", "docs", "notes")
+	// The cache exists, so with no git its refresh only warns.
+	runGit(t, "", "clone", f.appRemote, f.cache())
+	fake := &fakeDriver{status: vcs.Status{Pushed: true}, emptyDir: t.TempDir()}
+	f.platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	t.Setenv("PATH", t.TempDir())
+
+	workspace := f.workspace("feature-a")
+	lifecycle := map[string]vcs.Slot{
+		"app":  {Path: filepath.Join(workspace, "app"), Mode: vcs.ModeWorktree, Primary: f.cache(), Branch: "feature-a", BaseRef: "main", BaseRemote: "origin"},
+		"docs": {Path: filepath.Join(workspace, "docs"), Mode: vcs.ModeClone, CloneURL: f.docsRemote, BaseRef: "main", BaseRemote: "origin"},
+	}
+	// calls lists the driver calls since the last one, each with the slot it
+	// was handed checked against the slot's lifecycle facts.
+	calls := func() []string {
+		var got []string
+		for _, call := range fake.calls {
+			name := filepath.Base(call.slot.Path)
+			if call.method != "BranchMismatch" && call.slot != lifecycle[name] {
+				t.Fatalf("%s slot = %#v, want %#v", call.method, call.slot, lifecycle[name])
+			}
+			got = append(got, strings.TrimSpace(call.method+" "+name+" "+strings.Join(call.args, " ")))
+		}
+		fake.calls = nil
+		return got
+	}
+	created := []string{"Exists app", "Add app configure=false", "Add docs configure=true"}
+
+	// An invalid TTL fails the create after its slots are cut.
+	if _, err := f.platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: template, Name: "feature-a", TTL: "not-a-duration"}); err == nil {
+		t.Fatal("WorkspaceCreate() with an invalid TTL error = nil, want a failure")
+	}
+	if got, want := calls(), concat(created, []string{"Remove docs", "Remove app"}); !slices.Equal(got, want) {
+		t.Fatalf("failed create driver calls = %q, want %q", got, want)
+	}
+	if _, err := os.Lstat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("workspace after the failed create: Lstat error = %v, want it gone", err)
+	}
+
+	if _, err := f.platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: template, Name: "feature-a"}); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	if got := calls(); !slices.Equal(got, created) {
+		t.Fatalf("create driver calls = %q, want %q", got, created)
+	}
+	if target, err := os.Readlink(filepath.Join(workspace, "notes")); err != nil || !strings.HasSuffix(target, "notes") {
+		t.Fatalf("local slot link = %q, %v, want the service's link to the notes directory", target, err)
+	}
+
+	if err := f.platform.WorkspaceDestroy(ctx, "feature-a", true); err != nil {
+		t.Fatalf("WorkspaceDestroy() error = %v", err)
+	}
+	// The guard reads the branch slot; removal goes deepest path first.
+	if got, want := calls(), []string{"BranchMismatch app", "Remove docs", "Remove app"}; !slices.Equal(got, want) {
+		t.Fatalf("destroy driver calls = %q, want %q", got, want)
+	}
+	if _, err := os.Lstat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("workspace after destroy: Lstat error = %v, want it gone", err)
 	}
 }
 
