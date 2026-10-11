@@ -14,6 +14,33 @@ type Process struct {
 	ReadinessProbe *Probe                       `yaml:"readiness_probe,omitempty" json:"readiness_probe,omitempty"`
 	DependsOn      map[string]ProcessDependency `yaml:"depends_on,omitempty"`
 	Shutdown       *Shutdown                    `yaml:"shutdown,omitempty" json:"shutdown,omitempty"`
+	// LogLocation is a file process-compose writes the process's output to,
+	// besides its in-memory log buffer.
+	LogLocation string     `yaml:"log_location,omitempty"`
+	LogConfig   *LogConfig `yaml:"log_configuration,omitempty"`
+}
+
+// LogConfig is process-compose's log_configuration for a LogLocation file.
+// Without DisableJSON each line is a JSON object; with it, a text line that
+// NoMetadata keeps to the level and message, and AddTimestamp prefixes with the
+// time in TimestampFormat (a Go layout; process-compose's default has no date).
+type LogConfig struct {
+	// FlushEachLine writes every line to the file as it arrives; without it
+	// process-compose buffers the file until the process's logger closes.
+	FlushEachLine   bool         `yaml:"flush_each_line,omitempty"`
+	DisableJSON     bool         `yaml:"disable_json,omitempty"`
+	NoColor         bool         `yaml:"no_color,omitempty"`
+	NoMetadata      bool         `yaml:"no_metadata,omitempty"`
+	AddTimestamp    bool         `yaml:"add_timestamp,omitempty"`
+	TimestampFormat string       `yaml:"timestamp_format,omitempty"`
+	Rotation        *LogRotation `yaml:"rotation,omitempty"`
+}
+
+// LogRotation has process-compose rotate a LogLocation file at MaxSizeMB,
+// keeping MaxBackups rotated files beside it.
+type LogRotation struct {
+	MaxSizeMB  int `yaml:"max_size_mb,omitempty"`
+	MaxBackups int `yaml:"max_backups,omitempty"`
 }
 
 type Shutdown struct {

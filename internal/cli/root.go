@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -381,6 +383,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 	restartCmd := serviceActionCommand(stdout, root, operatorURL, "restart")
 
 	var follow bool
+	var tail int
 	logsCmd := &cobra.Command{
 		Use:   "logs [service...]",
 		Short: "Show service logs",
@@ -390,7 +393,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 			if err != nil {
 				return err
 			}
-			lines, err := platform.StackLogs(cmd.Context(), args, follow)
+			lines, err := platform.StackLogs(cmd.Context(), args, follow, tail)
 			if err != nil {
 				return err
 			}
@@ -403,6 +406,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 		},
 	}
 	logsCmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
+	logsCmd.Flags().IntVarP(&tail, "tail", "n", 0, logTailUsage)
 
 	var devBuild bool
 	var devDetach bool
@@ -507,8 +511,12 @@ func serviceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 	return cmd
 }
 
+// logTailUsage is the help of the logs commands' -n/--tail flag.
+const logTailUsage = "lines to show from the end of each log; 0 shows 200. A local service or job holds its last 1000 lines (its full output is in run/logs/<name>.log), and --follow replays at most 256 of them"
+
 func serviceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var follow bool
+	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "Show service logs",
@@ -518,7 +526,7 @@ func serviceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 			if err != nil {
 				return err
 			}
-			logs, err := platform.StackLogs(cmd.Context(), args, follow)
+			logs, err := platform.StackLogs(cmd.Context(), args, follow, tail)
 			if err != nil {
 				return err
 			}
@@ -531,6 +539,7 @@ func serviceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
+	cmd.Flags().IntVarP(&tail, "tail", "n", 0, logTailUsage)
 	return cmd
 }
 
@@ -544,19 +553,22 @@ func jobCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *
 
 func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var follow bool
+	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "Show the output of a job's last run",
-		Long: "Show the output of a job's last run, as the runtime holds it: the\n" +
-			"process-compose log buffer for a local job, the exited container for a\n" +
-			"container job. The output lasts until the stack goes down.",
+		Long: "Show the last lines of a job's last run (200 unless -n says otherwise),\n" +
+			"as the runtime holds it: the process-compose log buffer for a local job,\n" +
+			"the exited container for a container job. The output lasts until the\n" +
+			"stack goes down; a local job's output is also written to\n" +
+			"run/logs/<name>.log under the stack root.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
 				return err
 			}
-			logs, err := platform.StackLogs(cmd.Context(), args, follow)
+			logs, err := platform.StackLogs(cmd.Context(), args, follow, tail)
 			if err != nil {
 				return err
 			}
@@ -569,6 +581,7 @@ func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command 
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
+	cmd.Flags().IntVarP(&tail, "tail", "n", 0, logTailUsage)
 	return cmd
 }
 
@@ -834,13 +847,26 @@ func serviceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput 
 				return writeJSON(stdout, services)
 			}
 			for _, service := range services {
-				if _, err := fmt.Fprintln(stdout, listRow(service.Name, service.Runtime, service.Status, service.Reason)); err != nil {
+				if _, err := fmt.Fprintln(stdout, listRow(service.Name, service.Runtime, serviceStatusText(service), service.Reason)); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
+}
+
+// serviceStatusText renders a service's runtime state, or `failed (exit 1)` for
+// a failed service: the runtime calls an exited process `Completed` whatever its
+// exit status.
+func serviceStatusText(service api.ServiceState) string {
+	if service.Outcome != api.JobFailed {
+		return service.Status
+	}
+	if service.ExitCode == nil {
+		return api.JobFailed
+	}
+	return fmt.Sprintf("%s (exit %d)", api.JobFailed, *service.ExitCode)
 }
 
 func bindServiceFlags(cmd *cobra.Command, req *api.ServiceInitRequest, env *[]string) {
@@ -1667,8 +1693,19 @@ func statusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool
 			if *jsonOutput {
 				return writeJSON(stdout, status)
 			}
-			_, err = fmt.Fprintf(stdout, "%s\nroot: %s\nservices: %s\njobs: %s\nworkspaces: %d\n", status.Name, status.Root,
-				statusCountsText(len(status.Services), status.Summary.Services), statusCountsText(len(status.Jobs), status.Summary.Jobs), len(status.Workspaces))
+			if _, err := fmt.Fprintf(stdout, "%s\nroot: %s\nservices: %s\n", status.Name, status.Root, statusCountsText(len(status.Services), status.Summary.Services)); err != nil {
+				return err
+			}
+			for _, name := range slices.Sorted(maps.Keys(status.Services)) {
+				service := status.Services[name]
+				if service.Outcome != api.JobFailed {
+					continue
+				}
+				if _, err := fmt.Fprintln(stdout, "  "+listRow(name, serviceStatusText(service), service.Reason)); err != nil {
+					return err
+				}
+			}
+			_, err = fmt.Fprintf(stdout, "jobs: %s\nworkspaces: %d\n", statusCountsText(len(status.Jobs), status.Summary.Jobs), len(status.Workspaces))
 			return err
 		},
 	}

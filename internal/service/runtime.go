@@ -204,7 +204,7 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 	// Nothing rendered to run yet: fall back to following whatever logs the
 	// backends can produce so `angee dev` against an empty stack still tails.
 	if !hasContainers && !hasLocal {
-		logs, err := p.StackLogs(ctx, nil, true)
+		logs, err := p.StackLogs(ctx, nil, true, 0)
 		if err != nil {
 			return err
 		}
@@ -438,11 +438,14 @@ func (p *Platform) ServiceRestart(ctx context.Context, names []string) error {
 	return p.serviceRuntimeAction(ctx, "restart", names)
 }
 
-func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error) {
-	return p.StackLogsLimited(ctx, services, follow, 0)
+func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool, tail int) (<-chan string, error) {
+	return p.StackLogsLimited(ctx, services, follow, tail, 0)
 }
 
-func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error) {
+// StackLogsLimited reads the last tail lines of each service or job (0:
+// runtime.DefaultLogTail; see logTail), or replays them before following live,
+// and caps a buffered read of each runtime at maxBytes (0: no cap).
+func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, tail, maxBytes int) (<-chan string, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -464,6 +467,9 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 			return nil, err
 		}
 	}
+	if tail, err = logTail(tail, local, follow); err != nil {
+		return nil, err
+	}
 	// follow streams line-by-line (StreamLogs) so subscribers see logs live;
 	// a bounded read (follow=false) keeps the buffered Logs path unchanged.
 	logsFor := func(backend runtime.Backend, req runtime.LogsRequest) (<-chan string, error) {
@@ -474,14 +480,16 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	}
 	var channels []<-chan string
 	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) && len(container) > 0 {
-		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
+		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, Tail: tail})
 		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, ch)
 	}
 	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) && len(local) > 0 {
-		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
+		// Lines are labelled with their service whenever the read covers
+		// more than one, as docker compose labels its own.
+		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, Tail: tail, NoPrefix: len(container)+len(local) == 1, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
 		}
@@ -492,30 +500,12 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		close(ch)
 		return ch, nil
 	}
-	out := make(chan string)
 	if follow {
 		// Interleave the backends concurrently so a live stream from one
 		// doesn't wait for the other to drain.
-		var wg sync.WaitGroup
-		for _, ch := range channels {
-			wg.Add(1)
-			go func(ch <-chan string) {
-				defer wg.Done()
-				for line := range ch {
-					select {
-					case out <- line:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}(ch)
-		}
-		go func() {
-			wg.Wait()
-			close(out)
-		}()
-		return out, nil
+		return runtime.MergeStreams(ctx, channels...), nil
 	}
+	out := make(chan string)
 	go func() {
 		defer close(out)
 		for _, ch := range channels {

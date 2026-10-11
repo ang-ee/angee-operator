@@ -10,6 +10,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
 // Error codes are the stable category of a failed operation. GraphQL errors
@@ -158,9 +159,16 @@ func fillEmpty(field *string, value string) {
 // object in the matching context field.
 func classifyOperationError(err error) *OperationError {
 	var notFound *NotFoundError
+	var notLoaded *runtime.ProcessNotLoadedError
 	var conflict *ConflictError
 	var invalid *InvalidInputError
 	switch {
+	case errors.As(err, &notLoaded) && notLoaded.Replacing:
+		// The supervisor is swapping in an updated definition; a retry reads it.
+		return &OperationError{Code: CodeConflict, Err: err}
+	case errors.As(err, &notLoaded):
+		// Declared, but the running supervisor does not know it.
+		return &OperationError{Code: CodeNotFound, Err: err}
 	case errors.As(err, &notFound):
 		opErr := &OperationError{Code: CodeNotFound, Err: err}
 		switch notFound.Kind {

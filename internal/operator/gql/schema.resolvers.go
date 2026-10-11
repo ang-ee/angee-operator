@@ -771,9 +771,9 @@ func (r *queryResolver) WorkspaceSourceDiff(ctx context.Context, workspace strin
 }
 
 // StackLogs is the resolver for the stackLogs field.
-func (r *queryResolver) StackLogs(ctx context.Context, services []string, limit *int) (string, error) {
+func (r *queryResolver) StackLogs(ctx context.Context, services []string, limit *int, tail *int) (string, error) {
 	maxBytes := logLimitValue(limit)
-	logs, err := r.Platform.StackLogsLimited(ctx, services, false, maxBytes)
+	logs, err := r.Platform.StackLogsLimited(ctx, services, false, logTailValue(tail), maxBytes)
 	if err != nil {
 		return "", err
 	}
@@ -781,9 +781,9 @@ func (r *queryResolver) StackLogs(ctx context.Context, services []string, limit 
 }
 
 // ServiceLogs is the resolver for the serviceLogs field.
-func (r *queryResolver) ServiceLogs(ctx context.Context, name string, limit *int) (string, error) {
+func (r *queryResolver) ServiceLogs(ctx context.Context, name string, limit *int, tail *int) (string, error) {
 	maxBytes := logLimitValue(limit)
-	logs, err := r.Platform.StackLogsLimited(ctx, []string{name}, false, maxBytes)
+	logs, err := r.Platform.StackLogsLimited(ctx, []string{name}, false, logTailValue(tail), maxBytes)
 	if err != nil {
 		return "", err
 	}
@@ -943,11 +943,11 @@ func (r *subscriptionResolver) OnGitOpsTopologyChange(ctx context.Context) (<-ch
 }
 
 // OnServiceLogs is the resolver for the onServiceLogs field.
-func (r *subscriptionResolver) OnServiceLogs(ctx context.Context, name string) (<-chan string, error) {
+func (r *subscriptionResolver) OnServiceLogs(ctx context.Context, name string, tail *int) (<-chan string, error) {
 	if r.Events == nil {
 		return nil, errSubscriptionsUnavailable
 	}
-	return r.Events.SubscribeServiceLogs(ctx, name)
+	return r.Events.SubscribeServiceLogs(ctx, name, logTailValue(tail))
 }
 
 // OnWorkspaceLogs is the resolver for the onWorkspaceLogs field.

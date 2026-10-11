@@ -66,10 +66,17 @@ type RuntimeAPI interface {
 	StackDev(ctx context.Context, build bool) error
 	StackDevForeground(ctx context.Context, build bool, stdout, stderr io.Writer) error
 	StackDown(ctx context.Context) error
-	StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error)
-	StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error)
+	// StackLogs reads the last tail lines of each service or job, or replays
+	// them before following live; 0 means runtime.DefaultLogTail. A follow of
+	// a local service or job is refused a tail above
+	// runtime.MaxLocalFollowTail.
+	StackLogs(ctx context.Context, services []string, follow bool, tail int) (<-chan string, error)
+	// StackLogsLimited is StackLogs with each runtime's buffered read capped at
+	// maxBytes (0: no cap).
+	StackLogsLimited(ctx context.Context, services []string, follow bool, tail, maxBytes int) (<-chan string, error)
 	// StreamServiceLogs opens a live, structured per-service log stream,
-	// optionally replaying the last `tail` lines first (0 = no backlog cap).
+	// replaying the last `tail` lines first (0 = runtime.DefaultLogTail), with
+	// StackLogs' tail limits.
 	StreamServiceLogs(ctx context.Context, service string, tail int) (<-chan api.LogLine, error)
 	ServiceUp(ctx context.Context, names []string) error
 	ServiceStart(ctx context.Context, names []string) error

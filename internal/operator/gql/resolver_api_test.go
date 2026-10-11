@@ -223,6 +223,42 @@ func TestFileQueryAndMutation(t *testing.T) {
 // TestServicesGroupsByStatus drives the typed-key grouped aggregation (the
 // strawberry-django-hasura Option A shape): group by status, each group pairing
 // a typed key (one field per selected dimension) with the free aggregate.
+// A service's outcome filters, orders and groups like its status, so a console
+// can list the failed services whatever the runtime calls them.
+func TestServicesFilterOrderAndGroupByOutcome(t *testing.T) {
+	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
+		{Name: "web", Runtime: "local", Status: "Running", Outcome: api.JobRunning},
+		{Name: "worker", Runtime: "local", Status: "Completed", Outcome: api.JobFailed},
+		{Name: "db", Runtime: "container", Status: "exited", Outcome: api.JobFailed},
+	}}}
+	failed := api.JobFailed
+	asc := model.OrderByAsc
+	got, err := r.Query().Services(context.Background(),
+		&model.ServicesBoolExp{Outcome: &model.StringComparisonExp{Eq: &failed}},
+		[]*model.ServicesOrderBy{{Outcome: &asc}, {Name: &asc}}, nil, nil)
+	if err != nil {
+		t.Fatalf("Services() error = %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "db" || got[1].Name != "worker" {
+		t.Fatalf("Services(outcome _eq failed) = %#v, want [db worker]", got)
+	}
+	groups, err := r.Query().ServicesGroups(context.Background(),
+		[]*model.ServicesGroupBySpec{{Field: model.ServicesGroupableFieldOutcome}}, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("ServicesGroups() error = %v", err)
+	}
+	counts := map[string]int{}
+	for _, g := range groups {
+		if g.Key == nil || g.Key.Outcome == nil {
+			t.Fatalf("group key = %#v, want a typed outcome dimension", g.Key)
+		}
+		counts[*g.Key.Outcome] = g.Aggregate.Count
+	}
+	if counts[api.JobFailed] != 2 || counts[api.JobRunning] != 1 {
+		t.Fatalf("grouped counts = %#v, want failed:2 running:1", counts)
+	}
+}
+
 func TestServicesGroupsByStatus(t *testing.T) {
 	r := &Resolver{Platform: fakeAPI{services: []api.ServiceState{
 		{Name: "a", Runtime: "container", Status: "running"},

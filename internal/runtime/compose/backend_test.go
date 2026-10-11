@@ -101,6 +101,22 @@ func TestBackendStreamLogsTail(t *testing.T) {
 	}
 }
 
+// A buffered read passes the tail as a follow does, so both runtimes return the
+// last lines of a log.
+func TestBackendLogsTail(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if _, err := backend.Logs(context.Background(), runtime.LogsRequest{
+		Root: "/stack", Services: []string{"web"}, Tail: 200,
+	}); err != nil {
+		t.Fatalf("Logs() error = %v", err)
+	}
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "logs", "--tail", "200", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
 func TestBackendStreamLogsOmitsNoLogPrefixWhenUnset(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}

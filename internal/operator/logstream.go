@@ -83,7 +83,12 @@ func (s *Server) serviceLogsStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	lines, err := s.logStreamer.StreamService(ctx, name, logTailParam(r))
+	tail, err := logTailQuery(r, "n")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	lines, err := s.logStreamer.StreamService(ctx, name, tail)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -133,29 +138,26 @@ func (s *Server) serviceLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// maxLogTail caps the requested backlog so a client can't ask the backend to
-// replay an unbounded number of lines before the live follow begins.
-const maxLogTail = 10000
-
-// logTailParam reads the `tail` (or `n` alias) query parameter — the number of
-// trailing lines to replay before following live. It clamps to [0, maxLogTail];
-// a missing, non-numeric, or negative value means no backlog cap (0).
-func logTailParam(r *http.Request) int {
+// logTailQuery reads the `tail` query parameter of a logs read, or of the log
+// socket, where `n` is an alias: the number of lines from the end of each log,
+// 0 or absent for the default (runtime.DefaultLogTail). A value that is not a
+// number is refused; the platform checks the limits of the rest.
+func logTailQuery(r *http.Request, aliases ...string) (int, error) {
 	raw := r.URL.Query().Get("tail")
-	if raw == "" {
-		raw = r.URL.Query().Get("n")
+	for _, alias := range aliases {
+		if raw != "" {
+			break
+		}
+		raw = r.URL.Query().Get(alias)
 	}
 	if raw == "" {
-		return 0
+		return 0, nil
 	}
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0
+	if err != nil {
+		return 0, &service.InvalidInputError{Field: "tail", Reason: "must be a whole number of lines"}
 	}
-	if n > maxLogTail {
-		return maxLogTail
-	}
-	return n
+	return n, nil
 }
 
 // authorizeServiceSocket gates the per-service log socket. With no configured

@@ -633,7 +633,12 @@ func (s *Server) stackDestroy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stackLogs(w http.ResponseWriter, r *http.Request) {
-	logs, err := s.platform.StackLogs(r.Context(), r.URL.Query()["service"], false)
+	tail, err := logTailQuery(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	logs, err := s.platform.StackLogs(r.Context(), r.URL.Query()["service"], false, tail)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -853,7 +858,12 @@ func (s *Server) serviceDestroy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serviceLogs(w http.ResponseWriter, r *http.Request) {
-	logs, err := s.platform.StackLogs(r.Context(), []string{r.PathValue("name")}, false)
+	tail, err := logTailQuery(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	logs, err := s.platform.StackLogs(r.Context(), []string{r.PathValue("name")}, false, tail)
 	if err != nil {
 		writeError(w, err)
 		return

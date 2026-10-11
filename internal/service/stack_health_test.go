@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -223,11 +225,11 @@ func TestRuntimeOutcome(t *testing.T) {
 		{"job skipped", "Skipped", exitCode(0), true, api.JobSkipped},
 		{"query failed", "unknown", nil, true, api.JobUnknown},
 		{"service crashed", "Completed", exitCode(2), false, api.JobFailed},
-		{"service stopped by signal", "Completed", exitCode(-1), false, serviceStopped},
-		{"container stopped by SIGTERM", "exited", exitCode(143), false, serviceStopped},
-		{"container killed after the grace period", "exited", exitCode(137), false, serviceStopped},
+		{"service stopped by signal", "Completed", exitCode(-1), false, api.ServiceStopped},
+		{"container stopped by SIGTERM", "exited", exitCode(143), false, api.ServiceStopped},
+		{"container killed after the grace period", "exited", exitCode(137), false, api.ServiceStopped},
 		{"container exited cleanly", "exited", exitCode(0), false, api.JobCompleted},
-		{"container never started", "created", exitCode(0), false, serviceStopped},
+		{"container never started", "created", exitCode(0), false, api.ServiceStopped},
 		{"service running", "running", exitCode(0), false, api.JobRunning},
 		{"service skipped", "Skipped", exitCode(0), false, api.JobSkipped},
 	} {
@@ -626,6 +628,20 @@ func (b *logsRecorder) Logs(_ context.Context, req runtime.LogsRequest) (<-chan 
 	return ch, nil
 }
 
+func (b *logsRecorder) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+	return b.Logs(ctx, req)
+}
+
+func (b *logsRecorder) tails() []int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	tails := make([]int, 0, len(b.requests))
+	for _, req := range b.requests {
+		tails = append(tails, req.Tail)
+	}
+	return tails
+}
+
 func TestStackLogsAcceptsJobNames(t *testing.T) {
 	root := devFailureStack(t)
 	local := &logsRecorder{}
@@ -633,7 +649,7 @@ func TestStackLogsAcceptsJobNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithBackends: %v", err)
 	}
-	lines, err := platform.StackLogs(t.Context(), []string{"deps"}, false)
+	lines, err := platform.StackLogs(t.Context(), []string{"deps"}, false, 0)
 	if err != nil {
 		t.Fatalf("StackLogs(deps): %v", err)
 	}
@@ -645,7 +661,218 @@ func TestStackLogsAcceptsJobNames(t *testing.T) {
 		t.Fatalf("logs = %q, requests %+v; want the deps process logs", out.String(), local.requests)
 	}
 	var notFound *NotFoundError
-	if _, err := platform.StackLogs(t.Context(), []string{"missing"}, false); !errors.As(err, &notFound) {
+	if _, err := platform.StackLogs(t.Context(), []string{"missing"}, false, 0); !errors.As(err, &notFound) {
 		t.Fatalf("StackLogs(missing) = %v, want *NotFoundError", err)
+	}
+}
+
+// process-compose calls a process that exited `Completed` whatever its exit
+// status, and docker compose calls a container `exited`. A service's state
+// carries that raw status, and beside it the verdict the summary counts and the
+// exit code, so a crashed service reads as failed (#112).
+func TestStackStatusReportsFailedServiceOutcomeAndExitCode(t *testing.T) {
+	root := devFailureStack(t)
+	containers := stubStatusBackend{statuses: []runtime.ServiceStatus{{Name: "postgres", Runtime: "container", State: "exited", ExitCode: exitCode(2)}}}
+	local := stubStatusBackend{statuses: []runtime.ServiceStatus{
+		{Name: "deps", State: "Completed", ExitCode: exitCode(0)},
+		{Name: "codegen", State: "Completed", ExitCode: exitCode(0)},
+		{Name: "django", State: "Completed", ExitCode: exitCode(1)},
+		{Name: "frontend", State: "Completed", ExitCode: exitCode(143)},
+		{Name: "storybook", State: "Error", ExitCode: exitCode(0)},
+	}}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	status, err := platform.StackStatus(t.Context())
+	if err != nil {
+		t.Fatalf("StackStatus: %v", err)
+	}
+	tests := []struct {
+		name     string
+		status   string
+		outcome  string
+		exitCode *int
+		reason   string
+	}{
+		{name: "django", status: "Completed", outcome: api.JobFailed, exitCode: exitCode(1)},
+		{name: "postgres", status: "exited", outcome: api.JobFailed, exitCode: exitCode(2)},
+		{name: "storybook", status: "Error", outcome: api.JobFailed, reason: couldNotStart},
+		{name: "frontend", status: "Completed", outcome: api.ServiceStopped, exitCode: exitCode(143)},
+	}
+	for _, tt := range tests {
+		got := status.Services[tt.name]
+		if got.Status != tt.status || got.Outcome != tt.outcome || got.Reason != tt.reason || !sameExitCode(got.ExitCode, tt.exitCode) {
+			t.Errorf("%s = %+v, want status %q, outcome %q, exit %v, reason %q", tt.name, got, tt.status, tt.outcome, derefExit(tt.exitCode), tt.reason)
+		}
+	}
+	if want := (api.StatusCounts{Total: 4, Failed: 3}); status.Summary.Services != want {
+		t.Fatalf("services summary = %+v, want %+v", status.Summary.Services, want)
+	}
+}
+
+func sameExitCode(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func derefExit(code *int) any {
+	if code == nil {
+		return nil
+	}
+	return *code
+}
+
+// A log read or follow asks both runtimes for the last lines only. Without a
+// tail, process-compose replays its whole 1000-line buffer over a websocket that
+// drops lines once a client falls behind, and returns the oldest lines (#113).
+func TestStackLogsAskBothRuntimesForTheLastLines(t *testing.T) {
+	root := devFailureStack(t)
+	containers := &logsRecorder{}
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	for _, follow := range []bool{false, true} {
+		lines, err := platform.StackLogs(t.Context(), []string{"postgres", "django"}, follow, 0)
+		if err != nil {
+			t.Fatalf("StackLogs(follow=%v): %v", follow, err)
+		}
+		for range lines {
+		}
+	}
+	for name, backend := range map[string]*logsRecorder{"container": containers, "local": local} {
+		if got, want := backend.tails(), []int{runtime.DefaultLogTail, runtime.DefaultLogTail}; !slices.Equal(got, want) {
+			t.Errorf("%s backend tails = %v, want %v for a read and a follow", name, got, want)
+		}
+	}
+}
+
+// An explicit tail reaches the runtimes, capped at MaxLogTail. A buffered read
+// of a local service takes any tail, since it goes through the supervisor's
+// log range endpoint. A follow of a local service or job is refused a backlog
+// above MaxLocalFollowTail, where process-compose drops the newest lines, with
+// an error naming its log file rather than a silent clamp (#114).
+func TestStackLogsTailLimits(t *testing.T) {
+	root := devFailureStack(t)
+	containers := &logsRecorder{}
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	drain := func(lines <-chan string) {
+		for range lines {
+		}
+	}
+	for _, read := range []struct {
+		services []string
+		follow   bool
+		tail     int
+	}{
+		{[]string{"postgres"}, false, 300},
+		{[]string{"postgres"}, true, 20000},
+		{[]string{"django"}, false, 1000},
+		{[]string{"django"}, true, runtime.MaxLocalFollowTail},
+	} {
+		lines, err := platform.StackLogs(t.Context(), read.services, read.follow, read.tail)
+		if err != nil {
+			t.Fatalf("StackLogs(%v, follow %v, tail %d): %v", read.services, read.follow, read.tail, err)
+		}
+		drain(lines)
+	}
+	if got, want := containers.tails(), []int{300, runtime.MaxLogTail}; !slices.Equal(got, want) {
+		t.Fatalf("container tails = %v, want %v", got, want)
+	}
+
+	var invalid *InvalidInputError
+	for _, services := range [][]string{{"django"}, {"postgres", "deps"}} {
+		_, err := platform.StackLogs(t.Context(), services, true, 300)
+		if !errors.As(err, &invalid) || invalid.Field != "tail" || !strings.Contains(err.Error(), "256") || !strings.Contains(err.Error(), "run/logs/"+services[len(services)-1]+".log") {
+			t.Fatalf("StackLogs(%v, follow, tail 300) = %v, want an invalid tail naming 256 and the log file", services, err)
+		}
+	}
+	if _, err := platform.StreamServiceLogs(t.Context(), "django", 300); !errors.As(err, &invalid) || !strings.Contains(err.Error(), "run/logs/django.log") {
+		t.Fatalf("StreamServiceLogs(django, 300) = %v, want an invalid tail naming the log file", err)
+	}
+	if _, err := platform.StackLogs(t.Context(), []string{"postgres"}, false, -1); !errors.As(err, &invalid) {
+		t.Fatalf("StackLogs(tail -1) = %v, want an invalid tail", err)
+	}
+	if got, want := local.tails(), []int{1000, runtime.MaxLocalFollowTail}; !slices.Equal(got, want) {
+		t.Fatalf("local tails = %v, want %v: a refused tail reaches no runtime", got, want)
+	}
+}
+
+// A read that covers more than one service has its local lines labelled, even
+// when only one of them is local; a read of one service is not labelled.
+func TestStackLogsLabelsLocalLinesWhenTheReadCoversSeveralServices(t *testing.T) {
+	root := devFailureStack(t)
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, &logsRecorder{}, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	for _, services := range [][]string{{"django"}, {"postgres", "django"}, {"django", "deps"}} {
+		lines, err := platform.StackLogs(t.Context(), services, false, 0)
+		if err != nil {
+			t.Fatalf("StackLogs(%v): %v", services, err)
+		}
+		for range lines {
+		}
+	}
+	local.mu.Lock()
+	defer local.mu.Unlock()
+	var noPrefix []bool
+	for _, req := range local.requests {
+		noPrefix = append(noPrefix, req.NoPrefix)
+	}
+	if want := []bool{true, false, false}; !slices.Equal(noPrefix, want) {
+		t.Fatalf("local NoPrefix = %v, want %v", noPrefix, want)
+	}
+}
+
+// A local service the running supervisor has not loaded is a NotFound error,
+// so REST answers 404 and GraphQL reports NOT_FOUND.
+func TestProcessNotLoadedIsNotFound(t *testing.T) {
+	err := fmt.Errorf("read: %w", &runtime.ProcessNotLoadedError{Name: "late", ControlPort: 28100})
+	if got := AsOperationError(err).Code; got != CodeNotFound {
+		t.Fatalf("code = %q, want %q", got, CodeNotFound)
+	}
+}
+
+// A process the supervisor is replacing with an updated definition is a
+// Conflict, worth retrying, not a NotFound that suggests a supervisor restart.
+func TestProcessBeingReplacedIsConflict(t *testing.T) {
+	err := fmt.Errorf("read: %w", &runtime.ProcessNotLoadedError{Name: "web", ControlPort: 28100, Replacing: true})
+	if got := AsOperationError(err).Code; got != CodeConflict {
+		t.Fatalf("code = %q, want %q", got, CodeConflict)
+	}
+	if strings.Contains(err.Error(), "restart the supervisor") {
+		t.Fatalf("error = %v, want no advice to restart the supervisor", err)
+	}
+}
+
+// A service stream that names no backlog replays the default tail; one that
+// names a backlog keeps it.
+func TestStreamServiceLogsDefaultsTheTail(t *testing.T) {
+	root := devFailureStack(t)
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, &logsRecorder{}, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	for _, tail := range []int{0, 50} {
+		lines, err := platform.StreamServiceLogs(t.Context(), "django", tail)
+		if err != nil {
+			t.Fatalf("StreamServiceLogs(tail=%d): %v", tail, err)
+		}
+		for range lines {
+		}
+	}
+	if got, want := local.tails(), []int{runtime.DefaultLogTail, 50}; !slices.Equal(got, want) {
+		t.Fatalf("tails = %v, want %v", got, want)
 	}
 }

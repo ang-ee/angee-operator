@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/gorilla/websocket"
 )
 
@@ -170,23 +172,31 @@ func TestNewLogStreamer(t *testing.T) {
 	}
 }
 
-func TestLogTailParam(t *testing.T) {
+// The socket's tail reaches the platform as given, which checks its limits; a
+// value that is not a number is refused rather than read as the default.
+func TestLogTailQueryOnTheSocket(t *testing.T) {
 	cases := []struct {
 		query string
 		want  int
 	}{
 		{"", 0},
 		{"tail=5", 5},
-		{"n=7", 7},                  // alias
-		{"tail=3&n=9", 3},           // tail wins over n
-		{"tail=abc", 0},             // non-numeric
-		{"tail=-4", 0},              // negative
-		{"tail=999999", maxLogTail}, // clamped
+		{"n=7", 7},              // alias
+		{"tail=3&n=9", 3},       // tail wins over n
+		{"tail=-4", -4},         // the platform refuses it
+		{"tail=999999", 999999}, // the platform caps it
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(http.MethodGet, "http://op/services/web/logs/stream?"+c.query, nil)
-		if got := logTailParam(r); got != c.want {
-			t.Errorf("logTailParam(%q) = %d, want %d", c.query, got, c.want)
+		if got, err := logTailQuery(r, "n"); err != nil || got != c.want {
+			t.Errorf("logTailQuery(%q) = %d, %v; want %d", c.query, got, err, c.want)
+		}
+	}
+	for _, query := range []string{"tail=abc", "n=lots"} {
+		r := httptest.NewRequest(http.MethodGet, "http://op/services/web/logs/stream?"+query, nil)
+		var invalid *service.InvalidInputError
+		if _, err := logTailQuery(r, "n"); !errors.As(err, &invalid) {
+			t.Errorf("logTailQuery(%q) error = %v, want an invalid tail", query, err)
 		}
 	}
 }
@@ -211,6 +221,18 @@ func TestServiceLogsSocketPassesTail(t *testing.T) {
 	}
 	if tail != 42 {
 		t.Fatalf("handler passed tail = %d, want 42", tail)
+	}
+}
+
+func TestServiceLogsSocketRefusesANonNumericTail(t *testing.T) {
+	ts, _ := newLogStreamTestServer(t, "", fakeLogStreamer{})
+	resp, err := http.Get(ts.URL + "/services/web/logs/stream?tail=abc")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 before the upgrade", resp.StatusCode)
 	}
 }
 

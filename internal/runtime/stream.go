@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
@@ -84,6 +85,51 @@ func StreamCommand(ctx context.Context, cmd *exec.Cmd, attrs ...slog.Attr) (<-ch
 		trace(nil, cmd.Wait())
 	}()
 	return ch, nil
+}
+
+// MergeStreams interleaves channels into one as their elements arrive, so a live
+// stream from one doesn't wait for another to drain. The result closes once
+// every input has closed, or when ctx is done.
+func MergeStreams(ctx context.Context, channels ...<-chan string) <-chan string {
+	out := make(chan string)
+	var wg sync.WaitGroup
+	for _, ch := range channels {
+		wg.Add(1)
+		go func(ch <-chan string) {
+			defer wg.Done()
+			for line := range ch {
+				select {
+				case out <- line:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(ch)
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+
+// PrefixLines prefixes each line of text with label, padded to width, and a
+// `|` separator, as docker compose labels the lines of several services. The
+// text keeps its line endings, and an unterminated last line is prefixed too.
+func PrefixLines(text, label string, width int) string {
+	if text == "" {
+		return ""
+	}
+	prefix := label + strings.Repeat(" ", max(width-len(label), 0)) + " | "
+	var b strings.Builder
+	for line := range strings.SplitAfterSeq(text, "\n") {
+		if line == "" {
+			continue
+		}
+		b.WriteString(prefix)
+		b.WriteString(line)
+	}
+	return b.String()
 }
 
 // ReplayLines turns already-captured output into a line channel, mirroring

@@ -89,14 +89,32 @@ type StatusCounts struct {
 type ServiceState struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
-	Status  string `json:"status"`
+	// Status is the runtime's own state, such as process-compose's
+	// `Completed` or docker compose's `exited`. Outcome is the verdict.
+	Status string `json:"status"`
+	// Outcome classifies the runtime state as the stack summary counts it:
+	// running, completed (exit 0), failed (a non-zero exit, or the command
+	// could not start), stopped (ended by a stop signal), skipped (a
+	// dependency failed), pending, never-run (the runtime holds no state for
+	// it) or unknown (the runtime could not be queried). Empty when the
+	// runtime was not read, as in a create or update response.
+	//
+	// A local service killed by any signal reads as stopped, not failed:
+	// process-compose reports exit code -1 alike for a crash by signal (such as
+	// SIGSEGV), a SIGKILL from outside (such as the OOM killer) and a
+	// deliberate stop, so the outcome cannot tell them apart.
+	Outcome string `json:"outcome,omitempty"`
+	// ExitCode is the exit status of a service that ended, when the runtime
+	// reports one.
+	ExitCode *int `json:"exit_code,omitempty"`
 	// Health mirrors the container healthcheck verdict from the
 	// runtime backend: typically `healthy`, `unhealthy`, or `starting`.
 	// Empty when no healthcheck is declared, the service has not been
 	// brought up, or the local-runtime backend doesn't expose one.
 	Health string `json:"health,omitempty"`
 	// Reason explains a skipped service: the failed job or service its
-	// dependency chain stopped at, such as `job deps failed (exit 1)`.
+	// dependency chain stopped at, such as `job deps failed (exit 1)`. For a
+	// failed service whose command could not start, it says so.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -116,6 +134,10 @@ const (
 	JobSkipped = "skipped"
 	// JobUnknown means the runtime backend could not be queried.
 	JobUnknown = "unknown"
+	// ServiceStopped is a service's outcome when it ended without failing:
+	// it exited after a stop signal, or it is a container that exists without
+	// running. Services otherwise take the Job* outcomes; a job has none.
+	ServiceStopped = "stopped"
 )
 
 type JobState struct {

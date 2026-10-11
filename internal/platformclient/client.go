@@ -229,10 +229,13 @@ func (p *RemoteClient) StackDown(ctx context.Context) error {
 	return p.doJSON(ctx, http.MethodPost, "/stack/down", nil, nil, nil)
 }
 
-func (p *RemoteClient) StackLogs(ctx context.Context, services []string, _ bool) (<-chan string, error) {
+func (p *RemoteClient) StackLogs(ctx context.Context, services []string, _ bool, tail int) (<-chan string, error) {
 	query := url.Values{}
 	for _, service := range services {
 		query.Add("service", service)
+	}
+	if tail != 0 {
+		query.Set("tail", strconv.Itoa(tail))
 	}
 	return p.stream(ctx, "/stack/logs", query)
 }
@@ -240,8 +243,8 @@ func (p *RemoteClient) StackLogs(ctx context.Context, services []string, _ bool)
 // StackLogsLimited delegates to the operator's /stack/logs stream. The
 // operator emits a finite, already-bounded snapshot, so follow and maxBytes
 // are not forwarded — the same degradation StackLogs applies to follow.
-func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, _ bool, _ int) (<-chan string, error) {
-	return p.StackLogs(ctx, services, false)
+func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, _ bool, tail, _ int) (<-chan string, error) {
+	return p.StackLogs(ctx, services, false, tail)
 }
 
 // StreamServiceLogs is not proxied by the HTTP remote client: the per-service
