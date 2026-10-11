@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/git"
@@ -285,7 +286,7 @@ func TestStatus(t *testing.T) {
 				}
 				got.CurrentRef = ""
 			}
-			if got != tc.want {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("Status() = %#v, want %#v", got, tc.want)
 			}
 		})

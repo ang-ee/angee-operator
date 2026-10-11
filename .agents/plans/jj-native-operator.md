@@ -69,7 +69,7 @@ changes what gets built, so challenge them here rather than in a PR:
 | D5 | Conflicts are detected by a read after the command, never by exit status. | `jj rebase` exits 0 when it produces conflicts (probe). |
 | D6 | Publish pre-checks the commits it is about to push for conflicts and missing descriptions, and returns any other refusal as a typed push-refused error carrying jj's message. | `jj git push` exits 1 with only stderr text (probe). The pre-check cannot mirror every jj push policy (private commits, future ones), so the plan does not promise to. |
 | D7 | On a jj slot, "dirty" means the working-copy commit `@` is non-empty, and **every status read snapshots the working copy**: slot reads never pass `--ignore-working-copy`. Mutating verbs and the destroy guard snapshot first too (jj does this itself before any command that does not skip the working copy). Slot state is read on demand only (owner, 2026-10-10, Q6), so every read is an explicit request and nothing snapshots on a timer. | A read with `--ignore-working-copy` does not see edits made since the last snapshot (probe), so a never-snapshotting status would report `clean` over unsaved work, and destroy could delete it. A snapshot costs about what the `git status` the git path runs on every read costs. Measured: a snapshot that finds no change writes nothing to the operation log; one that finds a change writes one `snapshot working copy` operation (40 to 200 ms on a small repo, depending on machine load). |
-| D8 | Slot mutations run with the slot as working directory, and every primary gets `snapshot.auto-update-stale = true`. | Rewriting a slot's commits from elsewhere leaves it stale and its next plain `jj` command fails; with the setting it repairs itself (probe). |
+| D8 | Slot mutations run with the slot as working directory, and every primary gets `snapshot.auto-update-stale = true`. *As built in phase 5:* the jj runner also passes `--config snapshot.auto-update-stale=true` on every command, since jj keeps repository config per user (Q9). | Rewriting a slot's commits from elsewhere leaves it stale and its next plain `jj` command fails; with the setting it repairs itself (probe). |
 | D9 | Every operator mutation of a primary, git or jj, takes one cross-process file lock for that primary, at `<parent>/.<name>.angee.lock` beside the primary. | `beginMutation` is an in-process, per-`Platform` try-lease (`platform.go:105`). It does not serialize two stacks, or the CLI and the operator, on one shared primary. The lock sits outside the primary because `.jj` does not exist before initialization. Order: stack mutation lease, then the root lock, then the primary lock. |
 | D10 | The jj driver uses `jj rebase --onto`. | `-d/--destination` is no longer in `jj rebase --help`; it still parses as a legacy alias. |
 | D11 | `sync-base` treats an unset method as "the driver's default": merge for git slots, rebase for jj slots. An explicit `--merge` on a workspace that has a jj slot is refused before any slot is touched. | The CLI hardcodes `method := "merge"` (`cli/root.go:1231`), so the service cannot tell a default from an explicit choice. Silently rebasing when merge was asked for is worse than refusing. |
@@ -780,6 +780,191 @@ Tests:
 - Stale recovery (D8) across two slots that share history, entered through
   status, sync-base and publish.
 
+**As built in phase 5 (steps 1-5, 7, 8) (2026-10-11).** Step 6
+(`EnsurePrimary`, `Add`, `Remove`) is not in this PR: it waits for 4c's
+lifecycle interface and primary lock.
+
+- **Package.** `internal/vcs/jjdriver`, not `internal/vcs/jj`, to match
+  `gitdriver`. `Driver` satisfies `vcs.Driver` (a compile-time assertion).
+  `Status` and `Diff` are real. Every other method returns an error
+  wrapping `vcs.ErrUnsupported`, except `FetchURL` and `PushURL`, which
+  have no error and return "". `MergeAbort`, `RebaseAbort` and
+  `RebaseContinue` already say a jj slot never has an operation in
+  progress (phase 8 step 6); the rest say "not implemented yet".
+  `Platform.slotDriver` never returns it.
+- **Runner (step 1).**
+  - jj comes from `PATH`. Every run starts with `--no-pager --color never
+    --config snapshot.auto-update-stale=true`. D8 then holds wherever the
+    operator runs, whatever the repository's per-user config says (Q9).
+  - Environment: `git.IsolatedEnv`, which `git.Client.RunIsolated` now
+    builds through too, plus `JJ_USER`, `JJ_EMAIL` and `JJ_EDITOR=true`.
+  - jj never runs in the process's working directory. `run` refuses an
+    empty directory, and `snapshot` and `read` refuse an empty slot.
+    - A slot command runs in the slot with `-R .`. jj then loads the slot's
+      own workspace, so `@` is its working copy and no workspace name is
+      needed. It also never falls back to a repository above the slot: a
+      stack root inside a jj checkout would otherwise be snapshotted when a
+      slot has lost its `.jj`.
+    - The probe runs in the system temporary directory. jj records every
+      repository it loads under `$XDG_CONFIG_HOME/jj/repos/` (a
+      `metadata.binpb`, even for `jj --version`), so a probe run from inside
+      a checkout wrote to the user's config. Review of #126 found this.
+  - `snapshot` lets jj snapshot first. A call's first command is `jj op log
+    -n 1`, which snapshots and returns the operation that recorded the
+    snapshot. `read` adds `--ignore-working-copy --at-op <that operation>`
+    to every read after it. The six to eight reads of a status then agree
+    with each other while agents work in the repository. A base bookmark
+    that vanishes mid-call cannot turn `(B)..(@-)` into all of history.
+  - Nothing names a primary with `-R` yet.
+  - `network` runs under `git.RunNetworkOperation`, for phase 8's fetch and
+    push. Failures are a `*jjdriver.CommandError` with redacted arguments
+    and stderr.
+  - No command mutates yet, so none passes `-m`.
+- **Slot and Status.** No `vcs.Slot` field was added: running in the slot
+  stands in for `Name` and `Primary` for reads. `vcs.Status` gains
+  `ChangeID`, `BaseBehind`, `Conflicted` and `ConflictPaths`. The git
+  driver leaves them unset, and the DTOs and GraphQL wait for phase 7.
+  `ConflictPaths` makes `Status` non-comparable, so the git driver's test
+  compares with `reflect.DeepEqual`.
+- **Revsets (step 2).** `revset.go` builds every revset.
+  - `quote` writes jj's double-quoted literal: `\"`, `\\`, and ASCII
+    control characters as escapes; every other byte as it is.
+  - `exact` builds string patterns, for revset functions and for `jj
+    bookmark list` arguments.
+  - Bookmarks use the function forms (`bookmarks(exact:"X")`,
+    `remote_bookmarks(exact:"X", remote=exact:"R")`). A missing bookmark is
+    then an empty set, not an error, and a tag of the same name never wins.
+    Workspaces use `"N"@`, and `symbol` names a ref.
+  - jj also parses bookmark *name arguments* (`jj bookmark create/set X`)
+    as revset symbols, so phase 8 must quote those too.
+  - The `name` template keyword prints a name quoted that way, while
+    `json()` prints it raw. The decode structs read `json()`.
+- **Probe (step 3).**
+  - `Probe(ctx)` returns `Capabilities` (`JJ`, `JJErr`, `Git`, `GitErr`,
+    `OSErr`). It is cached for the process once a probe completes. A probe
+    that its caller cancelled, or its own 10 s timeout cut short, is
+    returned but not kept.
+  - `Err()` is a `*jjdriver.UnsupportedError` that lists every shortfall
+    with its hint. It wraps its causes and `vcs.ErrUnsupported`.
+  - `--colocate` must start an option line of `jj workspace add --help`.
+  - `GitSupported` (the 2.42 floor) is shared with doctor.
+- **Templates (step 4)** are as listed, with three additions: commits carry
+  `parents_short` (jj's short id of each parent, for `CurrentRef`) and
+  `working_copies` as names, and `jj op log` prints the operation id. None
+  uses `root`. The fixtures are regenerated with jj's own test settings
+  (`JJ_RANDOMNESS_SEED` per command, `JJ_TIMESTAMP`, fixed git dates), so
+  `-update` with the same jj changes no byte. CI regenerates them on Linux
+  and fails on any difference.
+- **Status (step 5)** is as worded above.
+  - **D7 holds except for Q10.** Every status snapshots first, so an edit
+    no jj command has recorded counts as dirty. The exception is a new file
+    jj refuses to snapshot (over `snapshot.max-new-file-size`), or one
+    `snapshot.auto-track` leaves out. A test pins that as a known limit.
+  - B is `BaseRef@BaseRemote` (origin when `BaseRemote` is empty), else the
+    local bookmark. jj's `git` pseudo-remote is never B's remote. With
+    neither, Status returns `vcs.ErrBaseNotFound` and what it read before.
+  - Reads, in order:
+    - the snapshot (`jj op log`);
+    - then, at its operation: `@`; the bookmarks; the commits of `B..@`
+      (conflicts and `CurrentRef` come from that one listing); the counts.
+
+    That is seven to nine jj runs, about 12 ms each on a small repository.
+  - A two-parent `@` reports its first parent as `CurrentRef`, and its
+    counts run from both parents.
+  - **For phase 6:** with a missing base, the jj driver returns
+    `vcs.ErrBaseNotFound` with no `Pushed` verdict, while the git driver
+    returns a `*vcs.CountError` that keeps its verdict. The destroy guard
+    must treat the two the same: refuse unless a verdict says pushed.
+- **R, the push remote (Q8, built as recommended).** R is git's push remote
+  for the slot's branch, read from the slot's colocated git config:
+  `git.Client.PushRemoteFor(slot, X)`. That is publish's order for git
+  slots (#122): the branch's `pushRemote`, `remote.pushDefault`, the
+  branch's remote, origin, the only remote.
+  - When git names none (`*git.NoPushRemoteError`), Status reports no
+    upstream.
+  - A jj `git.push` setting is ignored by angee. jj itself ignores git's
+    `remote.pushDefault` and `branch.<name>.pushRemote`. It pushes to the
+    remotes its `git.push` names, else the only remote, else origin, and
+    with several remotes and no origin it refuses.
+  - So phase 8 must pass this R to `jj git push --remote`. jj keeps to the
+    canonical remote's push block, since it pushes through git.
+  - The first version of this PR read `git.push` and copied jj's fallback.
+    That was a second implementation of jj's rule, and it matched patterns
+    loosely. The review of #126 replaced it.
+- **Repository config lives outside the repository (finding; Q9, built as
+  recommended).** jj 0.45 writes `jj config set --repo` values, and the
+  `trunk()` alias of `jj git init`, to
+  `$XDG_CONFIG_HOME/jj/repos/<id>/config.toml`, keyed by
+  `.jj/repo/config-id`, not to `.jj/repo/config.toml`. D8's setting is
+  therefore per user, so the runner passes it on every command, and the
+  test fixtures no longer set it. Every jj call in the tests runs under a
+  temporary HOME and `XDG_CONFIG_HOME`. A test checks that the probe and the
+  fixtures, run from inside a jj repository, write nothing to the HOME they
+  started with.
+- **Stale working copies (finding).** A rewrite from another workspace
+  leaves a slot stale only when it changes the slot's files (a rebase onto
+  a moved base). A new description on `@-` does not.
+- **Diff.**
+  - Uncommitted changes: `jj diff --git` of `@`, against its parents.
+  - With a ref: `--from first_parent(@) --to "<ref>"`, so a two-parent `@`
+    works too. The ref is one quoted symbol, so a remote bookmark
+    (`main@origin`) cannot be named yet; phase 8 decides how a jj slot's
+    refs are spelled.
+  - The diff reads at the snapshot's operation. The output is git's format,
+    and it goes through `vcs.DiffFiles`, moved out of `gitdriver` so both
+    drivers share it.
+- **For phase 8.** Once `jj git push --remote fork --bookmark X` has run,
+  pushing X to origin is refused until `jj bookmark track X@origin`.
+- **Doctor (step 7).** `tool.jj` reports the version and "workspace add
+  --colocate", and warns without them. `tool.git` warns below 2.42.
+- **CI (step 8).**
+  - `.github/jj-rev` holds `f8f808f9…`.
+  - Job `test (jj)` builds jj with `cargo install --git … --rev … --locked
+    --bin jj jj-cli` into `~/.jj-ci`. It restores and saves that directory
+    by OS, architecture and revision, saving right after the build so a
+    failing test keeps it.
+  - It runs `go test -race ./internal/vcs/... ./internal/service/...` with
+    `ANGEE_REQUIRE_JJ=1`, then regenerates the template fixtures and fails
+    on a diff.
+  - A cold build took 2 min 30 s on an 18-core laptop with an empty cargo
+    home, and 3 min 42 s on the runner. Branch protection is unchanged.
+- **Tests.**
+  - Fixtures: decode tests over `testdata/*.ndjson` run with no jj
+    installed.
+  - Status, ported from the probes: clean; an edit jj has not recorded
+    (dirty, D7); ahead with no upstream; on and ahead of its upstream;
+    behind; the base moved under a published slot (`BaseBehind`); a
+    conflicting rebase that exits 0 (D5).
+  - The `CurrentRef` rules. A two-parent `@` in Status and in Diff.
+  - The push remote follows git:
+    - a jj `git.push` has no effect;
+    - `remote.pushDefault` applies, and a branch's `pushRemote` comes
+      before it;
+    - the only remote is used even when it is not named origin;
+    - with no push remote there is no upstream;
+    - the `git` pseudo-remote is never the base or the upstream.
+  - Stale recovery (D8) on a repository that does not set
+    auto-update-stale, where a plain jj fails. Only through status:
+    sync-base and publish come with phase 8.
+  - Reads pinned to the snapshot's operation; a missing base; Diff.
+  - The Q10 known limit, for both cases.
+  - Nothing reaches the developer's jj config.
+  - Hostile names, which jj itself resolves: quotes, backslashes, `@`,
+    `..`, spaces, an injected expression, a tab, non-ASCII.
+  - The runner's arguments, environment, redaction and timeout, and its
+    refusal of an empty slot, through a fake jj.
+  - The probe through fake jj and git, including a cancelled and a
+    timed-out probe that is not kept, and the per-verb refusals.
+  - Mutants caught:
+    - an unescaped quote, an unescaped backslash, bare names;
+    - a non-snapshotting first read, a runner that never snapshots;
+    - a conflict flag that is never read, the slot's commits never listed;
+    - a probe run in the process's directory;
+    - an empty slot let through;
+    - a timed-out probe kept;
+    - an upstream always on origin, or on jj's `git.push`;
+    - reads not pinned to the snapshot.
+
 ### Phase 6. `mode: jj` lifecycle and status
 
 **Goal:** `ws create`, `ws status` and `ws destroy` work for jj slots,
@@ -821,7 +1006,13 @@ Steps:
    A non-empty directory that is not a registered workspace still errors.
 5. Rollback and destroy: `workspaceSourceCleanup` and
    `removeWorkspaceSources` (`:1469`) call `driver.Remove`. The destroy guard
-   uses a snapshotting status, so unsaved edits count as dirty.
+   uses a snapshotting status, so unsaved edits count as dirty. Two things
+   from phase 5 come first:
+   - Q10 must be settled, since a file jj refuses to snapshot reads as
+     pushed today;
+   - with a missing base, the jj driver returns `vcs.ErrBaseNotFound` with
+     no `Pushed` verdict, where the git driver returns a `*vcs.CountError`
+     that keeps one, and the guard must treat the two alike.
 6. Status: `workspaceSourceStatus` (`:392`) builds the existing DTO fields
    from `driver.Status` for jj slots. There is no `branch-mismatch` on a jj
    slot. Every status read snapshots (D7).
@@ -1063,6 +1254,59 @@ Q1, Q2 and Q6 are answered. The rest can be answered later.
   work-state store's own publish recipe. Covering them needs a way to
   exclude a work-state slot first: a slot or source flag (`push: false`,
   say), a dedicated mode for it, or a rule on the work-state source. Open.
+- **Q8. Which remote does a jj slot push to? Built as recommended in
+  #126; the owner can still reverse it.** jj reads neither git's
+  `remote.pushDefault`, which phase 2 writes from `push_default`, nor a
+  branch's `pushRemote`. Without its own `git.push`, jj pushes a source that
+  has an origin and a fork to origin. With several remotes and no origin,
+  it refuses. The options were:
+  - EnsurePrimary also writes `git.push = <push_default>` into jj's
+    repository config (but see Q9: that config is per user);
+  - the jj driver resolves the remote by git's order from the slot's git
+    config (`git.Client.PushRemoteFor`, as publish does for git slots) and
+    always passes `--remote` to `jj git push`; Status then counts against
+    that remote too;
+  - jj slots follow jj's rule, and the docs say `push_default` does not
+    apply to them.
+
+  Built: the second, so a git slot and a jj slot of one source publish to
+  the same remote, and the manifest stays the one place that says where.
+  Status counts the upstream on that remote, and phase 8 passes it to `jj
+  git push --remote`. A jj `git.push` setting is ignored by angee.
+- **Q9. Where does jj's repository config live? Built as recommended in
+  #126 for the operator; the agents' side is open.** jj 0.45 keeps `jj
+  config set --repo` values in the user's config directory
+  (`$XDG_CONFIG_HOME/jj/repos/<id>/config.toml`, keyed by
+  `.jj/repo/config-id`), not inside `.jj`. D8's
+  `snapshot.auto-update-stale` is therefore per user. An operator in a
+  container with another HOME neither sees what the host user wrote nor
+  writes where the agents' own jj reads. The options:
+  - the runner passes `--config snapshot.auto-update-stale=true` on every
+    operator command, which covers the operator wherever it runs, while
+    EnsurePrimary still writes the repository setting for the host user;
+  - the container mounts the host's jj config directory;
+  - the agents' environment sets it in their user config.
+
+  Built: the first. The agents' side (an agent's own `jj` in a slot the
+  operator rebased) still needs one of the others.
+- **Q10. Files jj will not snapshot. Open (found in the review of #126).**
+  jj refuses to snapshot a new file over `snapshot.max-new-file-size`, and
+  leaves untracked anything `snapshot.auto-track` excludes. The snapshot
+  still exits 0 and `@` stays empty, so Status reports `Dirty=false,
+  Pushed=true` for a slot holding a file nothing else has. Only jj's
+  human-readable output says otherwise: the stderr warning "Refused to
+  snapshot some files", and the `Untracked paths:` section of `jj status`.
+  The options:
+  - (a) treat jj's own report as dirty, reading the refusal warning, `jj
+    status`'s untracked section, or both;
+  - (b) accept it, and say so in the docs;
+  - (c) ask git. Ruled out: section 2 forbids deriving jj slot state from
+    git.
+
+  Recommendation: (a). It is jj's account of the slot, and the destroy
+  guard must not delete files only the slot holds. A test pins today's
+  behaviour as a known limit. **Phase 6 must settle Q10 before the destroy
+  guard reads a jj slot's `Pushed`.**
 
 ## 6. Corrections to feed back into the proposal
 

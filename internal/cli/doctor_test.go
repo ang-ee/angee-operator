@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
 func TestDoctorJSONReportsManifestAndMissingSource(t *testing.T) {
@@ -40,6 +43,10 @@ sources:
 	}
 	if status := doctorCheckStatus(report, "source.app"); status != doctorWarn {
 		t.Fatalf("source.app status = %q, want %q", status, doctorWarn)
+	}
+	// Whatever jj this machine has, the check is there and never an error.
+	if status := doctorCheckStatus(report, "tool.jj"); status != doctorOK && status != doctorWarn {
+		t.Fatalf("tool.jj status = %q, want ok or warn", status)
 	}
 }
 
@@ -188,6 +195,68 @@ func TestCommandVersionSurfacesStderrOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "docker: unknown command: docker compose") {
 		t.Fatalf("commandVersion() error = %q, want the stderr line", err)
+	}
+}
+
+// git below 2.42 is a warning naming the floor jj slots need, not an error:
+// no manifest can declare a jj slot yet.
+func TestDoctorWarnsOfGitBelowTheJJFloor(t *testing.T) {
+	tool := doctorToolNamed(t, "git")
+	if tool.short == nil {
+		t.Fatal("the git probe checks no version floor")
+	}
+	if detail, hint := tool.short("git version 2.50.1 (Apple Git-155)"); detail != "" || hint != "" {
+		t.Fatalf("short(2.50.1) = %q, %q; want nothing", detail, hint)
+	}
+	detail, hint := tool.short("git version 2.41.0")
+	if detail != "git version 2.41.0 is older than 2.42, which jj slots need" || !strings.Contains(hint, "2.42") {
+		t.Fatalf("short(2.41.0) = %q, %q; want the 2.42 floor", detail, hint)
+	}
+}
+
+// tool.jj reports jj's version and its colocate capability, and warns
+// rather than fails without them.
+func TestDoctorJJCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		caps   jjdriver.Capabilities
+		status doctorStatus
+		detail string
+		hint   string
+	}{
+		{
+			name:   "supported",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1-f8f808f", Git: "git version 2.50.1"},
+			status: doctorOK,
+			detail: "jj 0.45.1-f8f808f (workspace add --colocate)",
+		},
+		{
+			name:   "missing",
+			caps:   jjdriver.Capabilities{JJErr: errors.New("jj is not on PATH")},
+			status: doctorWarn,
+			detail: "jj is not on PATH",
+			hint:   "brew install --HEAD jj",
+		},
+		{
+			name:   "no colocate",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.34.0", JJErr: errors.New("jj 0.34.0 has no `jj workspace add --colocate`")},
+			status: doctorWarn,
+			detail: "jj 0.34.0 has no `jj workspace add --colocate`",
+			hint:   "brew install --HEAD jj",
+		},
+		{
+			name:   "windows",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1", OSErr: errors.New("jj slots are not supported on Windows yet")},
+			status: doctorWarn,
+			detail: "jj 0.45.1: jj slots are not supported on Windows yet",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := jjDoctorCheck(tc.caps)
+			if check.Name != "tool.jj" || check.Status != tc.status || check.Detail != tc.detail || !strings.Contains(check.Hint, tc.hint) {
+				t.Fatalf("jjDoctorCheck() = %#v, want %s %q with hint %q", check, tc.status, tc.detail, tc.hint)
+			}
+		})
 	}
 }
 

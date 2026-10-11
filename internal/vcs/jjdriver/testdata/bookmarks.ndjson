@@ -1,0 +1,6 @@
+{"name":"feature","target":["a720be81686e70f4312aa7015982cffcf375f972"]}
+{"name":"feature","remote":"git","target":["a720be81686e70f4312aa7015982cffcf375f972"],"tracking_target":["a720be81686e70f4312aa7015982cffcf375f972"]}
+{"name":"feature","remote":"origin","target":["8070ed79771b55f5a92cc2f09fb05bceb5f576d7"],"tracking_target":["a720be81686e70f4312aa7015982cffcf375f972"]}
+{"name":"main","target":["61da5230b0f66fb7fac0cdbba72cef8b7bdd0c88"]}
+{"name":"main","remote":"git","target":["61da5230b0f66fb7fac0cdbba72cef8b7bdd0c88"],"tracking_target":["61da5230b0f66fb7fac0cdbba72cef8b7bdd0c88"]}
+{"name":"main","remote":"origin","target":["123703881ef8db4648ab0b3262eaccfc0952d9ff"]}

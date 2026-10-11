@@ -45,6 +45,14 @@ latest tag.
     form accepts `<<` merge keys, as the rest of the manifest does.
   - `angee workspace source publish` keeps to the remotes (step 5): see
     Changed.
+- **`angee doctor` checks for what jj slots will need** (phase 5 of
+  `.agents/plans/jj-native-operator.md`). A new `tool.jj` check reports
+  `jj --version` and whether `jj workspace add --colocate` exists, and
+  `tool.git` warns when git is older than 2.42. Both are warnings, never
+  errors, since no stack can declare a jj slot yet. The jj driver behind
+  them (`internal/vcs/jjdriver`) reads a slot's status and diff, is tested
+  in CI against the jj commit in `.github/jj-rev`, and is not reachable from
+  a manifest.
 
 ### Changed
 
