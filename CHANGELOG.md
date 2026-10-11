@@ -124,6 +124,46 @@ latest tag.
   - `angee workspace status` no longer prints `chain_root`, `inner_stack` or
     `inner_error` lines.
 
+### Fixed
+
+- **`stack update --template` no longer moves path inputs (#121).** It read a
+  `type: path` answer from the stack's answers file, where copier recorded it
+  already relative to `ANGEE_ROOT`, and resolved it again as if it were new
+  input relative to the directory copier renders into. On a stack whose
+  `ANGEE_ROOT` is not `.`, every update moved the path up by the depth of
+  `ANGEE_ROOT`: under `.angee/`, `PROJECT_PATH: ..` became `../..`, then
+  `../../..`. Stacks with `ANGEE_ROOT=.`, as the angee-django templates use,
+  were not affected.
+  - A recorded answer is now replayed as it is, and so is a value passed on
+    the update that equals the recorded string, as the `-i` form and the
+    immutability check already take it. Any other value passed on the update
+    (`--input`, `--answers`, or a field changed in `-i`) is resolved once, as
+    `stack init` resolves it: relative to the directory holding the answers
+    file. So is the default of a path question the template gained since the
+    last render.
+  - The `-i` form shows a recorded path relative to `ANGEE_ROOT`, but reads an
+    edited one relative to the directory holding the answers file.
+  - A chained template that inherits one of the stack template's own path
+    inputs unchanged takes the recorded answer as it is too. Any other input
+    it inherits, such as one the stack declares `type: str`, and any input
+    its chain entry sets are resolved for that layer, as at init.
+  - Known limits: two chain layouts still move a chained template's path
+    input once, on the first update, and keep it there (before, they moved on
+    every update). One is a chain entry that sets its own `ANGEE_ROOT`: with
+    `ANGEE_ROOT: "."`, `app` becomes `../app`. The other is a chain entry
+    that forwards the stack's path input: with
+    `PROJECT_PATH: "${inputs.PROJECT_PATH}"`, `../app` becomes `../../app`.
+    No shipped chained template declares a path input.
+  - A stack that has already been updated keeps the moved value in its
+    answers file. Pass the right one once with
+    `angee stack update --template --input PROJECT_PATH=<path>`, relative to
+    the directory holding the answers file. An `immutable` path input refuses
+    a new value: edit the answers file by hand. A question that changed from
+    `type: str` to `type: path` is replayed as recorded, the raw value, and
+    the same `--input` repair fixes it; spell the value differently from the
+    recorded string (`./app` for `app`), since an equal value is kept as
+    recorded.
+
 ## v0.21.3 — 2026-10-11
 
 ### Changed

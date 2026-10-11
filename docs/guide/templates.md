@@ -157,7 +157,7 @@ seed_users:
 | `multiselect: true` | Multiple choices; the stored value is a JSON array string such as `["admin","demo"]`. |
 | `type: bool` | A Yes/No toggle; `yes`/`no`/`y`/`n`/`true`/`false` are accepted from flags and answers files. |
 | `type: int` | Validated as an integer. |
-| `type: path` | Free text; the value is rewritten relative to the stack root as described under [Local Resolution](#local-resolution). A leading `~` (`~` or `~/…`) expands to the home of the user running the render, and that absolute path is what the answers record, so a later render elsewhere reuses it. |
+| `type: path` | Free text; the value is rewritten relative to the stack root as described under [Local Resolution](#local-resolution). A leading `~` (`~` or `~/…`) expands to the home of the user running the render, and that absolute path is what the answers record, so a later render elsewhere reuses it. A value passed to `stack init` or `stack update --template` (`--input`, `--answers`, or a field changed in `-i`) is read relative to the directory copier renders into: the parent of `ANGEE_ROOT`, which holds the answers file (the project directory for a `.angee` stack). `stack update --template` replays a recorded answer as it is, since it is already relative to the stack root, and so it keeps a value passed equal to the recorded one; it rewrites only other values passed on the update and the default of a question added since. The `-i` form therefore shows a recorded path relative to the stack root, but reads an edited one relative to the directory holding the answers file. |
 | `secret: true` | Masked while typing and in the summary; never written to the answers file, so it is asked again on re-render. |
 | `placeholder` | Hint shown while the input is empty. |
 | `required: true` (in `_angee.inputs`) | The form refuses an empty value; non-interactive runs name the `--input` flag to pass. |
@@ -177,7 +177,12 @@ the question wins.
 Answers recorded by a render (`.copier-answers.stack.yml` for stacks,
 `.copier-answers.yml` for workspaces and services) can be replayed with
 `--answers <file>` on the create commands, and `angee stack update
---template -i` re-opens the form with the recorded values.
+--template -i` re-opens the form with the recorded values. The `--answers`
+replay does not hold for the `type: path` answers of a stack whose
+`ANGEE_ROOT` is not `.`: the file records them relative to the stack root,
+but `--answers` passes them as new values, relative to the directory copier
+renders into, so they are resolved again (`..` becomes `../..`). Pass those
+with `--input` instead.
 
 ## Workspace metadata
 

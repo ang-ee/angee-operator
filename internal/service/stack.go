@@ -63,7 +63,7 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 		return StackInitResult{}, err
 	}
 	statePath := renderPlanStatePath(preparedRoot, "stack", "")
-	plan, documents, err := p.buildStackRenderPlan(ctx, templatePath, targetPath, mergedInputs, statePath)
+	plan, documents, err := p.buildStackRenderPlan(ctx, templatePath, targetPath, mergedInputs, nil, statePath)
 	if err != nil {
 		return StackInitResult{}, err
 	}

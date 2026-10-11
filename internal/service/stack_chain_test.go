@@ -51,7 +51,7 @@ func readChainFile(t *testing.T, path string) string {
 }
 
 func applyStackRenderPlan(ctx context.Context, p *Platform, stackTemplatePath, targetPath string, inputs copierx.Inputs) error {
-	plan, _, err := p.buildStackRenderPlan(ctx, stackTemplatePath, targetPath, inputs, "")
+	plan, _, err := p.buildStackRenderPlan(ctx, stackTemplatePath, targetPath, inputs, nil, "")
 	if err != nil {
 		return err
 	}
@@ -177,6 +177,109 @@ _angee:
 	}
 	if _, err := os.Stat(filepath.Join(target, "manage.py")); !os.IsNotExist(err) {
 		t.Fatalf("host must not render flat into the target when root is set")
+	}
+}
+
+// writePathChainTemplates writes a stack template rendered under ANGEE_ROOT
+// .angee that chains a host template, which declares PROJECT_PATH as a
+// `type: path` input and renders it into host-path.txt. stackDecl is the stack
+// template's own PROJECT_PATH question, if any, and entryInputs the chain
+// entry's `inputs:` block, if any. It returns the stack template's directory.
+func writePathChainTemplates(t *testing.T, base, stackDecl, entryInputs string) string {
+	t.Helper()
+	writeChainTemplate(t, filepath.Join(base, ".templates", "projects", "web"),
+		`_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.host.yml
+_angee:
+  kind: stack
+  name: web
+PROJECT_PATH:
+  type: path
+  default: "."
+`, map[string]string{"host-path.txt.jinja": "{{ PROJECT_PATH }}\n"})
+	return writeChainTemplate(t, filepath.Join(base, ".templates", "stacks", "local"),
+		`_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: stack
+  name: local
+  chain:
+    - template: "../../projects/web"
+`+entryInputs+`ANGEE_ROOT:
+  type: str
+  default: .angee
+`+stackDecl, map[string]string{
+			"{{ ANGEE_ROOT }}/angee.yaml.jinja": `version: 1
+kind: stack
+name: demo
+template:
+  active: stacks/local
+  answers_file: .copier-answers.yml
+`,
+		})
+}
+
+// A chained template's path input renders the same at init and after each
+// update (#121). It takes a recorded answer as it is only when the stack layer
+// resolved that answer, that is when the stack template declares the input as
+// a path too and the chain entry does not set it. Otherwise the recorded value
+// is the one given, or the entry sets a value new to the layer, and the layer
+// resolves it as at init.
+func TestStackUpdateFromTemplateKeepsChainPathInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stackDecl   string
+		entryInputs string
+		inputs      map[string]string
+		want        string
+	}{
+		{
+			name:      "inherited from a stack path input",
+			stackDecl: "PROJECT_PATH:\n  type: path\n  default: \".\"\n",
+			want:      "..",
+		},
+		{
+			name:      "inherited from a stack str input",
+			stackDecl: "PROJECT_PATH:\n  type: str\n  default: \".\"\n",
+			inputs:    map[string]string{"PROJECT_PATH": "app"},
+			want:      "../app",
+		},
+		{
+			name:        "set to a literal by the chain entry",
+			stackDecl:   "PROJECT_PATH:\n  type: path\n  default: \".\"\n",
+			entryInputs: "      inputs:\n        PROJECT_PATH: web\n",
+			want:        "../web",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := t.TempDir()
+			stackDir := writePathChainTemplates(t, base, tc.stackDecl, tc.entryInputs)
+			inputs := map[string]string{"ANGEE_ROOT": ".angee"}
+			for key, value := range tc.inputs {
+				inputs[key] = value
+			}
+			p, _ := New(base)
+			initialized, err := p.StackInit(ctx, stackDir, base, inputs, false)
+			if err != nil {
+				t.Fatalf("StackInit: %v", err)
+			}
+			want := tc.want + "\n"
+			if got := readChainFile(t, filepath.Join(base, "host-path.txt")); got != want {
+				t.Fatalf("initial host-path.txt = %q, want %q", got, want)
+			}
+			stackPlatform, _ := New(initialized.Root)
+			for run := 1; run <= 2; run++ {
+				if _, err := stackPlatform.StackUpdateFromTemplate(ctx, StackUpdateTemplateOptions{}); err != nil {
+					t.Fatalf("StackUpdateFromTemplate run %d: %v", run, err)
+				}
+				if got := readChainFile(t, filepath.Join(base, "host-path.txt")); got != want {
+					t.Fatalf("host-path.txt after update %d = %q, want %q", run, got, want)
+				}
+			}
+		})
 	}
 }
 

@@ -403,6 +403,46 @@ func TestResolvePathInputsHandlesAngeeInputsBlock(t *testing.T) {
 	}
 }
 
+// PathInputNames names the inputs ResolvePathInputs rewrites: `type: path`
+// questions and `_angee.inputs` alike, with a question's type winning over the
+// metadata entry of the same name.
+func TestPathInputNamesFollowsResolvePathInputs(t *testing.T) {
+	tpl := writeTemplate(t, filepath.Join(t.TempDir(), "tpl"), strings.Join([]string{
+		"_angee:",
+		"  kind: stack",
+		"  name: dev",
+		"  inputs:",
+		"    meta_path:",
+		"      type: path",
+		"    overridden:",
+		"      type: path",
+		"question_path:",
+		"  type: path",
+		"overridden:",
+		"  type: str",
+		"plain:",
+		"  type: str",
+	}, "\n"))
+	names, err := PathInputNames(tpl)
+	if err != nil {
+		t.Fatalf("PathInputNames() = %v", err)
+	}
+	want := map[string]bool{"meta_path": true, "question_path": true}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("PathInputNames() = %v, want %v", names, want)
+	}
+	inputs := Inputs{"meta_path": "a", "question_path": "b", "overridden": "c", "plain": "d"}
+	out, err := ResolvePathInputs(tpl, inputs, t.TempDir(), ".angee")
+	if err != nil {
+		t.Fatalf("ResolvePathInputs() = %v", err)
+	}
+	for key, value := range inputs {
+		if rewritten := out[key] != value; rewritten != names[key] {
+			t.Fatalf("ResolvePathInputs rewrote %s: %v, but PathInputNames lists it: %v", key, rewritten, names[key])
+		}
+	}
+}
+
 // ParseMetadata is the entry point for callers that already hold copier.yml
 // bytes from a guarded read, so it must agree with ReadMetadata on well-formed
 // input and fail loudly rather than silently on malformed input.
