@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.22.0 — 2026-10-13
+
 ### Added
 
 - **Git sources can declare several remotes** (`remotes:`), with one
