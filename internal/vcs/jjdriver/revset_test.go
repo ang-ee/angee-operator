@@ -52,6 +52,7 @@ func TestRevsetConstructors(t *testing.T) {
 		{workspaceCommit(`st"ack--ws`), `"st\"ack--ws"@`},
 		{workingCopy.parents(), `(@)-`},
 		{localBookmark("main").to(workingCopy.parents()), `(bookmarks(exact:"main"))..((@)-)`},
+		{coalesce(localBookmark(`a"b`), remoteBookmark("main", "origin")), `coalesce(bookmarks(exact:"a\"b"), remote_bookmarks(exact:"main", remote=exact:"origin"))`},
 	} {
 		if tc.got.String() != tc.want {
 			t.Errorf("revset = %s, want %s", tc.got, tc.want)

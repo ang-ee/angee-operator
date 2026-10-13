@@ -38,17 +38,22 @@ const waitDelay = 100 * time.Millisecond
 // jj never runs in the process's working directory: a slot command runs with
 // the slot as working directory and `-R .`, so jj loads the slot's own
 // workspace (`@` is its working-copy commit, and no workspace name is needed)
-// and never a repository it would find above the slot, and the probe runs in
-// the system temporary directory, outside any repository, since jj records
-// every repository it loads in the user's config directory.
+// and never a repository it would find above the slot. A command on a primary
+// runs the same way in the primary. The probe and `jj git init` run in the
+// system temporary directory, outside any repository, since jj records every
+// repository it loads in the user's config directory.
 //
 // snapshot lets jj snapshot the slot's working copy before the command, as
 // every slot read and mutation must (plan D7, D8). read adds
 // --ignore-working-copy and --at-op, for the reads that follow a snapshot in
 // the same call: they all see the operation the snapshot recorded, whatever
-// agents do in the repository meanwhile. A primary is only ever named with
-// `-R` together with --ignore-working-copy, since otherwise jj would snapshot
-// the primary's working copy instead; nothing in this package needs that yet.
+// agents do in the repository meanwhile.
+//
+// On a primary, primaryStore adds --ignore-working-copy, so the workspace
+// list and the forget touch no working copy. Only `jj workspace add` runs in
+// the primary without it (inPrimary), as any jj command there runs: jj
+// refuses to add a workspace with it, and its import of git's refs is what
+// shows jj the base just fetched into the primary with git (Add).
 type runner struct {
 	bin string
 }
@@ -77,6 +82,29 @@ func (r runner) read(ctx context.Context, slot, op string, args ...string) ([]by
 // errNoSlot refuses a slot command with no slot, which would otherwise run jj
 // in the process's working directory.
 var errNoSlot = errors.New("a jj slot command needs the slot's path")
+
+// inPrimary runs a jj command in the primary as any jj command there runs:
+// jj snapshots the primary's working copy and, colocated, imports what git
+// changed in it first.
+func (r runner) inPrimary(ctx context.Context, primary string, args ...string) ([]byte, error) {
+	if primary == "" {
+		return nil, errNoPrimary
+	}
+	return r.run(ctx, primary, append([]string{"-R", "."}, args...))
+}
+
+// primaryStore runs a jj command on the primary's repository without loading
+// any working copy.
+func (r runner) primaryStore(ctx context.Context, primary string, args ...string) ([]byte, error) {
+	if primary == "" {
+		return nil, errNoPrimary
+	}
+	return r.run(ctx, primary, append([]string{"-R", ".", "--ignore-working-copy"}, args...))
+}
+
+// errNoPrimary refuses a command on a primary with no primary, which would
+// otherwise run jj in the process's working directory.
+var errNoPrimary = errors.New("a jj command on a primary needs the primary's path")
 
 // network runs a jj command in the slot that reaches a remote (`jj git
 // fetch`, `jj git push`), snapshotting first, under ANGEE_GIT_TIMEOUT like
