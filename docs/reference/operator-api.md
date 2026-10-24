@@ -253,6 +253,40 @@ GET   /services/{name}/logs/stream   live per-service log WebSocket
 GET   /services/{name}/endpoint      service endpoint + log-stream descriptor
 ```
 
+### Manual backups
+
+All `/backups` routes require the configured admin bearer; minted connection
+tokens are denied. Django owns plans, authorization, workflow attempts, and
+completed Backup/File records. The operator captures declared stack resources.
+
+```text
+POST /backups/preview
+POST /backups
+GET  /backups/{id}/archive
+```
+
+Preview/start requests have `version: 1`, a `selection` object, and start also
+requires `request_id` (1–128 letters/digits/underscores/hyphens). Selection groups
+are `databases`, `service_state`, `workspaces`, `sources`, `storage`; every group
+uses `mode: all|selected|none`, `names`, `exclude`. Sources add
+`policy: bundle|fetch_published`. Source names are `stack:<source>` or
+`workspace:<workspace>/<slot>`; workspaces and their sources are independent.
+Preview reports included/excluded/unsupported resources, estimated source bytes,
+and unknown sizes explicitly. An included unsupported resource prevents start.
+
+Start returns HTTP 202 with the existing `JobRunOperation` receipt; poll
+`GET /job-runs/{id}`. Equal IDs and selections are idempotent across restarts;
+changed selections conflict. Interrupted receipts fail rather than restarting
+an unknown partial operation. Only success includes `artifact` with `path`,
+`size_bytes`, `sha256`, `manifest_version: 1`, and immutable `manifest` evidence.
+Publication is under `backups/archives/<id>.zip`; staging, runtime directories,
+and unsafe physical database persists are excluded through containing trees.
+
+The [capture/format contract](../proposals/operator-backup-restore.md) documents
+trusted native job declarations, per-entry verification, structured Git/JJ
+recovery identity, original encryption-key preservation, and the per-database
+consistency boundary. ZIP commands are never executable restore input.
+
 ### Per-service live log socket
 
 `GET /services/{name}/logs/stream` is a WebSocket that streams a single

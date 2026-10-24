@@ -2,10 +2,13 @@
 // colocated with git, of a source's primary. It reads a slot's status and
 // diff; every other verb waits for phase 8 of
 // .agents/plans/jj-native-operator.md and reports vcs.ErrUnsupported. No
-// manifest can name a jj slot yet, so nothing selects this driver.
+// manifest can name a jj slot yet, so normal slot dispatch does not select
+// this driver. Backup plans use it when colocated JJ metadata is present.
 //
-// jj owns the slot: the driver runs the jj CLI and interprets what it prints
-// through the templates in templates.go, and never reads or writes jj's files.
+// jj owns the slot: status, diff and verbs run the jj CLI and interpret what it
+// prints through the templates in templates.go. BackupPlan additionally reads
+// repository pointer files to validate portable topology without changing them.
+// The driver never writes JJ metadata directly.
 // Which remote a slot's branch is pushed to is git's answer, from the slot's
 // colocated git config, as it is for git slots.
 package jjdriver

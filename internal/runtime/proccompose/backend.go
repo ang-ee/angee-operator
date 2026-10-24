@@ -126,7 +126,7 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
-	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, b.upArgs(target, false)...)
+	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, foregroundOptions{prompt: true}, b.upArgs(target, false)...)
 }
 
 // upArgs returns the `process-compose up` arguments for a detached or a
@@ -206,7 +206,7 @@ func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
 //
 // A process the stack defined after the supervisor started is unknown to it, and
 // Up refuses it before starting anything. Registering it means posting the whole
-// project (see addMissingProcess), and process-compose v1.120.0 replaces every
+// project, and process-compose v1.120.0 replaces every
 // process its file loader created on the first such post, restarting the ones
 // that run: the loader stores PC_REPLICA_NUM as an int, which the JSON round
 // trip turns into a float64, so its own comparison never finds them equal.
@@ -462,6 +462,14 @@ func (b Backend) awaitSupervisor(ctx context.Context, target runtime.Target) err
 	}
 }
 
+// ValidateJob reports native platform constraints without starting a workload.
+func (b Backend) ValidateJob(job runtime.JobSpec) error {
+	if job.Transient {
+		return transientJobSupport()
+	}
+	return nil
+}
+
 func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
 	name := job.Name
 	var document File
@@ -471,6 +479,9 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	process, ok := document.Processes[name]
 	if !ok {
 		return nil, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", name)
+	}
+	if job.Transient {
+		return b.runTransientJob(ctx, target, name, process)
 	}
 	target.Services = []string{name}
 	// Snapshot the job's process entry before triggering the re-run. Both the
@@ -742,7 +753,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if processMissing(resp.StatusCode, body) {
-			return b.addMissingProcess(ctx, target, name, updates)
+			return false, &runtime.ProcessNotLoadedError{Name: name, ControlPort: effectiveControlPort(target.ControlPort)}
 		}
 		return false, fmt.Errorf("get process config: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
@@ -865,108 +876,6 @@ func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Targe
 		// hold a Process object and wait indefinitely even when is_running is false.
 		return false, nil
 	}
-}
-
-// addMissingProcess round-trips every current native process configuration
-// before adding the compiled job. POST /project replaces the project set, so a
-// partial payload would remove unrelated processes.
-func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
-	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
-	list, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/processes", nil)
-	if err != nil {
-		return false, err
-	}
-	setProcessToken(list, target.Root, target.EnvFile)
-	response, err := controlPlaneClient.Do(list)
-	if err != nil {
-		return false, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode >= 300 {
-		return false, fmt.Errorf("list process configs: %s", response.Status)
-	}
-	var states struct {
-		Data []struct {
-			Name string `json:"name"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&states); err != nil {
-		return false, err
-	}
-	processes := make(map[string]any, len(states.Data)+1)
-	for _, state := range states.Data {
-		info, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/info/"+url.PathEscape(state.Name), nil)
-		if err != nil {
-			return false, err
-		}
-		setProcessToken(info, target.Root, target.EnvFile)
-		current, err := controlPlaneClient.Do(info)
-		if err != nil {
-			return false, err
-		}
-		if current.StatusCode >= 300 {
-			_ = current.Body.Close()
-			return false, fmt.Errorf("get process config %s: %s", state.Name, current.Status)
-		}
-		var config map[string]any
-		decodeErr := json.NewDecoder(current.Body).Decode(&config)
-		closeErr := current.Body.Close()
-		if decodeErr != nil {
-			return false, decodeErr
-		}
-		if closeErr != nil {
-			return false, closeErr
-		}
-		processes[state.Name] = config
-	}
-	// POST /project accepts decoded native types directly, bypassing the file
-	// loader that normally supplies these required identity/default fields.
-	compiled := map[string]any{
-		"name": name, "replicaName": name, "namespace": "default",
-		"replicas": 1, "launchTimeout": 5,
-		"shutDownParams": map[string]any{"signal": 15},
-		// UpdateProject does not derive executable/args for a new process.
-		// Register an inert placeholder, then activate it through UpdateProcess,
-		// whose native owner performs that command setup before running it.
-		"disabled": true,
-	}
-	for key, value := range updates {
-		normalized, err := jsonValue(value)
-		if err != nil {
-			return false, err
-		}
-		compiled[key] = normalized
-	}
-	processes[name] = compiled
-	payload, err := json.Marshal(map[string]any{"processes": processes})
-	if err != nil {
-		return false, err
-	}
-	post, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/project", bytes.NewReader(payload))
-	if err != nil {
-		return false, err
-	}
-	post.Header.Set("Content-Type", "application/json")
-	setProcessToken(post, target.Root, target.EnvFile)
-	result, err := controlPlaneClient.Do(post)
-	if err != nil {
-		return false, err
-	}
-	defer result.Body.Close()
-	if result.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
-		return false, fmt.Errorf("add process config: %s: %s", result.Status, strings.TrimSpace(string(body)))
-	}
-	activation := maps.Clone(updates)
-	activation["disabled"] = false
-	changed, err := b.updateProcess(ctx, target, name, activation)
-	if err != nil {
-		return false, fmt.Errorf("activate added process: %w", err)
-	}
-	if !changed {
-		return false, fmt.Errorf("activate added process: native placeholder was not updated")
-	}
-	return true, nil
 }
 
 // setProcessToken sends the supervisor's API token, when process-compose has
@@ -1528,8 +1437,14 @@ func (b Backend) run(ctx context.Context, root string, envFile string, args ...s
 	return b.Runner.Run(ctx, root, env, name, args...)
 }
 
-func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, args ...string) error {
-	name, err := b.processComposeBinary(ctx, b.input(), stdout, stderr, true)
+type foregroundOptions struct {
+	prompt    bool
+	isolated  bool
+	waitDelay time.Duration
+}
+
+func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, options foregroundOptions, args ...string) error {
+	name, err := b.processComposeBinary(ctx, b.input(), stdout, stderr, options.prompt)
 	if err != nil {
 		return err
 	}
@@ -1542,6 +1457,12 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 	cmd.Env = runtime.ChildEnviron(env)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.WaitDelay = options.waitDelay
+	if options.isolated {
+		if err := isolateForegroundCommand(cmd); err != nil {
+			return err
+		}
+	}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
@@ -1707,3 +1628,61 @@ func effectiveControlPort(controlPort int) int {
 	}
 	return controlPort
 }
+
+// runTransientJob uses the native foreground workload lifecycle without adding
+// or updating any process in the shared supervisor. Prerequisites were checked
+// by the Platform; native --no-deps prevents a second copy of them being started.
+func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, name string, process Process) ([]byte, error) {
+	if err := b.ValidateJob(runtime.JobSpec{Name: name, Transient: true}); err != nil {
+		return nil, err
+	}
+	process.DependsOn = nil
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{name: process}})
+	if err != nil {
+		return nil, err
+	}
+	directory, err := os.MkdirTemp("", "angee-process-job-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(directory) }()
+	config := filepath.Join(directory, "process-compose.yaml")
+	if err = os.WriteFile(config, document, 0600); err != nil {
+		return nil, err
+	}
+	output := runtime.NewLimitedLogRead(maxJobOutputBytes)
+	shutdown := manifestDefaultJobShutdown
+	if process.Shutdown != nil && process.Shutdown.TimeoutSeconds > 0 {
+		shutdown = time.Duration(process.Shutdown.TimeoutSeconds) * time.Second
+	}
+	args := []string{"--no-server", "--log-file", filepath.Join(directory, "process-compose.log"), "--log-no-color", "run", "--no-deps", "--config", config, name}
+	err = b.runForeground(ctx, target.Root, target.EnvFile, output, output, foregroundOptions{isolated: true, waitDelay: shutdown + time.Second}, args...)
+	safeOutput := logctx.RedactText(output.String())
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		// Startup/configuration failures may be written only to the native logger.
+		// Retain its bounded tail before removing the private runtime directory.
+		if strings.TrimSpace(safeOutput) == "" {
+			if file, openErr := os.Open(filepath.Join(directory, "process-compose.log")); openErr == nil {
+				if info, statErr := file.Stat(); statErr == nil {
+					keep := int64(maxJobOutputBytes + 1)
+					if info.Size() > keep {
+						_, _ = file.Seek(info.Size()-keep, io.SeekStart)
+					}
+					collector := runtime.NewLimitedLogRead(maxJobOutputBytes)
+					_, _ = io.Copy(collector, io.LimitReader(file, keep))
+					safeOutput = logctx.RedactText(collector.String())
+				}
+				_ = file.Close()
+			}
+		}
+		if diagnostics := strings.TrimSpace(runtime.LimitLogBytes(safeOutput, 2<<10)); diagnostics != "" {
+			err = fmt.Errorf("%w; native output: %s", err, diagnostics)
+		}
+	}
+	return []byte(safeOutput), err
+}
+
+const manifestDefaultJobShutdown = 10 * time.Second

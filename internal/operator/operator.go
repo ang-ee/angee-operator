@@ -196,6 +196,9 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /stack/dev/stream", s.auth(http.HandlerFunc(s.stackDevStream)))
 	mux.Handle("GET /ingress/status", s.auth(http.HandlerFunc(s.ingressStatus)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobList)))
+	mux.Handle("POST /backups/preview", s.adminAuth(http.HandlerFunc(s.backupPreview)))
+	mux.Handle("POST /backups", s.adminAuth(http.HandlerFunc(s.backupStart)))
+	mux.Handle("GET /backups/{id}/archive", s.adminAuth(http.HandlerFunc(s.backupArchive)))
 	mux.Handle("POST /jobs/{name}/run", s.auth(http.HandlerFunc(s.jobRun)))
 	mux.Handle("GET /jobs/{name}/run-preview", s.auth(http.HandlerFunc(s.jobRunPreview)))
 	mux.Handle("GET /job-runs/latest", s.auth(http.HandlerFunc(s.latestJobRun)))
@@ -1092,6 +1095,19 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
+// adminAuth composes the canonical bearer authentication with the authority
+// required by archive capture/recovery secrets. Minted actor tokens do not
+// become admin credentials, regardless of their advisory scopes.
+func (s *Server) adminAuth(next http.Handler) http.Handler {
+	return s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, minted := actorScopeFromContext(r.Context()); minted || s.config.Token == "" {
+			writeJSON(w, http.StatusForbidden, api.ErrorResponse{Error: "operator admin bearer required"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
 // parseBearer extracts the credential from an Authorization-style value,
 // requiring the "Bearer " scheme prefix. ok is false when the prefix is
 // absent. Shared by the HTTP auth middleware and the WebSocket InitFunc so the
@@ -1167,8 +1183,17 @@ func decode[T any](r *http.Request) (T, error) {
 	// don't get to oversize a POST simply because decode is generic.
 	r.Body = http.MaxBytesReader(nil, r.Body, maxRESTBodyBytes)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&value); err != nil && !errors.Is(err, io.EOF) {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		if errors.Is(err, io.EOF) {
+			return value, nil
+		}
 		return value, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return value, errors.New("request must contain exactly one JSON value")
 	}
 	return value, nil
 }

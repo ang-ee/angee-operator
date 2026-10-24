@@ -6,6 +6,28 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- Manual backup preview and capture REST APIs, restricted to the operator admin
+  bearer. Completed backups publish a verified ZIP and versioned manifest with
+  original recovery secrets, exact per-database dumps, selected persistence,
+  workspaces, and portable Git/JJ source history or verified published revisions.
+  Backup attempts retain idempotent native JobRun receipts across restarts, with
+  bounded redacted native diagnostics on capture failure.
+  Configuration-only archives are supported; schedules and cold restore remain deferred.
+- Trusted job `capture` declarations and persist `backup: exclude` policy.
+  Local captures use isolated native process-compose foreground jobs without
+  modifying or restarting the shared supervisor project. Local transient capture
+  is explicitly unavailable on Windows until native process-tree cancellation
+  is verified; discovery reports that limitation before capture starts.
+
+### Changed
+
+- Ordinary local jobs missing from the running supervisor now fail with explicit
+  supervisor-restart guidance instead of applying a project update that could
+  restart unrelated services. Capture jobs are manual and cannot participate
+  as dependencies or declare startup triggers.
+
 ## v0.22.0 — 2026-10-13
 
 ### Added

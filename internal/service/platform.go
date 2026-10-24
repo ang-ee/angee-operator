@@ -39,6 +39,7 @@ type Platform struct {
 	slotDrivers     func(vcs.Slot) vcs.Driver // nil selects slotDriver's default
 	jobOutput       *jobOutputSink
 	interactive     bool
+	backupMu        sync.Mutex
 	jobRunsMu       sync.RWMutex
 	jobRuns         map[string]api.JobRunOperation
 	latestJobRun    string
@@ -800,6 +801,10 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 
 	for _, name := range sortedKeys(stack.Jobs) {
 		job := stack.Jobs[name]
+		// Capture jobs exist only in explicitly requested backup runtime snapshots.
+		if job.Capture != nil && jobInputs[name] == nil {
+			continue
+		}
 		jobCtx := ctx
 		if resolveProcessSecrets && job.Runtime == manifest.RuntimeLocal {
 			jobCtx.SecretEnvVars = nil

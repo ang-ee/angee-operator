@@ -513,3 +513,12 @@ func (b *synchronizedBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buffer.String()
 }
+
+func TestRegisteredMultilineSecretsMaskTruncatedLogLines(t *testing.T) {
+	RegisterSecrets("private-key-header\nprivate-key-sensitive-body\r\nprivate-key-footer")
+	for _, line := range []string{"private-key-header", "private-key-sensitive-body", "private-key-footer"} {
+		if got := RedactText("tail: " + line); got != "tail: ***" {
+			t.Fatalf("multiline key fragment leaked: %q", got)
+		}
+	}
+}

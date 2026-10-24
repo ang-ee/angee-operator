@@ -1428,57 +1428,19 @@ func TestProcessUpdatesPreservesShutdownWhenGraceIsOmitted(t *testing.T) {
 	}
 }
 
-func TestAddMissingProcessSuppliesNativeIdentityDefaults(t *testing.T) {
-	var added map[string]any
-	var activated map[string]any
-	var requests []string
+func TestUpdateProcessRefusesMissingWithoutReplacingProject(t *testing.T) {
+	var writes int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, r.Method+" "+r.URL.Path)
-		switch {
-		case r.URL.Path == "/processes":
-			_, _ = io.WriteString(w, `{"data":[]}`)
-		case r.URL.Path == "/project":
-			var project struct {
-				Processes map[string]map[string]any `json:"processes"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
-				t.Errorf("decode project: %v", err)
-			}
-			added = project.Processes["job"]
-			_, _ = io.WriteString(w, `{}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
-			_ = json.NewEncoder(w).Encode(added)
-		case r.Method == http.MethodPost && r.URL.Path == "/process":
-			if err := json.NewDecoder(r.Body).Decode(&activated); err != nil {
-				t.Errorf("decode activation: %v", err)
-			}
-			_, _ = io.WriteString(w, `{}`)
-		default:
-			http.NotFound(w, r)
+		if r.Method != http.MethodGet {
+			writes++
 		}
+		http.Error(w, `{"error":"no such process: job"}`, http.StatusBadRequest)
 	}))
 	defer server.Close()
-	_, portText, err := net.SplitHostPort(server.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, _ := strconv.Atoi(portText)
-	_, err = (Backend{}).addMissingProcess(t.Context(), runtime.Target{ControlPort: port}, "job", map[string]any{"command": "run"})
-	if err != nil {
-		t.Fatalf("addMissingProcess() error = %v", err)
-	}
-	if added["name"] != "job" || added["replicaName"] != "job" || added["namespace"] != "default" || added["replicas"] != float64(1) || added["launchTimeout"] != float64(5) {
-		t.Fatalf("added native identity/defaults = %#v", added)
-	}
-	if shutdown := added["shutDownParams"].(map[string]any); shutdown["signal"] != float64(15) {
-		t.Fatalf("added shutdown defaults = %#v", shutdown)
-	}
-	if added["disabled"] != true || activated["disabled"] != false || activated["command"] != "run" {
-		t.Fatalf("bootstrap payloads = added %#v activated %#v", added, activated)
-	}
-	wantRequests := []string{"GET /processes", "POST /project", "GET /process/info/job", "POST /process"}
-	if !reflect.DeepEqual(requests, wantRequests) {
-		t.Fatalf("requests = %v, want %v", requests, wantRequests)
+	_, err := (Backend{}).updateProcess(t.Context(), runtime.Target{ControlPort: serverPort(t, server)}, "job", map[string]any{"command": "run"})
+	var missing *runtime.ProcessNotLoadedError
+	if !errors.As(err, &missing) || writes != 0 {
+		t.Fatalf("missing error=%v writes=%d", err, writes)
 	}
 }
 
@@ -2107,8 +2069,7 @@ func TestRunJobRestartsJobWhenSupervisorDiscardsUpdate(t *testing.T) {
 // the process, leaving afterUpdate as its state, or, when afterUpdate is nil,
 // leaves it untouched — what process-compose does when its own comparison finds
 // the posted config equal to the one it holds. While missing is set the process
-// is unknown, answered with the real supervisor's 400 bodies, until POST
-// /project registers it. As a Runner it relaunches the process on `process
+// is unknown, answered with the real supervisor's 400 bodies, without any attempt to replace the project. As a Runner it relaunches the process on `process
 // restart`, reusing the native state under a new pid, and serves that state to
 // `list -o json`.
 type fakeSupervisor struct {
@@ -2137,18 +2098,7 @@ func (s *fakeSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"can't get state of process `+s.name+`: no such process"}`, http.StatusBadRequest)
 	case r.Method == http.MethodGet && r.URL.Path == "/processes":
 		_, _ = io.WriteString(w, `{"data":[]}`)
-	case r.Method == http.MethodPost && r.URL.Path == "/project":
-		var project struct {
-			Processes map[string]json.RawMessage `json:"processes"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		s.missing = false
-		s.config = string(project.Processes[s.name])
-		s.state = processListEntry{Name: s.name, Status: "Disabled"}
-		_, _ = io.WriteString(w, `{}`)
+
 	case r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
 		_, _ = io.WriteString(w, s.config)
 	case r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
@@ -2344,29 +2294,17 @@ func TestApplyRestartsProcessTheUpdateLeftDisabled(t *testing.T) {
 	}
 }
 
-// A process the supervisor does not know yet is registered and activated by the
-// update itself, which launches it: there is nothing to restart on top.
-func TestApplyRegistersMissingProcessWithoutRestartingIt(t *testing.T) {
-	supervisor := &fakeSupervisor{
-		name:        "web",
-		missing:     true,
-		afterUpdate: &processListEntry{Name: "web", Status: "Pending"},
-	}
+func TestApplyRefusesMissingProcessWithoutRestartingAnything(t *testing.T) {
+	supervisor := &fakeSupervisor{name: "web", missing: true}
 	server := httptest.NewServer(supervisor)
 	defer server.Close()
-	backend := Backend{Runner: supervisor}
-
-	err := backend.Apply(t.Context(), runtime.Target{
-		ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration),
-	})
-	if err != nil {
-		t.Fatalf("Apply() error = %v", err)
+	err := (Backend{Runner: supervisor}).Apply(t.Context(), runtime.Target{ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration)})
+	var missing *runtime.ProcessNotLoadedError
+	if !errors.As(err, &missing) {
+		t.Fatalf("Apply error=%v", err)
 	}
-	if got, want := supervisor.postedCommands(), []any{"serve"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("posted commands = %v, want one activation of the compiled command: %v", got, want)
-	}
-	if _, restarts, _ := supervisor.observed(); restarts != 0 {
-		t.Fatalf("process restarted %d times after being registered and activated; want 0", restarts)
+	if posts, restarts, _ := supervisor.observed(); posts != 0 || restarts != 0 {
+		t.Fatalf("posts=%d restarts=%d", posts, restarts)
 	}
 }
 
@@ -2441,5 +2379,66 @@ func TestBackendStatusReturnsParseError(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("statuses = %v, want nil", got)
+	}
+}
+
+func TestTransientNativeLogTailDoesNotExposeTruncatedSecrets(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	for _, secret := range []string{"boundary-secret-abcdefghijklmnopqrstuvwxyz", "private-first-line\nprivate-sensitive-last-line"} {
+		t.Run(strings.ReplaceAll(secret, "\n", "-"), func(t *testing.T) {
+			root := t.TempDir()
+			logctx.RegisterSecrets(secret)
+			payload := secret + "\n" + strings.Repeat("x", maxJobOutputBytes+8-len(secret)-1)
+			fixture := filepath.Join(root, "fixture.log")
+			if err := os.WriteFile(fixture, []byte(payload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(root, "fake-process-compose")
+			script := fmt.Sprintf("#!/bin/sh\ncp %q \"$3\"\nexit 1\n", fixture)
+			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+			output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			if !strings.HasPrefix(string(output), runtime.LogTruncatedMarker) {
+				t.Fatalf("native fallback was not exercised: %q", output)
+			}
+			if strings.Contains(string(output), secret[8:]) || strings.Contains(string(output), "private-sensitive-last-line") {
+				t.Fatal("truncated native log exposed secret fragment")
+			}
+		})
+	}
+}
+
+func TestTransientNativeStdoutTailRedactsMultilineSecrets(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	material := "local-secret-material-long-line"
+	secret := "BEGIN-PRIVATE-KEY-LINE\n" + material + "\nEND-PRIVATE-KEY-LINE"
+	logctx.RegisterSecrets(secret)
+	payload := secret + "\n" + strings.Repeat("x\n", (maxJobOutputBytes+6-len(secret)-1)/2)
+	fixture := filepath.Join(root, "fixture.log")
+	if err := os.WriteFile(fixture, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\nexit 1\n", fixture)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if strings.Contains(string(output), material) {
+		t.Fatal("native stdout tail exposed complete private-key line after dropping registered multiline key prefix")
 	}
 }

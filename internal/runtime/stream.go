@@ -225,3 +225,7 @@ func ReplayLines(ctx context.Context, out []byte) <-chan string {
 	}()
 	return ch
 }
+
+// Write accepts native foreground command output through the same bounded log
+// owner used by streamed reads. Like Add, callers serialize writes.
+func (r *LimitedLogRead) Write(data []byte) (int, error) { r.Add(string(data)); return len(data), nil }

@@ -140,7 +140,19 @@ type JobBackend interface {
 	RunJob(ctx context.Context, target Target, job JobSpec) ([]byte, error)
 }
 
+// JobValidator optionally reports platform-specific job constraints before execution.
+// A backend without additional constraints needs only JobBackend.
+type JobValidator interface{ ValidateJob(job JobSpec) error }
+
+// JobCapabilityError is a static public reason a native workload cannot run.
+type JobCapabilityError struct{ Reason string }
+
+func (e *JobCapabilityError) Error() string { return e.Reason }
+
 type JobSpec struct {
+	// Transient jobs retain their attempt in the caller's receipt rather than
+	// installing mutable process state in the shared service supervisor.
+	Transient     bool
 	Name          string
 	Configuration []byte
 }

@@ -302,15 +302,25 @@ var (
 // RegisterSecrets records resolved secret values so RedactText masks them
 // wherever they appear in logged text: argv, captured subprocess output, or
 // error strings. Values shorter than four bytes are ignored because masking
-// them would garble unrelated output. Safe for concurrent use.
+// them would garble unrelated output. Substantive lines of multiline values are
+// registered too, so bounded log tails cannot expose a key after its prefix is
+// truncated. Safe for concurrent use.
 func RegisterSecrets(values ...string) {
 	secretsMu.Lock()
 	defer secretsMu.Unlock()
 	for _, value := range values {
-		if len(value) < 4 || slices.Contains(secretValues, value) {
-			continue
+		candidates := []string{value}
+		if strings.ContainsAny(value, "\r\n") {
+			for _, line := range strings.Split(value, "\n") {
+				candidates = append(candidates, strings.TrimSpace(line))
+			}
 		}
-		secretValues = append(secretValues, value)
+		for _, candidate := range candidates {
+			if len(candidate) < 4 || slices.Contains(secretValues, candidate) {
+				continue
+			}
+			secretValues = append(secretValues, candidate)
+		}
 	}
 	// Longest first so a value that contains another is masked whole.
 	slices.SortFunc(secretValues, func(a, b string) int { return len(b) - len(a) })
