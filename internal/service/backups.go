@@ -96,9 +96,99 @@ func backupExcluded(candidate string, excludes []string) bool {
 	return false
 }
 
+// Preview estimates are advisory. Bound filesystem work across the entire
+// request; native capability discovery and every selected resource remain visible.
+const (
+	backupPreviewEstimateEntries         = 100000
+	backupPreviewResourceEstimateEntries = 10000
+)
+
+var errBackupEstimateIncomplete = errors.New("backup preview estimate scan limit reached")
+
+type backupEstimateBudget struct{ remaining, perResource int }
+
+// backupScanBudget charges enumeration before sorting or applying exclusions.
+// One lookahead entry distinguishes an exact fit from an incomplete estimate.
+type backupScanBudget struct {
+	request   *backupEstimateBudget
+	remaining int
+}
+
+func (budget *backupScanBudget) available() int {
+	return max(0, min(budget.request.remaining, budget.remaining))
+}
+func (budget *backupScanBudget) consume(count int) error {
+	available := budget.available()
+	charged := min(count, available)
+	budget.remaining -= charged
+	budget.request.remaining -= charged
+	if count > available {
+		return errBackupEstimateIncomplete
+	}
+	return nil
+}
+
+func inspectBackupTrees(ctx context.Context, trees []backupTree, budget *backupEstimateBudget) (*int64, error) {
+	// Capability and containment checks are independent of optional byte estimates.
+	// Validate every root, even when an earlier component exhausts the scan budget.
+	for _, tree := range trees {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		root, err := openBackupTree(tree)
+		if err != nil {
+			return nil, err
+		}
+		_ = root.Close()
+	}
+	if budget == nil {
+		return nil, nil
+	}
+	remaining := budget.remaining
+	if budget.perResource > 0 {
+		remaining = min(remaining, budget.perResource)
+	}
+	scan := &backupScanBudget{request: budget, remaining: remaining}
+	var total int64
+	for _, tree := range trees {
+		err := walkBackupTree(ctx, tree, func(_ *os.Root, _ string, info fs.FileInfo, _ string) error {
+			if info.Mode().IsRegular() {
+				total += info.Size()
+			}
+			return nil
+		}, scan)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &total, nil
+}
+
+// inspect owns the public interpretation of size estimates and traversal errors.
+// A partial estimate is never published as a complete byte count or exclusion.
+func (resource *backupResource) inspect(ctx context.Context, budget *backupEstimateBudget) error {
+	if resource.Status != "included" || resource.job != "" {
+		return nil
+	}
+	estimate, err := inspectBackupTrees(ctx, resource.trees, budget)
+	if canceled := ctx.Err(); canceled != nil {
+		return canceled
+	}
+	if errors.Is(err, errBackupEstimateIncomplete) {
+		resource.EstimatedBytes = nil
+		resource.Reason = "Size not available from quick discovery. Full contents are checked during backup."
+	} else if err != nil {
+		resource.Status = "unsupported"
+		resource.Reason = backupPublicReason(ctx, err)
+	} else {
+		resource.EstimatedBytes = estimate
+	}
+	return nil
+}
+
 // BackupPreview discovers stack-owned resources without executing capture jobs.
 func (p *Platform) BackupPreview(ctx context.Context, req api.BackupRequest) (api.BackupPreview, error) {
-	resources, _, err := p.backupDiscover(ctx, req)
+	resources, _, err := p.backupDiscover(ctx, req, &backupEstimateBudget{remaining: backupPreviewEstimateEntries, perResource: backupPreviewResourceEstimateEntries})
 	if err != nil {
 		return api.BackupPreview{}, err
 	}
@@ -116,7 +206,10 @@ func (p *Platform) BackupPreview(ctx context.Context, req api.BackupRequest) (ap
 	return preview, nil
 }
 
-func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest) ([]backupResource, *manifest.Stack, error) {
+func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest, budget *backupEstimateBudget) ([]backupResource, *manifest.Stack, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if err := validateBackup(req); err != nil {
 		return nil, nil, err
 	}
@@ -152,27 +245,15 @@ func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest) ([
 		resource := backupResource{BackupResource: api.BackupResource{Group: group, Name: name, Status: "excluded", Path: resourcePath, CaptureJob: job}, trees: trees, job: job, capture: capture}
 		if backupChosen(groups[group], name) {
 			resource.Status = "included"
-			if job == "" {
-				var total int64
-				for _, tree := range trees {
-					if backupExcluded(tree.root, tree.exclude) {
-						resource.Status = "excluded"
-						resource.Reason = "physical database state or operator artifact directory is never copied"
-						break
-					}
-					err := walkBackupTree(ctx, tree, func(_ *os.Root, _ string, info fs.FileInfo, _ string) error {
-						if info.Mode().IsRegular() {
-							total += info.Size()
-						}
-						return nil
-					})
-					if err != nil {
-						resource.Status = "unsupported"
-						resource.Reason = backupPublicReason(ctx, err)
-						break
-					}
+			for _, tree := range trees {
+				if backupExcluded(tree.root, tree.exclude) {
+					resource.Status = "excluded"
+					resource.Reason = "physical database state or operator artifact directory is never copied"
+					break
 				}
-				resource.EstimatedBytes = &total
+			}
+			if err := resource.inspect(ctx, budget); err != nil {
+				return err
 			}
 		}
 		result = append(result, resource)
@@ -309,24 +390,14 @@ func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest) ([
 		if backupChosen(groups["sources"], name) {
 			resource.Status = "included"
 			resource.trees, resource.revision, err = p.backupSourceTrees(ctx, name, root, declaredStore, sourceExcluded, req.Selection.Sources.Policy)
+			if canceled := ctx.Err(); canceled != nil {
+				return canceled
+			}
 			if err != nil {
 				resource.Status = "unsupported"
 				resource.Reason = backupPublicReason(ctx, err)
-			} else {
-				var total int64
-				for _, tree := range resource.trees {
-					if err := walkBackupTree(ctx, tree, func(_ *os.Root, _ string, info fs.FileInfo, _ string) error {
-						if info.Mode().IsRegular() {
-							total += info.Size()
-						}
-						return nil
-					}); err != nil {
-						resource.Status = "unsupported"
-						resource.Reason = backupPublicReason(ctx, err)
-						break
-					}
-				}
-				resource.EstimatedBytes = &total
+			} else if err := resource.inspect(ctx, budget); err != nil {
+				return err
 			}
 		}
 		result = append(result, resource)
@@ -361,6 +432,9 @@ func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest) ([
 				return nil, nil, &InvalidInputError{Field: group, Reason: fmt.Sprintf("unknown resource %q", name)}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 	return result, stack, nil
 }
@@ -423,14 +497,18 @@ func openBackupPath(scope, target string) (*os.Root, error) {
 	return root, nil
 }
 
+func openBackupTree(tree backupTree) (*os.Root, error) {
+	if backupExcluded(tree.root, tree.exclude) {
+		return nil, errors.New("resource belongs to an excluded physical-state, operator-artifact or separately selected source owner")
+	}
+	return openBackupPath(tree.scope, tree.root)
+}
+
 // walkBackupTree never follows directory links, including links within the
 // stack. Every ancestor and recursive child is opened through its pinned parent;
 // lexical exclusions therefore cannot be bypassed through a contained alias.
-func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, string, fs.FileInfo, string) error) error {
-	if backupExcluded(tree.root, tree.exclude) {
-		return errors.New("resource belongs to an excluded physical-state, operator-artifact or separately selected source owner")
-	}
-	root, err := openBackupPath(tree.scope, tree.root)
+func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, string, fs.FileInfo, string) error, scan *backupScanBudget) error {
+	root, err := openBackupTree(tree)
 	if err != nil {
 		return err
 	}
@@ -438,6 +516,11 @@ func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, s
 	rootInfo, err := root.Stat(".")
 	if err != nil {
 		return err
+	}
+	if scan != nil {
+		if err := scan.consume(1); err != nil {
+			return err
+		}
 	}
 	if err := visit(root, ".", rootInfo, tree.prefix); err != nil {
 		return err
@@ -451,7 +534,37 @@ func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, s
 		if err != nil {
 			return err
 		}
-		entries, err := file.ReadDir(-1)
+		var entries []fs.DirEntry
+		if scan == nil {
+			entries, err = file.ReadDir(-1)
+		} else {
+			// Bound the directory read itself, including excluded entries. A positive
+			// ReadDir may return a short batch, so continue until EOF or lookahead fills.
+			limit := scan.available() + 1
+			for len(entries) < limit {
+				if err = ctx.Err(); err != nil {
+					break
+				}
+				var batch []fs.DirEntry
+				batch, err = file.ReadDir(limit - len(entries))
+				entries = append(entries, batch...)
+				if errors.Is(err, io.EOF) {
+					err = nil
+					break
+				}
+				if err != nil {
+					break
+				}
+				if len(batch) == 0 {
+					err = io.ErrNoProgress
+					break
+				}
+			}
+			budgetErr := scan.consume(len(entries))
+			if err == nil {
+				err = budgetErr
+			}
+		}
 		closeErr := file.Close()
 		if err != nil {
 			return err
@@ -654,7 +767,7 @@ func (p *Platform) BackupStart(ctx context.Context, req api.BackupRequest) (api.
 			return api.JobRunOperation{}, err
 		}
 	}
-	resources, stack, err := p.backupDiscover(ctx, req)
+	resources, stack, err := p.backupDiscover(ctx, req, nil)
 	if err != nil {
 		release()
 		return api.JobRunOperation{}, err
@@ -860,7 +973,7 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 			}
 		}
 		for _, tree := range trees {
-			if err = walkBackupTree(ctx, tree, add); err != nil {
+			if err = walkBackupTree(ctx, tree, add, nil); err != nil {
 				return err
 			}
 		}

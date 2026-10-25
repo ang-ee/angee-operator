@@ -15,6 +15,8 @@ latest tag.
   Backup attempts retain idempotent native JobRun receipts across restarts, with
   bounded redacted native diagnostics on capture failure.
   Configuration-only archives are supported; schedules and cold restore remain deferred.
+  Quick discovery bounds filesystem enumeration and reports incomplete sizes
+  as unknown while preserving the full selected inventory.
 - Trusted job `capture` declarations and persist `backup: exclude` policy.
   Local captures use isolated native process-compose foreground jobs without
   modifying or restarting the shared supervisor project. Local transient capture

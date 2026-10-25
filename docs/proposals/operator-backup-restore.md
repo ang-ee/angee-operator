@@ -9,7 +9,11 @@ There is no plugin registry, second job engine, or operator catalog.
 ## API
 
 Admin-bearer-only `POST /backups/preview` discovers manifest-owned resources with
-included/excluded/unsupported status and explicit unknown size estimates.
+included/excluded/unsupported status and explicit unknown size estimates. Quick
+discovery bounds filesystem enumeration per resource and across the request,
+including excluded entries. Unfinished sizes remain null, with included status
+and a reason; the total sums known sizes and has_unknown_sizes stays true.
+All component roots are checked independently of optional size estimation.
 `POST /backups` starts capture with a stable `request_id`; polling uses existing
 `GET /job-runs/{id}`. Identical requests return the same durable receipt,
 including after restart; changing the selection under that ID conflicts.
@@ -55,7 +59,9 @@ until their template migration. Never use raw pgdata or `pg_dumpall`.
 The ZIP contains `manifest.json` version 1, selected payloads, exact source
 revisions, explicit directories (including empty repository roots), per-entry size/mode/SHA256, and original manifest and key material
 under `recovery/`. ZIP entries and hashes are read back before atomic publication;
-only then can an operation succeed. A failed or interrupted operation never
+only then can an operation succeed. Capture preflight checks selection and
+resource roots without repeating size estimation; the asynchronous capture
+performs full traversal and verification before publishing. A failed or interrupted operation never
 produces a completed Django Backup record.
 
 Original application encryption secrets are recovery material. In particular,

@@ -618,7 +618,7 @@ func TestBackupTraversalRejectsDirectoryReplacementAndContainedAncestorLinks(t *
 					copied = true
 				}
 				return nil
-			})
+			}, nil)
 			if err == nil || copied {
 				t.Fatalf("err=%v copied physical state=%v", err, copied)
 			}
@@ -843,5 +843,187 @@ func TestBackupNativeCaptureUsesCompiledEnvironmentAndLogs(t *testing.T) {
 	op := waitBackup(t, p, req.RequestID)
 	if op.Status != api.JobRunSucceeded {
 		t.Fatalf("native compiled capture: %+v", op)
+	}
+}
+
+func TestBackupPreviewBudgetKeepsResourcesAndNeverPublishesPartialSizes(t *testing.T) {
+	p, req := backupFixture(t)
+	stack, err := p.LoadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.Persist["later"] = manifest.PersistPath{Subpath: "./later", Scope: "stack"}
+	if err := os.Mkdir(filepath.Join(p.root, "later"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	complete, _, err := p.backupDiscover(t.Context(), req, &backupEstimateBudget{remaining: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounded, _, err := p.backupDiscover(t.Context(), req, &backupEstimateBudget{remaining: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(complete) != len(bounded) {
+		t.Fatalf("bounded preview lost resources: %d != %d", len(complete), len(bounded))
+	}
+	for i, resource := range bounded {
+		if resource.Name != complete[i].Name || resource.Status != complete[i].Status {
+			t.Fatalf("selection changed: %+v vs %+v", resource, complete[i])
+		}
+		if resource.Status == "included" && resource.Group == "storage" {
+			if resource.EstimatedBytes != nil || resource.Reason == "" {
+				t.Fatalf("partial count published as complete: %+v", resource)
+			}
+		}
+	}
+	fair, _, err := p.backupDiscover(t.Context(), req, &backupEstimateBudget{remaining: 100, perResource: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range fair {
+		if resource.Name == "app-data" && resource.EstimatedBytes != nil {
+			t.Fatalf("large resource escaped per-resource budget: %+v", resource)
+		}
+		if resource.Name == "later" && (resource.EstimatedBytes == nil || *resource.EstimatedBytes != 0) {
+			t.Fatalf("large resource starved later small estimate: %+v", resource)
+		}
+	}
+
+}
+
+func TestBackupDiscoveryCallerCancellationIsNotCapabilityFailure(t *testing.T) {
+	p, req := backupFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := p.BackupPreview(ctx, req); !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller cancellation=%v", err)
+	}
+	resource := backupResource{BackupResource: api.BackupResource{Status: "included"}, trees: []backupTree{{scope: p.root, root: filepath.Join(p.root, "data"), prefix: "storage"}}}
+	if err := resource.inspect(ctx, &backupEstimateBudget{}); !errors.Is(err, context.Canceled) || resource.Status != "included" {
+		t.Fatalf("cancellation became unsupported: %+v %v", resource, err)
+	}
+}
+
+func TestBackupCapturePreflightStillRejectsUnsafeRootsWithoutEstimating(t *testing.T) {
+	p, req := backupFixture(t)
+	alias := filepath.Join(p.root, "alias")
+	if err := os.Symlink(filepath.Join(p.root, "data", "pgdata"), alias); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := p.LoadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.Persist["unsafe-alias"] = manifest.PersistPath{Subpath: "./alias", Scope: "stack"}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	for _, budget := range []*backupEstimateBudget{nil, {remaining: 0}} {
+		resources, _, err := p.backupDiscover(t.Context(), req, budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, resource := range resources {
+			if resource.Name == "unsafe-alias" {
+				found = true
+				if resource.Status != "unsupported" {
+					t.Fatalf("unsafe root accepted: %+v", resource)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("unsafe root omitted")
+		}
+	}
+}
+
+func TestBackupCaptureStillFullyValidatesMetadataAfterBoundedDiscovery(t *testing.T) {
+	p, req := backupFixture(t)
+	source := filepath.Join(p.root, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init"}, {"config", "user.name", "backup"}, {"config", "user.email", "backup@example.invalid"}, {"commit", "--allow-empty", "-m", "initial"}} {
+		command := exec.Command("git", args...)
+		command.Dir = source
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git: %v %s", err, out)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "external-secret")
+	if err := os.WriteFile(outside, []byte("must-not-be-read"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(source, ".git", "unsafe-metadata-link")); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := p.LoadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.Sources = map[string]manifest.Source{"app": {Kind: "local", Path: source}}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	req.Selection = api.BackupSelection{Sources: api.BackupSourceSelection{BackupGroupSelection: api.BackupGroupSelection{Mode: "all"}}}
+	resources, _, err := p.backupDiscover(t.Context(), req, &backupEstimateBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range resources {
+		if resource.Group == "sources" && (resource.Status != "included" || resource.EstimatedBytes != nil) {
+			t.Fatalf("bounded discovery=%+v", resource)
+		}
+	}
+	if _, err := p.BackupStart(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	op := waitBackup(t, p, req.RequestID)
+	if op.Status != api.JobRunFailed || op.Artifact != nil || !strings.Contains(op.Error, "metadata symlink") {
+		t.Fatalf("unsafe metadata published after preflight: %+v", op)
+	}
+}
+
+func TestBackupPreviewBudgetCountsEnumerationBeforeExclusions(t *testing.T) {
+	root := t.TempDir()
+	tree := backupTree{scope: root, root: root, prefix: "storage"}
+	for i := 0; i < 12; i++ {
+		filename := filepath.Join(root, string(rune('a'+i)))
+		if err := os.WriteFile(filename, []byte("excluded"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		tree.exclude = append(tree.exclude, filename)
+	}
+	request := &backupEstimateBudget{remaining: 5}
+	visits := 0
+	err := walkBackupTree(t.Context(), tree, func(*os.Root, string, fs.FileInfo, string) error { visits++; return nil }, &backupScanBudget{request: request, remaining: 5})
+	if !errors.Is(err, errBackupEstimateIncomplete) || request.remaining != 0 || visits != 1 {
+		t.Fatalf("enumeration was not bounded before exclusions: visits=%d remaining=%d err=%v", visits, request.remaining, err)
+	}
+}
+
+func TestBackupPreviewBudgetCannotHideUnsafeLaterComponentRoot(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	excluded := filepath.Join(root, "pgdata")
+	for _, directory := range []string{allowed, excluded} {
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(allowed, "payload"), []byte("payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resource := backupResource{BackupResource: api.BackupResource{Status: "included"}, trees: []backupTree{{scope: root, root: allowed, prefix: "source/worktree"}, {scope: root, root: excluded, prefix: "source/repository/git", exclude: []string{excluded}}}}
+	if err := resource.inspect(t.Context(), &backupEstimateBudget{remaining: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if resource.Status != "unsupported" {
+		t.Fatalf("estimate cap hid unsafe repository root: %+v", resource)
 	}
 }

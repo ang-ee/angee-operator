@@ -272,7 +272,11 @@ uses `mode: all|selected|none`, `names`, `exclude`. Sources add
 `policy: bundle|fetch_published`. Source names are `stack:<source>` or
 `workspace:<workspace>/<slot>`; workspaces and their sources are independent.
 Preview reports included/excluded/unsupported resources, estimated source bytes,
-and unknown sizes explicitly. An included unsupported resource prevents start.
+and unknown sizes explicitly. A selected unsupported resource prevents start.
+
+Backup preview uses bounded quick discovery: incomplete resource sizes remain
+`null`, included resources remain visible, and `has_unknown_sizes` is true.
+The total sums only known sizes; capture performs complete validation.
 
 Start returns HTTP 202 with the existing `JobRunOperation` receipt; poll
 `GET /job-runs/{id}`. Equal IDs and selections are idempotent across restarts;

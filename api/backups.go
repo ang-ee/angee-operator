@@ -24,19 +24,21 @@ type BackupRequest struct {
 	Selection BackupSelection `json:"selection"`
 }
 type BackupResource struct {
-	CaptureJob     string `json:"capture_job,omitempty"`
-	Group          string `json:"group"`
-	Name           string `json:"name"`
-	Status         string `json:"status"`
-	Reason         string `json:"reason,omitempty"`
-	Path           string `json:"path,omitempty"`
+	CaptureJob string `json:"capture_job,omitempty"`
+	Group      string `json:"group"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason,omitempty"`
+	Path       string `json:"path,omitempty"`
+	// EstimatedBytes is nil when size is unknown or quick discovery is incomplete.
 	EstimatedBytes *int64 `json:"estimated_bytes"`
 }
 type BackupPreview struct {
-	Version         int              `json:"version"`
-	Resources       []BackupResource `json:"resources"`
-	EstimatedBytes  int64            `json:"estimated_bytes"`
-	HasUnknownSizes bool             `json:"has_unknown_sizes"`
+	Version   int              `json:"version"`
+	Resources []BackupResource `json:"resources"`
+	// EstimatedBytes sums only known included sizes; HasUnknownSizes marks incomplete coverage.
+	EstimatedBytes  int64 `json:"estimated_bytes"`
+	HasUnknownSizes bool  `json:"has_unknown_sizes"`
 }
 type BackupEntry struct {
 	Path      string `json:"path"`
