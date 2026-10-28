@@ -3,6 +3,9 @@ package gitdriver
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 
@@ -10,21 +13,52 @@ import (
 	"github.com/ang-ee/angee-operator/internal/git"
 )
 
-// angeeIdentity is who the commits of runOp's operations are made by: merge
-// and rebase in a slot record angee, not whoever runs the operator.
-var angeeIdentity = []string{
-	"GIT_AUTHOR_NAME=angee",
-	"GIT_AUTHOR_EMAIL=angee@example.invalid",
-	"GIT_COMMITTER_NAME=angee",
-	"GIT_COMMITTER_EMAIL=angee@example.invalid",
+// identityEnvKeys are the variables git reads an identity, or the config files
+// that hold one, from. git.IsolatedEnv leaves them out; commitIdentity passes
+// the operator's on, so an identity its environment names (a container's
+// compose environment, say) is honoured as sync-base honours it.
+// GIT_CONFIG_COUNT and its pairs stay out: they can carry http.extraHeader
+// tokens.
+var identityEnvKeys = []string{
+	"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
+	"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+}
+
+// commitIdentity is the environment a merge or rebase in dir commits in. The
+// commits are the user's: the identity git resolves for dir from the
+// operator's identityEnvKeys and its config (repository, global, system,
+// author.* and committer.*). Only a role git reports no identity for, such as
+// an operator in a container whose user never set one, commits as angee's
+// placeholder; user.useConfigOnly keeps git from guessing one from the host
+// name instead. A probe that fails any other way adds nothing, so a commit is
+// never misattributed to angee; the operation then fails or succeeds as git
+// decides.
+func (d Driver) commitIdentity(ctx context.Context, dir string) []string {
+	var env []string
+	for _, key := range identityEnvKeys {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	probe := slices.Clone(env)
+	for _, role := range []string{"AUTHOR", "COMMITTER"} {
+		_, _, err := d.git.RunIsolated(ctx, dir, probe, "-c", "user.useConfigOnly=true", "var", "GIT_"+role+"_IDENT")
+		var exit *exec.ExitError
+		// git dies with 128 for an unknown identity.
+		if errors.As(err, &exit) && exit.ExitCode() == 128 && ctx.Err() == nil {
+			env = append(env, "GIT_"+role+"_NAME=angee", "GIT_"+role+"_EMAIL=angee@example.invalid")
+		}
+	}
+	return env
 }
 
 // runOp runs a git operation that may stop on conflicts (merge, rebase and
-// their abort and continue, publish's push) in dir as angee. A conflict is a
-// result: Conflicted with the paths git ls-files -u reports. Any other
-// failure is the *git.CommandError carrying git's output.
-func (d Driver) runOp(ctx context.Context, dir string, args ...string) (api.GitOpResult, error) {
-	_, combined, runErr := d.git.RunIsolated(ctx, dir, angeeIdentity, args...)
+// their abort and continue, publish's push) in dir, with env on top of git's
+// isolated environment. A conflict is a result: Conflicted with the paths git
+// ls-files -u reports. Any other failure is the *git.CommandError carrying
+// git's output.
+func (d Driver) runOp(ctx context.Context, dir string, env []string, args ...string) (api.GitOpResult, error) {
+	_, combined, runErr := d.git.RunIsolated(ctx, dir, env, args...)
 	result := api.GitOpResult{
 		Message:       combined,
 		ConflictFiles: []string{},
@@ -50,7 +84,7 @@ func (d Driver) runOp(ctx context.Context, dir string, args ...string) (api.GitO
 // conflictedPaths lists the paths git ls-files -u reports in dir, non-ASCII
 // names unquoted (core.quotepath=false) so they come back as raw UTF-8.
 func (d Driver) conflictedPaths(ctx context.Context, dir string) ([]string, error) {
-	stdout, _, err := d.git.RunIsolated(ctx, dir, angeeIdentity, "-c", "core.quotepath=false", "ls-files", "-u")
+	stdout, _, err := d.git.RunIsolated(ctx, dir, nil, "-c", "core.quotepath=false", "ls-files", "-u")
 	return parseConflictedPaths(string(stdout)), err
 }
 

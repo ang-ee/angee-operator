@@ -153,30 +153,33 @@ func (d Driver) SyncBase(ctx context.Context, s vcs.Slot, onto, method string) (
 }
 
 // Merge merges ref with --no-ff, so a merge commit is recorded even when the
-// branch could fast-forward.
+// branch could fast-forward. The commit is the user's (commitIdentity).
 func (d Driver) Merge(ctx context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
-	return d.runOp(ctx, s.Path, "merge", "--no-ff", "--no-edit", git.EndOfOptions, ref)
+	return d.runOp(ctx, s.Path, d.commitIdentity(ctx, s.Path), "merge", "--no-ff", "--no-edit", git.EndOfOptions, ref)
 }
 
 // Rebase rebases the checkout's branch onto ref. On conflict the checkout
-// stays in the rebasing state until RebaseContinue or RebaseAbort.
+// stays in the rebasing state until RebaseContinue or RebaseAbort. The
+// replayed commits keep their authors and are committed by the user
+// (commitIdentity).
 func (d Driver) Rebase(ctx context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
-	return d.runOp(ctx, s.Path, "rebase", git.EndOfOptions, ref)
+	return d.runOp(ctx, s.Path, d.commitIdentity(ctx, s.Path), "rebase", git.EndOfOptions, ref)
 }
 
 // MergeAbort aborts an in-progress merge.
 func (d Driver) MergeAbort(ctx context.Context, s vcs.Slot) (api.GitOpResult, error) {
-	return d.runOp(ctx, s.Path, "merge", "--abort")
+	return d.runOp(ctx, s.Path, nil, "merge", "--abort")
 }
 
 // RebaseAbort aborts an in-progress rebase.
 func (d Driver) RebaseAbort(ctx context.Context, s vcs.Slot) (api.GitOpResult, error) {
-	return d.runOp(ctx, s.Path, "rebase", "--abort")
+	return d.runOp(ctx, s.Path, nil, "rebase", "--abort")
 }
 
-// RebaseContinue continues an in-progress rebase without opening an editor.
+// RebaseContinue continues an in-progress rebase without opening an editor,
+// committing as Rebase does.
 func (d Driver) RebaseContinue(ctx context.Context, s vcs.Slot) (api.GitOpResult, error) {
-	return d.runOp(ctx, s.Path, "-c", "core.editor=true", "rebase", "--continue")
+	return d.runOp(ctx, s.Path, d.commitIdentity(ctx, s.Path), "-c", "core.editor=true", "rebase", "--continue")
 }
 
 // PlanPublish decides a publish without changing anything. The remote is the
@@ -265,7 +268,7 @@ func (d Driver) Publish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) (
 		// A full refspec, so the branch is only ever a branch name: git refuses
 		// one that carries refspec syntax (":" deletes, "+" forces).
 		refspec := "refs/heads/" + plan.Branch + ":refs/heads/" + plan.Branch
-		result, runErr = d.runOp(ctx, s.Path, "push", "--set-upstream", git.EndOfOptions, plan.Remote, refspec)
+		result, runErr = d.runOp(ctx, s.Path, nil, "push", "--set-upstream", git.EndOfOptions, plan.Remote, refspec)
 		return runErr
 	})
 	return result, err

@@ -6,6 +6,29 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **Workspace merges and rebases commit as you, not as
+  `angee <angee@example.invalid>`.** `ws source merge` set angee's
+  placeholder as the merge commit's author and committer, and `rebase` and
+  `rebase --continue` as the committer of every replayed commit, even when
+  git had your identity configured.
+  - They now commit with the identity git resolves for the slot, as
+    `sync-base` does: repository, global and system config, `author.*` and
+    `committer.*`, and the operator's own `GIT_AUTHOR_*`, `GIT_COMMITTER_*`,
+    `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`, so a
+    container can name its identity in its environment. A rebase still keeps
+    each replayed commit's author.
+  - Only a role git reports no identity for, as for an operator in a
+    container whose user never set one, falls back to the placeholder;
+    `user.useConfigOnly` keeps git from guessing one from the host name.
+  - Publish's push and the aborts set no identity, since they commit nothing.
+  - The jj driver no longer sets `JJ_USER` and `JJ_EMAIL`, so jj records your
+    `user.name` and `user.email` from your jj config, and it passes the
+    operator's `JJ_CONFIG` through so jj finds that config where you keep it.
+    It has no placeholder yet for a user with no jj identity; no stack can
+    select the jj driver, and the fallback comes before any jj verb pushes.
+
 ## v0.22.0 — 2026-10-13
 
 ### Added

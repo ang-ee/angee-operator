@@ -70,7 +70,7 @@ func commitInSlot(t *testing.T, dir, name, contents string) {
 	runGit(t, dir, "commit", "-m", "slot "+name)
 }
 
-// A merge always records a merge commit (--no-ff), made by angee's own
+// A merge always records a merge commit (--no-ff), made by the user's own
 // identity without an editor; a conflict leaves the paths git reports,
 // non-ASCII names unquoted, and abort restores the slot.
 func TestWorkspaceSourceMergeRecordsAMergeCommitAndReportsRawConflictPaths(t *testing.T) {
@@ -90,8 +90,8 @@ func TestWorkspaceSourceMergeRecordsAMergeCommitAndReportsRawConflictPaths(t *te
 	if parents := strings.Fields(runGitOutput(t, app, "log", "-1", "--format=%P")); len(parents) != 2 {
 		t.Fatalf("HEAD parents = %v, want a merge commit although a fast-forward was possible", parents)
 	}
-	if got := strings.TrimSpace(runGitOutput(t, app, "log", "-1", "--format=%an <%ae>|%cn <%ce>")); got != "angee <angee@example.invalid>|angee <angee@example.invalid>" {
-		t.Fatalf("merge commit identity = %q, want angee's", got)
+	if got := strings.TrimSpace(runGitOutput(t, app, "log", "-1", "--format=%an <%ae>|%cn <%ce>")); got != "Test User <test@example.com>|Test User <test@example.com>" {
+		t.Fatalf("merge commit identity = %q, want the user's", got)
 	}
 
 	before := gitRev(t, app, "HEAD")
@@ -126,15 +126,17 @@ func TestWorkspaceSourceMergeOfAnUnknownRefFails(t *testing.T) {
 }
 
 // A rebase that stops on conflicts can be aborted back to where it started,
-// or continued without an editor once resolved; the replayed commit is
-// committed by angee.
+// or continued without an editor once resolved; the replayed commit keeps
+// its author and is committed by the user.
 func TestWorkspaceSourceRebaseConflictAbortAndContinue(t *testing.T) {
 	ctx := context.Background()
 	fixture := newRepairFixture(t)
 	app := fixture.slotPath("app")
 	gitIdentity(t, app)
 	pushUpstreamChange(t, fixture, "README.md", "upstream change\n")
-	commitInSlot(t, app, "README.md", "slot change\n")
+	mustWriteFile(t, filepath.Join(app, "README.md"), "slot change\n")
+	runGit(t, app, "add", "README.md")
+	runGit(t, app, "commit", "--author", "Slot Author <author@example.com>", "-m", "slot README.md")
 	runGit(t, app, "fetch", "origin")
 	before := gitRev(t, app, "HEAD")
 
@@ -162,8 +164,8 @@ func TestWorkspaceSourceRebaseConflictAbortAndContinue(t *testing.T) {
 	if got, want := gitRev(t, app, "HEAD~1"), gitRev(t, app, "origin/main"); got != want {
 		t.Fatalf("HEAD~1 after continue = %s, want origin/main %s", got, want)
 	}
-	if got := strings.TrimSpace(runGitOutput(t, app, "log", "-1", "--format=%cn <%ce>")); got != "angee <angee@example.invalid>" {
-		t.Fatalf("rebased commit committer = %q, want angee's", got)
+	if got := strings.TrimSpace(runGitOutput(t, app, "log", "-1", "--format=%an <%ae>|%cn <%ce>")); got != "Slot Author <author@example.com>|Test User <test@example.com>" {
+		t.Fatalf("rebased commit identity = %q, want its own author and the user as committer", got)
 	}
 	if got := strings.TrimSpace(runGitOutput(t, app, "rev-parse", "--abbrev-ref", "HEAD")); got != "feature-a" {
 		t.Fatalf("branch after continue = %q, want feature-a", got)
