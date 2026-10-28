@@ -1199,9 +1199,21 @@ driver yet; phase 6 wires it.
   - `Add` and `Remove`: workspace add and forget, then the prune.
 
   `removeWorkspaceSlot` already takes the lock for any slot with a
-  `Primary`, so jj rollback and destroy are covered once phase 6 hands it
-  jj slots. The create path needs a jj branch beside `addWorktreeSlot`. No
-  service code changed.
+  `Primary`, so jj rollback and destroy take it once phase 6 hands it jj
+  slots. They are not yet fully covered: when the lock times out,
+  `removeWorkspaceSlot` falls back to `dest.RemoveAll()` and relies on the
+  next `git worktree prune` to drop the registration, but nothing forgets a
+  jj workspace, so its name stays taken and recreating the workspace fails
+  with `vcs.ErrNameTaken` until someone runs `jj workspace forget`. Phase 6
+  must forget the name on that path too (or retry under the lock). The
+  create path needs a jj branch beside `addWorktreeSlot`. No service code
+  changed.
+- **A failed `Add` removes an empty directory that was already at the slot
+  path.** `dest.MkdirAll` keeps it, and the rollback's `Remove` deletes it.
+  The git driver builds the checkout elsewhere and installs it at the end,
+  so its failed `Add` leaves the directory. Phase 6 either recreates the
+  directory after the rollback or treats this as the jj lifecycle's
+  contract and says so where the service calls `Add`.
 - **Status** of a slot that `Add` made works unchanged (a test).
 - **Probe findings** (jj `0.45.1-f8f808f`):
   - `jj workspace add --ignore-working-copy` creates the workspace and its

@@ -769,8 +769,10 @@ func TestRemoveGoesOnWhenAStepFails(t *testing.T) {
 }
 
 // cancelDest is the service's guard, cancelling the caller's context once
-// Add's first identity check has passed, so that jj's add fails as it would
-// for a caller that goes away while jj runs.
+// Add's first identity check has passed. jj's add is then never started (Go
+// refuses to start a command under a cancelled context), so the test pins
+// that the rollback runs on a context of its own, not that jj is stopped
+// mid-run.
 type cancelDest struct {
 	*copierx.GuardedPath
 	cancel context.CancelFunc
