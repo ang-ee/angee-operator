@@ -7,14 +7,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
 // The fake jj and git are this test binary linked under those names on PATH.
 // Run that way, it records its run in $HOME/fake-runs.jsonl, sleeps when
-// $HOME/sleep exists, fails when $HOME/fail does, prints the version and
-// help text files in $HOME hold, and exits instead of testing.
+// $HOME/sleep exists, fails when $HOME/fail does or when one of its arguments
+// is a line of $HOME/fail-on, prints the version and help text files in
+// $HOME hold, and exits instead of testing.
 func init() {
 	tool := filepath.Base(os.Args[0])
 	if tool != "jj" && tool != "git" {
@@ -30,7 +32,7 @@ func init() {
 	if _, err := os.Stat(filepath.Join(home, "sleep")); err == nil {
 		time.Sleep(30 * time.Second)
 	}
-	if _, err := os.Stat(filepath.Join(home, "fail")); err == nil {
+	if _, err := os.Stat(filepath.Join(home, "fail")); err == nil || failsOn(home, os.Args[1:]) {
 		_, _ = os.Stderr.WriteString("Error: fake failure for https://user:secret@example.com/repo\n")
 		os.Exit(1)
 	}
@@ -49,6 +51,18 @@ func init() {
 		_, _ = os.Stdout.Write(out)
 	}
 	os.Exit(0)
+}
+
+// failsOn reports whether one of args is a line of $HOME/fail-on, so a test
+// can fail one command (`forget`, say) and let the others run.
+func failsOn(home string, args []string) bool {
+	failOn, err := os.ReadFile(filepath.Join(home, "fail-on"))
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(strings.Split(string(failOn), "\n"), func(line string) bool {
+		return line != "" && slices.Contains(args, line)
+	})
 }
 
 // fakeRun is one run of a fake tool, as it received it.

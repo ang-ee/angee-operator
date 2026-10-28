@@ -1,13 +1,20 @@
 // Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces,
-// colocated with git, of a source's primary. It reads a slot's status and
-// diff; every other verb waits for phase 8 of
-// .agents/plans/jj-native-operator.md and reports vcs.ErrUnsupported. No
-// manifest can name a jj slot yet, so nothing selects this driver.
+// colocated with git, of a source's primary. It makes and removes a slot
+// (lifecycle.go) and reads its status and diff; every other verb waits for
+// phase 8 of .agents/plans/jj-native-operator.md and reports
+// vcs.ErrUnsupported. No manifest can name a jj slot yet, so nothing selects
+// this driver.
 //
 // jj owns the slot: the driver runs the jj CLI and interprets what it prints
 // through the templates in templates.go, and never reads or writes jj's files.
 // Which remote a slot's branch is pushed to is git's answer, from the slot's
 // colocated git config, as it is for git slots.
+//
+// The primary's lock (plan D9) is the caller's: EnsurePrimary (which creates
+// the primary's .jj), Add and Remove (which add and forget a workspace, and
+// prune the primary's git worktree registrations) run under it. jj merges
+// concurrent operations on its own, so nothing else needs it: Exists,
+// Status, Diff and the slot verbs take none.
 package jjdriver
 
 import (
@@ -149,24 +156,50 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	return status, nil
 }
 
-// resolveBase picks the slot's base from the bookmarks listed for it: ref on
-// remote (origin when remote is empty), else the local bookmark ref. jj's
-// git pseudo-remote, which mirrors the colocated repository's own branches,
-// is never the base's remote.
+// resolveBase picks the slot's base from the bookmarks listed for it: the
+// first of baseCandidates that exists.
 func resolveBase(marks []bookmark, ref, remote string) (target, error) {
 	if ref == "" {
 		return target{}, fmt.Errorf("the slot has no base ref: %w", vcs.ErrBaseNotFound)
 	}
+	candidates := baseCandidates(ref, remote)
+	for _, c := range candidates {
+		if hasBookmark(marks, ref, c.remote) {
+			return c.target, nil
+		}
+	}
+	return target{}, fmt.Errorf("no bookmark %q on %s or locally: %w", ref, baseRemote(remote), vcs.ErrBaseNotFound)
+}
+
+// baseCandidate is a bookmark that can be a slot's base: ref on remote, local
+// when remote is empty.
+type baseCandidate struct {
+	target
+	remote string
+}
+
+// baseCandidates lists, in order, the bookmarks that can be the base B of a
+// slot with base ref on remote: ref on remote (origin when remote is empty),
+// then the local bookmark ref. jj's git pseudo-remote, which mirrors the
+// colocated repository's own branches, is never the base's remote. Status
+// counts against the first that exists, and Add starts a slot on it.
+func baseCandidates(ref, remote string) []baseCandidate {
+	var candidates []baseCandidate
+	if remote = baseRemote(remote); remote != gitRemote {
+		candidates = append(candidates, baseCandidate{
+			target: target{revset: remoteBookmark(ref, remote), name: ref + "@" + remote},
+			remote: remote,
+		})
+	}
+	return append(candidates, baseCandidate{target: target{revset: localBookmark(ref), name: ref}})
+}
+
+// baseRemote is the remote a base ref comes from: remote, else origin.
+func baseRemote(remote string) string {
 	if remote == "" {
-		remote = "origin"
+		return "origin"
 	}
-	if remote != gitRemote && hasBookmark(marks, ref, remote) {
-		return target{revset: remoteBookmark(ref, remote), name: ref + "@" + remote}, nil
-	}
-	if hasBookmark(marks, ref, "") {
-		return target{revset: localBookmark(ref), name: ref}, nil
-	}
-	return target{}, fmt.Errorf("no bookmark %q on %s or locally: %w", ref, remote, vcs.ErrBaseNotFound)
+	return remote
 }
 
 // upstream returns branch on the remote git pushes it to from the slot, when

@@ -47,6 +47,15 @@ func (r revset) firstParent() revset { return "first_parent(" + r + ")" }
 // to is the commits that reach reaches and r does not (r..reach).
 func (r revset) to(reach revset) revset { return "(" + r + ")..(" + reach + ")" }
 
+// coalesce is the first of rs that is not empty, as jj resolves it.
+func coalesce(rs ...revset) revset {
+	parts := make([]string, len(rs))
+	for i, r := range rs {
+		parts[i] = string(r)
+	}
+	return revset("coalesce(" + strings.Join(parts, ", ") + ")")
+}
+
 func (r revset) String() string { return string(r) }
 
 // exact is a string pattern matching s and nothing else, for revset

@@ -28,16 +28,24 @@ const (
 // Slot identifies one slot checkout and the facts a driver needs about it.
 type Slot struct {
 	Path string // the checkout
-	// Mode, Primary and CloneURL say how the checkout is made; only the
+	// Mode, Primary, CloneURL and Name say how the checkout is made; only the
 	// lifecycle (Exists, Add, Remove) reads them. Mode is ModeWorktree or
-	// ModeClone. Primary is the repository a worktree is a checkout of, its
+	// ModeClone, for the git driver; the jj driver makes every slot one way.
+	// Primary is the repository a worktree or a jj slot is a checkout of, its
 	// source's cache; CloneURL is the URL a clone is cloned from, as the
 	// remote BaseRemote names.
 	Mode     string
 	Primary  string
 	CloneURL string
-	Branch   string // the branch the checkout must be on; empty when any ref will do
-	BaseRef  string // the slot's ref, else its source's default ref; may be empty
+	// Name is the slot's name in Primary, for a primary that keeps its
+	// checkouts by name: the jj workspace name. The service computes it
+	// (`<stack>--<workspace>`, plus `--<slot>` when one workspace has two
+	// slots of one repository; plan Q2) and does not store it. The jj
+	// lifecycle reads it; jj's reads and verbs run in the slot, where jj
+	// knows its own workspace, and the git driver ignores it.
+	Name    string
+	Branch  string // the branch the checkout must be on; empty when any ref will do
+	BaseRef string // the slot's ref, else its source's default ref; may be empty
 	// BaseRemote is the remote BaseRef comes from: the source's clone remote.
 	// Empty lets the driver pick (git: origin).
 	BaseRemote string
@@ -51,6 +59,13 @@ type Dest interface {
 	// Lstat returns the entry at the path as the capability holds it, and
 	// whether there is one; it fails when the entry changed since.
 	Lstat() (fs.FileInfo, bool, error)
+	// IsEmptyDirectory reports whether the entry is an empty real directory.
+	// It fails when there is no entry or it is not a real directory.
+	IsEmptyDirectory() (bool, error)
+	// MkdirAll makes the path a directory, creating missing parents through
+	// the capability, and keeps an existing real directory. From then on the
+	// capability holds that directory, for a checkout made in place.
+	MkdirAll(mode fs.FileMode) error
 	// ReplaceFrom installs a copy of the tree at stage as the path.
 	ReplaceFrom(ctx context.Context, stage string) error
 	// VerifyPathIdentity confirms that path, looked up by name, still leads
@@ -165,6 +180,9 @@ var (
 	// ErrBaseNotFound is wrapped by Driver.ResolveBase when the slot's base
 	// exists neither locally nor on a remote.
 	ErrBaseNotFound = errors.New("base not found")
+	// ErrNameTaken is wrapped by Driver.Add when Slot.Primary already has a
+	// checkout under Slot.Name, which the slot would collide with.
+	ErrNameTaken = errors.New("name already taken in the primary")
 	// ErrUnsupported is wrapped by a driver method that has no meaning for its
 	// kind of slot, such as aborting a merge in a version control system that
 	// never stops mid-merge. The service reports it as invalid input.
@@ -175,23 +193,39 @@ var (
 // the manifest and from what the driver reads whether a verb may run and what
 // it targets; the driver carries the verb out. Errors are the version control
 // system's own, for the service to report.
+//
+// The primary's lock (plan D9) is the caller's. Add and Remove of a slot that
+// has a Primary change what the primary keeps of its checkouts (git: adding a
+// worktree and pruning registrations; jj: adding and forgetting a workspace,
+// then the same prune), so the caller holds the lock around them. Exists,
+// the reads and the verbs take none.
 type Driver interface {
-	// Exists reports whether Slot.Primary lists a checkout at Slot.Path, as a
-	// leftover of an earlier create can still be listed. A clone is a
-	// repository of its own, which nothing lists.
+	// Exists reports whether Slot.Primary lists the slot's checkout: git by
+	// Slot.Path, jj by Slot.Name. A clone is a repository of its own, which
+	// nothing lists. For git, a worktree listed at the slot's own path is a
+	// leftover of an earlier create, which the caller may Remove before Add.
+	// For jj it means only that the name is taken in the primary, possibly
+	// by another live slot (one that moved, or another stack's whose name
+	// collides), which Remove would forget, deleting its .git. So a jj slot
+	// must not go through the git leftover removal (addWorktreeSlot); plan
+	// phase 6 step 4 decides what a taken name means.
 	Exists(ctx context.Context, s Slot) (bool, error)
 	// Add makes the slot's checkout at Slot.Path, writing there only through
 	// d, which holds nothing or an empty directory: a worktree of
 	// Slot.Primary on Slot.Branch (created at the base unless it exists) or,
-	// without a branch, detached at the base; or a clone of Slot.CloneURL at
-	// the base. configure, when not nil, runs on the new checkout before it
-	// reaches Slot.Path, so nothing there can use it unconfigured. Add leaves
-	// nothing behind when it fails.
+	// without a branch, detached at the base; a clone of Slot.CloneURL at
+	// the base; or a jj workspace of Slot.Primary named Slot.Name, made in
+	// place on the bookmark Slot.Branch when it exists and at the base
+	// otherwise, creating no bookmark. configure, when not nil, runs on the
+	// new checkout before it reaches Slot.Path, so nothing there can use it
+	// unconfigured; a driver that cannot keep that promise refuses it. Add
+	// leaves nothing behind when it fails.
 	Add(ctx context.Context, s Slot, d Dest, configure func(ctx context.Context, checkout string) error) error
 	// Remove removes the checkout through d and drops whatever Slot.Primary
 	// keeps of it. For a git worktree that is `git worktree prune`, which
 	// drops every registration in the cache whose checkout is missing, not
-	// only this slot's.
+	// only this slot's; a jj workspace is forgotten first, then pruned the
+	// same way.
 	Remove(ctx context.Context, s Slot, d Dest) error
 
 	// Status reads the checkout. On error, the returned Status holds what was

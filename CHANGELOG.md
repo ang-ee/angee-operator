@@ -6,6 +6,15 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **The jj driver makes and removes a slot** (phase 5 step 6 of
+  `.agents/plans/jj-native-operator.md`). It colocates a source's cache with
+  jj, creates a jj workspace of it in place, refusing a taken name or an
+  occupied path and rolling back a failed create, and forgets and removes
+  one. Like the rest of the driver, it is not reachable from a manifest until
+  phase 6.
+
 ### Fixed
 
 - **Workspace merges and rebases commit as you, not as
