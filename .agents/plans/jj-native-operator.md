@@ -106,7 +106,7 @@ workspaces. Scripts are not checked in; phase 5 turns them into tests.
 | After a rewrite from the primary, `jj status` in the slot exits 1 "working copy is stale" unless `snapshot.auto-update-stale` is set, in which case the slot updates itself. | D8. |
 | Rewriting an immutable commit (trunk, an untracked remote bookmark) exits 1 with a hint. | A sync-base or rebase can fail for a reason that is not a conflict; return jj's message as the error. |
 | A file created in the slot is invisible to `--ignore-working-copy` reads (`empty=true`) until a snapshotting command runs. | D7. |
-| `JJ_USER`, `JJ_EMAIL`, `JJ_EDITOR` are honoured. `--config ui.editor=true` is rejected (the value parses as a boolean). | The runner sets identity and a no-op editor through the environment. |
+| `JJ_USER`, `JJ_EMAIL`, `JJ_EDITOR` are honoured. `--config ui.editor=true` is rejected (the value parses as a boolean). | The runner sets a no-op editor through the environment. It no longer sets an identity (commit-identity fix, 2026-10-28): jj commits as the user, from their jj config. |
 | `jj new "N"@- <ref> -m "Merge <ref>"` leaves the merge as `@`; a following `jj new` leaves it as `@-` under a fresh empty `@`. | Merge is two commands, so publish (which pushes `@-`) includes the merge. |
 | `working_copies()` and the `working_copies` keyword exist; `"stack--a"@` parses. | D12 and D13 are implementable as written. |
 | `git worktree remove` silently deletes ignored files and refuses when untracked, non-ignored files exist. | The migrate verb must carry untracked and ignored content across (phase 9). |
@@ -929,6 +929,9 @@ lifecycle interface and primary lock.
     operator runs, whatever the repository's per-user config says (Q9).
   - Environment: `git.IsolatedEnv`, which `git.Client.RunIsolated` now
     builds through too, plus `JJ_USER`, `JJ_EMAIL` and `JJ_EDITOR=true`.
+    *Changed 2026-10-28 (commit-identity fix):* `JJ_USER` and `JJ_EMAIL`
+    are gone and `JJ_CONFIG` is passed through, so jj commits as the user;
+    the git ops likewise commit with the identity git resolves.
   - jj never runs in the process's working directory. `run` refuses an
     empty directory, and `snapshot` and `read` refuse an empty slot.
     - A slot command runs in the slot with `-R .`. jj then loads the slot's
@@ -1405,6 +1408,15 @@ Tests: JSON shape tests for the new fields; a conflicted slot reports paths;
 
 Replaces the phase 6 refusals verb by verb. May land as two PRs (sync-base
 and rebase; then publish, push and merge).
+
+0. Identity fallback, first. The runner sets no identity, so an operator
+   whose user has no jj `user.name`/`user.email` records commits with an
+   empty author and committer (every snapshot rewrites `@`), and `jj git
+   push` refuses those. The git ops fall back to angee's placeholder per role
+   only when git has none configured; give jj the same rule, probing `jj -R
+   . --ignore-working-copy config get user.name` (and `user.email`) and
+   setting `JJ_USER`/`JJ_EMAIL` only when empty, since those override user
+   and repo config.
 
 1. Rebase scope (D12). Before any rebase on a jj slot, read `(B.."N"@)::`.
    If it contains another workspace's working copy, or a commit that is the

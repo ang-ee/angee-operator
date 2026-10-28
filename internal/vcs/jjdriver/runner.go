@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -14,12 +15,30 @@ import (
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
-// jjEnv is what every jj run gets on top of git.IsolatedEnv: angee's
-// identity, for the commits and operations jj records, and a no-op editor,
-// so a command that would open one never waits. Mutations still pass -m
-// wherever jj would open an editor. (`--config ui.editor=true` cannot do
-// this: jj reads the value as a boolean.)
-var jjEnv = []string{"JJ_USER=angee", "JJ_EMAIL=angee@example.invalid", "JJ_EDITOR=true"}
+// jjPassedEnv are the variables of the operator's environment every jj run
+// gets: where its config is, and the identity jj takes over that config.
+var jjPassedEnv = []string{"JJ_CONFIG", "JJ_USER", "JJ_EMAIL"}
+
+// jjEnv is what every jj run gets on top of git.IsolatedEnv: a no-op editor,
+// so a command that would open one never waits, and the operator's
+// jjPassedEnv. Mutations still pass -m wherever jj would open an editor.
+// (`--config ui.editor=true` cannot do this: jj reads the value as a
+// boolean.) No identity of angee's is set: the commits jj records are the
+// user's, from JJ_USER and JJ_EMAIL when the operator sets them, else from
+// user.name and user.email in their jj config, which HOME, XDG_CONFIG_HOME
+// and JJ_CONFIG locate, as the git driver's commits are the user's. Unlike
+// the git driver, there is no placeholder for a user with none yet: jj then
+// records an empty identity, which `jj git push` refuses. Phase 8 of the plan
+// adds the fallback before any jj verb pushes.
+func jjEnv() []string {
+	env := []string{"JJ_EDITOR=true"}
+	for _, key := range jjPassedEnv {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
 
 // globalArgs start every jj invocation. snapshot.auto-update-stale lets a
 // slot whose working copy another workspace rewrote update itself instead of
@@ -131,7 +150,7 @@ func (r runner) run(ctx context.Context, dir string, args []string) ([]byte, err
 		bin = "jj"
 	}
 	argv := append(append([]string(nil), globalArgs...), args...)
-	env := git.IsolatedEnv(jjEnv...)
+	env := git.IsolatedEnv(jjEnv()...)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
 	cmd.Env = env
