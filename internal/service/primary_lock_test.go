@@ -179,7 +179,11 @@ esac
 case "$*" in
   *.app.clone-*) probe=1 ;;
 esac
-case "$1" in
+subcommand() {
+  while [ "$1" = -c ]; do shift 2; done
+  printf '%%s' "$1"
+}
+case "$(subcommand "$@")" in
   worktree|fetch|pull|push|clone|remote|branch) ;;
   config) case "$*" in *--get*) probe= ;; esac ;;
   *) probe= ;;
