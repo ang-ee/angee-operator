@@ -15,19 +15,25 @@ latest tag.
   git had your identity configured.
   - They now commit with the identity git resolves for the slot, as
     `sync-base` does: repository, global and system config, `author.*` and
-    `committer.*`, and the operator's own `GIT_AUTHOR_*`, `GIT_COMMITTER_*`,
-    `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`, so a
-    container can name its identity in its environment. A rebase still keeps
-    each replayed commit's author.
+    `committer.*`, `EMAIL` for an email no config gives, and the operator's
+    own `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_CONFIG_GLOBAL`,
+    `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM` and the `user`, `author` and
+    `committer` entries of `GIT_CONFIG_COUNT` (its other entries, which can
+    carry tokens, stay out), so a container can name its identity in its
+    environment. The identity resolved is passed to the operation, so it
+    commits as exactly that. A rebase still keeps each replayed commit's
+    author.
   - Only a role git reports no identity for, as for an operator in a
     container whose user never set one, falls back to the placeholder;
-    `user.useConfigOnly` keeps git from guessing one from the host name.
+    `user.useConfigOnly` keeps git from guessing one from the host name. An
+    identity git refuses, such as a configured name of only `<>`, fails the
+    operation with git's message instead of being replaced.
   - Publish's push and the aborts set no identity, since they commit nothing.
-  - The jj driver no longer sets `JJ_USER` and `JJ_EMAIL`, so jj records your
-    `user.name` and `user.email` from your jj config, and it passes the
-    operator's `JJ_CONFIG` through so jj finds that config where you keep it.
-    It has no placeholder yet for a user with no jj identity; no stack can
-    select the jj driver, and the fallback comes before any jj verb pushes.
+  - The jj driver no longer sets `JJ_USER` and `JJ_EMAIL` to angee's: it
+    passes the operator's own `JJ_USER`, `JJ_EMAIL` and `JJ_CONFIG` through,
+    so jj records your identity from those or your jj config. It has no
+    placeholder yet for a user with no jj identity; no stack can select the
+    jj driver, and the fallback comes before any jj verb pushes.
 
 ## v0.22.0 — 2026-10-13
 

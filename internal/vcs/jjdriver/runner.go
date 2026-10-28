@@ -15,11 +15,16 @@ import (
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
+// jjPassedEnv are the variables of the operator's environment every jj run
+// gets: where its config is, and the identity jj takes over that config.
+var jjPassedEnv = []string{"JJ_CONFIG", "JJ_USER", "JJ_EMAIL"}
+
 // jjEnv is what every jj run gets on top of git.IsolatedEnv: a no-op editor,
-// so a command that would open one never waits, and the operator's JJ_CONFIG
-// when it sets one. Mutations still pass -m wherever jj would open an editor.
+// so a command that would open one never waits, and the operator's
+// jjPassedEnv. Mutations still pass -m wherever jj would open an editor.
 // (`--config ui.editor=true` cannot do this: jj reads the value as a
-// boolean.) No identity is set: the commits jj records are the user's, from
+// boolean.) No identity of angee's is set: the commits jj records are the
+// user's, from JJ_USER and JJ_EMAIL when the operator sets them, else from
 // user.name and user.email in their jj config, which HOME, XDG_CONFIG_HOME
 // and JJ_CONFIG locate, as the git driver's commits are the user's. Unlike
 // the git driver, there is no placeholder for a user with none yet: jj then
@@ -27,8 +32,10 @@ import (
 // adds the fallback before any jj verb pushes.
 func jjEnv() []string {
 	env := []string{"JJ_EDITOR=true"}
-	if config, ok := os.LookupEnv("JJ_CONFIG"); ok {
-		env = append(env, "JJ_CONFIG="+config)
+	for _, key := range jjPassedEnv {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
 	}
 	return env
 }

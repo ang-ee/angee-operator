@@ -17,9 +17,9 @@ import (
 // --no-pager --color never and snapshot.auto-update-stale (D8), `-R .` in the
 // slot, --ignore-working-copy and the snapshot's operation only for a read
 // after a snapshot, and git's isolated environment plus a no-op editor and
-// the operator's JJ_CONFIG, with nothing else from the operator's
-// environment: no identity of angee's or the operator's, so jj commits with
-// the user's own from their jj config.
+// the operator's JJ_CONFIG, JJ_USER and JJ_EMAIL, with nothing else from the
+// operator's environment and no identity of angee's: jj commits as the
+// operator's JJ_USER and JJ_EMAIL when set, else as their jj config says.
 func TestRunnerRunsJJInTheSlot(t *testing.T) {
 	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n"})
 	t.Setenv("JJ_CONFIG", "/tmp/jj-config.toml")
@@ -54,7 +54,7 @@ func TestRunnerRunsJJInTheSlot(t *testing.T) {
 			t.Errorf("run %d ran in %s, want the slot %s", i, run.Dir, realSlot)
 		}
 		for _, entry := range []string{
-			"JJ_EDITOR=true", "JJ_CONFIG=/tmp/jj-config.toml",
+			"JJ_EDITOR=true", "JJ_CONFIG=/tmp/jj-config.toml", "JJ_USER=operator", "JJ_EMAIL=operator@example.invalid",
 			"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes",
 			"HOME=" + home, "GH_TOKEN=gh-token", "SSH_AUTH_SOCK=/tmp/agent.sock",
 		} {
@@ -63,7 +63,7 @@ func TestRunnerRunsJJInTheSlot(t *testing.T) {
 			}
 		}
 		for _, entry := range run.Env {
-			if entry == "ANGEE_UNRELATED_SECRET=must-not-leak" || strings.HasPrefix(entry, "JJ_USER=") || strings.HasPrefix(entry, "JJ_EMAIL=") {
+			if entry == "ANGEE_UNRELATED_SECRET=must-not-leak" || strings.Contains(entry, "angee@example.invalid") {
 				t.Errorf("run %d environment carries %s", i, entry)
 			}
 		}

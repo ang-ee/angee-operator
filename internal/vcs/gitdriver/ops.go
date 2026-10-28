@@ -3,53 +3,113 @@ package gitdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
-	"os/exec"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
 )
 
-// identityEnvKeys are the variables git reads an identity, or the config files
-// that hold one, from. git.IsolatedEnv leaves them out; commitIdentity passes
-// the operator's on, so an identity its environment names (a container's
-// compose environment, say) is honoured as sync-base honours it.
-// GIT_CONFIG_COUNT and its pairs stay out: they can carry http.extraHeader
-// tokens.
+// identityEnvKeys are the variables of the operator's environment that git
+// reads an identity, or the config files that hold one, from. git.IsolatedEnv
+// leaves them out; commitIdentity's probes get them, so an identity the
+// operator's environment names (a container's compose environment, say) is
+// honoured as sync-base honours it.
 var identityEnvKeys = []string{
 	"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
 	"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
 }
 
-// commitIdentity is the environment a merge or rebase in dir commits in. The
-// commits are the user's: the identity git resolves for dir from the
-// operator's identityEnvKeys and its config (repository, global, system,
-// author.* and committer.*). Only a role git reports no identity for, such as
-// an operator in a container whose user never set one, commits as angee's
-// placeholder; user.useConfigOnly keeps git from guessing one from the host
-// name instead. A probe that fails any other way adds nothing, so a commit is
-// never misattributed to angee; the operation then fails or succeeds as git
-// decides.
-func (d Driver) commitIdentity(ctx context.Context, dir string) []string {
+// identityConfigKeys are the config keys, lower-cased, that the probes take
+// from the operator's GIT_CONFIG_COUNT entries. Its other entries stay out:
+// they can carry http.extraHeader tokens.
+var identityConfigKeys = []string{"user.name", "user.email", "author.name", "author.email", "committer.name", "committer.email"}
+
+// identLine is what `git var GIT_<ROLE>_IDENT` prints: the name, the email in
+// angle brackets, a timestamp and its offset.
+var identLine = regexp.MustCompile(`^(.*) <([^<>]*)> \d+ [+-]\d{4}$`)
+
+// identityProbeEnv is what commitIdentity's probes run in on top of git's
+// isolated environment: the operator's identityEnvKeys, its GIT_CONFIG_COUNT
+// entries for identityConfigKeys renumbered in order, and the C locale, so a
+// refusal reads the same whatever the operator's language.
+func identityProbeEnv() []string {
 	var env []string
 	for _, key := range identityEnvKeys {
 		if value, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+value)
 		}
 	}
-	probe := slices.Clone(env)
+	count, _ := strconv.Atoi(os.Getenv("GIT_CONFIG_COUNT"))
+	var kept []int
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		index, err := strconv.Atoi(strings.TrimPrefix(name, "GIT_CONFIG_KEY_"))
+		if strings.HasPrefix(name, "GIT_CONFIG_KEY_") && err == nil && index >= 0 && index < count &&
+			slices.Contains(identityConfigKeys, strings.ToLower(os.Getenv(name))) {
+			kept = append(kept, index)
+		}
+	}
+	// A later entry overrides an earlier one, so their order is kept.
+	slices.Sort(kept)
+	for i, index := range kept {
+		env = append(env,
+			fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, os.Getenv(fmt.Sprintf("GIT_CONFIG_KEY_%d", index))),
+			fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, os.Getenv(fmt.Sprintf("GIT_CONFIG_VALUE_%d", index))))
+	}
+	if len(kept) > 0 {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(kept)))
+	}
+	return append(env, "LC_ALL=C")
+}
+
+// commitIdentity is the environment a merge or rebase in dir commits in: each
+// role's identity, as git resolves it for dir, named explicitly, so the
+// operation commits as exactly what was resolved. The commits are the user's:
+// git resolves them from dir's config (repository, global, system, author.*
+// and committer.*) and identityProbeEnv, as for sync-base, and takes EMAIL
+// for an email none of those gives, as a plain git commit does.
+// user.useConfigOnly keeps git from guessing one from the host name instead.
+// Only a role git reports none for, as for an operator in a container whose
+// user never set one, commits as angee's placeholder. A role whose probe fails
+// any other way, such as an invalid configured name, adds nothing, so the
+// operation reports git's own refusal rather than commit as angee.
+func (d Driver) commitIdentity(ctx context.Context, dir string) []string {
+	probe := identityProbeEnv()
+	var env []string
 	for _, role := range []string{"AUTHOR", "COMMITTER"} {
-		_, _, err := d.git.RunIsolated(ctx, dir, probe, "-c", "user.useConfigOnly=true", "var", "GIT_"+role+"_IDENT")
-		var exit *exec.ExitError
-		// git dies with 128 for an unknown identity.
-		if errors.As(err, &exit) && exit.ExitCode() == 128 && ctx.Err() == nil {
-			env = append(env, "GIT_"+role+"_NAME=angee", "GIT_"+role+"_EMAIL=angee@example.invalid")
+		if name, email, ok := d.resolveIdentity(ctx, dir, probe, role); ok {
+			env = append(env, "GIT_"+role+"_NAME="+name, "GIT_"+role+"_EMAIL="+email)
 		}
 	}
 	return env
+}
+
+// resolveIdentity is role's identity for commitIdentity, and false when it
+// names none.
+func (d Driver) resolveIdentity(ctx context.Context, dir string, env []string, role string) (name, email string, ok bool) {
+	args := []string{"-c", "user.useConfigOnly=true", "var", "GIT_" + role + "_IDENT"}
+	out, combined, err := d.git.RunIsolated(ctx, dir, env, args...)
+	if address := os.Getenv("EMAIL"); err != nil && address != "" && strings.Contains(combined, "no email was given") {
+		// git takes EMAIL for an email no config gives, but not under
+		// user.useConfigOnly; as user.email it ranks below every config.
+		out, combined, err = d.git.RunIsolated(ctx, dir, env, append([]string{"-c", "user.email=" + address}, args...)...)
+	}
+	if err == nil {
+		if match := identLine.FindStringSubmatch(strings.TrimSpace(string(out))); match != nil {
+			return match[1], match[2], true
+		}
+		return "", "", false
+	}
+	if ctx.Err() == nil && strings.Contains(combined, "auto-detection is disabled") {
+		return "angee", "angee@example.invalid", true
+	}
+	return "", "", false
 }
 
 // runOp runs a git operation that may stop on conflicts (merge, rebase and

@@ -26,9 +26,10 @@ type fakeGitRun struct {
 
 // The fake git is this test binary linked as "git" on PATH. Run that way with
 // a HOME holding fakeGitLog, it records its run there instead of testing. It
-// fails every command but ls-files and var when HOME also holds "fail", and
-// `var GIT_<ROLE>_IDENT`, as git does for a role with no configured identity,
-// when HOME holds "no-<ROLE>".
+// fails every command but ls-files and var when HOME also holds "fail".
+// `var GIT_<ROLE>_IDENT` prints fakeIdent, or fails as git does for a role
+// with no identity when HOME holds "no-<ROLE>", and for one whose configured
+// name is invalid when it holds "invalid-<ROLE>".
 func init() {
 	if filepath.Base(os.Args[0]) != "git" {
 		return
@@ -44,8 +45,14 @@ func init() {
 	if i := slices.Index(os.Args, "var"); i >= 0 && i+1 < len(os.Args) {
 		role := strings.TrimSuffix(strings.TrimPrefix(os.Args[i+1], "GIT_"), "_IDENT")
 		if _, err := os.Stat(filepath.Join(home, "no-"+role)); err == nil {
+			_, _ = os.Stderr.WriteString("fatal: no email was given and auto-detection is disabled\n")
 			os.Exit(128)
 		}
+		if _, err := os.Stat(filepath.Join(home, "invalid-"+role)); err == nil {
+			_, _ = os.Stderr.WriteString("fatal: name consists only of disallowed characters: <>\n")
+			os.Exit(128)
+		}
+		_, _ = os.Stdout.WriteString(fakeIdent + " 1793222148 -0400\n")
 		os.Exit(0)
 	}
 	if _, err := os.Stat(filepath.Join(home, "fail")); err == nil && !slices.Contains(os.Args, "ls-files") {
@@ -58,6 +65,28 @@ func init() {
 var identityProbes = [][]string{
 	{"-c", "user.useConfigOnly=true", "var", "GIT_AUTHOR_IDENT"},
 	{"-c", "user.useConfigOnly=true", "var", "GIT_COMMITTER_IDENT"},
+}
+
+// fakeIdent is the identity the fake git resolves for every role, and
+// fakeIdentEnv what a merge or rebase then commits with.
+const fakeIdent = "Fake User <fake@example.com>"
+
+var fakeIdentEnv = []string{
+	"GIT_AUTHOR_NAME=Fake User", "GIT_AUTHOR_EMAIL=fake@example.com",
+	"GIT_COMMITTER_NAME=Fake User", "GIT_COMMITTER_EMAIL=fake@example.com",
+}
+
+// sameEnv reports whether two environments hold the same entries, in any
+// order, as exec dedups a repeated key into the later one's place.
+func sameEnv(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+}
+
+// probeEnv is the environment the identity probes run in, given the one an
+// operation without them gets: the same, in the C locale.
+func probeEnv(env []string) []string {
+	env = slices.DeleteFunc(slices.Clone(env), func(e string) bool { return strings.HasPrefix(e, "LC_ALL=") })
+	return append(env, "LC_ALL=C")
 }
 
 // fakeGit puts the fake git first on an otherwise empty PATH, sets every
@@ -94,11 +123,12 @@ func fakeGit(t *testing.T, sshCommand string) string {
 	return home
 }
 
-// unsetIdentityEnv clears identityEnvKeys for the test, so commitIdentity
-// sees no identity from the environment the tests run in.
+// unsetIdentityEnv clears identityEnvKeys, EMAIL and GIT_CONFIG_COUNT for the
+// test, so commitIdentity sees no identity from the environment the tests run
+// in.
 func unsetIdentityEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range identityEnvKeys {
+	for _, key := range append(slices.Clone(identityEnvKeys), "EMAIL", "GIT_CONFIG_COUNT") {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("Unsetenv(%s) error = %v", key, err)
@@ -135,9 +165,9 @@ func fakeGitRuns(t *testing.T, home string) []fakeGitRun {
 // arguments and environment they had before they moved to git.Client: the
 // environment holds only what git needs to reach ssh and credential helpers,
 // with prompts disabled; GIT_SSH_COMMAND is kept when set, else batch-mode
-// ssh. A merge or rebase first asks git for the user's identity, and with one
-// configured adds none of its own. Syncing a base runs as the user, with
-// their whole environment.
+// ssh. A merge or rebase first asks git for each role's identity, in the C
+// locale, and commits as exactly what git resolved. Syncing a base runs as the
+// user, with their whole environment.
 func TestOperationsRunGitWithTheirArgumentsAndEnvironment(t *testing.T) {
 	ctx := context.Background()
 	for _, ssh := range []string{"ssh-wrapper --flag", ""} {
@@ -189,8 +219,14 @@ func TestOperationsRunGitWithTheirArgumentsAndEnvironment(t *testing.T) {
 						t.Fatalf("%v ran git %#v,\nwant %q", tc.args, runs, wantArgs)
 					}
 					for i, run := range runs {
-						if !slices.Equal(run.Args, wantArgs[i]) || !slices.Equal(run.Env, want) {
-							t.Fatalf("%v run %d = %#v,\nwant args %q and env %q", tc.args, i, run, wantArgs[i], want)
+						wantEnv := want
+						if tc.commits && i < len(identityProbes) {
+							wantEnv = probeEnv(want)
+						} else if tc.commits {
+							wantEnv = append(slices.Clone(want), fakeIdentEnv...)
+						}
+						if !slices.Equal(run.Args, wantArgs[i]) || !sameEnv(run.Env, wantEnv) {
+							t.Fatalf("%v run %d = %#v,\nwant args %q and env %q", tc.args, i, run, wantArgs[i], wantEnv)
 						}
 					}
 				}
@@ -204,7 +240,7 @@ func TestOperationsRunGitWithTheirArgumentsAndEnvironment(t *testing.T) {
 					t.Fatal("Merge() of a failing git error = nil")
 				}
 				runs := fakeGitRuns(t, home)
-				if len(runs) != 4 || !slices.Equal(runs[3].Args, []string{"-c", "core.quotepath=false", "ls-files", "-u"}) || !slices.Equal(runs[3].Env, want) {
+				if len(runs) != 4 || !slices.Equal(runs[3].Args, []string{"-c", "core.quotepath=false", "ls-files", "-u"}) || !sameEnv(runs[3].Env, want) {
 					t.Fatalf("failed Merge() ran git %#v, want ls-files -u with the operation's environment", runs)
 				}
 
@@ -225,26 +261,30 @@ func TestOperationsRunGitWithTheirArgumentsAndEnvironment(t *testing.T) {
 	}
 }
 
-// Only a role git has no identity configured for commits as angee's
-// placeholder; the other stays the user's, so git resolves it.
+// A merge or rebase commits as exactly the identity each probe resolved. Only
+// a role git reports no identity for commits as angee's placeholder; one whose
+// configured identity git refuses gets none, so the operation reports git's
+// refusal rather than commit as angee.
 func TestMergeAndRebaseCommitAsAngeeOnlyWithoutAConfiguredIdentity(t *testing.T) {
 	ctx := context.Background()
-	author := []string{"GIT_AUTHOR_NAME=angee", "GIT_AUTHOR_EMAIL=angee@example.invalid"}
-	committer := []string{"GIT_COMMITTER_NAME=angee", "GIT_COMMITTER_EMAIL=angee@example.invalid"}
+	angeeAuthor := []string{"GIT_AUTHOR_NAME=angee", "GIT_AUTHOR_EMAIL=angee@example.invalid"}
+	angeeCommitter := []string{"GIT_COMMITTER_NAME=angee", "GIT_COMMITTER_EMAIL=angee@example.invalid"}
+	fakeAuthor, fakeCommitter := fakeIdentEnv[:2], fakeIdentEnv[2:]
 	for _, tc := range []struct {
-		missing []string
+		markers []string
 		want    []string
 	}{
-		{nil, nil},
-		{[]string{"AUTHOR"}, author},
-		{[]string{"COMMITTER"}, committer},
-		{[]string{"AUTHOR", "COMMITTER"}, append(slices.Clone(author), committer...)},
+		{nil, fakeIdentEnv},
+		{[]string{"no-AUTHOR"}, append(slices.Clone(angeeAuthor), fakeCommitter...)},
+		{[]string{"no-COMMITTER"}, append(slices.Clone(fakeAuthor), angeeCommitter...)},
+		{[]string{"no-AUTHOR", "no-COMMITTER"}, append(slices.Clone(angeeAuthor), angeeCommitter...)},
+		{[]string{"invalid-AUTHOR"}, fakeCommitter},
 	} {
-		t.Run(strings.Join(tc.missing, "+"), func(t *testing.T) {
+		t.Run(strings.Join(tc.markers, "+"), func(t *testing.T) {
 			home := fakeGit(t, "")
-			for _, role := range tc.missing {
-				if err := os.WriteFile(filepath.Join(home, "no-"+role), nil, 0o644); err != nil {
-					t.Fatalf("WriteFile(no-%s) error = %v", role, err)
+			for _, marker := range tc.markers {
+				if err := os.WriteFile(filepath.Join(home, marker), nil, 0o644); err != nil {
+					t.Fatalf("WriteFile(%s) error = %v", marker, err)
 				}
 			}
 			d := New(git.New())
@@ -275,9 +315,58 @@ func TestMergeAndRebaseCommitAsAngeeOnlyWithoutAConfiguredIdentity(t *testing.T)
 	}
 }
 
+// The probes get the operator's GIT_CONFIG_COUNT entries for identity keys
+// only, renumbered in order; the others, which can carry tokens, and the
+// operation itself get none.
+func TestIdentityProbesTakeOnlyIdentityConfigEntries(t *testing.T) {
+	home := fakeGit(t, "")
+	for key, value := range map[string]string{
+		"GIT_CONFIG_COUNT":   "4",
+		"GIT_CONFIG_KEY_0":   "http.extraHeader",
+		"GIT_CONFIG_VALUE_0": "Authorization: Bearer must-not-leak",
+		"GIT_CONFIG_KEY_1":   "user.name",
+		"GIT_CONFIG_VALUE_1": "Cfg User",
+		"GIT_CONFIG_KEY_2":   "core.sshCommand",
+		"GIT_CONFIG_VALUE_2": "ssh -i must-not-leak",
+		"GIT_CONFIG_KEY_3":   "User.Email",
+		"GIT_CONFIG_VALUE_3": "cfg@example.com",
+		"GIT_CONFIG_KEY_4":   "user.name",
+		"GIT_CONFIG_VALUE_4": "Beyond the count",
+	} {
+		t.Setenv(key, value)
+	}
+	if _, err := New(git.New()).Merge(context.Background(), vcs.Slot{Path: t.TempDir()}, "main"); err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	runs := fakeGitRuns(t, home)
+	if len(runs) != 3 {
+		t.Fatalf("Merge() ran git %#v, want two identity probes and the merge", runs)
+	}
+	config := func(env []string) []string {
+		var entries []string
+		for _, entry := range env {
+			if strings.HasPrefix(entry, "GIT_CONFIG_") && !strings.HasPrefix(entry, "GIT_CONFIG_NOSYSTEM") {
+				entries = append(entries, entry)
+			}
+		}
+		slices.Sort(entries)
+		return entries
+	}
+	want := []string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=user.name", "GIT_CONFIG_KEY_1=User.Email", "GIT_CONFIG_VALUE_0=Cfg User", "GIT_CONFIG_VALUE_1=cfg@example.com"}
+	for i, run := range runs[:2] {
+		if got := config(run.Env); !slices.Equal(got, want) {
+			t.Fatalf("probe %d config entries = %q, want %q", i, got, want)
+		}
+	}
+	if got := config(runs[2].Env); len(got) != 0 {
+		t.Fatalf("merge config entries = %q, want none", got)
+	}
+}
+
 // With real git, a merge through the driver commits as the identity git
 // resolves from the operator's environment and config files, the way
-// sync-base's merge does, and only with none as angee's placeholder.
+// sync-base's merge does (EMAIL included), only with none as angee's
+// placeholder, and not at all with an invalid one.
 func TestMergeCommitsAsTheIdentityGitResolves(t *testing.T) {
 	ctx := context.Background()
 	dir, remote := clone(t)
@@ -287,38 +376,59 @@ func TestMergeCommitsAsTheIdentityGitResolves(t *testing.T) {
 	run(t, dir, "config", "--unset", "user.name")
 	run(t, dir, "config", "--unset", "user.email")
 	before := gitOutput(t, dir, "rev-parse", "HEAD")
-	userConfig := func(t *testing.T, path, name string) {
+	writeConfig := func(t *testing.T, path, contents string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("MkdirAll() error = %v", err)
 		}
-		if err := os.WriteFile(path, []byte("[user]\n\tname = "+name+"\n\temail = user@example.com\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 			t.Fatalf("WriteFile(%s) error = %v", path, err)
 		}
 	}
+	userConfig := func(t *testing.T, path, name string) {
+		t.Helper()
+		writeConfig(t, path, "[user]\n\tname = "+name+"\n\temail = user@example.com\n")
+	}
 	for _, tc := range []struct {
-		name  string
-		setup func(t *testing.T, home string)
-		want  string
+		name    string
+		setup   func(t *testing.T, home string)
+		want    string
+		wantErr string
 	}{
-		{"nothing configured", func(*testing.T, string) {}, "angee <angee@example.invalid>|angee <angee@example.invalid>"},
+		{"nothing configured", func(*testing.T, string) {}, "angee <angee@example.invalid>|angee <angee@example.invalid>", ""},
 		{"HOME's gitconfig", func(t *testing.T, home string) { userConfig(t, filepath.Join(home, ".gitconfig"), "Home User") },
-			"Home User <user@example.com>|Home User <user@example.com>"},
+			"Home User <user@example.com>|Home User <user@example.com>", ""},
 		{"GIT_CONFIG_GLOBAL", func(t *testing.T, home string) {
 			path := filepath.Join(t.TempDir(), "gitconfig")
 			userConfig(t, path, "Global User")
 			t.Setenv("GIT_CONFIG_GLOBAL", path)
-		}, "Global User <user@example.com>|Global User <user@example.com>"},
+		}, "Global User <user@example.com>|Global User <user@example.com>", ""},
 		{"identity variables", func(t *testing.T, _ string) {
 			t.Setenv("GIT_AUTHOR_NAME", "Env Author")
 			t.Setenv("GIT_AUTHOR_EMAIL", "author@example.com")
 			t.Setenv("GIT_COMMITTER_NAME", "Env Committer")
 			t.Setenv("GIT_COMMITTER_EMAIL", "committer@example.com")
-		}, "Env Author <author@example.com>|Env Committer <committer@example.com>"},
+		}, "Env Author <author@example.com>|Env Committer <committer@example.com>", ""},
 		{"author variables only", func(t *testing.T, _ string) {
 			t.Setenv("GIT_AUTHOR_NAME", "Env Author")
 			t.Setenv("GIT_AUTHOR_EMAIL", "author@example.com")
-		}, "Env Author <author@example.com>|angee <angee@example.invalid>"},
+		}, "Env Author <author@example.com>|angee <angee@example.invalid>", ""},
+		{"EMAIL for a configured name", func(t *testing.T, home string) {
+			writeConfig(t, filepath.Join(home, ".gitconfig"), "[user]\n\tname = Home User\n")
+			t.Setenv("EMAIL", "env@example.com")
+		}, "Home User <env@example.com>|Home User <env@example.com>", ""},
+		{"identity config entries", func(t *testing.T, _ string) {
+			t.Setenv("GIT_CONFIG_COUNT", "3")
+			t.Setenv("GIT_CONFIG_KEY_0", "http.extraHeader")
+			t.Setenv("GIT_CONFIG_VALUE_0", "Authorization: Bearer must-not-leak")
+			t.Setenv("GIT_CONFIG_KEY_1", "user.name")
+			t.Setenv("GIT_CONFIG_VALUE_1", "Cfg User")
+			t.Setenv("GIT_CONFIG_KEY_2", "user.email")
+			t.Setenv("GIT_CONFIG_VALUE_2", "cfg@example.com")
+		}, "Cfg User <cfg@example.com>|Cfg User <cfg@example.com>", ""},
+		{"an invalid configured name", func(t *testing.T, home string) {
+			writeConfig(t, filepath.Join(home, ".gitconfig"), "[user]\n\tname = <>\n\temail = user@example.com\n")
+		}, "", "disallowed characters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			unsetIdentityEnv(t)
@@ -330,6 +440,15 @@ func TestMergeCommitsAsTheIdentityGitResolves(t *testing.T) {
 			run(t, dir, "reset", "--hard", before)
 
 			result, err := New(git.New()).Merge(ctx, vcs.Slot{Path: dir}, "origin/main")
+			if tc.wantErr != "" {
+				if err == nil || result.OK || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Merge() = %#v, %v, want git's refusal %q", result, err, tc.wantErr)
+				}
+				if got := gitOutput(t, dir, "rev-parse", "HEAD"); got != before {
+					t.Fatalf("HEAD after a refused merge = %s, want %s", got, before)
+				}
+				return
+			}
 			if err != nil || !result.OK {
 				t.Fatalf("Merge() = %#v, %v, want OK", result, err)
 			}
