@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Server) backupPreview(w http.ResponseWriter, r *http.Request) {
-	req, err := decode[api.BackupRequest](r)
+	req, err := decodeStrict[api.BackupRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return
@@ -22,7 +22,7 @@ func (s *Server) backupPreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, preview)
 }
 func (s *Server) backupStart(w http.ResponseWriter, r *http.Request) {
-	req, err := decode[api.BackupRequest](r)
+	req, err := decodeStrict[api.BackupRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return

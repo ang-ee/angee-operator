@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +16,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"gopkg.in/yaml.v3"
 )
 
 type Runner interface {
@@ -129,11 +133,18 @@ func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
 	return err
 }
 
+// maxJobOutputBytes bounds the output RunJob returns to the last 1 MiB a job
+// printed.
+const maxJobOutputBytes = 1 << 20
+
 func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
 	service := job.Name
 	runner, ok := b.inputRunner()
 	if !ok {
 		return nil, fmt.Errorf("compose backend does not support in-memory job overrides")
+	}
+	if job.Transient {
+		return b.runTransientJob(ctx, runner, target, job)
 	}
 	args := configurationArgs(target.EnvFile)
 	args = append(args, "up", "-d", "--force-recreate", "--no-deps", service)
@@ -150,9 +161,7 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	logArgs := configurationArgs(target.EnvFile)
 	logArgs = append(logArgs, "logs", "--no-color", "--no-log-prefix", service)
 	out, logErr := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", logArgs...)
-	if len(out) > 1<<20 {
-		out = out[len(out)-(1<<20):]
-	}
+	out = jobOutputTail(out)
 	if waitErr != nil {
 		return out, fmt.Errorf("container job %s failed: %w", service, waitErr)
 	}
@@ -160,6 +169,121 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		return out, logErr
 	}
 	return out, nil
+}
+
+// runTransientJob runs a job as a one-off container, `docker compose run --rm`
+// from the request's in-memory configuration, so the attempt leaves nothing in
+// the shared project: no recreated service container that keeps its
+// configuration, inputs and environment. --no-deps leaves prerequisites to the
+// caller, which checked them, and a one-off container publishes no service
+// ports. Its output is what the run printed, redacted before it is cut to its
+// last maxJobOutputBytes so the cut cannot leave part of a secret.
+//
+// Cancelling ctx kills the docker client but not the container, which the
+// daemon keeps running, so the container is named up front and removed by that
+// name (removeCanceledJob).
+func (b Backend) runTransientJob(ctx context.Context, runner InputRunner, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("container job %s failed: %w", job.Name, err)
+	}
+	env, err := runtime.ReadEnvFile(target.EnvFile)
+	if err != nil {
+		return nil, err
+	}
+	container := oneOffContainerName(job)
+	args := configurationArgs(target.EnvFile)
+	args = append(args, "run", "--rm", "--no-deps", "-T", "--name", container, job.Name)
+	exited := make(chan struct{})
+	removed := make(chan error, 1)
+	stop := context.AfterFunc(ctx, func() {
+		removed <- b.removeCanceledJob(context.WithoutCancel(ctx), target, container, exited)
+	})
+	out, runErr := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", args...)
+	close(exited)
+	out = jobOutputTail([]byte(logctx.RedactText(string(out))))
+	var removeErr error
+	if !stop() {
+		if err := <-removed; err != nil {
+			removeErr = fmt.Errorf("remove container %s of canceled job %s: %w", container, job.Name, err)
+		}
+	}
+	if runErr != nil {
+		if ctx.Err() != nil {
+			// The client was killed; why matters more than its exit status.
+			runErr = ctx.Err()
+		}
+		return out, errors.Join(fmt.Errorf("container job %s failed: %w", job.Name, runErr), removeErr)
+	}
+	// The run succeeded, so --rm has removed its container; a removal that a
+	// cancel landing just after it started can only fail on a container that
+	// is gone, and must not fail the job.
+	return out, nil
+}
+
+// transientRemoveInterval is how often removeCanceledJob removes the container
+// of a canceled job again while its docker client has yet to exit.
+var transientRemoveInterval = time.Second
+
+// transientRemoveTimeout bounds one `docker rm -f` of a canceled job.
+const transientRemoveTimeout = 30 * time.Second
+
+// removeCanceledJob force-removes the container of a canceled transient job:
+// at once, which stops a running container and so ends the attached client
+// too, then every transientRemoveInterval until the client has exited, in case
+// the compose plugin outlives the killed docker client and starts the
+// container after an earlier removal, and once more after it has exited, when
+// nothing is left to start it, for a container a create in flight left behind.
+// ctx must outlive the cancellation; each removal has its own timeout. The
+// last removal's error is returned.
+func (b Backend) removeCanceledJob(ctx context.Context, target runtime.Target, container string, exited <-chan struct{}) error {
+	ticker := time.NewTicker(transientRemoveInterval)
+	defer ticker.Stop()
+	for {
+		_ = b.removeContainer(ctx, target, container)
+		select {
+		case <-exited:
+			return b.removeContainer(ctx, target, container)
+		case <-ticker.C:
+		}
+	}
+}
+
+// removeContainer runs `docker rm -f` on one container. A container that is
+// already gone is no error, as older docker clients report it.
+func (b Backend) removeContainer(ctx context.Context, target runtime.Target, container string) error {
+	ctx, cancel := context.WithTimeout(ctx, transientRemoveTimeout)
+	defer cancel()
+	out, err := b.run(ctx, target.Root, target.EnvFile, "rm", "-f", container)
+	if err != nil && strings.Contains(string(out), "No such container") {
+		return nil
+	}
+	return err
+}
+
+// oneOffContainerName names one run of a transient job as docker compose names
+// its own one-off containers, <project>-<service>-run-<id>, with a random id so
+// concurrent and earlier runs never collide.
+func oneOffContainerName(job runtime.JobSpec) string {
+	var project struct {
+		Name string `yaml:"name"`
+	}
+	// An undecodable configuration fails the run itself; the name only needs
+	// a prefix.
+	_ = yaml.Unmarshal(job.Configuration, &project)
+	if project.Name == "" {
+		project.Name = "angee"
+	}
+	id := make([]byte, 6)
+	_, _ = rand.Read(id) // never fails (crypto/rand)
+	return project.Name + "-" + job.Name + "-run-" + hex.EncodeToString(id)
+}
+
+// jobOutputTail keeps the last maxJobOutputBytes of a job's output.
+func jobOutputTail(out []byte) []byte {
+	if len(out) > maxJobOutputBytes {
+		return out[len(out)-maxJobOutputBytes:]
+	}
+	return out
 }
 
 func (b Backend) Apply(ctx context.Context, target runtime.Target) error {

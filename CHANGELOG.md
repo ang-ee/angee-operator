@@ -19,16 +19,34 @@ latest tag.
   as unknown while preserving the full selected inventory.
 - Trusted job `capture` declarations and persist `backup: exclude` policy.
   Local captures use isolated native process-compose foreground jobs without
-  modifying or restarting the shared supervisor project. Local transient capture
+  modifying or restarting the shared supervisor project. Container captures run
+  as one-off `docker compose run --rm` containers, removed with `docker rm -f`
+  when a capture times out or is cancelled while the operator runs; stopping
+  the operator mid-capture is best-effort, and the container may run on until
+  it finishes. Local transient capture
   is explicitly unavailable on Windows until native process-tree cancellation
   is verified; discovery reports that limitation before capture starts.
-
-### Changed
-
-- Ordinary local jobs missing from the running supervisor now fail with explicit
-  supervisor-restart guidance instead of applying a project update that could
-  restart unrelated services. Capture jobs are manual and cannot participate
-  as dependencies or declare startup triggers.
+- Capture jobs run only through `POST /backups`. They are manual, cannot
+  declare `run_on` or be a dependency, are left out of chained restarts, and
+  `POST /jobs/{name}/run`, `GET /jobs/{name}/run-preview` and the GraphQL
+  `jobRun` and `jobRunPreview` refuse them with `INVALID_INPUT` (HTTP 400),
+  whatever inputs they are given.
+- Backup receipts are `JobRunOperation`s read through `GET /job-runs/{id}` and
+  GraphQL `jobRunOperation(id)`; their nodes have the new `JobRunNodeKind`
+  `BACKUP`. Only the admin bearer sees them; a minted token gets the same
+  404 / `NOT_FOUND` as for an unknown ID. A backup never becomes
+  `latestJobRun` (REST `/job-runs/latest`), and backup receipts never evict
+  the latest job run.
+- The `/backups` request bodies are decoded strictly: an unknown field, nested
+  or not, or anything after the one JSON value is a 400. Every other endpoint
+  decodes as before.
+- `fetch_published` source capture works on a jj-colocated source: jj's own
+  `.jj/` tree and `refs/jj/` refs are exempt only once the jj layer has
+  verified them against the declared store, and jj then refuses any visible
+  commit no remote bookmark or tag holds, and a working-copy commit that is
+  not empty and undescribed. Branch and HEAD reflogs still count, so history
+  jj rewrote within git's reflog expiry is still refused there; use
+  `portable` for those sources.
 
 ## v0.22.0 — 2026-10-13
 

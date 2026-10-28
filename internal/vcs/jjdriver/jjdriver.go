@@ -3,11 +3,13 @@
 // diff; every other verb waits for phase 8 of
 // .agents/plans/jj-native-operator.md and reports vcs.ErrUnsupported. No
 // manifest can name a jj slot yet, so normal slot dispatch does not select
-// this driver. Backup plans use it when colocated JJ metadata is present.
+// this driver. Source captures use it as the vcs.BackupLayer over a Git
+// checkout, which plans nothing unless colocated JJ metadata is present.
 //
 // jj owns the slot: status, diff and verbs run the jj CLI and interpret what it
-// prints through the templates in templates.go. BackupPlan additionally reads
-// repository pointer files to validate portable topology without changing them.
+// prints through the templates in templates.go. BackupLayerPlan additionally
+// reads repository pointer files to validate portable topology without
+// changing them.
 // The driver never writes JJ metadata directly.
 // Which remote a slot's branch is pushed to is git's answer, from the slot's
 // colocated git config, as it is for git slots.

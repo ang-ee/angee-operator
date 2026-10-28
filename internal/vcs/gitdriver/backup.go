@@ -8,13 +8,17 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
+var _ vcs.BackupPlanner = Driver{}
+
 // BackupPlan checks native Git metadata and publication without changing the repository.
 // The caller must confine each returned component to its declared filesystem boundary.
-func (d Driver) BackupPlan(ctx context.Context, slot vcs.Slot, remoteOnly bool) (vcs.BackupPlan, error) {
+// The publication verdict runs last, once Git and the layer have verified their metadata.
+func (d Driver) BackupPlan(ctx context.Context, slot vcs.Slot, remoteOnly bool, layer vcs.BackupLayer) (vcs.BackupPlan, error) {
 	client := d.git
 	root, store := slot.Path, slot.Primary
 	policy := "bundle"
@@ -47,13 +51,6 @@ func (d Driver) BackupPlan(ctx context.Context, slot vcs.Slot, remoteOnly bool) 
 	}
 	if data, err := os.ReadFile(filepath.Join(commonPath, "objects/info/alternates")); err == nil && strings.TrimSpace(string(data)) != "" {
 		return vcs.BackupPlan{}, vcs.BackupRefusal("git alternates require a self-contained object store")
-	}
-	if policy == "fetch_published" {
-		remotes, err := client.PublishedBackup(ctx, root)
-		if err != nil {
-			return vcs.BackupPlan{}, err
-		}
-		revision.Remotes = remotes
 	}
 	plan := vcs.BackupPlan{RepositoryRoot: commonPath, WorktreeExclude: []string{filepath.Join(root, ".git")}, Components: []vcs.BackupComponent{{Name: "git", Root: commonPath, Exclude: []string{filepath.Join(commonPath, "worktrees")}}}}
 	worktreeGit, _, err := client.RunIsolated(ctx, root, nil, "--no-pager", "rev-parse", "--git-dir")
@@ -88,5 +85,39 @@ func (d Driver) BackupPlan(ctx context.Context, slot vcs.Slot, remoteOnly bool) 
 		}
 	}
 	plan.Evidence = revision
-	return plan, nil
+	var layered vcs.BackupPlan
+	if layer != nil {
+		if layered, err = layer.BackupLayerPlan(ctx, slot, commonPath, remoteOnly); err != nil {
+			return vcs.BackupPlan{}, err
+		}
+	}
+	if remoteOnly {
+		colocated, err := colocatedMetadata(root, layered.Colocated)
+		if err != nil {
+			return vcs.BackupPlan{}, err
+		}
+		if _, err := client.PublishedBackup(ctx, root, colocated); err != nil {
+			return vcs.BackupPlan{}, err
+		}
+	}
+	return plan.Layered(layered), nil
+}
+
+// colocatedMetadata is what the Git publication verdict leaves to a verified
+// colocated layer: its directories, by name, which must lie directly in the
+// worktree root, its ref namespaces, and the commits its verdict counts as
+// published. A layer that verified nothing leaves the verdict strict.
+func colocatedMetadata(root string, own *vcs.ColocatedMetadata) (git.Colocated, error) {
+	if own == nil {
+		return git.Colocated{}, nil
+	}
+	colocated := git.Colocated{Refs: own.GitRefs, Revisions: own.Published}
+	for _, dir := range own.Dirs {
+		dir = filepath.Clean(dir)
+		if filepath.Dir(dir) != filepath.Clean(root) {
+			return git.Colocated{}, vcs.BackupRefusal("colocated metadata lies outside the source worktree root")
+		}
+		colocated.Dirs = append(colocated.Dirs, filepath.Base(dir))
+	}
+	return colocated, nil
 }

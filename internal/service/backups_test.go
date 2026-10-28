@@ -13,15 +13,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	gitx "github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
 func backupFixture(t *testing.T) (*Platform, api.BackupRequest) {
@@ -1025,5 +1029,268 @@ func TestBackupPreviewBudgetCannotHideUnsafeLaterComponentRoot(t *testing.T) {
 	}
 	if resource.Status != "unsupported" {
 		t.Fatalf("estimate cap hid unsafe repository root: %+v", resource)
+	}
+}
+
+// TestBackupFetchPublishedColocatedJJ captures a real colocated jj store and a
+// workspace of it from their remote alone. Fully published, both pass, though
+// each carries jj's ignored .jj tree and refs/jj/ keep refs. A dirty working
+// copy (before and after jj snapshots it), a commit only jj can see, and an
+// ignored file outside .jj are each refused, and passing returns once each is
+// gone. Git's reflogs still count: a commit rewritten after jj exported it as
+// HEAD is refused, though jj hides it.
+func TestBackupFetchPublishedColocatedJJ(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	home := t.TempDir()
+	for key, value := range map[string]string{"HOME": home, "XDG_CONFIG_HOME": filepath.Join(home, ".config"), "JJ_CONFIG": filepath.Join(home, "jj.toml"), "GIT_CONFIG_GLOBAL": filepath.Join(home, ".gitconfig"), "GIT_CONFIG_NOSYSTEM": "1", "JJ_USER": "backup-test", "JJ_EMAIL": "backup@example.invalid", "GIT_AUTHOR_NAME": "backup-test", "GIT_AUTHOR_EMAIL": "backup@example.invalid", "GIT_COMMITTER_NAME": "backup-test", "GIT_COMMITTER_EMAIL": "backup@example.invalid"} {
+		t.Setenv(key, value)
+	}
+	if err := jjdriver.Probe(t.Context()).Err(); err != nil {
+		if os.Getenv("ANGEE_REQUIRE_JJ") == "1" {
+			t.Fatalf("ANGEE_REQUIRE_JJ=1, but %v", err)
+		}
+		t.Skip(err)
+	}
+	run := func(dir, tool string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(tool, args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v %s", tool, args, err, out)
+		}
+	}
+	write := func(path, contents string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := t.TempDir()
+	remote, seed, primary := filepath.Join(base, "remote.git"), filepath.Join(base, "seed"), filepath.Join(base, "primary")
+	run(base, "git", "init", "-q", "--bare", "-b", "main", remote)
+	run(base, "git", "clone", "-q", remote, seed)
+	write(filepath.Join(seed, "tracked"), "published\n")
+	run(seed, "git", "add", ".")
+	run(seed, "git", "commit", "-q", "-m", "published")
+	run(seed, "git", "push", "-q", "origin", "HEAD:main")
+	run(base, "git", "clone", "-q", remote, primary)
+	run(primary, "jj", "git", "init", "--colocate")
+	p, _ := backupFixture(t)
+	slot := filepath.Join(p.root, "workspaces/dev/work")
+	if err := os.MkdirAll(filepath.Dir(slot), 0700); err != nil {
+		t.Fatal(err)
+	}
+	run(primary, "jj", "workspace", "add", "--colocate", "--name", "dev", "-r", "main@origin", slot)
+	stack, _ := p.LoadStack()
+	stack.Sources = map[string]manifest.Source{"work": {Kind: "local", Path: primary}}
+	stack.Workspaces = map[string]manifest.Workspace{"dev": {Template: "test", Sources: map[string]manifest.WorkspaceSource{"work": {Source: "work", Subpath: "work"}}}}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	req := api.BackupRequest{Version: 1, RequestID: "published-jj", Selection: api.BackupSelection{Sources: api.BackupSourceSelection{BackupGroupSelection: api.BackupGroupSelection{Mode: "selected", Names: []string{"stack:work", "workspace:dev/work"}}, Policy: "fetch_published"}}}
+	verdicts := func() map[string]api.BackupResource {
+		t.Helper()
+		preview, err := p.BackupPreview(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := map[string]api.BackupResource{}
+		for _, resource := range preview.Resources {
+			found[resource.Name] = resource
+		}
+		return found
+	}
+	published := func(name string) {
+		t.Helper()
+		found := verdicts()
+		for _, resource := range []string{"stack:work", "workspace:dev/work"} {
+			if got := found[resource]; got.Status != "included" {
+				t.Fatalf("%s: %s=%+v, want it captured from its remote", name, resource, got)
+			}
+		}
+		_, evidence, err := p.backupSourceTrees(context.Background(), "workspace:dev/work", slot, primary, nil, "fetch_published")
+		if err != nil || evidence.Policy != "fetch_published" || evidence.Remotes["origin"] == "" || evidence.GitRevision == "" || evidence.JJRevision == "" || evidence.JJOperation == "" {
+			t.Fatalf("%s: evidence=%+v err=%v", name, evidence, err)
+		}
+	}
+	refused := func(name string) {
+		t.Helper()
+		if got := verdicts()["workspace:dev/work"]; got.Status != "unsupported" || !strings.HasPrefix(got.Reason, "remote-only capture refuses") {
+			t.Fatalf("%s: workspace:dev/work=%+v, want a publication refusal", name, got)
+		}
+		var refusal *gitx.BackupPublicationError
+		if _, _, err := p.backupSourceTrees(context.Background(), "workspace:dev/work", slot, primary, nil, "fetch_published"); !errors.As(err, &refusal) {
+			t.Fatalf("%s: err=%v, want a publication refusal", name, err)
+		}
+	}
+
+	published("fully published")
+
+	write(filepath.Join(slot, "dirty.txt"), "unsnapshotted edit\n")
+	refused("edit jj has not snapshotted")
+	run(slot, "jj", "status")
+	refused("snapshotted dirty working copy")
+	run(slot, "jj", "restore")
+	published("restored working copy")
+
+	write(filepath.Join(slot, "side.txt"), "jj-only work\n")
+	run(slot, "jj", "new", "main@origin")
+	refused("commit no Git ref holds")
+	run(slot, "jj", "abandon", "-r", "visible_heads() ~ working_copies()")
+	published("abandoned side commit")
+
+	write(filepath.Join(primary, ".git/info/exclude"), "build/\n")
+	write(filepath.Join(slot, "build/out"), "stray ignored output\n")
+	refused("ignored file outside .jj")
+	if err := os.RemoveAll(filepath.Join(slot, "build")); err != nil {
+		t.Fatal(err)
+	}
+	published("stray file removed")
+
+	write(filepath.Join(slot, "rewritten.txt"), "rewritten before it was pushed\n")
+	run(slot, "jj", "commit", "-m", "first draft")
+	run(slot, "jj", "describe", "-r", "@-", "-m", "final")
+	run(slot, "git", "push", "-q", "origin", "HEAD:main")
+	run(slot, "jj", "git", "fetch")
+	run(slot, "jj", "bookmark", "set", "main", "-r", "main@origin")
+	if got := verdicts()["workspace:dev/work"]; got.Status != "unsupported" || got.Reason != "remote-only capture refuses unpublished reflog history; choose portable capture" {
+		t.Fatalf("draft held only by HEAD's reflog: workspace:dev/work=%+v, want the reflog refusal", got)
+	}
+}
+
+// backupPlanningDriver is a slot driver with the capture capability: it
+// returns plan without running anything and records what the service asked.
+type backupPlanningDriver struct {
+	*fakeDriver
+	plan       vcs.BackupPlan
+	planned    []vcs.Slot
+	remoteOnly []bool
+	layers     []vcs.BackupLayer
+}
+
+func (d *backupPlanningDriver) BackupPlan(_ context.Context, s vcs.Slot, remoteOnly bool, layer vcs.BackupLayer) (vcs.BackupPlan, error) {
+	d.planned = append(d.planned, s)
+	d.remoteOnly = append(d.remoteOnly, remoteOnly)
+	d.layers = append(d.layers, layer)
+	return d.plan, nil
+}
+
+// fakeBackupLayer is the layer a test hands the service; only its identity is
+// compared, so planning through it is never expected. name keeps the type
+// non-zero-sized, so two pointers to it never compare equal by accident.
+type fakeBackupLayer struct{ name string }
+
+func (*fakeBackupLayer) BackupLayerPlan(context.Context, vcs.Slot, string, bool) (vcs.BackupPlan, error) {
+	return vcs.BackupPlan{}, errors.New("the fake slot driver plans no layer")
+}
+
+// TestBackupSourcePlansThroughDriverSeams injects the slot driver and the
+// colocated layer through their Platform seams: a source capture asks the
+// slot's driver to plan, hands it the seam's layer, and copies exactly the
+// plan's components, while a driver without the capability is refused.
+func TestBackupSourcePlansThroughDriverSeams(t *testing.T) {
+	p, _ := backupFixture(t)
+	source := filepath.Join(p.root, "sources/app")
+	metadata := filepath.Join(source, ".fake-vcs")
+	if err := os.MkdirAll(metadata, 0700); err != nil {
+		t.Fatal(err)
+	}
+	driver := &backupPlanningDriver{fakeDriver: &fakeDriver{}, plan: vcs.BackupPlan{
+		Components:      []vcs.BackupComponent{{Name: "fake", Root: metadata}},
+		WorktreeExclude: []string{metadata},
+		Evidence:        api.BackupSourceEvidence{GitRevision: "fake-revision", Policy: "bundle"},
+	}}
+	layer := &fakeBackupLayer{name: "seam"}
+	var layered []vcs.Slot
+	p.slotDrivers = func(vcs.Slot) vcs.Driver { return driver }
+	p.backupLayers = func(s vcs.Slot) vcs.BackupLayer { layered = append(layered, s); return layer }
+
+	trees, evidence, err := p.backupSourceTrees(context.Background(), "stack:app", source, source, nil, "bundle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := vcs.Slot{Path: source, Primary: source}
+	if len(driver.planned) != 1 || driver.planned[0] != want || driver.remoteOnly[0] || driver.layers[0] != vcs.BackupLayer(layer) || len(layered) != 1 || layered[0] != want {
+		t.Fatalf("planned=%+v remoteOnly=%v layers=%v layered=%+v", driver.planned, driver.remoteOnly, driver.layers, layered)
+	}
+	if evidence.GitRevision != "fake-revision" || len(trees) != 2 {
+		t.Fatalf("evidence=%+v trees=%+v", evidence, trees)
+	}
+	if worktree := trees[0]; worktree.root != source || worktree.prefix != "sources/stack/app/worktree" || !slices.Contains(worktree.exclude, metadata) {
+		t.Fatalf("worktree tree=%+v", worktree)
+	}
+	if component := trees[1]; component.root != metadata || component.prefix != "sources/stack/app/repository/fake" {
+		t.Fatalf("component tree=%+v", component)
+	}
+	if _, evidence, err := p.backupSourceTrees(context.Background(), "stack:app", source, source, nil, "fetch_published"); err != nil || evidence.GitRevision != "fake-revision" || !driver.remoteOnly[1] {
+		t.Fatalf("remote-only plan: evidence=%+v err=%v remoteOnly=%v", evidence, err, driver.remoteOnly)
+	}
+
+	p.slotDrivers = func(vcs.Slot) vcs.Driver { return &fakeDriver{} }
+	var refusal *vcs.BackupCapabilityError
+	if _, _, err := p.backupSourceTrees(context.Background(), "stack:app", source, source, nil, "bundle"); !errors.As(err, &refusal) {
+		t.Fatalf("a driver without the capture capability: err=%v", err)
+	}
+}
+
+// captureRecorder is a container backend that records the capture job it is
+// asked to run and writes the dump that job would have, into the backup's
+// output directory for it.
+type captureRecorder struct {
+	stubStatusBackend
+	output string
+	spec   runtime.JobSpec
+}
+
+func (b *captureRecorder) RunJob(_ context.Context, _ runtime.Target, spec runtime.JobSpec) ([]byte, error) {
+	b.spec = spec
+	return nil, os.WriteFile(filepath.Join(b.output, "app.dump"), []byte("dump\n"), 0o600)
+}
+
+// A container capture job reaches the container backend as a transient job,
+// compiled with the output directory the backup chose for it, and its dump is
+// archived under its capture's group and name.
+func TestContainerCaptureRunsTransientWithItsBackupOutput(t *testing.T) {
+	p, _ := backupFixture(t)
+	stack, err := p.LoadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.Jobs = map[string]manifest.Job{"dump": {
+		Runtime: manifest.RuntimeContainer, Image: "alpine:3",
+		Mounts:  []string{"bind://./${inputs.backup_output}:/out"},
+		Command: []string{"sh", "-c", "echo dump > /out/app.dump"},
+		Capture: &manifest.BackupCapture{Group: "databases", Name: "app", Output: "app.dump"},
+	}}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	req := api.BackupRequest{Version: 1, RequestID: "container-capture", Selection: api.BackupSelection{Databases: api.BackupGroupSelection{Mode: "all"}}}
+	output := "state/backups/" + req.RequestID + "/captures/dump"
+	recorder := &captureRecorder{output: filepath.Join(p.root, output)}
+	p.composeBackend = recorder
+
+	if _, err := p.BackupStart(context.Background(), req); err != nil {
+		t.Fatalf("BackupStart() error = %v", err)
+	}
+	op := waitBackup(t, p, req.RequestID)
+	if op.Status != api.JobRunSucceeded || op.Artifact == nil {
+		t.Fatalf("backup = %+v, want it succeeded with an artifact", op)
+	}
+	if recorder.spec.Name != "dump" || !recorder.spec.Transient || !strings.Contains(string(recorder.spec.Configuration), output) {
+		t.Fatalf("container backend ran %q (transient %v) with configuration\n%s\nwant the transient capture job bound to %s", recorder.spec.Name, recorder.spec.Transient, recorder.spec.Configuration, output)
+	}
+	archive, err := zip.OpenReader(filepath.Join(p.root, op.Artifact.Path))
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+	defer func() { _ = archive.Close() }()
+	if !slices.ContainsFunc(archive.File, func(f *zip.File) bool { return f.Name == "captures/databases/app/app.dump" }) {
+		t.Fatalf("archive lacks captures/databases/app/app.dump")
 	}
 }

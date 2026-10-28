@@ -29,8 +29,6 @@ import (
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 	"github.com/ang-ee/angee-operator/internal/vcs"
-	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
-	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
 const backupArchiveDirectory = "backups/archives"
@@ -674,24 +672,18 @@ func (p *Platform) backupSourceTrees(ctx context.Context, name, root, store stri
 	}
 	prefix := "sources/" + strings.ReplaceAll(name, ":", "/")
 	slot := vcs.Slot{Path: root, Primary: store}
-	gitPlan, err := gitdriver.New(p.gitClient()).BackupPlan(ctx, slot, policy == "fetch_published")
+	planner, ok := p.slotDriver(slot).(vcs.BackupPlanner)
+	if !ok {
+		return nil, api.BackupSourceEvidence{}, vcs.BackupRefusal("source version control cannot plan a capture")
+	}
+	plan, err := planner.BackupPlan(ctx, slot, policy == "fetch_published", p.backupLayer(slot))
 	if err != nil {
 		return nil, api.BackupSourceEvidence{}, err
 	}
-	jjPlan, err := jjdriver.New(p.gitClient()).BackupPlan(ctx, slot, gitPlan.RepositoryRoot, policy == "fetch_published")
-	if err != nil {
-		return nil, api.BackupSourceEvidence{}, err
-	}
-	revision := gitPlan.Evidence
-	revision.JJRevision = jjPlan.Evidence.JJRevision
-	revision.JJChangeID = jjPlan.Evidence.JJChangeID
-	revision.JJOperation = jjPlan.Evidence.JJOperation
-	revision.JJWorkspaces = jjPlan.Evidence.JJWorkspaces
 	if policy == "fetch_published" {
-		return nil, revision, nil
+		return nil, plan.Evidence, nil
 	}
-	exclusions := append(slices.Clone(excluded), gitPlan.WorktreeExclude...)
-	exclusions = append(exclusions, jjPlan.WorktreeExclude...)
+	exclusions := append(slices.Clone(excluded), plan.WorktreeExclude...)
 	scope := root
 	if backupWithin(p.root, root) {
 		scope = p.root
@@ -701,7 +693,7 @@ func (p *Platform) backupSourceTrees(ctx context.Context, name, root, store stri
 	if err != nil {
 		return nil, api.BackupSourceEvidence{}, err
 	}
-	for _, component := range append(gitPlan.Components, jjPlan.Components...) {
+	for _, component := range plan.Components {
 		scope := resolvedStore
 		if backupWithin(root, component.Root) {
 			scope = root
@@ -711,7 +703,7 @@ func (p *Platform) backupSourceTrees(ctx context.Context, name, root, store stri
 		}
 		trees = append(trees, backupTree{scope, component.Root, prefix + "/repository/" + component.Name, append(slices.Clone(excluded), component.Exclude...)})
 	}
-	return trees, revision, nil
+	return trees, plan.Evidence, nil
 }
 
 // BackupStart creates an idempotent asynchronous operation using the existing
@@ -785,7 +777,7 @@ func (p *Platform) BackupStart(ctx context.Context, req api.BackupRequest) (api.
 		return op, err
 	}
 	p.jobRunsMu.Lock()
-	p.rememberJobRun(cloneJobRun(op), nil, nil)
+	p.rememberBackupRun(cloneJobRun(op))
 	p.jobRunsMu.Unlock()
 	operationCtx := context.WithoutCancel(ctx)
 	if p.detachedContext != nil {
@@ -936,12 +928,12 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 			if err = root.MkdirAll(dir, 0700); err != nil {
 				return err
 			}
-			inputs := map[string]map[string]string{resource.job: {"backup_output": dir, "backup_output_absolute": filepath.Join(p.root, dir)}}
+			inputs := map[string]string{"backup_output": dir, "backup_output_absolute": filepath.Join(p.root, dir)}
 			projected, err := jobOperationStack(stack, resource.job, false)
 			if err != nil {
 				return err
 			}
-			compiled, err := compile(projected, p.root, originalSecrets, inputs, true)
+			compiled, err := compileCapture(projected, p.root, originalSecrets, resource.job, inputs)
 			if err != nil {
 				return err
 			}
@@ -1180,6 +1172,15 @@ func (p *Platform) BackupArchive(ctx context.Context, id string) (io.ReadCloser,
 	}
 	file, err := root.Open(expected)
 	return file, *op.Artifact, err
+}
+
+// IsBackupReceipt reports whether op is a backup's receipt rather than a job
+// run's, by its nodes (kind "backup"), not its root job's name: a stack may
+// declare a job called backup. A backup receipt's artifact names every archived
+// path and the digest of the captured secrets, so the operator shows it only
+// to the admin bearer that /backups requires.
+func IsBackupReceipt(op api.JobRunOperation) bool {
+	return len(op.Nodes) > 0 && op.Nodes[0].Kind == "backup"
 }
 
 func backupReceiptFor(existing api.JobRunOperation, digest string) (api.JobRunOperation, error) {

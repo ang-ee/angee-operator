@@ -99,13 +99,20 @@ for untrusted clients. No backup archive or JSON manifest claims otherwise.
 Capture jobs run through the existing runtime JobBackend using process-compose's
 foreground `run --no-server --no-deps`. The selected trusted job gets a private
 configuration and process group; it cannot mutate the live supervisor project.
-The existing operation receipt owns its outcome. Registered lifecycle jobs retain
-the supervisor path. Missing ordinary jobs/services fail with ProcessNotLoadedError
-and require a supervised stack restart to load newly declared process names.
+The existing operation receipt owns its outcome. Capture jobs never reach the
+shared supervisor: a transient job runs in the foreground before any project
+update, so the full-project registration of a process the supervisor has not
+loaded (upstream v1.120.0 compares file-loaded int variables to JSON float64
+values and restarts the file-loaded processes on that post) cannot fire during
+a backup. Ordinary jobs and services keep that registration path, as in v0.22.0.
 
-The former full-project JSON roundtrip registration path is removed: upstream
-v1.120.0 compares file-loaded int variables to JSON float64 values and restarts
-unrelated processes. No automatic whole-project replacement is safe here.
+Container capture jobs run the same way, as one-off `docker compose run --rm
+--no-deps -T` containers with a private name, not by recreating the job's
+service in the shared compose project. A capture that times out or is
+cancelled while the operator runs has its container removed with `docker rm
+-f`, since killing the compose client alone leaves it running. Stopping the
+operator mid-capture is best-effort: nothing waits for that removal, so the
+container may run on until it finishes.
 
 Local transient capture currently refuses Windows before spawning: Go cannot
 interrupt Windows process groups, and killing only the supervisor could orphan

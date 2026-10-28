@@ -265,6 +265,11 @@ POST /backups
 GET  /backups/{id}/archive
 ```
 
+Preview/start bodies are decoded strictly, unlike other REST bodies: an unknown
+field (such as a misspelled group) or anything after the one JSON object answers
+`400` with code `INVALID_INPUT` before discovery or capture starts, so a typo
+never silently captures less.
+
 Preview/start requests have `version: 1`, a `selection` object, and start also
 requires `request_id` (1–128 letters/digits/underscores/hyphens). Selection groups
 are `databases`, `service_state`, `workspaces`, `sources`, `storage`; every group
@@ -279,12 +284,24 @@ Backup preview uses bounded quick discovery: incomplete resource sizes remain
 The total sums only known sizes; capture performs complete validation.
 
 Start returns HTTP 202 with the existing `JobRunOperation` receipt; poll
-`GET /job-runs/{id}`. Equal IDs and selections are idempotent across restarts;
+`GET /job-runs/{id}` or GraphQL `jobRunOperation(id:)`. Its `root_job` is
+`backup` and its nodes, `capture` and `verify`, have kind `backup` (GraphQL
+`BACKUP`). Like the `/backups` routes, a backup receipt answers only the admin
+bearer: its artifact names every archived path and the digest of the captured
+secrets, so to a minted token both routes answer as for an unknown ID (404,
+`NOT_FOUND`). A backup never becomes `GET /job-runs/latest` (`latestJobRun`),
+which stays the latest job run. Equal IDs and selections are idempotent across restarts;
 changed selections conflict. Interrupted receipts fail rather than restarting
 an unknown partial operation. Only success includes `artifact` with `path`,
 `size_bytes`, `sha256`, `manifest_version: 1`, and immutable `manifest` evidence.
 Publication is under `backups/archives/<id>.zip`; staging, runtime directories,
 and unsafe physical database persists are excluded through containing trees.
+
+A job that declares `capture:` runs only inside a backup, which chooses its
+output directory. `POST /jobs/{name}/run`, `GET /jobs/{name}/run-preview` and
+GraphQL `jobRun` and `jobRunPreview` refuse it, with or without inputs, with code
+`INVALID_INPUT` (`400`) naming the `job`, and a chained restart never runs one
+as a dependent.
 
 The [capture/format contract](../proposals/operator-backup-restore.md) documents
 trusted native job declarations, per-entry verification, structured Git/JJ
@@ -423,8 +440,9 @@ counts both under `summary` (`total`, `running`, `completed`, `failed`,
 the operation continues under the operator daemon after the initiating HTTP
 request disconnects. Poll `GET /job-runs/{id}` for its operation status, current
 step, per-node outcomes, terminal root-job output, and error. The `latest` route
-returns the most recently started receipt or JSON `null` when this daemon has not
-started one.
+returns the most recently started job run's receipt, never a backup's, or JSON
+`null` when this daemon has not started one. A backup capture job is refused
+with `INVALID_INPUT` (see [Manual backups](#manual-backups)).
 
 The preview route returns the jobs and services affected by the requested run
 without starting it. With `chained_restart`, a successful root job is followed by
@@ -432,8 +450,11 @@ its downstream jobs and services in dependency order; failed prerequisites block
 their descendants.
 
 Receipts are retained in bounded daemon memory so clients can reconnect and keep
-polling. They are not written to disk: restarting or stopping the operator loses
-the retained receipts, and stopping the daemon cancels an active operation.
+polling. Job-run receipts are not written to disk: restarting or stopping the
+operator loses the retained receipts, and stopping the daemon cancels an active
+operation. Backup receipts are also written under `state/job-runs/`, so
+`GET /job-runs/{id}` keeps answering for them, to the admin bearer only (see
+Manual backups).
 
 Sources:
 

@@ -17,6 +17,17 @@ type revset string
 // needed.
 const workingCopy revset = "@"
 
+// published is what the remotes hold as far as the repository knows: the
+// targets of every remote bookmark and remote tag. Neither function selects
+// jj's git pseudo-remote, which mirrors the colocated repository's own refs.
+const published revset = "remote_bookmarks() | remote_tags()"
+
+// unpublished is every visible commit that a capture from the remotes alone
+// would lose: all but the ancestors of published, less the working-copy
+// commits jj discards itself, empty and undescribed. A working-copy commit
+// with changes or a description, in any workspace, counts.
+const unpublished revset = "all() ~ ::(" + published + `) ~ (working_copies() & empty() & description(exact:""))`
+
 // symbol is one revision named the way a user names it (a bookmark, tag,
 // commit id or change id, resolved by jj's own rules), always as one quoted
 // name.

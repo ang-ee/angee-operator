@@ -206,7 +206,7 @@ func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
 //
 // A process the stack defined after the supervisor started is unknown to it, and
 // Up refuses it before starting anything. Registering it means posting the whole
-// project, and process-compose v1.120.0 replaces every
+// project (see addMissingProcess), and process-compose v1.120.0 replaces every
 // process its file loader created on the first such post, restarting the ones
 // that run: the loader stores PC_REPLICA_NUM as an int, which the JSON round
 // trip turns into a float64, so its own comparison never finds them equal.
@@ -753,7 +753,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if processMissing(resp.StatusCode, body) {
-			return false, &runtime.ProcessNotLoadedError{Name: name, ControlPort: effectiveControlPort(target.ControlPort)}
+			return b.addMissingProcess(ctx, target, name, updates)
 		}
 		return false, fmt.Errorf("get process config: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
@@ -876,6 +876,116 @@ func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Targe
 		// hold a Process object and wait indefinitely even when is_running is false.
 		return false, nil
 	}
+}
+
+// addMissingProcess round-trips every current native process configuration
+// before adding the compiled process. POST /project replaces the project set,
+// so a partial payload would remove unrelated processes.
+//
+// Apply and RunJob reach it for a process the stack declared after the
+// supervisor started, as a restart or a chained restart of a new service or
+// job does. On process-compose v1.120.0 the first such post also relaunches the
+// processes the supervisor loaded from its file (see upThroughSupervisor),
+// which is why Up refuses an unknown process instead. A transient job never
+// gets here: RunJob runs it under a private foreground supervisor
+// (runTransientJob) and leaves the shared project untouched.
+func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
+	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
+	list, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/processes", nil)
+	if err != nil {
+		return false, err
+	}
+	setProcessToken(list, target.Root, target.EnvFile)
+	response, err := controlPlaneClient.Do(list)
+	if err != nil {
+		return false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return false, fmt.Errorf("list process configs: %s", response.Status)
+	}
+	var states struct {
+		Data []struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&states); err != nil {
+		return false, err
+	}
+	processes := make(map[string]any, len(states.Data)+1)
+	for _, state := range states.Data {
+		info, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/process/info/"+url.PathEscape(state.Name), nil)
+		if err != nil {
+			return false, err
+		}
+		setProcessToken(info, target.Root, target.EnvFile)
+		current, err := controlPlaneClient.Do(info)
+		if err != nil {
+			return false, err
+		}
+		if current.StatusCode >= 300 {
+			_ = current.Body.Close()
+			return false, fmt.Errorf("get process config %s: %s", state.Name, current.Status)
+		}
+		var config map[string]any
+		decodeErr := json.NewDecoder(current.Body).Decode(&config)
+		closeErr := current.Body.Close()
+		if decodeErr != nil {
+			return false, decodeErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		processes[state.Name] = config
+	}
+	// POST /project accepts decoded native types directly, bypassing the file
+	// loader that normally supplies these required identity/default fields.
+	compiled := map[string]any{
+		"name": name, "replicaName": name, "namespace": "default",
+		"replicas": 1, "launchTimeout": 5,
+		"shutDownParams": map[string]any{"signal": 15},
+		// UpdateProject does not derive executable/args for a new process.
+		// Register an inert placeholder, then activate it through UpdateProcess,
+		// whose native owner performs that command setup before running it.
+		"disabled": true,
+	}
+	for key, value := range updates {
+		normalized, err := jsonValue(value)
+		if err != nil {
+			return false, err
+		}
+		compiled[key] = normalized
+	}
+	processes[name] = compiled
+	payload, err := json.Marshal(map[string]any{"processes": processes})
+	if err != nil {
+		return false, err
+	}
+	post, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/project", bytes.NewReader(payload))
+	if err != nil {
+		return false, err
+	}
+	post.Header.Set("Content-Type", "application/json")
+	setProcessToken(post, target.Root, target.EnvFile)
+	result, err := controlPlaneClient.Do(post)
+	if err != nil {
+		return false, err
+	}
+	defer result.Body.Close()
+	if result.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
+		return false, fmt.Errorf("add process config: %s: %s", result.Status, strings.TrimSpace(string(body)))
+	}
+	activation := maps.Clone(updates)
+	activation["disabled"] = false
+	changed, err := b.updateProcess(ctx, target, name, activation)
+	if err != nil {
+		return false, fmt.Errorf("activate added process: %w", err)
+	}
+	if !changed {
+		return false, fmt.Errorf("activate added process: native placeholder was not updated")
+	}
+	return true, nil
 }
 
 // setProcessToken sends the supervisor's API token, when process-compose has

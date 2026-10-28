@@ -1428,19 +1428,57 @@ func TestProcessUpdatesPreservesShutdownWhenGraceIsOmitted(t *testing.T) {
 	}
 }
 
-func TestUpdateProcessRefusesMissingWithoutReplacingProject(t *testing.T) {
-	var writes int
+func TestAddMissingProcessSuppliesNativeIdentityDefaults(t *testing.T) {
+	var added map[string]any
+	var activated map[string]any
+	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writes++
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/processes":
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		case r.URL.Path == "/project":
+			var project struct {
+				Processes map[string]map[string]any `json:"processes"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
+				t.Errorf("decode project: %v", err)
+			}
+			added = project.Processes["job"]
+			_, _ = io.WriteString(w, `{}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
+			_ = json.NewEncoder(w).Encode(added)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			if err := json.NewDecoder(r.Body).Decode(&activated); err != nil {
+				t.Errorf("decode activation: %v", err)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
 		}
-		http.Error(w, `{"error":"no such process: job"}`, http.StatusBadRequest)
 	}))
 	defer server.Close()
-	_, err := (Backend{}).updateProcess(t.Context(), runtime.Target{ControlPort: serverPort(t, server)}, "job", map[string]any{"command": "run"})
-	var missing *runtime.ProcessNotLoadedError
-	if !errors.As(err, &missing) || writes != 0 {
-		t.Fatalf("missing error=%v writes=%d", err, writes)
+	_, portText, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portText)
+	_, err = (Backend{}).addMissingProcess(t.Context(), runtime.Target{ControlPort: port}, "job", map[string]any{"command": "run"})
+	if err != nil {
+		t.Fatalf("addMissingProcess() error = %v", err)
+	}
+	if added["name"] != "job" || added["replicaName"] != "job" || added["namespace"] != "default" || added["replicas"] != float64(1) || added["launchTimeout"] != float64(5) {
+		t.Fatalf("added native identity/defaults = %#v", added)
+	}
+	if shutdown := added["shutDownParams"].(map[string]any); shutdown["signal"] != float64(15) {
+		t.Fatalf("added shutdown defaults = %#v", shutdown)
+	}
+	if added["disabled"] != true || activated["disabled"] != false || activated["command"] != "run" {
+		t.Fatalf("bootstrap payloads = added %#v activated %#v", added, activated)
+	}
+	wantRequests := []string{"GET /processes", "POST /project", "GET /process/info/job", "POST /process"}
+	if !reflect.DeepEqual(requests, wantRequests) {
+		t.Fatalf("requests = %v, want %v", requests, wantRequests)
 	}
 }
 
@@ -2069,7 +2107,8 @@ func TestRunJobRestartsJobWhenSupervisorDiscardsUpdate(t *testing.T) {
 // the process, leaving afterUpdate as its state, or, when afterUpdate is nil,
 // leaves it untouched — what process-compose does when its own comparison finds
 // the posted config equal to the one it holds. While missing is set the process
-// is unknown, answered with the real supervisor's 400 bodies, without any attempt to replace the project. As a Runner it relaunches the process on `process
+// is unknown, answered with the real supervisor's 400 bodies, until POST
+// /project registers it. As a Runner it relaunches the process on `process
 // restart`, reusing the native state under a new pid, and serves that state to
 // `list -o json`.
 type fakeSupervisor struct {
@@ -2098,7 +2137,18 @@ func (s *fakeSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"can't get state of process `+s.name+`: no such process"}`, http.StatusBadRequest)
 	case r.Method == http.MethodGet && r.URL.Path == "/processes":
 		_, _ = io.WriteString(w, `{"data":[]}`)
-
+	case r.Method == http.MethodPost && r.URL.Path == "/project":
+		var project struct {
+			Processes map[string]json.RawMessage `json:"processes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.missing = false
+		s.config = string(project.Processes[s.name])
+		s.state = processListEntry{Name: s.name, Status: "Disabled"}
+		_, _ = io.WriteString(w, `{}`)
 	case r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
 		_, _ = io.WriteString(w, s.config)
 	case r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
@@ -2294,17 +2344,29 @@ func TestApplyRestartsProcessTheUpdateLeftDisabled(t *testing.T) {
 	}
 }
 
-func TestApplyRefusesMissingProcessWithoutRestartingAnything(t *testing.T) {
-	supervisor := &fakeSupervisor{name: "web", missing: true}
+// A process the supervisor does not know yet is registered and activated by the
+// update itself, which launches it: there is nothing to restart on top.
+func TestApplyRegistersMissingProcessWithoutRestartingIt(t *testing.T) {
+	supervisor := &fakeSupervisor{
+		name:        "web",
+		missing:     true,
+		afterUpdate: &processListEntry{Name: "web", Status: "Pending"},
+	}
 	server := httptest.NewServer(supervisor)
 	defer server.Close()
-	err := (Backend{Runner: supervisor}).Apply(t.Context(), runtime.Target{ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration)})
-	var missing *runtime.ProcessNotLoadedError
-	if !errors.As(err, &missing) {
-		t.Fatalf("Apply error=%v", err)
+	backend := Backend{Runner: supervisor}
+
+	err := backend.Apply(t.Context(), runtime.Target{
+		ControlPort: serverPort(t, server), Services: []string{"web"}, Configuration: []byte(webConfiguration),
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
 	}
-	if posts, restarts, _ := supervisor.observed(); posts != 0 || restarts != 0 {
-		t.Fatalf("posts=%d restarts=%d", posts, restarts)
+	if got, want := supervisor.postedCommands(), []any{"serve"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("posted commands = %v, want one activation of the compiled command: %v", got, want)
+	}
+	if _, restarts, _ := supervisor.observed(); restarts != 0 {
+		t.Fatalf("process restarted %d times after being registered and activated; want 0", restarts)
 	}
 }
 
@@ -2440,5 +2502,45 @@ func TestTransientNativeStdoutTailRedactsMultilineSecrets(t *testing.T) {
 	}
 	if strings.Contains(string(output), material) {
 		t.Fatal("native stdout tail exposed complete private-key line after dropping registered multiline key prefix")
+	}
+}
+
+// A transient job stays out of the registration path that serves a process the
+// supervisor has not loaded (addMissingProcess): it runs under its own
+// foreground supervisor, so the shared one gets no request at all, let alone a
+// project post that would relaunch the processes it runs.
+func TestRunJobKeepsTransientJobOutOfTheSharedSupervisor(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	supervisor := &fakeSupervisor{name: "capture", missing: true}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		supervisor.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho transient-ok\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"capture": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{Runner: supervisor, LookupPath: func(string) (string, error) { return binary, nil }}
+	// A job run through the shared supervisor would wait on it for good.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	output, err := backend.RunJob(ctx, runtime.Target{Root: root, ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "capture", Configuration: config, Transient: true})
+	if err != nil || !strings.Contains(string(output), "transient-ok") {
+		t.Fatalf("RunJob() = %q, %v; want the foreground run's output", output, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("shared supervisor got %d requests; want none", got)
+	}
+	if posts, restarts, _ := supervisor.observed(); posts != 0 || restarts != 0 {
+		t.Fatalf("shared supervisor got %d updates and %d restarts; want none", posts, restarts)
 	}
 }
