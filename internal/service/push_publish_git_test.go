@@ -198,7 +198,7 @@ func TestBranchlessSlotPushAndPublishRunTheirGit(t *testing.T) {
 			call: func() (any, error) { return platform.WorkspaceSourcePublish(ctx, "feature-a", "app", "", "feature-a") },
 			git: concat(pushURL, []string{
 				dir + " [] switch -c feature-a",
-				dir + " [angee] push --set-upstream --end-of-options origin refs/heads/feature-a:refs/heads/feature-a",
+				dir + " [] push --set-upstream --end-of-options origin refs/heads/feature-a:refs/heads/feature-a",
 			}),
 			outcome: "{OK:true Conflicted:false ConflictFiles:[] Message:branch 'feature-a' set up to track 'origin/feature-a'.\n\nTo <base>/remote.git\n * [new branch]      feature-a -> feature-a Source:<nil>}",
 		},
@@ -290,8 +290,8 @@ func TestBranchSlotPushAndPublishRunTheirGit(t *testing.T) {
 			},
 			git: []string{
 				forkURL,
-				dir + " [angee] push --set-upstream --end-of-options fork refs/heads/missing:refs/heads/missing",
-				dir + " [angee] -c core.quotepath=false ls-files -u",
+				dir + " [] push --set-upstream --end-of-options fork refs/heads/missing:refs/heads/missing",
+				dir + " [] -c core.quotepath=false ls-files -u",
 			},
 			outcome: "error: Publish for workspace \"feature-a\" slot \"app\": pushing branch \"missing\" of source slot \"app\" (<base>/remote.git) failed. git: error: src refspec refs/heads/missing does not match any",
 		},
@@ -300,7 +300,7 @@ func TestBranchSlotPushAndPublishRunTheirGit(t *testing.T) {
 			call: func() (any, error) {
 				return platform.WorkspaceSourcePublish(ctx, workspaceName, "app", "fork", workspaceName)
 			},
-			git:     []string{forkURL, dir + " [angee] push --set-upstream --end-of-options fork refs/heads/feature-a:refs/heads/feature-a"},
+			git:     []string{forkURL, dir + " [] push --set-upstream --end-of-options fork refs/heads/feature-a:refs/heads/feature-a"},
 			outcome: "{OK:true Conflicted:false ConflictFiles:[] Message:branch 'feature-a' set up to track 'fork/feature-a'.\n\nEverything up-to-date Source:<nil>}",
 		},
 	})

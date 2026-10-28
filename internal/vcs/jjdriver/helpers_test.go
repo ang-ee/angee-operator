@@ -33,10 +33,10 @@ func requireJJ(t *testing.T) {
 // and, since 0.45, a record and the config of every repository it loads too
 // (under $XDG_CONFIG_HOME/jj/repos), so neither the developer's jj or git
 // config reaches the test, and nothing the test runs writes to the
-// developer's. The driver passes HOME and XDG_CONFIG_HOME on to jj; the
-// test's own jj and git commands also get an identity, an empty JJ_CONFIG and
-// empty global git config, and no system git config. Call it before
-// anything runs jj.
+// developer's. The driver passes HOME, XDG_CONFIG_HOME and JJ_CONFIG on to
+// jj, so it reads the empty JJ_CONFIG too and has no identity; the test's own
+// jj and git commands also get an identity, empty global git config, and no
+// system git config. Call it before anything runs jj.
 func isolate(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()

@@ -17,7 +17,8 @@ import (
 
 // Driver reads and acts on git checkouts through a git.Client. Merge, rebase,
 // their abort and continue, and publish's push run git with an environment of
-// their own (runOp), which pins angee's identity for the commits they make.
+// their own (runOp); the commits merge and rebase make are the user's
+// (commitIdentity).
 type Driver struct {
 	git git.Client
 }
