@@ -115,7 +115,7 @@ func TestBackupPlanLeavesOnlyVerifiedLayerMetadataToTheLayer(t *testing.T) {
 			t.Fatalf("layer metadata at %s: err=%v, want a capability refusal", dir, err)
 		}
 		if _, err := driver.BackupPlan(ctx, slot, false, layer); err != nil {
-			t.Fatalf("portable capture never reads layer metadata, got %v for %s", err, dir)
+			t.Fatalf("bundle capture never reads layer metadata, got %v for %s", err, dir)
 		}
 	}
 }

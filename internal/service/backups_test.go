@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/fslock"
 	gitx "github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -148,6 +150,131 @@ func TestBackupInterruptedReceiptDoesNotRetryUnderSameRequest(t *testing.T) {
 		t.Fatalf("receipt=%+v err=%v", op, err)
 	}
 }
+
+// An operator stopped mid-backup never runs the backup's own cleanup.
+// Recovering its receipt removes what it left: its staging, with a plaintext
+// dump and a partial archive, and an archive published before the receipt that
+// would have completed it. Nothing goes while another holder of the root lock
+// may still be running it, and another backup's files, a completed backup's
+// archive and files named after a receipt that is not a backup's stay.
+func TestBackupInterruptedReceiptRemovesItsStagingAndUnreceiptedArchive(t *testing.T) {
+	p, req := backupFixture(t)
+	write := func(name string) {
+		t.Helper()
+		file := filepath.Join(p.root, name)
+		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("SENSITIVE DUMP ROWS"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exists := func(name string) bool {
+		t.Helper()
+		_, err := os.Lstat(filepath.Join(p.root, name))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
+		}
+		return err == nil
+	}
+	interrupted := api.JobRunOperation{ID: req.RequestID, RootJob: "backup", Status: api.JobRunRunning, Nodes: []api.JobRunNode{{Name: "capture", Kind: "backup", Status: api.JobRunSucceeded}, {Name: "verify", Kind: "backup", Status: api.JobRunRunning}}}
+	completed := api.JobRunOperation{ID: "completed", RootJob: "backup", Status: api.JobRunSucceeded, Nodes: []api.JobRunNode{{Name: "capture", Kind: "backup", Status: api.JobRunSucceeded}, {Name: "verify", Kind: "backup", Status: api.JobRunSucceeded}}}
+	jobRun := api.JobRunOperation{ID: "job-run", RootJob: "backup", Status: api.JobRunRunning, Nodes: []api.JobRunNode{{Name: "backup", Kind: "job", Status: api.JobRunRunning}}}
+	for _, op := range []api.JobRunOperation{interrupted, completed, jobRun} {
+		if err := p.persistJobReceipt(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	left := []string{"state/backups/" + req.RequestID + "/captures/database/database.dump", "state/backups/" + req.RequestID + "/archive.zip", "backups/archives/" + req.RequestID + ".zip"}
+	kept := []string{"backups/archives/completed.zip", "state/backups/job-run/archive.zip", "backups/archives/job-run.zip", "state/backups/other/captures/database/database.dump", "backups/archives/other.zip"}
+	for _, name := range append(slices.Clone(left), kept...) {
+		write(name)
+	}
+	fresh, err := New(p.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// While another process holds the root lock, the backup may be its own.
+	lock := fslock.RootLock(p.root)
+	if err := lock.Lock(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	op, err := fresh.JobRunGet(t.Context(), interrupted.ID)
+	if unlockErr := lock.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	if err != nil || op.Status != api.JobRunRunning {
+		t.Fatalf("receipt read under another holder's root lock = %+v, %v; want it still running", op, err)
+	}
+	for _, name := range left {
+		if !exists(name) {
+			t.Fatalf("%s was removed while another holder of the root lock may run its backup", name)
+		}
+	}
+	for _, want := range []api.JobRunOperation{interrupted, completed, jobRun} {
+		status := api.JobRunFailed
+		if want.Status == api.JobRunSucceeded {
+			status = api.JobRunSucceeded
+		}
+		if op, err := fresh.JobRunGet(t.Context(), want.ID); err != nil || op.Status != status {
+			t.Fatalf("receipt %s = %+v, %v; want it %s", want.ID, op, err, status)
+		}
+	}
+	for _, name := range append(left, "state/backups/"+req.RequestID) {
+		if exists(name) {
+			t.Errorf("%s survived its interrupted backup's recovery", name)
+		}
+	}
+	for _, name := range kept {
+		if !exists(name) {
+			t.Errorf("%s was removed by another receipt's recovery", name)
+		}
+	}
+}
+
+// Files an interrupted backup left that the operator cannot remove, such as a
+// directory a root container capture created, do not keep its receipt from
+// failing: the receipt answers, and names what is left to remove.
+func TestBackupInterruptedReceiptFailsWhenItsFilesCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes any file")
+	}
+	p, req := backupFixture(t)
+	interrupted := api.JobRunOperation{ID: req.RequestID, RootJob: "backup", Status: api.JobRunRunning, Nodes: []api.JobRunNode{{Name: "capture", Kind: "backup", Status: api.JobRunRunning}, {Name: "verify", Kind: "backup", Status: api.JobRunPending}}}
+	if err := p.persistJobReceipt(interrupted); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(p.root, "state/backups", req.RequestID, "captures/database")
+	if err := os.MkdirAll(locked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "database.dump"), []byte("SENSITIVE DUMP ROWS"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0700) })
+	fresh, err := New(p.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := fresh.JobRunGet(t.Context(), req.RequestID)
+	if err != nil || op.Status != api.JobRunFailed || !strings.Contains(op.Error, "remove state/backups/"+req.RequestID) {
+		t.Fatalf("receipt = %+v, %v; want it failed, naming what is left", op, err)
+	}
+	if strings.Contains(op.Error, p.root) {
+		t.Fatalf("receipt error %q names the stack root", op.Error)
+	}
+	again, err := New(p.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op, err := again.JobRunGet(t.Context(), req.RequestID); err != nil || op.Status != api.JobRunFailed {
+		t.Fatalf("receipt read again = %+v, %v; want it failed", op, err)
+	}
+}
+
 func TestBackupDoesNotFollowExternalFileOrPersistLinks(t *testing.T) {
 	p, req := backupFixture(t)
 	outside := t.TempDir()
@@ -630,6 +757,143 @@ func TestBackupTraversalRejectsDirectoryReplacementAndContainedAncestorLinks(t *
 	}
 }
 
+// A file deleted after its directory was listed is not part of a live
+// capture, whether it goes before the walk stats it or before the archive opens
+// or reads it as a link, and leaves nothing in the archive. In repository
+// metadata, where a repack deletes the pack it replaced, the deletion fails the
+// walk instead. A required entry that goes fails too.
+func TestBackupSkipsFilesRemovedAfterListing(t *testing.T) {
+	for _, repository := range []bool{false, true} {
+		for _, window := range []string{"before stat", "before open", "before readlink"} {
+			if repository && window == "before readlink" {
+				continue // a repository tree refuses a symlink before reading it
+			}
+			t.Run(fmt.Sprintf("%s repository=%v", window, repository), func(t *testing.T) {
+				root := t.TempDir()
+				for _, name := range []string{"a", "b", "c"} {
+					if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if window == "before readlink" {
+					if err := os.Remove(filepath.Join(root, "b")); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink("a", filepath.Join(root, "b")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var buffer bytes.Buffer
+				writer := zip.NewWriter(&buffer)
+				manifest := api.BackupManifest{Entries: []api.BackupEntry{}}
+				archive := &backupArchive{ctx: t.Context(), writer: writer, manifest: &manifest, names: map[string]bool{}}
+				tree := backupTree{scope: root, root: root, prefix: "storage", repository: repository}
+				err := walkBackupTree(t.Context(), tree, func(source *os.Root, name string, info fs.FileInfo, archiveName string) error {
+					// The walk lists a, b and c at once, then stats and visits each in turn.
+					if window == "before stat" && name == "a" || window != "before stat" && name == "b" {
+						if err := os.Remove(filepath.Join(root, "b")); err != nil {
+							return err
+						}
+					}
+					return archive.add(source, name, info, archiveName)
+				}, nil)
+				if repository {
+					if err == nil {
+						t.Fatal("walk of repository metadata skipped a removed file; want it failed")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("walk = %v, want the removed file skipped", err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				var declared []string
+				for _, entry := range manifest.Entries {
+					declared = append(declared, entry.Path)
+				}
+				reader, err := zip.NewReader(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var written []string
+				for _, entry := range reader.File {
+					written = append(written, strings.TrimSuffix(entry.Name, "/"))
+				}
+				want := []string{"storage", "storage/a", "storage/c"}
+				if !slices.Equal(declared, want) || !slices.Equal(written, want) {
+					t.Fatalf("declared %q and wrote %q, want %q", declared, written, want)
+				}
+				info, err := os.Lstat(filepath.Join(root, "a"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				source, err := os.OpenRoot(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = source.Close() }()
+				if err := os.Remove(filepath.Join(root, "a")); err != nil {
+					t.Fatal(err)
+				}
+				if err := archive.add(source, "a", info, "recovery/a"); !errors.Is(err, errBackupEntryGone) {
+					t.Fatalf("required entry removed before it was opened: add = %v, want errBackupEntryGone", err)
+				}
+			})
+		}
+	}
+}
+
+// Only repository metadata trees refuse symlinks. A source named repository
+// still keeps its worktree's links, though its archive prefix holds
+// "/repository/".
+func TestBackupSourceNamedRepositoryKeepsWorktreeSymlinks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	p, req := backupFixture(t)
+	source := filepath.Join(t.TempDir(), "repository")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "README"), []byte("tracked\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("README", filepath.Join(source, "LINK")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init"}, {"config", "user.name", "backup"}, {"config", "user.email", "backup@example.invalid"}, {"add", "."}, {"commit", "-m", "initial"}} {
+		command := exec.Command("git", args...)
+		command.Dir = source
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	stack, err := p.LoadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.Sources = map[string]manifest.Source{"repository": {Kind: "local", Path: source}}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	req.Selection = api.BackupSelection{Sources: api.BackupSourceSelection{BackupGroupSelection: api.BackupGroupSelection{Mode: "all"}, Policy: "bundle"}}
+	if _, err := p.BackupStart(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	op := waitBackup(t, p, req.RequestID)
+	if op.Status != api.JobRunSucceeded || op.Artifact == nil {
+		t.Fatalf("backup of a source named repository = %+v", op)
+	}
+	link := "sources/stack/repository/worktree/LINK"
+	if !slices.ContainsFunc(op.Artifact.Manifest.Entries, func(entry api.BackupEntry) bool {
+		return entry.Path == link && fs.FileMode(entry.Mode)&fs.ModeSymlink != 0
+	}) {
+		t.Fatalf("archive lacks the worktree symlink %s", link)
+	}
+}
+
 func TestBackupRepositoryComponentsRetainSafetyExclusions(t *testing.T) {
 	p, req := backupFixture(t)
 	metadata := filepath.Join(p.root, "backups", "gitdata")
@@ -816,6 +1080,46 @@ func TestBackupFailureRetainsBoundedRedactedNativeDiagnostics(t *testing.T) {
 	data, _ := json.Marshal(op)
 	if strings.Contains(string(data), "fixture-sensitive-secret") {
 		t.Fatal("native diagnostics leaked registered secret")
+	}
+}
+
+// printingCaptureBackend runs every capture job: it writes the job's dump into
+// the backup's output directory for it and prints a line naming the job.
+type printingCaptureBackend struct {
+	stubStatusBackend
+	captures string
+}
+
+func (b *printingCaptureBackend) RunJob(_ context.Context, _ runtime.Target, spec runtime.JobSpec) ([]byte, error) {
+	if err := os.WriteFile(filepath.Join(b.captures, spec.Name, "app.dump"), []byte("dump\n"), 0600); err != nil {
+		return nil, err
+	}
+	return []byte("dumped by " + spec.Name), nil
+}
+
+// A backup receipt's output keeps every capture's output, each line labelled
+// with its capture's group and name, not only the last capture's.
+func TestBackupReceiptKeepsEveryCaptureOutput(t *testing.T) {
+	p, req := backupFixture(t)
+	stack, err := p.LoadStack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.Jobs = map[string]manifest.Job{
+		"first":  {Runtime: manifest.RuntimeLocal, Command: []string{"trusted-dump"}, Capture: &manifest.BackupCapture{Group: "databases", Name: "app", Output: "app.dump"}},
+		"second": {Runtime: manifest.RuntimeLocal, Command: []string{"trusted-dump"}, Capture: &manifest.BackupCapture{Group: "databases", Name: "audit", Output: "app.dump"}},
+	}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	p.procBackend = &printingCaptureBackend{captures: filepath.Join(p.root, "state/backups", req.RequestID, "captures")}
+	req.Selection = api.BackupSelection{Databases: api.BackupGroupSelection{Mode: "all"}}
+	if _, err := p.BackupStart(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	op := waitBackup(t, p, req.RequestID)
+	if want := "databases/app | dumped by first\ndatabases/audit | dumped by second\n"; op.Status != api.JobRunSucceeded || op.Output != want {
+		t.Fatalf("receipt status %s, output %q; want it succeeded with output %q", op.Status, op.Output, want)
 	}
 }
 
@@ -1158,7 +1462,7 @@ func TestBackupFetchPublishedColocatedJJ(t *testing.T) {
 	run(slot, "git", "push", "-q", "origin", "HEAD:main")
 	run(slot, "jj", "git", "fetch")
 	run(slot, "jj", "bookmark", "set", "main", "-r", "main@origin")
-	if got := verdicts()["workspace:dev/work"]; got.Status != "unsupported" || got.Reason != "remote-only capture refuses unpublished reflog history; choose portable capture" {
+	if got := verdicts()["workspace:dev/work"]; got.Status != "unsupported" || got.Reason != "remote-only capture refuses unpublished reflog history; use the bundle source policy" {
 		t.Fatalf("draft held only by HEAD's reflog: workspace:dev/work=%+v, want the reflog refusal", got)
 	}
 }

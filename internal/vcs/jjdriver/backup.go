@@ -56,7 +56,7 @@ func (d Driver) BackupEvidence(ctx context.Context, slot string, remoteOnly bool
 			return BackupIdentity{}, err
 		}
 		if len(local) > 0 {
-			return BackupIdentity{}, &git.BackupPublicationError{Reason: "remote-only capture refuses unpublished JJ commits; use portable capture"}
+			return BackupIdentity{}, &git.BackupPublicationError{Reason: "remote-only capture refuses unpublished JJ commits; use the bundle source policy"}
 		}
 		anchors, err := d.commits(ctx, slot, op, published)
 		if err != nil {

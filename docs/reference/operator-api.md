@@ -297,6 +297,45 @@ an unknown partial operation. Only success includes `artifact` with `path`,
 Publication is under `backups/archives/<id>.zip`; staging, runtime directories,
 and unsafe physical database persists are excluded through containing trees.
 
+An interrupted backup's receipt fails when it is next read once the operator
+has restarted. That read also removes the backup's staging directory
+(`state/backups/<id>`) and any `backups/archives/<id>.zip` it published
+without a completed receipt; files it cannot remove, such as a directory a
+root container capture created, are named in the receipt's `error` for an
+operator to remove. Nothing else deletes archives or receipts yet:
+`backups/archives/*.zip` and `state/job-runs/*.json` stay until the caller
+removes them, so retention is the caller's.
+
+A running backup holds the operator's mutation lease and `run/operator.lock`
+until its receipt is final, so every other stack mutation (job runs, restarts,
+applies, file, secret, source and workspace changes, another backup) answers
+`409` (`CONFLICT`) until it ends. A backup cannot be cancelled through the API.
+`ANGEE_JOB_TIMEOUT` (a Go duration, `30m` by default, `0` for none) bounds the
+whole backup, capture, archive and verification together; a backup that runs
+out of it fails.
+
+A backup receipt's `output` keeps every capture's output, each line labelled
+`<group>/<name> | ` after its capture, as the last whole lines within 1 MiB.
+Capture output and errors lose their terminal control sequences (CSI and OSC,
+such as colours and the window title process-compose sets to the host name).
+Like every job run's receipt output and errors, they are redacted: registered
+secret values are masked. A multi-line secret is masked whole, and each of its
+lines on its own when that line can carry secret material: a line that is not
+PEM armour (`-----BEGIN …-----`, `-----END …-----`) and either holds at least
+16 consecutive base64, base64url or hex characters, as key material does, or
+has a value (the line less a leading `"key":` or `key:`) of at least 8 bytes
+with a character other than a letter, a space, `_`, `-` or `.`, as a password
+does. Its other lines, such as `"enabled": true` or `kind: Config`, are masked
+only as part of the whole value.
+
+A file deleted between its directory's listing and its copy is not part of a
+live capture and is left out, except in repository metadata, where a deletion
+(such as a repack removing the pack it replaced) fails the backup.
+
+Container capture jobs write their output into the backup's staging
+directory, which the operator creates with mode `0700`. On Linux a container
+capture must therefore run as root or as the operator's uid.
+
 A job that declares `capture:` runs only inside a backup, which chooses its
 output directory. `POST /jobs/{name}/run`, `GET /jobs/{name}/run-preview` and
 GraphQL `jobRun` and `jobRunPreview` refuse it, with or without inputs, with code

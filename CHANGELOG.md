@@ -11,12 +11,34 @@ latest tag.
 - Manual backup preview and capture REST APIs, restricted to the operator admin
   bearer. Completed backups publish a verified ZIP and versioned manifest with
   original recovery secrets, exact per-database dumps, selected persistence,
-  workspaces, and portable Git/JJ source history or verified published revisions.
+  workspaces, and Git/JJ source history bundled into the archive (`bundle`) or
+  verified published revisions (`fetch_published`).
   Backup attempts retain idempotent native JobRun receipts across restarts, with
   bounded redacted native diagnostics on capture failure.
   Configuration-only archives are supported; schedules and cold restore remain deferred.
   Quick discovery bounds filesystem enumeration and reports incomplete sizes
   as unknown while preserving the full selected inventory.
+- A running backup holds the operator's mutation lease and `run/operator.lock`
+  until its receipt is final, so other stack mutations (job runs, restarts,
+  applies, and the rest) answer `409` until it ends. It cannot be cancelled
+  through the API. `ANGEE_JOB_TIMEOUT` (30 minutes by default, `0` for none)
+  bounds the whole backup: capture, archive and verify.
+- An interrupted backup's receipt fails when it is next read after a restart,
+  and that read removes the backup's staging directory, which may hold a
+  plaintext dump, and any archive it published without a completed receipt;
+  the receipt's error names any of them it cannot remove.
+  Nothing deletes `backups/archives/*.zip` or `state/job-runs/*.json` yet;
+  retention is the caller's.
+- A backup receipt's `output` keeps every capture's output, each line labelled
+  `<group>/<name> | `, as the last whole lines within 1 MiB. Capture output
+  and errors lose their terminal control sequences (CSI and OSC), such as the
+  window title naming the host that process-compose sets. A file deleted
+  between a directory's listing and its copy is left out of the capture
+  instead of failing it, except in repository metadata, where it still fails
+  the backup.
+- Container capture jobs write into the backup's staging directory, which the
+  operator owns with mode 0700, so on Linux they must run as root or as the
+  operator's uid.
 - Trusted job `capture` declarations and persist `backup: exclude` policy.
   Local captures use isolated native process-compose foreground jobs without
   modifying or restarting the shared supervisor project. Container captures run
@@ -45,8 +67,20 @@ latest tag.
   verified them against the declared store, and jj then refuses any visible
   commit no remote bookmark or tag holds, and a working-copy commit that is
   not empty and undescribed. Branch and HEAD reflogs still count, so history
-  jj rewrote within git's reflog expiry is still refused there; use
-  `portable` for those sources.
+  jj rewrote within git's reflog expiry is still refused there; use the
+  `bundle` policy for those sources.
+
+### Changed
+
+- Receipt output and errors are redacted for every job run, not only for
+  backups. A multi-line secret is registered whole and, so that a cut log tail
+  cannot expose a key, each of its lines that can carry secret material: one
+  that is not PEM armour (`-----BEGIN …-----`, `-----END …-----`) and either
+  holds at least 16 consecutive base64, base64url or hex characters, or has a
+  value (less a leading `"key":` or `key:`) of at least 8 bytes with a
+  character other than a letter, a space, `_`, `-` or `.`. Its other lines,
+  such as `"enabled": true` or `kind: Config`, are common text, masked only as
+  part of the whole value.
 
 ## v0.22.0 — 2026-10-13
 

@@ -1767,7 +1767,9 @@ func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, nam
 	}
 	args := []string{"--no-server", "--log-file", filepath.Join(directory, "process-compose.log"), "--log-no-color", "run", "--no-deps", "--config", config, name}
 	err = b.runForeground(ctx, target.Root, target.EnvFile, output, output, foregroundOptions{isolated: true, waitDelay: shutdown + time.Second}, args...)
-	safeOutput := logctx.RedactText(output.String())
+	// Strip terminal controls (the window title names the host) before redacting,
+	// so a secret an escape sequence splits is masked whole.
+	safeOutput := logctx.RedactText(runtime.StripTerminalControls(output.String()))
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
@@ -1783,7 +1785,7 @@ func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, nam
 					}
 					collector := runtime.NewLimitedLogRead(maxJobOutputBytes)
 					_, _ = io.Copy(collector, io.LimitReader(file, keep))
-					safeOutput = logctx.RedactText(collector.String())
+					safeOutput = logctx.RedactText(runtime.StripTerminalControls(collector.String()))
 				}
 				_ = file.Close()
 			}

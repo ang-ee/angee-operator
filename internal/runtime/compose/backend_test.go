@@ -456,6 +456,21 @@ func TestBackendRunJobReportsATransientJobsFailure(t *testing.T) {
 	}
 }
 
+// A transient job's output, which a backup receipt keeps, carries no terminal
+// controls: a capture's colours and titles are dropped and its text kept.
+func TestBackendRunJobDropsTerminalControlsFromATransientJobsOutput(t *testing.T) {
+	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) {
+		return []byte("\x1b]0;db.internal\apg_dump: \x1b[31merror\x1b[0m: connection refused\n"), errors.New("exit status 1")
+	}}
+	out, err := Backend{Runner: runner}.RunJob(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+	if err == nil {
+		t.Fatal("RunJob() error = nil, want the run's failure")
+	}
+	if string(out) != "pg_dump: error: connection refused\n" {
+		t.Fatalf("RunJob() output = %q, want the run's text alone", out)
+	}
+}
+
 // A transient job's output keeps its last maxJobOutputBytes, redacted before the
 // cut, so the cut cannot leave the tail of a secret it went through.
 func TestBackendRunJobKeepsTheRedactedTailOfATransientJobsOutput(t *testing.T) {

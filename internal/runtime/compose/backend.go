@@ -176,8 +176,9 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 // the shared project: no recreated service container that keeps its
 // configuration, inputs and environment. --no-deps leaves prerequisites to the
 // caller, which checked them, and a one-off container publishes no service
-// ports. Its output is what the run printed, redacted before it is cut to its
-// last maxJobOutputBytes so the cut cannot leave part of a secret.
+// ports. Its output is what the run printed, without terminal controls and
+// redacted before it is cut to its last maxJobOutputBytes so the cut cannot
+// leave part of a secret.
 //
 // Cancelling ctx kills the docker client but not the container, which the
 // daemon keeps running, so the container is named up front and removed by that
@@ -200,7 +201,7 @@ func (b Backend) runTransientJob(ctx context.Context, runner InputRunner, target
 	})
 	out, runErr := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", args...)
 	close(exited)
-	out = jobOutputTail([]byte(logctx.RedactText(string(out))))
+	out = jobOutputTail([]byte(logctx.RedactText(runtime.StripTerminalControls(string(out)))))
 	var removeErr error
 	if !stop() {
 		if err := <-removed; err != nil {

@@ -302,9 +302,10 @@ var (
 // RegisterSecrets records resolved secret values so RedactText masks them
 // wherever they appear in logged text: argv, captured subprocess output, or
 // error strings. Values shorter than four bytes are ignored because masking
-// them would garble unrelated output. Substantive lines of multiline values are
-// registered too, so bounded log tails cannot expose a key after its prefix is
-// truncated. Safe for concurrent use.
+// them would garble unrelated output. A multi-line value is registered whole,
+// and each of its lines that can carry secret material (secretLine) on its own,
+// so a bounded log tail cannot expose a key once its first lines are cut.
+// Safe for concurrent use.
 func RegisterSecrets(values ...string) {
 	secretsMu.Lock()
 	defer secretsMu.Unlock()
@@ -312,7 +313,9 @@ func RegisterSecrets(values ...string) {
 		candidates := []string{value}
 		if strings.ContainsAny(value, "\r\n") {
 			for _, line := range strings.Split(value, "\n") {
-				candidates = append(candidates, strings.TrimSpace(line))
+				if line = strings.TrimSpace(line); secretLine(line) {
+					candidates = append(candidates, line)
+				}
 			}
 		}
 		for _, candidate := range candidates {
@@ -324,6 +327,71 @@ func RegisterSecrets(values ...string) {
 	}
 	// Longest first so a value that contains another is masked whole.
 	slices.SortFunc(secretValues, func(a, b string) int { return len(b) - len(a) })
+}
+
+// secretLineRun is the shortest run of key-material characters that makes one
+// line of a multi-line secret worth masking on its own.
+const secretLineRun = 16
+
+// secretLineValue is the shortest value with a password's characters that
+// makes one line of a multi-line secret worth masking on its own.
+const secretLineValue = 8
+
+// secretLine reports whether one trimmed line of a multi-line secret can carry
+// secret material on its own. PEM armour (-----BEGIN …----- or -----END …-----)
+// cannot. Any other line can when it holds at least secretLineRun consecutive
+// characters of the base64, base64url or hex alphabets (letters, digits,
+// + / = - _), as a PEM body line, a token or a JSON key's private_key line
+// does, or when its value (secretLineValueOf) is at least secretLineValue bytes
+// and holds a character other than a letter, a space, _, - or ., as a password
+// does. Any other line, such as `"enabled": true`, `"type": "service_account",`
+// or `kind: Config`, is common text that would be masked in all later output;
+// only the whole value masks it.
+func secretLine(line string) bool {
+	if (strings.HasPrefix(line, "-----BEGIN ") || strings.HasPrefix(line, "-----END ")) && strings.HasSuffix(line, "-----") {
+		return false
+	}
+	run := 0
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("+/=-_", c) >= 0 {
+			if run++; run >= secretLineRun {
+				return true
+			}
+			continue
+		}
+		run = 0
+	}
+	value := secretLineValueOf(line)
+	return len(value) >= secretLineValue && strings.ContainsFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsSpace(r) && !strings.ContainsRune("_-.", r)
+	})
+}
+
+// secretLineValueOf is a JSON or YAML line's value: the line less a leading
+// list dash, a leading key ("key": or key: followed by a space or nothing), a
+// trailing comma and surrounding quotes. A line with no such key is its own
+// value, as a .pgpass line is.
+func secretLineValueOf(line string) string {
+	value := strings.TrimPrefix(line, "- ")
+	if strings.HasPrefix(value, `"`) {
+		if end := strings.IndexByte(value[1:], '"'); end >= 0 {
+			if rest := strings.TrimLeft(value[end+2:], " \t"); strings.HasPrefix(rest, ":") {
+				value = rest[1:]
+			}
+		}
+	} else if key, rest, ok := strings.Cut(value, ":"); ok && key != "" && (rest == "" || rest[0] == ' ' || rest[0] == '\t') && !strings.ContainsFunc(key, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("_-.", r)
+	}) {
+		value = rest
+	}
+	value = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), ","))
+	for _, quote := range []string{`"`, "'"} {
+		if len(value) >= 2 && strings.HasPrefix(value, quote) && strings.HasSuffix(value, quote) {
+			value = value[1 : len(value)-1]
+		}
+	}
+	return value
 }
 
 // sanitizeText escapes control characters so a value derived from user input

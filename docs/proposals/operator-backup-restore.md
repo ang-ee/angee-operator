@@ -18,7 +18,15 @@ All component roots are checked independently of optional size estimation.
 `GET /job-runs/{id}`. Identical requests return the same durable receipt,
 including after restart; changing the selection under that ID conflicts.
 `GET /backups/{id}/archive` streams a completed artifact. Artifacts live only
-under `backups/archives/<id>.zip`; staging uses `state/backups/<id>`.
+under `backups/archives/<id>.zip`; staging uses `state/backups/<id>`. Nothing
+deletes `backups/archives/*.zip` or `state/job-runs/*.json` yet: retention is
+the caller's.
+
+A running backup holds the mutation lease and `run/operator.lock` until its
+receipt is final, so other stack mutations (job runs, restarts, applies, and
+the rest) answer 409 until it ends. It cannot be cancelled through the API.
+`ANGEE_JOB_TIMEOUT` (30 minutes by default, 0 for none) bounds the whole
+backup: capture, archive and verify.
 
 Requests carry `version: 1` and `selection` groups `databases`, `service_state`,
 `workspaces`, `sources`, and `storage`. Every group uses `mode` (`all`, `selected`,
@@ -62,7 +70,16 @@ under `recovery/`. ZIP entries and hashes are read back before atomic publicatio
 only then can an operation succeed. Capture preflight checks selection and
 resource roots without repeating size estimation; the asynchronous capture
 performs full traversal and verification before publishing. A failed or interrupted operation never
-produces a completed Django Backup record.
+produces a completed Django Backup record. A file deleted between a directory's
+listing and its copy is not part of a live capture, except in repository
+metadata, where a repack deleting the pack it replaced would leave the captured
+store incomplete; there, as for any other change to a listed file, the backup
+fails. An operator stopped mid-backup cannot run the backup's cleanup, so
+recovering its receipt, which fails it, removes the backup's staging (which may
+hold a plaintext dump) and any archive it published without a completed
+receipt, and names in the receipt any of them it cannot remove. Recovery runs
+only when that receipt is read; a capture process or container that outlives a
+killed operator may still write into staging after it.
 
 Original application encryption secrets are recovery material. In particular,
 Django encrypted fields depend on the original SECRET_KEY: regenerating secrets
@@ -70,11 +87,22 @@ would lose access to captured ciphertext. Secrets are included as restricted
 recovery files, never as JSON manifest values or log output. Treat archives as
 sensitive. Key encryption/sealing is a future transport/storage concern.
 
+Receipt output and errors are redacted for every job run, backups' included.
+A multi-line secret is registered whole and per line, but only for lines that
+can carry secret material: not PEM armour, and either holding at least 16
+consecutive base64, base64url or hex characters (key material) or having a
+value, less any `"key":` or `key:`, of at least 8 bytes with a character other
+than a letter, a space, `_`, `-` or `.` (a password). Plainer lines, such as
+`"enabled": true`, would otherwise be masked in all later output. A backup
+receipt's output keeps each capture's output, every line labelled with its
+group/name, stripped of terminal control sequences (CSI and OSC).
+
 The native Git and JJ drivers return checked backup component plans and immutable
 evidence. Platform applies stack confinement and selection and copies their
 components into the archive; it does not interpret VCS pointer files.
-Portable source capture preserves worktree files, Git objects/refs, and JJ
-repository and workspace metadata as separately located components. External
+Bundle source capture (`policy: bundle`) preserves worktree files, Git
+objects/refs, and JJ repository and workspace metadata as separately located
+components; `fetch_published` refusals point to it. External
 Git/JJ pointers must resolve to the explicitly declared source store; capture
 never follows arbitrary pointers. Cold restore must validate all paths and
 remap repository metadata explicitly, retain configuration/lockfiles/generated
@@ -112,7 +140,9 @@ service in the shared compose project. A capture that times out or is
 cancelled while the operator runs has its container removed with `docker rm
 -f`, since killing the compose client alone leaves it running. Stopping the
 operator mid-capture is best-effort: nothing waits for that removal, so the
-container may run on until it finishes.
+container may run on until it finishes. Container captures write into the
+backup's staging directory, which the operator owns with mode 0700, so on Linux
+they must run as root or as the operator's uid.
 
 Local transient capture currently refuses Windows before spawning: Go cannot
 interrupt Windows process groups, and killing only the supervisor could orphan

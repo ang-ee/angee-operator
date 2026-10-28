@@ -2505,6 +2505,32 @@ func TestTransientNativeStdoutTailRedactsMultilineSecrets(t *testing.T) {
 	}
 }
 
+// process-compose's foreground run sets the terminal's title to
+// "process-compose: <host>/<directory>". Neither that nor a capture's colours
+// reach the output or the error a receipt keeps.
+func TestTransientNativeDiagnosticsDropTerminalControls(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	script := "#!/bin/sh\nprintf '\\033]0;process-compose: razor.local/001\\007pg_dump: \\033[31merror\\033[0m: connection refused\\n'\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if string(output) != "pg_dump: error: connection refused\n" {
+		t.Fatalf("output = %q, want the capture's text alone", output)
+	}
+	if message := err.Error(); strings.Contains(message, "\x1b") || strings.Contains(message, "razor.local") || !strings.Contains(message, "native output: pg_dump: error: connection refused") {
+		t.Fatalf("error = %q, want the capture's text without terminal controls", message)
+	}
+}
+
 // A transient job stays out of the registration path that serves a process the
 // supervisor has not loaded (addMissingProcess): it runs under its own
 // foreground supervisor, so the shared one gets no request at all, let alone a

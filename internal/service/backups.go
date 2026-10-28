@@ -31,13 +31,20 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-const backupArchiveDirectory = "backups/archives"
+const (
+	backupArchiveDirectory = "backups/archives"
+	backupStagingDirectory = "state/backups"
+)
 
+// backupTree is one directory a resource captures. A repository tree holds
+// version-control metadata, which may hold no symlink; its prefix is no guide,
+// since a source, workspace or slot may be named repository.
 type backupTree struct {
-	scope   string
-	root    string
-	prefix  string
-	exclude []string
+	scope      string
+	root       string
+	prefix     string
+	exclude    []string
+	repository bool
 }
 type backupResource struct {
 	api.BackupResource
@@ -341,7 +348,7 @@ func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest, bu
 				storageExcludes = append(storageExcludes, child)
 			}
 		}
-		if err := add("storage", name, resourcePath, []backupTree{{p.root, resourcePath, "storage/" + name, storageExcludes}}, "", nil); err != nil {
+		if err := add("storage", name, resourcePath, []backupTree{{scope: p.root, root: resourcePath, prefix: "storage/" + name, exclude: storageExcludes}}, "", nil); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -360,7 +367,7 @@ func (p *Platform) backupDiscover(ctx context.Context, req api.BackupRequest, bu
 			}
 			exclusions = append(exclusions, slotPath)
 		}
-		if err := add("workspaces", name, root, []backupTree{{p.root, root, "workspaces/" + name, exclusions}}, "", nil); err != nil {
+		if err := add("workspaces", name, root, []backupTree{{scope: p.root, root: root, prefix: "workspaces/" + name, exclude: exclusions}}, "", nil); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -505,6 +512,12 @@ func openBackupTree(tree backupTree) (*os.Root, error) {
 // walkBackupTree never follows directory links, including links within the
 // stack. Every ancestor and recursive child is opened through its pinned parent;
 // lexical exclusions therefore cannot be bypassed through a contained alias.
+//
+// A file deleted between its directory's listing and its stat, or its copy
+// (visit's errBackupEntryGone), is not part of a live capture and is skipped.
+// In a repository tree it is a change, such as a repack deleting the pack it
+// replaced after the listing, and fails the walk: skipping it could leave the
+// captured store without objects it needs.
 func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, string, fs.FileInfo, string) error, scan *backupScanBudget) error {
 	root, err := openBackupTree(tree)
 	if err != nil {
@@ -581,6 +594,9 @@ func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, s
 				continue
 			}
 			info, err := directory.Lstat(name)
+			if errors.Is(err, fs.ErrNotExist) && !tree.repository {
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -611,13 +627,16 @@ func walkBackupTree(ctx context.Context, tree backupTree, visit func(*os.Root, s
 				}
 				continue
 			}
-			if strings.Contains(tree.prefix, "/repository/") && info.Mode()&os.ModeSymlink != 0 {
+			if tree.repository && info.Mode()&os.ModeSymlink != 0 {
 				return fmt.Errorf("repository metadata symlink %q is not portable", logical)
 			}
 			if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
 				return fmt.Errorf("special file %q cannot be backed up", logical)
 			}
 			if err := visit(directory, name, info, archiveName); err != nil {
+				if errors.Is(err, errBackupEntryGone) && !tree.repository {
+					continue
+				}
 				return err
 			}
 		}
@@ -688,7 +707,7 @@ func (p *Platform) backupSourceTrees(ctx context.Context, name, root, store stri
 	if backupWithin(p.root, root) {
 		scope = p.root
 	}
-	trees := []backupTree{{scope, root, prefix + "/worktree", exclusions}}
+	trees := []backupTree{{scope: scope, root: root, prefix: prefix + "/worktree", exclude: exclusions}}
 	resolvedStore, err := filepath.EvalSymlinks(store)
 	if err != nil {
 		return nil, api.BackupSourceEvidence{}, err
@@ -701,7 +720,7 @@ func (p *Platform) backupSourceTrees(ctx context.Context, name, root, store stri
 		if backupWithin(p.root, component.Root) {
 			scope = p.root
 		}
-		trees = append(trees, backupTree{scope, component.Root, prefix + "/repository/" + component.Name, append(slices.Clone(excluded), component.Exclude...)})
+		trees = append(trees, backupTree{scope: scope, root: component.Root, prefix: prefix + "/repository/" + component.Name, exclude: append(slices.Clone(excluded), component.Exclude...), repository: true})
 	}
 	return trees, plan.Evidence, nil
 }
@@ -838,7 +857,7 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	staging := "state/backups/" + id
+	staging := backupStagingDirectory + "/" + id
 	if err = root.MkdirAll(staging, 0700); err != nil {
 		return err
 	}
@@ -854,69 +873,7 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 	defer output.Close()
 	writer := zip.NewWriter(output)
 	manifestData := api.BackupManifest{Version: 1, Stack: stack.Name, Selection: req.Selection, Entries: []api.BackupEntry{}, Resources: []api.BackupResource{}, SourceRefs: map[string]api.BackupSourceEvidence{}, Recovery: []string{"recovery/angee.yaml retains the stack declarations and source references", "recovery/secrets.env retains original application encryption keys; never regenerate SECRET_KEY for captured encrypted fields", "source worktree payloads retain configuration, lockfiles and migration files", "repository/git is a self-contained Git common directory; restore worktree with captured source_refs revision", "repository/jj-repo plus jj-workspace retain shared JJ history; remap repo and store/git_target to captured sibling components before use", "no archive command is executable restore input; cold restore requires explicit trusted CLI validation", "files are captured live; independent database dumps are per-database consistent, not a cross-service transaction"}}
-	names := map[string]bool{}
-	add := func(source *os.Root, name string, info fs.FileInfo, archiveName string) error {
-		if !fs.ValidPath(archiveName) || names[archiveName] {
-			return fmt.Errorf("invalid or duplicate archive entry %q", archiveName)
-		}
-		names[archiveName] = true
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
-		header.Name = archiveName
-		header.Method = zip.Deflate
-		if info.IsDir() {
-			header.Name += "/"
-			header.Method = zip.Store
-		}
-		destination, err := writer.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		hash := sha256.New()
-		var size int64
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := source.Readlink(name)
-			if err != nil {
-				return err
-			}
-			size, err = io.Copy(io.MultiWriter(destination, hash), strings.NewReader(target))
-			if err != nil {
-				return err
-			}
-		} else if !info.IsDir() {
-			file, err := source.Open(name)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-			before, err := file.Stat()
-			if err != nil {
-				return err
-			}
-			if !os.SameFile(info, before) || !before.Mode().IsRegular() {
-				return fmt.Errorf("file changed before capture: %s", archiveName)
-			}
-			size, err = io.Copy(io.MultiWriter(destination, hash), &backupContextReader{ctx: ctx, reader: file})
-			if err != nil {
-				return err
-			}
-			after, err := file.Stat()
-			if err != nil {
-				return err
-			}
-			current, err := source.Lstat(name)
-			if err != nil {
-				return err
-			}
-			if size != info.Size() || !os.SameFile(before, current) || after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
-				return fmt.Errorf("file changed during capture: %s", archiveName)
-			}
-		}
-		manifestData.Entries = append(manifestData.Entries, api.BackupEntry{Path: archiveName, SizeBytes: size, SHA256: hex.EncodeToString(hash.Sum(nil)), Mode: uint32(info.Mode())})
-		return nil
-	}
+	archive := &backupArchive{ctx: ctx, writer: writer, manifest: &manifestData, names: map[string]bool{}}
 	for _, resource := range resources {
 		manifestData.Resources = append(manifestData.Resources, resource.BackupResource)
 		if resource.Status != "included" {
@@ -947,7 +904,9 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 				}
 			}
 			out, runErr := p.runJob(ctx, stack, compiled, resource.job)
-			p.updateJobRun(id, func(o *api.JobRunOperation) { o.Output = boundedJobOutput(out) })
+			p.updateJobRun(id, func(o *api.JobRunOperation) {
+				o.Output = appendCaptureOutput(o.Output, resource.Group+"/"+resource.Name, out)
+			})
 			if runErr != nil {
 				p.updateJobRun(id, func(o *api.JobRunOperation) { o.Nodes[0].Message = boundedJobError(runErr.Error()) })
 				return fmt.Errorf("capture %q: %w", resource.Name, runErr)
@@ -960,12 +919,12 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 			if !info.Mode().IsRegular() || info.Size() == 0 {
 				return fmt.Errorf("capture %q must emit a non-empty regular file", resource.Name)
 			}
-			if err = add(root, file, info, "captures/"+resource.Group+"/"+resource.Name+"/"+resource.capture.Output); err != nil {
+			if err = archive.add(root, file, info, "captures/"+resource.Group+"/"+resource.Name+"/"+resource.capture.Output); err != nil {
 				return err
 			}
 		}
 		for _, tree := range trees {
-			if err = walkBackupTree(ctx, tree, add, nil); err != nil {
+			if err = walkBackupTree(ctx, tree, archive.add, nil); err != nil {
 				return err
 			}
 		}
@@ -994,7 +953,7 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("recovery file %q must be regular", name)
 		}
-		if err = add(root, name, info, item.destination); err != nil {
+		if err = archive.add(root, name, info, item.destination); err != nil {
 			return err
 		}
 	}
@@ -1067,6 +1026,128 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 	p.jobRunsMu.Lock()
 	p.jobRuns[id] = cloneJobRun(completed)
 	p.jobRunsMu.Unlock()
+	return nil
+}
+
+// appendCaptureOutput adds one capture's output to a backup receipt's, each
+// line labelled with its resource (group/name), as docker compose labels
+// services' lines. The output is redacted before it is labelled, since labels
+// would split a registered multi-line value, and the receipt keeps the last
+// whole lines within the job output bound, so a cut never leaves a line
+// unlabelled.
+func appendCaptureOutput(previous, label string, out []byte) string {
+	text := runtime.PrefixLines(logctx.RedactText(string(out)), label, 0)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return runtime.LimitLogBytes(previous+text, maxPersistedJobOutput)
+}
+
+// backupArchive writes a backup's ZIP entries and declares each, with its size,
+// mode and SHA256, in the archive's manifest.
+type backupArchive struct {
+	ctx      context.Context
+	writer   *zip.Writer
+	manifest *api.BackupManifest
+	names    map[string]bool
+}
+
+// errBackupEntryGone is add's error for an entry deleted before it was opened,
+// when nothing of it has been written. A walk skips such an entry outside
+// repository trees (walkBackupTree); an entry the backup requires, such as a
+// capture's output or a recovery file, fails the backup.
+var errBackupEntryGone = errors.New("was removed before it was copied")
+
+// add copies one entry into the archive. The entry is opened before its header
+// is written, so an entry that is gone by then leaves nothing in the archive.
+func (a *backupArchive) add(source *os.Root, name string, info fs.FileInfo, archiveName string) error {
+	if !fs.ValidPath(archiveName) || a.names[archiveName] {
+		return fmt.Errorf("invalid or duplicate archive entry %q", archiveName)
+	}
+	var content io.Reader
+	var file *os.File
+	var before fs.FileInfo
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := source.Readlink(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("archive entry %q %w", archiveName, errBackupEntryGone)
+		}
+		if err != nil {
+			return err
+		}
+		content = strings.NewReader(target)
+	} else if !info.IsDir() {
+		var err error
+		file, err = source.Open(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("archive entry %q %w", archiveName, errBackupEntryGone)
+		}
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		before, err = file.Stat()
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(info, before) || !before.Mode().IsRegular() {
+			return fmt.Errorf("file changed before capture: %s", archiveName)
+		}
+		content = &backupContextReader{ctx: a.ctx, reader: file}
+	}
+	a.names[archiveName] = true
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Name = archiveName
+	header.Method = zip.Deflate
+	if info.IsDir() {
+		header.Name += "/"
+		header.Method = zip.Store
+	}
+	destination, err := a.writer.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	var size int64
+	if content != nil {
+		size, err = io.Copy(io.MultiWriter(destination, hash), content)
+		if err != nil {
+			return err
+		}
+	}
+	if file != nil {
+		after, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		current, err := source.Lstat(name)
+		if err != nil {
+			return err
+		}
+		if size != info.Size() || !os.SameFile(before, current) || after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
+			return fmt.Errorf("file changed during capture: %s", archiveName)
+		}
+	}
+	a.manifest.Entries = append(a.manifest.Entries, api.BackupEntry{Path: archiveName, SizeBytes: size, SHA256: hex.EncodeToString(hash.Sum(nil)), Mode: uint32(info.Mode())})
+	return nil
+}
+
+// removeInterruptedBackup removes what a backup that never completed left in
+// the stack root: its staging directory, which its own cleanup never removed
+// and which may hold a plaintext dump and a partial archive with the recovery
+// secrets, and an archive it published before writing the receipt that would
+// have completed it. The caller holds the root lock, so no backup is running,
+// and id is a checked operation ID, so neither path names another backup's.
+func removeInterruptedBackup(root *os.Root, id string) error {
+	if err := root.RemoveAll(backupStagingDirectory + "/" + id); err != nil {
+		return err
+	}
+	if err := root.Remove(backupArchiveDirectory + "/" + id + ".zip"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 

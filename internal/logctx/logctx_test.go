@@ -514,6 +514,40 @@ func (b *synchronizedBuffer) String() string {
 	return b.buffer.String()
 }
 
+// A multi-line secret masks on their own only its lines that can carry secret
+// material: key material or a password's value. Its PEM armour and plain JSON
+// or YAML lines are common text: registered alone, they would mask another
+// certificate's armour or any `"enabled": true` in all later output.
+func TestRegisteredMultilineSecretsLeaveCommonLinesReadable(t *testing.T) {
+	certificate := "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQfixture\n-----END CERTIFICATE-----\n"
+	key := "{\n  \"type\": \"service_account\",\n  \"enabled\": true,\n  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0fixture\\n-----END PRIVATE KEY-----\\n\"\n}"
+	config := "kind: Config\npassword: Tr0ub4dor&3fixture\ndb:5432:app:app:p@ss!w0rd#fixture\n"
+	RegisterSecrets(certificate, key, config)
+	for _, text := range []string{
+		"public cert:\n-----BEGIN CERTIFICATE-----\nMIIC-another-certificate\n-----END CERTIFICATE-----",
+		`{"enabled": true, "type": "service_account", "x": 1}`,
+		`  "enabled": true,`,
+		"apiVersion: v1\nkind: Config\n",
+	} {
+		if got := RedactText(text); got != text {
+			t.Errorf("RedactText(%q) = %q, want common text unchanged", text, got)
+		}
+	}
+	for _, line := range []string{
+		"MIIBszCCAVmgAwIBAgIUQfixture",
+		`"private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0fixture\n-----END PRIVATE KEY-----\n"`,
+		"password: Tr0ub4dor&3fixture",
+		"db:5432:app:app:p@ss!w0rd#fixture",
+	} {
+		if got := RedactText("tail: " + line); got != "tail: ***" {
+			t.Errorf("RedactText(%q) = %q, want the secret line masked", "tail: "+line, got)
+		}
+	}
+	if got := RedactText(certificate + "trailer"); got != "***trailer" {
+		t.Errorf("RedactText(whole certificate) = %q, want it masked whole", got)
+	}
+}
+
 func TestRegisteredMultilineSecretsMaskTruncatedLogLines(t *testing.T) {
 	RegisterSecrets("private-key-header\nprivate-key-sensitive-body\r\nprivate-key-footer")
 	for _, line := range []string{"private-key-header", "private-key-sensitive-body", "private-key-footer"} {

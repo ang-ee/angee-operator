@@ -56,7 +56,7 @@ func TestBackupLayerPlanRemoteOnlyVerdict(t *testing.T) {
 	f.jj(f.slot, "status")
 	refused("dirty working copy", slot)
 	if _, err := driver().BackupLayerPlan(ctx, slot, store, false); err != nil {
-		t.Fatalf("portable capture of a dirty working copy: %v", err)
+		t.Fatalf("bundle capture of a dirty working copy: %v", err)
 	}
 	f.jj(f.slot, "restore")
 	published("restored working copy", slot)

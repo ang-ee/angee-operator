@@ -76,7 +76,7 @@ func (c Client) PublishedBackup(ctx context.Context, dir string, colocated Coloc
 		if name == "" || slices.ContainsFunc(colocated.Dirs, func(dir string) bool { return strings.HasPrefix(name, dir+"/") }) {
 			continue
 		}
-		return nil, backupPublicationRefusal("remote-only capture refuses local ignored files; use portable capture")
+		return nil, backupPublicationRefusal("remote-only capture refuses local ignored files; use the bundle source policy")
 	}
 	refs, _, err := c.RunIsolated(ctx, dir, []string{"GIT_OPTIONAL_LOCKS=0"}, "--no-pager", "for-each-ref", "--format=%(refname) %(objectname)")
 	if err != nil {
@@ -97,7 +97,7 @@ func (c Client) PublishedBackup(ctx context.Context, dir string, colocated Coloc
 			continue
 		}
 		if !slices.ContainsFunc(publishedRefs, within) {
-			return nil, backupPublicationRefusal("remote-only capture refuses local recovery refs (stash, notes, replace or custom refs); choose portable capture")
+			return nil, backupPublicationRefusal("remote-only capture refuses local recovery refs (stash, notes, replace or custom refs); use the bundle source policy")
 		}
 		revisions = append(revisions, fields[1])
 	}
@@ -154,10 +154,10 @@ func (c Client) PublishedBackup(ctx context.Context, dir string, colocated Coloc
 	args = append(append(args, "--all", "--reflog", "--not", EndOfOptions), tips...)
 	private, _, err := c.RunIsolated(ctx, dir, []string{"GIT_OPTIONAL_LOCKS=0"}, args...)
 	if err != nil {
-		return nil, fmt.Errorf("cannot prove local recovery history published; choose portable capture: %w", err)
+		return nil, fmt.Errorf("cannot prove local recovery history published; use the bundle source policy: %w", err)
 	}
 	if len(private) > 0 {
-		return nil, backupPublicationRefusal("remote-only capture refuses unpublished reflog history; choose portable capture")
+		return nil, backupPublicationRefusal("remote-only capture refuses unpublished reflog history; use the bundle source policy")
 	}
 	return remotes, nil
 }

@@ -132,6 +132,66 @@ func PrefixLines(text, label string, width int) string {
 	return b.String()
 }
 
+// StripTerminalControls removes the ECMA-48 escape sequences a terminal acts
+// on from captured output, so a receipt carries only its text: control
+// sequences (CSI, ESC [ … final byte), such as colours; operating system
+// commands (OSC, ESC ] … BEL or ESC \), such as the window title
+// "process-compose: <host>/<directory>" that process-compose sets, and the
+// other control strings (DCS, SOS, PM, APC: ESC P, X, ^ or _), which end the
+// same way; and the other escape sequences (ESC, intermediate bytes, final
+// byte). A control string left unterminated ends with its line, so it cannot
+// swallow the rest of the text. Everything else, newlines and tabs included,
+// is kept.
+func StripTerminalControls(text string) string {
+	const escape = 0x1b
+	if strings.IndexByte(text, escape) < 0 {
+		return text
+	}
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		next := strings.IndexByte(text[i:], escape)
+		if next < 0 {
+			b.WriteString(text[i:])
+			break
+		}
+		b.WriteString(text[i : i+next])
+		i += next + 1
+		if i == len(text) {
+			break
+		}
+		switch text[i] {
+		case '[':
+			i++
+			for i < len(text) && text[i] >= 0x20 && text[i] <= 0x3f {
+				i++
+			}
+			if i < len(text) && text[i] >= 0x40 && text[i] <= 0x7e {
+				i++
+			}
+		case ']', 'P', 'X', '^', '_':
+			end := strings.IndexAny(text[i:], "\a\x1b\n")
+			if end < 0 {
+				return b.String()
+			}
+			i += end
+			switch {
+			case text[i] == '\a':
+				i++
+			case text[i] == escape && i+1 < len(text) && text[i+1] == '\\':
+				i += 2
+			}
+		default:
+			for i < len(text) && text[i] >= 0x20 && text[i] <= 0x2f {
+				i++
+			}
+			if i < len(text) && text[i] >= 0x30 && text[i] <= 0x7e {
+				i++
+			}
+		}
+	}
+	return b.String()
+}
+
 // LogTruncatedMarker is the first line of a log read LimitLogBytes shortened:
 // the lines before it were dropped.
 const LogTruncatedMarker = "[truncated]\n"

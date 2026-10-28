@@ -55,8 +55,10 @@ func TestPublishedBackupVerifiesLiveRemoteAndRefusesLocalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	run(dir, "stash", "push", "-m", "private recovery state")
-	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); err == nil {
-		t.Fatal("accepted private stash")
+	// A refusal points to the source policy the backup API accepts.
+	var refusal *BackupPublicationError
+	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); !errors.As(err, &refusal) || !strings.HasSuffix(refusal.Reason, "; use the bundle source policy") {
+		t.Fatalf("private stash: err=%v, want a refusal naming the bundle source policy", err)
 	}
 	run(dir, "stash", "drop")
 	if err := os.RemoveAll(remote); err != nil {
