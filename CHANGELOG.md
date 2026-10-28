@@ -6,6 +6,12 @@ latest tag.
 
 ## Unreleased
 
+### Security
+
+- **Built with Go 1.26.10.** Release binaries and images were built with Go
+  1.26.9, whose `crypto/x509` has a vulnerability fixed in 1.26.10
+  (GO-2026-6809). govulncheck reports none on this release.
+
 ## v0.22.0 — 2026-10-13
 
 ### Added
