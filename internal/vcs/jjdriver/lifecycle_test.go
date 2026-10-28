@@ -383,8 +383,8 @@ func (d *swapParent) VerifyPathIdentity(path string) error {
 // TestAddDetectsAParentSwappedForASymlink: the parent swapped between the
 // checks before and after jj runs is detected, the workspace is forgotten and
 // its registration dropped, and the directory Add made is removed where it
-// is, never through the symlink. What jj wrote where the symlink leads is
-// left there.
+// is, never through the symlink. Where the symlink leads, jj's forget deletes
+// the .git jj wrote, and the rest of what jj wrote is left there.
 func TestAddDetectsAParentSwappedForASymlink(t *testing.T) {
 	f := newPrimary(t)
 	parent := filepath.Join(f.root, "workspaces", "ws")
@@ -412,8 +412,11 @@ func TestAddDetectsAParentSwappedForASymlink(t *testing.T) {
 	if exists(t, filepath.Join(parent+"-moved", "src")) {
 		t.Errorf("the directory Add made is still there")
 	}
-	if !exists(t, filepath.Join(outside, "src")) {
+	if !exists(t, filepath.Join(outside, "src", "f.txt")) {
 		t.Errorf("Add() removed what jj wrote through the symlink")
+	}
+	if exists(t, filepath.Join(outside, "src", ".git")) {
+		t.Errorf("the forget left the .git jj wrote through the symlink")
 	}
 }
 
@@ -685,5 +688,137 @@ func TestLifecycleCommands(t *testing.T) {
 		if run.Tool != w.tool || !slices.Equal(run.Args, w.args) || gotDir != wantDir {
 			t.Errorf("run %d = %s %q in %s, want %s %q in %s", i, run.Tool, run.Args, run.Dir, w.tool, w.args, w.dir)
 		}
+	}
+}
+
+// fakeSlot is a jj slot of an empty primary directory, for the fake jj and
+// git, and the guard the service opens on its path. The path holds nothing,
+// or, with files, a directory holding those, as Remove finds a slot.
+func fakeSlot(t *testing.T, files ...string) (vcs.Slot, *copierx.GuardedPath) {
+	t.Helper()
+	root := t.TempDir()
+	primary := filepath.Join(root, "primary")
+	if err := os.Mkdir(primary, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	s := vcs.Slot{Path: filepath.Join(root, "ws", "src"), Name: "stack--ws", Primary: primary, BaseRef: "main"}
+	if len(files) > 0 {
+		if err := os.MkdirAll(s.Path, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+	}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(s.Path, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	dest, err := copierx.OpenGuardedPath(root, root, "ws/src", nil)
+	if err != nil {
+		t.Fatalf("OpenGuardedPath() error = %v", err)
+	}
+	t.Cleanup(func() { _ = dest.Close() })
+	return s, dest
+}
+
+// commandLines is each run of the fake tools in home as one line: the tool
+// and its arguments.
+func commandLines(t *testing.T, home string) []string {
+	t.Helper()
+	runs := fakeRuns(t, home)
+	lines := make([]string, len(runs))
+	for i, run := range runs {
+		lines[i] = run.Tool + " " + strings.Join(run.Args, " ")
+	}
+	return lines
+}
+
+// lineWith is the index of the first of lines that contains s, else -1.
+func lineWith(lines []string, s string) int {
+	return slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, s) })
+}
+
+// failedJJ reports whether err holds a failed jj command with arg among its
+// arguments, and failedGit a failed git command.
+func failedJJ(err error, arg string) bool {
+	var command *CommandError
+	return errors.As(err, &command) && slices.Contains(command.Args, arg)
+}
+
+func failedGit(err error, arg string) bool {
+	var command *git.CommandError
+	return errors.As(err, &command) && slices.Contains(command.Args, arg)
+}
+
+// TestRemoveGoesOnWhenAStepFails: a failed forget still lets Remove remove
+// the directory and prune, and a failed prune after it is reported with it,
+// joined.
+func TestRemoveGoesOnWhenAStepFails(t *testing.T) {
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "fail-on": "forget\nprune\n"})
+	s, dest := fakeSlot(t, "f.txt")
+	err := driver().Remove(context.Background(), s, dest)
+	if !failedJJ(err, "forget") || !failedGit(err, "prune") {
+		t.Errorf("Remove() error = %v, want the forget's and the prune's failures joined", err)
+	}
+	if exists(t, s.Path) {
+		t.Errorf("Remove() left %s after the forget failed", s.Path)
+	}
+	lines := commandLines(t, home)
+	if forget, prune := lineWith(lines, "workspace forget"), lineWith(lines, "worktree prune"); forget < 0 || prune < forget {
+		t.Errorf("Remove() ran %q; want the forget, then the prune", lines)
+	}
+}
+
+// cancelDest is the service's guard, cancelling the caller's context once
+// Add's first identity check has passed, so that jj's add fails as it would
+// for a caller that goes away while jj runs.
+type cancelDest struct {
+	*copierx.GuardedPath
+	cancel context.CancelFunc
+}
+
+func (d *cancelDest) VerifyPathIdentity(path string) error {
+	err := d.GuardedPath.VerifyPathIdentity(path)
+	d.cancel()
+	return err
+}
+
+// TestAddRollsBackOnItsOwnContext: when the caller's context is what failed
+// the add, the rollback still forgets the workspace, removes the directory
+// and prunes, on a context of its own.
+func TestAddRollsBackOnItsOwnContext(t *testing.T) {
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n"})
+	s, guard := fakeSlot(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := driver().Add(ctx, s, &cancelDest{GuardedPath: guard, cancel: cancel}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Add() error = %v, want the caller's cancellation", err)
+	}
+	if strings.Contains(err.Error(), "roll back") {
+		t.Errorf("Add() error = %v, want the rollback to succeed", err)
+	}
+	lines := commandLines(t, home)
+	if forget, prune := lineWith(lines, "workspace forget"), lineWith(lines, "worktree prune"); forget < 0 || prune < forget {
+		t.Errorf("Add() ran %q; want the rollback's forget, then its prune", lines)
+	}
+	if exists(t, s.Path) {
+		t.Errorf("Add() left %s", s.Path)
+	}
+}
+
+// TestAddReportsAFailedRollback: a rollback that fails too is reported with
+// the failure it rolled back, joined, and still runs every step.
+func TestAddReportsAFailedRollback(t *testing.T) {
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "fail-on": "add\nprune\n"})
+	s, dest := fakeSlot(t)
+	err := driver().Add(context.Background(), s, dest, nil)
+	if !failedJJ(err, "add") || !failedGit(err, "prune") || !strings.Contains(err.Error(), "roll back jj slot "+s.Path) {
+		t.Errorf("Add() error = %v, want the add's failure joined with the rollback's", err)
+	}
+	if lines := commandLines(t, home); lineWith(lines, "workspace forget") < 0 {
+		t.Errorf("Add() ran %q; want the rollback's forget", lines)
+	}
+	if exists(t, s.Path) {
+		t.Errorf("Add() left %s", s.Path)
 	}
 }

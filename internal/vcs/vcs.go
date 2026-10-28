@@ -200,10 +200,15 @@ var (
 // then the same prune), so the caller holds the lock around them. Exists,
 // the reads and the verbs take none.
 type Driver interface {
-	// Exists reports whether Slot.Primary lists the slot's checkout, as a
-	// leftover of an earlier create can still be listed: git by Slot.Path,
-	// jj by Slot.Name. A clone is a repository of its own, which nothing
-	// lists.
+	// Exists reports whether Slot.Primary lists the slot's checkout: git by
+	// Slot.Path, jj by Slot.Name. A clone is a repository of its own, which
+	// nothing lists. For git, a worktree listed at the slot's own path is a
+	// leftover of an earlier create, which the caller may Remove before Add.
+	// For jj it means only that the name is taken in the primary, possibly
+	// by another live slot (one that moved, or another stack's whose name
+	// collides), which Remove would forget, deleting its .git. So a jj slot
+	// must not go through the git leftover removal (addWorktreeSlot); plan
+	// phase 6 step 4 decides what a taken name means.
 	Exists(ctx context.Context, s Slot) (bool, error)
 	// Add makes the slot's checkout at Slot.Path, writing there only through
 	// d, which holds nothing or an empty directory: a worktree of

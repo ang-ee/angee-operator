@@ -1167,11 +1167,14 @@ driver yet; phase 6 wires it.
   - The destination check comes first for the same reason. jj refuses a
     non-empty directory, but the rollback would then delete what was in
     it.
-  - With a swapped parent, jj writes the checkout where the symlink leads.
-    The after-check catches it. The rollback forgets the workspace (which
-    also drops the registration and the `.git` jj wrote there) and removes
-    the directory `Add` made, through the guard. It leaves what jj wrote
-    outside: removing through the swapped path is what the guard prevents.
+  - With a swapped parent, jj writes the checkout where the symlink leads,
+    and records that path. The after-check catches it. The rollback forgets
+    the workspace and removes the directory `Add` made, through the guard.
+    `Add` itself removes nothing through the swapped path, which is what the
+    guard prevents, but the forget does, as jj: it deletes the `.git` jj
+    wrote at the recorded path and runs its own `git worktree prune`
+    (probed; it also pruned an unrelated missing worktree). The rest of what
+    jj wrote there stays, and the test pins both.
   - Parents that `MkdirAll` created stay after a failure, as they do after
     the git driver's late failures.
 - **`configure` is refused on a jj slot**, with `vcs.ErrUnsupported`. A
@@ -1245,6 +1248,11 @@ driver yet; phase 6 wires it.
   - Missing facts and a non-nil `configure` are refused before any command
     runs. A fake jj and git pin each command, its arguments and its
     directory.
+  - Through the fake, which can fail chosen commands: a failed forget still
+    lets `Remove` remove the directory and prune, and a failed prune is
+    joined to it; a caller's context cancelled during `Add` still rolls
+    back (forget, remove, prune); and a failed rollback is joined into
+    `Add`'s error.
   - `TestNothingReachesTheDevelopersConfig` runs the lifecycle too. It now
     also checks that no jj the driver ran loaded the repository the test
     runs in.
@@ -1256,16 +1264,44 @@ driver yet; phase 6 wires it.
   - no destination check (the rollback deletes the directory's contents);
   - `--colocate` in `EnsurePrimary`;
   - `jj git init` in the process's directory;
-  - `workspace add` with `--ignore-working-copy`.
+  - `workspace add` with `--ignore-working-copy`;
+  - `Remove` stopping at a failed forget, or dropping its error;
+  - the rollback on the caller's context, or with its error dropped.
 - **For phase 6:**
   - Call `EnsurePrimary` only for a `kind: git` cache, never for a `kind:
     local` store (step 7: the operator never initializes one). Step 7 also
     needs `Add` without `--colocate` for a store that has no `.git`.
   - Hold the lock around `Exists`, `Remove` and `Add` together, as
-    `addWorktreeSlot` does. Step 4's keep-a-registered-slot rule decides
-    before `Add` runs. Map `vcs.ErrNameTaken` to a conflict.
+    `addWorktreeSlot` does, but not through its leftover removal. For git,
+    `Exists` finds a worktree at the slot's own path, a leftover. For jj it
+    finds the name taken, possibly by another live slot, which `Remove`
+    would forget, deleting its `.git`. Step 4's keep-a-registered-slot rule
+    decides before `Add` runs. Map `vcs.ErrNameTaken` to a conflict.
   - Set `Slot.Name` and `Slot.Primary` in `workspaceLifecycleSlot`, and
     pass a nil `configure`.
+  - **`Add` changes the shared cache's git format.** `jj workspace add
+    --colocate` runs `git -c worktree.useRelativePaths=true worktree add`,
+    which sets `core.repositoryformatversion=1` and
+    `extensions.relativeworktrees=true` on the cache and writes relative
+    links. That undoes what #130 keeps for git worktree slots (`worktreeAdd`
+    in `internal/git/git.go`). Found by probe (jj 0.45.1, git 2.50.1):
+    - go-git's `PlainOpen` refuses the cache, so `sourceCommits`
+      (`internal/service/commits.go:40`) returns no commits, and no error,
+      for that source in the GitOps topology;
+    - git before 2.48 does not know the extension and may refuse the cache
+      and its git worktree slots, while doctor accepts 2.42.
+
+    So before phase 6 hands jj a cache: require git ≥ 2.48 for jj slots
+    (doctor's floor and the create path); give `sourceCommits` a git CLI
+    fallback, or surface its error; and pin the cache's config after `Add`
+    in a test, with a git worktree slot of the same cache still working.
+  - **Workspace names can collide across stacks.** `<stack>--<workspace>`
+    is ambiguous once a part contains `--`: stack `a--b` with workspace `c`
+    and stack `a` with workspace `b--c` both get `a--b--c` (and `--<slot>`
+    adds more ways). On a shared cache D13 refuses the second with a clash
+    its own manifest does not show, and `Exists` reports the name taken.
+    Refuse `--` in the parts, or pick a form that cannot collide, before
+    names are computed.
 
 ### Phase 6. `mode: jj` lifecycle and status
 

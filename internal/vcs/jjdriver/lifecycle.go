@@ -97,8 +97,11 @@ func (d Driver) Exists(ctx context.Context, s vcs.Slot) (bool, error) {
 //   - jj creates the workspace in it (`jj workspace add`).
 //   - After: Slot.Path still leads to that directory. A parent swapped for a
 //     symlink in between shows here: jj then wrote the checkout where the
-//     symlink leads, and Add leaves that alone, since removing through the
-//     swapped path is what the guard is there to prevent.
+//     symlink leads, and recorded that path. Add itself removes nothing
+//     there, since removing through the swapped path is what the guard is
+//     there to prevent, but the rollback's forget does write through it, as
+//     jj: it deletes the .git jj wrote at the recorded path and runs its own
+//     `git worktree prune`. The rest of what jj wrote there stays.
 //
 // On a mismatch, or any error once the directory is made, Add rolls back as
 // Remove does: forget, remove through dest, prune. jj can create the
@@ -165,7 +168,7 @@ func (d Driver) create(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 		return err
 	}
 	if err := dest.VerifyPathIdentity(s.Path); err != nil {
-		return fmt.Errorf("jj slot %s changed while jj created it, so jj may have written the checkout elsewhere, and left it there: %w", s.Path, err)
+		return fmt.Errorf("jj slot %s changed while jj created it, so jj may have written the checkout elsewhere, and its files stay there: %w", s.Path, err)
 	}
 	return nil
 }
