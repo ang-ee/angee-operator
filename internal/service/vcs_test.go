@@ -384,7 +384,7 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "rebase", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourceRebase(ctx, ws, "app", "main")
 			return result.Message, err
-		}, want: []string{"Rebase(main)"}, wantMsg: "fake Rebase"},
+		}, want: []string{"Ready(rebase)", "Rebase(main)"}, wantMsg: "fake Rebase"},
 		{name: "merge abort", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourceMergeAbort(ctx, ws, "app")
 			return result.Message, err
@@ -655,6 +655,40 @@ func TestASyncThatWasMadeIsNotReportedAsFailed(t *testing.T) {
 	_, err = platform.WorkspaceSourceRebase(ctx, workspaceName, "app", "main")
 	if want := `Rebase for workspace "feature-a" slot "app": reading what rebasing onto main left in source slot "app" failed: `; err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Fatalf("WorkspaceSourceRebase() error = %v, want it to start %q", err, want)
+	}
+}
+
+// A sync or rebase its driver made with a warning (*vcs.Warning) is not a
+// failure: sync-base puts the warning on the slot's state, and the slot's
+// rebase returns its result, whose message carries it.
+func TestASyncThatWarnsIsNotAFailure(t *testing.T) {
+	ctx := context.Background()
+	warned := &vcs.Warning{Text: "Warning: 1 of those updates were skipped"}
+	platform, workspaceName, _, _ := setupGitWorkspace(t)
+	fake := &fakeDriver{status: vcs.Status{CurrentRef: workspaceName, Pushed: true}, fail: map[string]error{"SyncBase": warned, "Rebase": warned}}
+	platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	t.Setenv("PATH", t.TempDir())
+
+	states, err := platform.WorkspaceSyncBase(ctx, workspaceName, "rebase")
+	if err != nil || len(states) != 1 || states[0].Error != "synced, but jj warned while rebasing onto fake/main: "+warned.Text {
+		t.Fatalf("WorkspaceSyncBase() = %+v, %v, want the warning on the slot's state", states, err)
+	}
+	if result, err := platform.WorkspaceSourceRebase(ctx, workspaceName, "app", "main"); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceRebase() = %+v, %v, want its OK result", result, err)
+	}
+}
+
+// A slot whose sync fails once earlier slots are synced names them, since
+// they stay synced: in the message, before nothing else, and in the detail.
+func TestAFailedSyncNamesTheSlotsSyncedBeforeIt(t *testing.T) {
+	err := afterSynced(syncConflict(api.GitOpResult{Conflicted: true, ConflictFiles: []string{"f.txt"}}, gitStep{action: "merging origin/main into", object: `source slot "tree"`, slot: "tree"}), []string{"a", "b"})
+	opErr := AsOperationError(err)
+	if opErr == nil || opErr.Cause != CauseMergeConflict || !strings.HasSuffix(opErr.Summary, `source slots "a", "b" synced before it, and stay synced.`) ||
+		!strings.HasPrefix(opErr.Detail, `source slots "a", "b" synced before it`) {
+		t.Fatalf("afterSynced() = %+v, want the conflict naming a and b as synced", opErr)
+	}
+	if plain := syncConflict(api.GitOpResult{Conflicted: true, ConflictFiles: []string{"f.txt"}}, gitStep{slot: "tree"}); afterSynced(plain, nil) != plain {
+		t.Error("afterSynced() with nothing synced changed the error")
 	}
 }
 

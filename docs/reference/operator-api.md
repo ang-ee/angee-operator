@@ -99,6 +99,7 @@ their diagnostics, and their words are passed through.
 | `jj_unavailable` | `PRECONDITION_FAILED` | A workspace with a jj slot needs jj with `workspace add --colocate`, git 2.48 or later, and not Windows, to create one, sync it or rebase it; the hint says what to install. |
 | `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot yet (fetch, pull, push, publish, merge, diff), or `workspace push` over a workspace with a slot whose manifest names mode `jj`; `slot` or `paths` name the jj slots. Use jj in the slot. |
 | `shared_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot (sync-base, or the slot's rebase) would rewrite commits another checkout holds: another jj workspace's working-copy commit, or a git worktree's checked-out branch; the message names them, and `paths` the worktrees. Nothing is rebased. |
+| `untracked_paths` | `PRECONDITION_FAILED` | A jj slot holds files jj does not track (the untracked paths of `jj status`), which a sync-base or rebase could keep over the base's own; `paths` lists them. Nothing is fetched or rebased. |
 | `immutable_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot would rewrite commits jj holds immutable (a tag's, an untracked remote bookmark's); the message names them. Nothing is rebased. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
@@ -564,8 +565,10 @@ workspace with a slot whose manifest names mode `jj`, before any slot is
 read. A jj slot's conflict is a
 result, not an error: the slot's entry in the answer carries `conflicted` and
 `conflict_paths` (`conflictPaths` in GraphQL), read from its status, and the
-slots after it are synced too. A git slot that stops on conflicts still fails the sync with
-`merge_conflict`. A rebase rewrites the slot's commits, so a slot published
+slots after it are synced too. What jj warned of while it rebased a slot is on that slot's `error`. A
+git slot that stops on conflicts still fails the sync with `merge_conflict`,
+and any failure after other slots synced names them, in the message and
+`detail`. A rebase rewrites the slot's commits, so a slot published
 before it is force-updated by the next publish.
 
 A jj slot (`mode: jj`, or no mode under `vcs: jj`) is never

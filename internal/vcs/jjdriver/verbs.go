@@ -23,11 +23,23 @@ func noOperationInProgress(verb string) error {
 	return fmt.Errorf("%s: a jj slot never has a merge or rebase in progress, since jj records a conflict in the commit and goes on: %w", verb, vcs.ErrUnsupported)
 }
 
-// Ready lets sync-base run on a jj slot as it stands: the working-copy commit
-// rides along with the rebase, and there is no branch to be on.
-func (Driver) Ready(_ context.Context, _ vcs.Slot, verb vcs.Verb) error {
-	if verb != vcs.VerbSyncBase {
+// Ready lets sync-base and rebase run on a jj slot whose files jj all tracks:
+// the working-copy commit rides along with the rebase, and there is no branch
+// to be on. A slot with untracked paths (`jj status`'s, plan Q10) is refused
+// with a *vcs.UntrackedPathsError: they are work only the slot holds, and a
+// rebase whose new base adds the same path keeps the local file, which the
+// next snapshot records as a change undoing the base's. The read snapshots
+// the slot.
+func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
+	if verb != vcs.VerbSyncBase && verb != vcs.VerbRebase {
 		return notYet("the preconditions of " + string(verb))
+	}
+	untracked, err := d.untracked(ctx, s.Path)
+	if err != nil {
+		return err
+	}
+	if len(untracked) > 0 {
+		return &vcs.UntrackedPathsError{Paths: untracked}
 	}
 	return nil
 }

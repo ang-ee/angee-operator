@@ -12,9 +12,14 @@ import (
 
 // Ready answers sync-base's preconditions: a checkout that must be on a
 // branch is on it, and has no uncommitted changes, which a merge or rebase
-// would mix into the base's.
+// would mix into the base's. A slot's own rebase has none: git refuses a
+// rebase over uncommitted changes itself.
 func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
-	if verb != vcs.VerbSyncBase {
+	switch verb {
+	case vcs.VerbSyncBase:
+	case vcs.VerbRebase:
+		return nil
+	default:
 		return fmt.Errorf("no preconditions for %s on a git slot: %w", verb, vcs.ErrUnsupported)
 	}
 	if s.Branch != "" {

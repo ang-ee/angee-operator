@@ -51,6 +51,7 @@ const (
 	CauseJJUnavailable         = "jj_unavailable"
 	CauseSharedCommits         = "shared_commits"
 	CauseImmutableCommits      = "immutable_commits"
+	CauseUntrackedPaths        = "untracked_paths"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.

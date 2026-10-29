@@ -54,6 +54,8 @@ func TestRevsetConstructors(t *testing.T) {
 		{remoteBookmark("main", "origin").to(workingCopy).descendants(), `((remote_bookmarks(exact:"main", remote=exact:"origin"))..(@))::`},
 		{localBookmark(`a"b`).single(), `exactly(bookmarks(exact:"a\"b"), 1)`},
 		{localBookmark("main").and(immutable), `(bookmarks(exact:"main")) & (immutable())`},
+		{changeOf("wrzzmtqs").single(), `exactly(change_id("wrzzmtqs"), 1)`},
+		{commitOf("80b24e77"), `commit_id("80b24e77")`},
 		{refRevision("main@origin"), `"main"@"origin"`},
 		{refRevision(`fe"at@o"rigin`), `"fe\"at"@"o\"rigin"`},
 		{refRevision("a@b@origin"), `"a@b"@"origin"`},

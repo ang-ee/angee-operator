@@ -64,6 +64,17 @@ latest tag.
     a commit jj holds immutable, such as a tagged one (cause
     `immutable_commits`), and sync-base or rebase of a jj slot on a machine
     that cannot run jj slots (cause `jj_unavailable`).
+  - A jj slot that holds files jj does not track is refused, naming them
+    (cause `untracked_paths`), before anything is fetched: a base that adds
+    the same path would have the local file kept over its own. When jj warns
+    while it rebases a slot (it skipped updating a file the working copy
+    held, such as an ignored one), the warning is on that slot's `error` in
+    sync-base and in the rebase's `message`.
+  - A bookmark on the rebased commits that nothing has checked out moves
+    with them, as jj moves it, and a pushed one force-updates, with a lease,
+    on its next publish.
+  - A slot's sync that fails after others synced names those slots, which
+    stay synced.
   - A `kind: local` store's jj slot is rebased onto its base as the store has
     it; angee fetches nothing into a user's store.
   - `workspace source rebase` runs on a jj slot (`ref` in jj's spelling, such
@@ -94,6 +105,11 @@ latest tag.
   identity, else angee's placeholder when git has none either, as merges and
   rebases of git slots do. jj recorded an empty author and committer before,
   which `jj git push` refuses.
+- **sync-base checks each git slot's branch and its uncommitted changes
+  together, slot by slot.** It checked every slot's branch first before.
+  With slot `a` dirty and slot `b` off its branch, the refusal now names
+  `a`'s uncommitted changes rather than `b`'s branch; nothing is touched
+  either way.
 - A failure's message names the tool it quotes: ` jj: <line>` for a jj
   command, ` git: <line>` for git as before. A step that fails with neither
   tool's words, such as resolving a base, now ends with the error itself
