@@ -610,19 +610,31 @@ func branchMismatch(workspaceName, slot, source, path string, mismatch *vcs.Bran
 }
 
 // requireSlotReady refuses verb on a workspace slot when its driver says the
-// slot is not ready for it (vcs.Driver.Ready), in the service's words: a
-// branch mismatch or uncommitted changes, each with the fix the driver
-// names, or untracked paths only the slot holds.
+// slot is not ready for it (vcs.Driver.Ready), in the service's words
+// (readinessRefusal).
 func requireSlotReady(ctx context.Context, driver vcs.Driver, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) error {
 	err := driver.Ready(ctx, target, verb)
+	if refusal := readinessRefusal(err, target, verb, workspaceName, slot, source); refusal != nil {
+		return refusal
+	}
+	return err
+}
+
+// readinessRefusal words a driver's answer that verb may not run on the
+// workspace slot target: a branch mismatch or uncommitted changes, each with
+// the fix the driver names, untracked paths only the slot holds, or another
+// reason of the slot's version control. It is nil for any other error.
+func readinessRefusal(err error, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) *OperationError {
 	var mismatch *vcs.BranchMismatchError
 	var uncommitted *vcs.UncommittedError
 	var untracked *vcs.UntrackedPathsError
+	var notReady *vcs.NotReadyError
+	var refusal error
 	switch {
 	case errors.As(err, &mismatch):
-		return branchMismatch(workspaceName, slot, source, target.Path, mismatch)
+		refusal = branchMismatch(workspaceName, slot, source, target.Path, mismatch)
 	case errors.As(err, &uncommitted):
-		return uncommittedChanges(uncommitted.Paths, uncommitted.Fix, fmt.Sprintf("source slot %q", slot), slot, source)
+		refusal = uncommittedChanges(uncommitted.Paths, uncommitted.Fix, fmt.Sprintf("source slot %q", slot), slot, source)
 	case errors.As(err, &untracked):
 		// A rebase could keep them over the base's own; every other verb
 		// that refuses them acts on commits, which leave them out.
@@ -643,8 +655,27 @@ func requireSlotReady(ctx context.Context, driver vcs.Driver, target vcs.Slot, v
 				slot, why, vcs.NamePaths(untracked.Paths, maxMessagePaths), hint),
 			Err: err,
 		}
+	case errors.As(err, &notReady):
+		hint := "Fix the slot, then retry."
+		if notReady.Fix != "" {
+			hint = fmt.Sprintf("Fix it with `%s`, then retry.", notReady.Fix)
+		}
+		return &OperationError{
+			Code:      CodePreconditionFailed,
+			Workspace: workspaceName,
+			Slot:      slot,
+			Source:    source,
+			Paths:     []string{target.Path},
+			Hint:      hint,
+			Summary:   fmt.Sprintf("source slot %q is not ready for %s: %s. %s", slot, verb, notReady.Reason, hint),
+			Err:       err,
+		}
+	default:
+		return nil
 	}
-	return err
+	var opErr *OperationError
+	errors.As(refusal, &opErr)
+	return opErr
 }
 
 // workspaceSourceRequiresBranch reports whether a slot must stay on its
@@ -1424,7 +1455,7 @@ type workspaceGitPush struct {
 // slot's) is held to the manifest's rules for its remote, as a publish is
 // (publishRulesRefusal).
 func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slot, source manifest.Source, workspaceName, slot string, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
-	push := workspaceGitPush{driver: driver, target: target, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
+	push := workspaceGitPush{driver: driver, target: target, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, ""), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
 	plan, err := driver.PlanPush(ctx, target, ref, wsSource.Branch)
 	if err != nil {
 		return push, pushPlanRefusal(err, target, workspaceName, slot, wsSource)
@@ -1441,8 +1472,6 @@ func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slo
 		}
 		push.step.action = fmt.Sprintf("pushing branch %q of", plan.Publish.Branch)
 		push.step.remote = plan.Publish.URL
-	default:
-		push.step.remote = driver.PushURL(ctx, target, "")
 	}
 	return push, nil
 }
@@ -1467,6 +1496,12 @@ func pushPlanRefusal(err error, target vcs.Slot, workspaceName, slot string, wsS
 	if refusal := unpushableCommits(err, slot, wsSource.Source); refusal != nil {
 		return refusal
 	}
+	if refusal := branchTaken(err, slot); refusal != nil {
+		return refusal
+	}
+	if refusal := readinessRefusal(err, target, vcs.VerbPush, workspaceName, slot, wsSource.Source); refusal != nil {
+		return refusal
+	}
 	return gitFailure(err, gitStep{action: "planning the push of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
 }
 
@@ -1483,7 +1518,11 @@ func (push workspaceGitPush) run(ctx context.Context) error {
 		logctx.From(ctx).Warn(push.skip)
 		return nil
 	}
-	return gitFailure(push.driver.Push(ctx, push.target, push.plan), push.step)
+	err := push.driver.Push(ctx, push.target, push.plan)
+	if refusal := checkoutMoved(err, push.step.slot, push.step.source, "push"); refusal != nil {
+		return refusal
+	}
+	return gitFailure(err, push.step)
 }
 
 // detachedHeadPushError refuses a push of a slot that holds commits of its

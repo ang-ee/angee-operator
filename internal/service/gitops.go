@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -180,6 +181,11 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "fetch", workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
+	}
+	if source.Kind != "git" && wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+		// A local store is the user's: angee never fetches into it, as
+		// sync-base does not.
+		return api.WorkspaceSourceStatus{}, &InvalidInputError{Field: "slot", Reason: fmt.Sprintf("source slot %q is a jj slot of local store %q, which angee never fetches into; rebase the slot onto its base as the store has it, with `angee workspace source rebase %s %s %s`", slot, wsSource.Source, workspaceName, slot, cmp.Or(workspaceSourceBaseRef(source, wsSource), "<base>"))}
 	}
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)

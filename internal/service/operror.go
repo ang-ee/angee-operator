@@ -246,8 +246,11 @@ func classifyOperationError(err error) *OperationError {
 		}
 		return opErr
 	}
+	// A version-control command that failed, git's or a driver's tool's (a
+	// jj command's), quoting the tool.
 	var command *git.CommandError
-	if git.IsTimeout(err) || errors.As(err, &command) {
+	var tool vcs.ToolError
+	if git.IsTimeout(err) || errors.As(err, &command) || errors.As(err, &tool) {
 		var opErr *OperationError
 		errors.As(gitFailure(err, gitStep{}), &opErr)
 		return opErr
@@ -498,6 +501,41 @@ func unpushableCommits(err error, slot, source string) *OperationError {
 		Source:  source,
 		Hint:    hint,
 		Summary: fmt.Sprintf("source slot %q was not pushed: %v. %s", slot, refused, hint),
+		Err:     err,
+	}
+}
+
+// branchTaken is the refusal of a publish or push of slot under a branch that
+// is not the slot's to set (a *vcs.BranchTakenError): a git worktree of the
+// same source has it checked out, or the remote has a branch of that name the
+// repository does not track. It is the caller's choice of branch at fault, as
+// a git publish's existing branch is. It is nil for any other error.
+func branchTaken(err error, slot string) error {
+	var taken *vcs.BranchTakenError
+	if !errors.As(err, &taken) {
+		return nil
+	}
+	remedy := "pass another branch"
+	if taken.Remote != "" {
+		remedy = fmt.Sprintf("pass another branch, or track it with `jj bookmark track %s@%s` and rebase the slot onto it", taken.Branch, taken.Remote)
+	}
+	return &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("source slot %q cannot be published under branch %q: %v; %s", slot, taken.Branch, taken, remedy)}
+}
+
+// checkoutMoved is the refusal of a publish or push of slot whose checkout
+// moved after its push was planned (vcs.ErrCheckoutMoved): nothing was pushed,
+// and the verb run again plans afresh. It is nil for any other error.
+func checkoutMoved(err error, slot, source, verb string) *OperationError {
+	if !errors.Is(err, vcs.ErrCheckoutMoved) {
+		return nil
+	}
+	hint := fmt.Sprintf("Run %s again.", verb)
+	return &OperationError{
+		Code:    CodeConflict,
+		Slot:    slot,
+		Source:  source,
+		Hint:    hint,
+		Summary: fmt.Sprintf("source slot %q changed while its %s was checked, so nothing was pushed: %v. %s", slot, verb, err, hint),
 		Err:     err,
 	}
 }

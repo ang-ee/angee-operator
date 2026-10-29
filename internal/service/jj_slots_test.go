@@ -52,52 +52,50 @@ func jjVerbStack(t *testing.T, vcsJJ bool) *Platform {
 	return platform
 }
 
-// Every slot verb phase 8 has not implemented refuses a jj slot, before it
-// runs anything, with one typed error: INVALID_INPUT, cause
-// jj_slot_unsupported, the verb and the slot named, matching
-// vcs.ErrUnsupported. So does workspace push over a workspace that holds one
-// whose manifest names mode jj, which would otherwise skip it. A slot with no
-// mode under `vcs: jj` is a jj slot too for the per-slot verbs; workspace
-// push walks only the slots that name a mode (plan Q7), so it skips that one
-// and reaches the worktree slot, which is not on disk.
-func TestJJSlotVerbsRefuseUntilPhase8(t *testing.T) {
+// A pull of a jj slot, with or without a mode of its own, is refused before
+// it runs anything (no jj is needed): INVALID_INPUT, cause
+// jj_slot_unsupported, matching vcs.ErrUnsupported, since jj takes a base in
+// by rebasing. The hint names what does that: sync-base for a slot whose
+// manifest names its mode, and the slot's own fetch and rebase onto its base
+// for any, since sync-base skips a slot that names none (plan Q7).
+func TestJJSlotPullIsRefusedNamingSyncBase(t *testing.T) {
 	for _, vcsJJ := range []bool{false, true} {
 		platform := jjVerbStack(t, vcsJJ)
-		ctx := context.Background()
-		for _, tc := range []struct {
-			verb, operation string
-			call            func() error
-		}{
-			{"fetch", "workspace.source-fetch", func() error { _, err := platform.WorkspaceSourceFetch(ctx, "ws", "work"); return err }},
-			{"pull", "workspace.source-pull", func() error { _, err := platform.WorkspaceSourcePull(ctx, "ws", "work"); return err }},
-			{"push", "workspace.source-push", func() error { _, err := platform.WorkspaceSourcePush(ctx, "ws", "work", ""); return err }},
-			{"publish", "workspace.source-publish", func() error {
-				_, err := platform.WorkspaceSourcePublish(ctx, "ws", "work", "", "feature")
-				return err
-			}},
-			{"merge", "workspace.source-merge", func() error { _, err := platform.WorkspaceSourceMerge(ctx, "ws", "work", "main"); return err }},
-			{"diff", "", func() error { _, err := platform.WorkspaceSourceDiff(ctx, "ws", "work", ""); return err }},
-			{"workspace push", "workspace.push", func() error { _, err := platform.WorkspacePush(ctx, "ws", ""); return err }},
-		} {
-			err := tc.call()
-			opErr := AsOperationError(err)
-			if vcsJJ && tc.verb == "workspace push" {
-				if opErr == nil || opErr.Cause != CauseSlotMissing || opErr.Slot != "app" {
-					t.Errorf("vcs jj, workspace push: error = %v (%+v), want the slot with no mode skipped and app's slot_missing", err, opErr)
-				}
-				continue
-			}
-			if opErr == nil || opErr.Code != CodeInvalidInput || opErr.Cause != CauseJJSlotUnsupported || opErr.Slot != "work" || opErr.Workspace != "ws" || opErr.Operation != tc.operation {
-				t.Errorf("vcs jj %v, %s: error = %v (%+v), want INVALID_INPUT jj_slot_unsupported for slot work of ws, operation %q", vcsJJ, tc.verb, err, opErr, tc.operation)
-				continue
-			}
-			if !errors.Is(err, vcs.ErrUnsupported) {
-				t.Errorf("vcs jj %v, %s: error = %v, want it to match vcs.ErrUnsupported", vcsJJ, tc.verb, err)
-			}
-			if want := tc.verb + ` is not supported on jj slot "work" yet`; !strings.Contains(err.Error(), want) {
-				t.Errorf("vcs jj %v, %s: error = %q, want it to say %q", vcsJJ, tc.verb, err, want)
-			}
+		onDisk(t, platform)
+		_, err := platform.WorkspaceSourcePull(context.Background(), "ws", "work")
+		opErr := AsOperationError(err)
+		if opErr == nil || opErr.Code != CodeInvalidInput || opErr.Cause != CauseJJSlotUnsupported || opErr.Slot != "work" || opErr.Workspace != "ws" ||
+			opErr.Source != "notes" || opErr.Operation != "workspace.source-pull" || !errors.Is(err, vcs.ErrUnsupported) {
+			t.Fatalf("vcs jj %v: WorkspaceSourcePull() error = %v (%+v), want INVALID_INPUT jj_slot_unsupported for slot work", vcsJJ, err, opErr)
 		}
+		want := `Pull for workspace "ws" slot "work": source slot "work" is a jj slot, which is never pulled: jj takes in its base by rebasing the slot onto it. `
+		if !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("vcs jj %v: message = %q, want it to start %q", vcsJJ, err, want)
+		}
+		rebase := "`angee workspace source rebase ws work main@origin` after `angee workspace source fetch ws work`"
+		hint := "Sync it with `angee workspace sync-base ws`, which syncs every slot of the workspace with its base, or alone with " + rebase + "."
+		if vcsJJ {
+			hint = "Rebase it onto its base with " + rebase + "; sync-base skips a slot whose manifest names no mode."
+		}
+		if opErr.Hint != hint {
+			t.Errorf("vcs jj %v: hint = %q, want %q", vcsJJ, opErr.Hint, hint)
+		}
+	}
+}
+
+// A slot verb not listed in jjSlotVerbs, as one added later would be, is
+// refused on a jj slot before it runs anything, so it never acts on one
+// unawares.
+func TestAnUnlistedVerbIsRefusedOnAJJSlot(t *testing.T) {
+	platform := jjVerbStack(t, true)
+	onDisk(t, platform)
+	_, _, _, _, err := platform.workspaceSourceTarget(context.Background(), "migrate", "ws", "work")
+	if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodeInvalidInput || opErr.Cause != CauseJJSlotUnsupported || opErr.Slot != "work" ||
+		!errors.Is(err, vcs.ErrUnsupported) || !strings.Contains(err.Error(), `migrate is not supported on jj slot "work" yet`) {
+		t.Fatalf("workspaceSourceTarget(migrate) error = %v (%+v), want jj_slot_unsupported", err, opErr)
+	}
+	if _, _, _, _, err := platform.workspaceSourceTarget(context.Background(), "migrate", "ws", "app"); err != nil {
+		t.Fatalf("workspaceSourceTarget(migrate) of the git slot error = %v, want it let through", err)
 	}
 }
 
@@ -157,9 +155,10 @@ func TestSyncBaseByMergeRefusesAJJSlot(t *testing.T) {
 	}
 }
 
-// A machine that cannot run jj slots refuses sync-base and rebase of one as
-// jj_unavailable, before it fetches anything, rather than fail a fetch with
-// no jj to run.
+// A machine that cannot run jj slots refuses every verb that runs jj on one
+// (sync-base, workspace push, and the slot's fetch, push, publish, merge,
+// rebase and diff) as jj_unavailable, before it runs anything, rather than
+// fail with no jj to run.
 func TestJJSlotVerbsNeedJJ(t *testing.T) {
 	platform := jjVerbStack(t, false)
 	onDisk(t, platform)
@@ -168,8 +167,14 @@ func TestJJSlotVerbsNeedJJ(t *testing.T) {
 	}
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
-		"sync-base": func() error { _, err := platform.WorkspaceSyncBase(ctx, "ws", ""); return err },
-		"rebase":    func() error { _, err := platform.WorkspaceSourceRebase(ctx, "ws", "work", "main@origin"); return err },
+		"sync-base":      func() error { _, err := platform.WorkspaceSyncBase(ctx, "ws", ""); return err },
+		"workspace push": func() error { _, err := platform.WorkspacePush(ctx, "ws", ""); return err },
+		"fetch":          func() error { _, err := platform.WorkspaceSourceFetch(ctx, "ws", "work"); return err },
+		"push":           func() error { _, err := platform.WorkspaceSourcePush(ctx, "ws", "work", ""); return err },
+		"publish":        func() error { _, err := platform.WorkspaceSourcePublish(ctx, "ws", "work", "", "feature"); return err },
+		"merge":          func() error { _, err := platform.WorkspaceSourceMerge(ctx, "ws", "work", "main@origin"); return err },
+		"rebase":         func() error { _, err := platform.WorkspaceSourceRebase(ctx, "ws", "work", "main@origin"); return err },
+		"diff":           func() error { _, err := platform.WorkspaceSourceDiff(ctx, "ws", "work", ""); return err },
 	} {
 		if opErr := AsOperationError(call()); opErr == nil || opErr.Code != CodePreconditionFailed || opErr.Cause != CauseJJUnavailable {
 			t.Errorf("%s error = %+v, want PRECONDITION_FAILED jj_unavailable", name, opErr)

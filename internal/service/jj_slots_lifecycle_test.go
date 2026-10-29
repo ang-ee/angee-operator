@@ -376,8 +376,8 @@ func TestJJSlotBesideAWorktreeSlotOfOneCache(t *testing.T) {
 	if err := f.platform.WorkspaceDestroy(ctx, "feature-a", true); err == nil || !strings.Contains(err.Error(), "ahead of base ref main@origin") {
 		t.Fatalf("WorkspaceDestroy(feature-a) of a slot with a commit of its own error = %v, want a refusal", err)
 	}
-	if _, err := f.platform.WorkspaceSourceFetch(ctx, "feature-a", "work"); AsOperationError(err).Cause != CauseJJSlotUnsupported {
-		t.Errorf("WorkspaceSourceFetch() of the jj slot error = %v, want jj_slot_unsupported", err)
+	if status, err := f.platform.WorkspaceSourceFetch(ctx, "feature-a", "work"); err != nil || status.Mode != manifest.WorkspaceSourceModeJJ {
+		t.Errorf("WorkspaceSourceFetch() of the jj slot = %+v, %v, want it fetched and read as a jj slot", status, err)
 	}
 }
 

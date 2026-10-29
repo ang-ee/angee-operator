@@ -19,12 +19,14 @@ var update = flag.Bool("update", false, "regenerate testdata from the installed 
 // probe: a slot that committed and published `feature`, then was rebased onto
 // a base that conflicts with it. For the report, the slot then holds a file
 // jj tracks, one over snapshot.max-new-file-size and a directory outside
-// snapshot.auto-track.
+// snapshot.auto-track; the working-copy commit's changed files are read after
+// it.
 const (
 	commitsFixture    = "testdata/commits.ndjson"
 	bookmarksFixture  = "testdata/bookmarks.ndjson"
 	workspacesFixture = "testdata/workspaces.ndjson"
 	statusFixture     = "testdata/status.txt"
+	changedFixture    = "testdata/changed.ndjson"
 )
 
 var (
@@ -99,6 +101,16 @@ func TestTemplateFixtures(t *testing.T) {
 	}
 	if workspaces[1].Target.CommitID != wc.Commit.CommitID {
 		t.Fatalf("stack--ws's working copy %s, want %s", workspaces[1].Target.CommitID, wc.Commit.CommitID)
+	}
+}
+
+// TestChangedFilesFixture decodes the working-copy commit's changed files as
+// jj printed them, with no jj: the tracked file the report's snapshot
+// recorded, and neither of the files it left untracked.
+func TestChangedFilesFixture(t *testing.T) {
+	lists := decodeFixture[[]string](t, changedFixture)
+	if len(lists) != 1 || !slices.Equal(lists[0], []string{"small.txt"}) {
+		t.Fatalf("%s = %q, want one list holding small.txt", changedFixture, lists)
 	}
 }
 
@@ -215,4 +227,5 @@ func regenerateFixtures(t *testing.T) {
 	}
 	f.write(filepath.Join(f.slot, "local"), "notes.txt", "left out\n")
 	record(statusFixture, f.jj(f.slot, "--config", "snapshot.max-new-file-size=16", "--config", `snapshot.auto-track='~root:"local"'`, "status"))
+	record(changedFixture, f.jj(f.slot, "--ignore-working-copy", "log", "--no-graph", "-r", workingCopy.String(), "-T", changedFilesTemplate))
 }

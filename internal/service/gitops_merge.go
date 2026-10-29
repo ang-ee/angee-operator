@@ -156,6 +156,12 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		if refusal := unpushableCommits(err, slot, wsSource.Source); refusal != nil {
 			return api.GitOpResult{}, refusal
 		}
+		if refusal := branchTaken(err, slot); refusal != nil {
+			return api.GitOpResult{}, refusal
+		}
+		if refusal := readinessRefusal(err, target, vcs.VerbPublish, workspace, slot, wsSource.Source); refusal != nil {
+			return api.GitOpResult{}, refusal
+		}
 		return api.GitOpResult{}, gitFailure(err, gitStep{action: "planning the publish of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
 	}
 	// The manifest's rules for the target remote are checked before the
@@ -169,6 +175,9 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 	// publishing names its branch, so the driver creates or sets it for the
 	// push below.
 	if err := driver.PreparePublish(ctx, target, plan); err != nil {
+		if refusal := checkoutMoved(err, slot, wsSource.Source, "publish"); refusal != nil {
+			return api.GitOpResult{}, refusal
+		}
 		action := fmt.Sprintf("setting branch %q in", plan.Branch)
 		if plan.Create {
 			action = fmt.Sprintf("creating branch %q in", plan.Branch)
@@ -249,6 +258,13 @@ func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step git
 	result, err = run(ctx, driver, target)
 	if refusal := rebaseRefusal(err, workspace, slot, wsSource.Source); refusal != nil {
 		return result, refusal
+	}
+	// A driver that checks the verb's preconditions again as it runs (a jj
+	// merge, against changes made since Ready) refuses in Ready's words.
+	if ready != "" {
+		if refusal := readinessRefusal(err, target, ready, workspace, slot, wsSource.Source); refusal != nil {
+			return result, refusal
+		}
 	}
 	if warned := (*vcs.Warning)(nil); result.OK && errors.As(err, &warned) {
 		return result, nil

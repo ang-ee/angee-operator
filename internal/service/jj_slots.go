@@ -699,7 +699,7 @@ func jjSlotNotPulled(err error, workspaceName, slot, sourceName string, source m
 	}
 	hint := fmt.Sprintf("Rebase it onto its base with %s; sync-base skips a slot whose manifest names no mode.", rebase)
 	if named {
-		hint = fmt.Sprintf("Sync it with `angee workspace sync-base %s`, which rebases every slot of the workspace onto its base, or alone with %s.", workspaceName, rebase)
+		hint = fmt.Sprintf("Sync it with `angee workspace sync-base %s`, which syncs every slot of the workspace with its base, or alone with %s.", workspaceName, rebase)
 	}
 	return &OperationError{
 		Code:      CodeInvalidInput,

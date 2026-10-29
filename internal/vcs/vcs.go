@@ -184,6 +184,17 @@ func (e *UncommittedError) Error() string {
 	return "uncommitted changes in " + strings.Join(e.Paths, ", ")
 }
 
+// NotReadyError is returned by Driver.Ready when the checkout cannot take the
+// verb for a reason of its version control's own, which Reason says, such as
+// a jj working-copy commit with two parents, which leaves no one commit to
+// publish. Fix, when set, is the tool's own command that changes that.
+type NotReadyError struct {
+	Reason string
+	Fix    string
+}
+
+func (e *NotReadyError) Error() string { return e.Reason }
+
 // UntrackedPathsError is returned by Driver.Ready when the verb would move
 // the checkout under files only it holds and its version control does not
 // track (for jj, the paths `jj status` lists as untracked: over
@@ -272,6 +283,25 @@ func (e *UnpushableCommitsError) Error() string {
 		reasons = append(reasons, "no description on "+strings.Join(e.Undescribed, ", "))
 	}
 	return "commits jj will not push: " + strings.Join(reasons, "; ")
+}
+
+// BranchTakenError is returned by Driver.PlanPublish, and by Driver.PlanPush
+// where a push publishes, when the branch to publish under is not the
+// checkout's to set: a git worktree of the same primary has it checked out
+// (Worktree), which moving it would leave on no branch, or the remote already
+// has a branch of that name that the repository does not track (Remote), so
+// jj would not push over it. Nothing is changed.
+type BranchTakenError struct {
+	Branch   string
+	Worktree string
+	Remote   string
+}
+
+func (e *BranchTakenError) Error() string {
+	if e.Worktree != "" {
+		return fmt.Sprintf("branch %q is checked out by the git worktree at %s", e.Branch, e.Worktree)
+	}
+	return fmt.Sprintf("remote %q already has a branch %q that this repository does not track", e.Remote, e.Branch)
 }
 
 // NothingToPublishError is ErrNothingToPublish with the driver's account of
@@ -375,6 +405,11 @@ var (
 	// ErrNameTaken is wrapped by Driver.Add when Slot.Primary already has a
 	// checkout under Slot.Name, which the slot would collide with.
 	ErrNameTaken = errors.New("name already taken in the primary")
+	// ErrCheckoutMoved is wrapped by Driver.PreparePublish, and by
+	// Driver.Push where a push publishes, when the checkout moved after its
+	// plan was made, so the plan no longer says what would be pushed. Nothing
+	// is changed; a new plan reads the checkout afresh.
+	ErrCheckoutMoved = errors.New("the checkout moved since its push was planned")
 	// ErrUnsupported is wrapped by a driver method that has no meaning for its
 	// kind of slot, such as aborting a merge in a version control system that
 	// never stops mid-merge. The service reports it as invalid input.
@@ -430,8 +465,8 @@ type Driver interface {
 	Diff(ctx context.Context, s Slot, ref string) ([]api.DiffFile, error)
 
 	// Ready reports whether verb may run on the checkout as it stands: nil,
-	// or why not, as a *BranchMismatchError, an *UncommittedError or an
-	// *UntrackedPathsError, for the service to word. What a verb needs is the
+	// or why not, as a *BranchMismatchError, an *UncommittedError, an
+	// *UntrackedPathsError or a *NotReadyError, for the service to word. What a verb needs is the
 	// driver's to say: a git sync-base, pull or push needs the checkout on
 	// Slot.Branch and clean, while a jj slot's working-copy commit rides
 	// along with its rebase, but not files jj does not track, and a jj
@@ -440,9 +475,6 @@ type Driver interface {
 	// driver does not run, or does not know, is an error wrapping
 	// ErrUnsupported.
 	Ready(ctx context.Context, s Slot, verb Verb) error
-	// BranchMismatch says how the checkout differs from Slot.Branch, or
-	// returns "" when it is on it or Slot.Branch is empty.
-	BranchMismatch(ctx context.Context, s Slot) (string, error)
 	// DirtyPaths lists the checkout's uncommitted changes.
 	DirtyPaths(ctx context.Context, s Slot) ([]string, error)
 	// FetchURL is the URL of the remote a fetch or pull names in a message,

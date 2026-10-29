@@ -38,7 +38,9 @@ func neverPulled() error {
 //     new working copy, so what the working copy holds, recorded or not, is
 //     left out. Changes in the working-copy commit are a
 //     *vcs.UncommittedError with jj's own command that commits them;
-//     without any, untracked paths are a *vcs.UntrackedPathsError.
+//     without any, untracked paths are a *vcs.UntrackedPathsError; and a
+//     working-copy commit with parents other than one (`jj new A B`) has no
+//     one commit under it, a *vcs.NotReadyError.
 //   - destroy, and repair's check of a slot it made: none, and nothing runs.
 //     The destroy guard reads the slot's own work from Status, and a jj slot
 //     keeps no branch checked out.
@@ -55,15 +57,16 @@ func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 		}
 		return nil
 	case vcs.VerbPublish, vcs.VerbPush, vcs.VerbMerge:
-		changed, untracked, err := d.uncommitted(ctx, s.Path)
-		if err != nil {
+		w, err := d.uncommitted(ctx, s.Path)
+		switch {
+		case err != nil:
 			return err
-		}
-		if len(changed) > 0 {
-			return &vcs.UncommittedError{Paths: changed, Fix: fmt.Sprintf("jj -R %s commit -m <message>", s.Path)}
-		}
-		if len(untracked) > 0 {
-			return &vcs.UntrackedPathsError{Paths: untracked}
+		case len(w.changed) > 0:
+			return uncommittedChanges(s.Path, w.changed)
+		case len(w.untracked) > 0:
+			return &vcs.UntrackedPathsError{Paths: w.untracked}
+		case w.parents != 1:
+			return severalParents(s.Path, w.parents, string(verb))
 		}
 		return nil
 	case vcs.VerbDestroy, vcs.VerbRepair:
@@ -87,10 +90,11 @@ func (Driver) SyncMethod(method string) (string, error) {
 	return "", fmt.Errorf("unknown sync method %q: %w", method, vcs.ErrUnsupported)
 }
 
-// BranchMismatch reports none: a jj slot keeps no branch checked out, and
-// its bookmark moves with the commits it points at, so it is never off it.
-func (Driver) BranchMismatch(context.Context, vcs.Slot) (string, error) {
-	return "", nil
+// uncommittedChanges is the *vcs.UncommittedError of the changes in the
+// working-copy commit of the slot at dir, with jj's command that commits
+// them.
+func uncommittedChanges(dir string, changed []string) error {
+	return &vcs.UncommittedError{Paths: changed, Fix: fmt.Sprintf("jj -R %s commit -m <message>", dir)}
 }
 
 // DirtyPaths lists what the slot holds that no commit under its working copy
@@ -98,33 +102,54 @@ func (Driver) BranchMismatch(context.Context, vcs.Slot) (string, error) {
 // jj leaves out of it (plan Q10), which only the slot holds. It snapshots the
 // slot first, as every read does (D7).
 func (d Driver) DirtyPaths(ctx context.Context, s vcs.Slot) ([]string, error) {
-	changed, untracked, err := d.uncommitted(ctx, s.Path)
+	w, err := d.uncommitted(ctx, s.Path)
 	if err != nil {
 		return nil, err
 	}
-	return append(changed, untracked...), nil
+	return append(w.changed, w.untracked...), nil
 }
 
-// uncommitted snapshots the slot through `jj status` and returns the paths
-// its working-copy commit changes and the untracked paths the report lists,
-// both as that snapshot left them.
-func (d Driver) uncommitted(ctx context.Context, dir string) (changed, untracked []string, err error) {
+// uncommittedWork is what a slot's working copy holds, as one snapshot left
+// it: the paths its working-copy commit changes, the untracked paths jj left
+// out of it, and how many parents that commit has.
+type uncommittedWork struct {
+	changed, untracked []string
+	parents            int
+}
+
+// uncommitted snapshots the slot through `jj status` and reads what its
+// working copy holds at the operation that snapshot left.
+func (d Driver) uncommitted(ctx context.Context, dir string) (uncommittedWork, error) {
 	untracked, op, err := d.statusSnapshot(ctx, dir)
 	if err != nil {
-		return nil, nil, err
+		return uncommittedWork{}, err
 	}
+	wc, err := d.workingCopy(ctx, dir, op)
+	if err != nil {
+		return uncommittedWork{}, err
+	}
+	changed, err := d.changedFiles(ctx, dir, op)
+	if err != nil {
+		return uncommittedWork{}, err
+	}
+	return uncommittedWork{changed: changed, untracked: untracked, parents: len(wc.Commit.Parents)}, nil
+}
+
+// changedFiles lists the paths the slot's working-copy commit changes, at
+// operation op.
+func (d Driver) changedFiles(ctx context.Context, dir, op string) ([]string, error) {
 	out, err := d.jj.read(ctx, dir, op, "log", "--no-graph", "-r", workingCopy.String(), "-T", changedFilesTemplate)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	lists, err := decodeLines[[]string](out)
 	if err != nil {
-		return nil, nil, fmt.Errorf("jj log -r @ in %s: %w", dir, err)
+		return nil, fmt.Errorf("jj log -r @ in %s: %w", dir, err)
 	}
 	if len(lists) != 1 {
-		return nil, nil, fmt.Errorf("jj log -r @ in %s printed %d lists of changed paths, want 1", dir, len(lists))
+		return nil, fmt.Errorf("jj log -r @ in %s printed %d lists of changed paths, want 1", dir, len(lists))
 	}
-	return lists[0], untracked, nil
+	return lists[0], nil
 }
 
 // Pull is refused: a jj slot is never pulled (neverPulled).

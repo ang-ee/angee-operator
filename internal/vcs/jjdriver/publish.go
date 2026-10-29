@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -63,28 +64,28 @@ func (d Driver) pushRemote(ctx context.Context, dir, remote, branch string) (str
 }
 
 // remoteURL returns the URL of remote as the slot's repository has it, and
-// whether it has that remote: from git's config when the slot is colocated,
-// else from `jj git remote list`. jj's git pseudo-remote, which mirrors the
-// colocated repository's own branches, is no remote to push to.
+// whether it has that remote, from git's config: the slot's own when it is
+// colocated, else that of the repository jj keeps its store in (`jj git
+// root`), so the name is matched exactly and the URL is what git reads, as
+// for a git slot. jj's git pseudo-remote, which mirrors the colocated
+// repository's own branches, is no remote to push to.
 func (d Driver) remoteURL(ctx context.Context, dir, remote string) (string, bool, error) {
 	if remote == gitRemote {
 		return "", false, nil
 	}
+	repo := dir
 	if ok, err := colocated(dir); err != nil {
 		return "", false, err
-	} else if ok {
-		return d.git.RemoteURL(ctx, dir, remote)
-	}
-	out, err := d.jj.store(ctx, dir, "git", "remote", "list")
-	if err != nil {
-		return "", false, err
-	}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		if name, url, ok := strings.Cut(strings.TrimSpace(line), " "); ok && name == remote {
-			return url, true, nil
+	} else if !ok {
+		out, err := d.jj.store(ctx, dir, "git", "root")
+		if err != nil {
+			return "", false, err
+		}
+		if repo = strings.TrimSpace(string(out)); repo == "" {
+			return "", false, fmt.Errorf("jj git root in %s printed no repository", dir)
 		}
 	}
-	return "", false, nil
+	return d.git.RemoteURL(ctx, repo, remote)
 }
 
 // pending is what a push of the slot's branch to a remote would send, read
@@ -127,7 +128,7 @@ func (d Driver) pendingPush(ctx context.Context, s vcs.Slot, remote, branch stri
 		return pending{}, err
 	}
 	if len(wc.Commit.Parents) != 1 {
-		return pending{}, fmt.Errorf("the working-copy commit of jj slot %s has %d parents, so no one commit under it is the slot's to publish; start the working copy on one with `jj new`", s.Path, len(wc.Commit.Parents))
+		return pending{}, severalParents(s.Path, len(wc.Commit.Parents), "publish")
 	}
 	p := pending{op: op, tip: wc.Commit.Parents[0]}
 	marks, err := d.bookmarks(ctx, s.Path, op, branch, s.BaseRef)
@@ -136,6 +137,12 @@ func (d Driver) pendingPush(ctx context.Context, s vcs.Slot, remote, branch stri
 	}
 	p.local = branch != "" && hasBookmark(marks, branch, "")
 	if branch != "" && remote != "" && remote != gitRemote && hasBookmark(marks, branch, remote) {
+		// A remote branch the repository does not track is someone else's
+		// (fetched, never published from here): jj will not push over it,
+		// and counting from it would measure the slot against their work.
+		if !tracked(marks, branch, remote) {
+			return pending{}, &vcs.BranchTakenError{Branch: branch, Remote: remote}
+		}
 		p.from = target{revset: remoteBookmark(branch, remote), name: branch + "@" + remote}
 		p.upstream = true
 	} else if p.from, err = resolveBase(marks, s.BaseRef, s.BaseRemote); err != nil {
@@ -145,6 +152,41 @@ func (d Driver) pendingPush(ctx context.Context, s vcs.Slot, remote, branch stri
 		return pending{}, err
 	}
 	return p, nil
+}
+
+// tracked reports whether the repository tracks bookmark name on remote: jj
+// gives a remote bookmark a tracking target only when it does.
+func tracked(marks []bookmark, name, remote string) bool {
+	return slices.ContainsFunc(marks, func(m bookmark) bool {
+		return m.Name == name && m.Remote == remote && m.TrackingTarget != nil
+	})
+}
+
+// severalParents is a *vcs.NotReadyError for a slot whose working-copy commit
+// has parents other than one (`jj new A B` makes two), so no one commit under
+// it is the slot's to verb.
+func severalParents(dir string, parents int, verb string) error {
+	return &vcs.NotReadyError{
+		Reason: fmt.Sprintf("its working-copy commit has %d parents, so no one commit under it is the slot's to %s", parents, verb),
+		Fix:    fmt.Sprintf("jj -R %s new <commit>", dir),
+	}
+}
+
+// checkedOut refuses branch when a git worktree of the slot's primary other
+// than the slot has it checked out: setting the bookmark moves the branch,
+// which leaves that worktree on no branch, as a rebase would (plan D12).
+func (d Driver) checkedOut(ctx context.Context, s vcs.Slot, branch string) error {
+	worktrees, err := d.primaryWorktrees(ctx, s.Path)
+	if err != nil {
+		return err
+	}
+	own := vcs.CanonicalPath(s.Path)
+	for _, w := range worktrees {
+		if w.Branch == branch && vcs.CanonicalPath(w.Path) != own {
+			return &vcs.BranchTakenError{Branch: branch, Worktree: w.Path}
+		}
+	}
+	return nil
 }
 
 // unpushable reports the commits of p that remote does not hold yet, which
@@ -178,6 +220,9 @@ func (d Driver) unpushable(ctx context.Context, s vcs.Slot, p pending, remote st
 //     vcs.ErrNoBranch, since a jj slot is on no branch;
 //   - the remote R: the intent's, else the one the slot pushes X to
 //     (pushRemote), which the slot must have (*vcs.UnknownRemoteError);
+//   - X must be the slot's to set: not checked out by another git worktree
+//     of the primary (checkedOut), and, when the remote has it, tracked
+//     there; else a *vcs.BranchTakenError;
 //   - the commits to send (pendingPush): none is a
 //     *vcs.NothingToPublishError, and nothing is pushed;
 //   - of those, the ones R does not hold yet must be ones jj will push
@@ -203,6 +248,9 @@ func (d Driver) PlanPublish(ctx context.Context, s vcs.Slot, intent vcs.PublishI
 	if !ok {
 		return vcs.PublishPlan{}, &vcs.UnknownRemoteError{Remote: remote, Resolved: intent.Remote == ""}
 	}
+	if err := d.checkedOut(ctx, s, intent.Branch); err != nil {
+		return vcs.PublishPlan{}, err
+	}
 	p, err := d.pendingPush(ctx, s, remote, intent.Branch)
 	if err != nil {
 		return vcs.PublishPlan{}, err
@@ -222,8 +270,9 @@ func (d Driver) PlanPublish(ctx context.Context, s vcs.Slot, intent vcs.PublishI
 // elsewhere since (by an agent, say) is left where it is, and that is jj's
 // error; one a rebase moved along with the commits it rewrote is where the
 // plan's Commit is, or behind it. A slot whose working copy no longer sits on
-// the plan's Commit (an agent committed or rewrote meanwhile) is refused, so
-// what is pushed is what PlanPublish checked; a new publish plans it afresh.
+// the plan's Commit (an agent committed or rewrote meanwhile) is refused,
+// wrapping vcs.ErrCheckoutMoved, so what is pushed is what PlanPublish
+// checked; a new publish plans it afresh.
 // If the push then fails, the bookmark stays, as a branch git's publish
 // creates does, and a retry pushes it.
 func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) error {
@@ -239,7 +288,7 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 		return err
 	}
 	if len(wc.Commit.Parents) != 1 || wc.Commit.Parents[0] != plan.Commit {
-		return fmt.Errorf("jj slot %s moved while its publish was checked: its working copy no longer sits on %s; publish again", s.Path, shortID(plan.Commit))
+		return fmt.Errorf("jj slot %s: its working copy no longer sits on %s, the commit its publish checked: %w", s.Path, shortID(plan.Commit), vcs.ErrCheckoutMoved)
 	}
 	if _, err := d.jj.snapshot(ctx, s.Path, "bookmark", "set", "-r", commitOf(plan.Commit).String(), "--", quote(plan.Branch)); err != nil {
 		return fmt.Errorf("set bookmark %q in %s: %w", plan.Branch, s.Path, err)
@@ -248,7 +297,7 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 }
 
 // Publish pushes the plan's branch to its remote: `jj git push --remote R
-// --bookmark X` in the slot, under ANGEE_GIT_TIMEOUT. A branch new to the
+// --bookmark X` in the slot, each matched exactly, under ANGEE_GIT_TIMEOUT. A branch new to the
 // remote is created there, and jj tracks it; one the remote already has is
 // moved to the plan's commit, sideways too, as after a sync-base rebase
 // rewrote what was published: jj then force-pushes it, with a lease that
@@ -259,7 +308,8 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 func (d Driver) Publish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) (api.GitOpResult, error) {
 	result := api.GitOpResult{ConflictFiles: []string{}}
 	operation := fmt.Sprintf("jj git push --remote %s --bookmark %s", plan.Remote, plan.Branch)
-	_, stderr, err := d.jj.networkOutputs(ctx, operation, s.Path, "git", "push", "--remote="+plan.Remote, "--bookmark="+exact(plan.Branch))
+	// Both are patterns to jj (glob by default), so each is matched exactly.
+	_, stderr, err := d.jj.networkOutputs(ctx, operation, s.Path, "git", "push", "--remote="+exact(plan.Remote), "--bookmark="+exact(plan.Branch))
 	result.Message = logctx.RedactText(strings.TrimSpace(string(stderr)))
 	if err != nil {
 		return result, err
@@ -296,7 +346,7 @@ func (d Driver) PlanPush(ctx context.Context, s vcs.Slot, ref, branch string) (v
 	if err != nil {
 		return vcs.PushPlan{}, err
 	}
-	return vcs.PushPlan{Track: branch, Publish: &plan}, nil
+	return vcs.PushPlan{Publish: &plan}, nil
 }
 
 // Push carries out a plan PlanPush returned: a skipped plan pushes nothing,
