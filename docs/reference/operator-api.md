@@ -552,6 +552,30 @@ on its manifest branch, and the workspace top-level state is `discrepancy`.
 `sync-base` updates each workspace branch from its base ref without switching
 branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
 
+A jj slot (`mode: jj`, or no mode under `vcs: jj`) is never
+`branch-mismatch`, and its status carries what jj reads beyond git: in
+workspace status `sources[]`, `repair`'s slot status, the topology's
+`links[]` and `workspace git`'s source states. The per-slot verbs, `push`
+and `sync-base` return the same fields, but refuse a jj slot until phase 8 of
+the jj plan runs them there. The state vocabulary is unchanged; `conflicted`
+is a flag beside it, since jj records a conflict in a commit and goes on, so
+a client that does not know the fields reads the slot as before. For any
+other slot `conflicted` is `false` and the rest are absent (GraphQL: empty,
+`0` or `null`).
+
+| JSON | GraphQL | Meaning |
+| --- | --- | --- |
+| `conflicted` | `conflicted: Boolean!` | A conflicted commit among the slot's own (its base to its working copy). Always present; `false` too for a slot whose base does not resolve (state `error`), whose conflicts are not read. |
+| `conflict_paths` | `conflictPaths` | Those commits' conflicted files, sorted. |
+| `change_id` | `changeId` | The change id of the slot's working-copy commit. |
+| `base_behind` | `baseBehind` | The commits of the slot's base it lacks; `behind` counts against its upstream when it has one, so a moved base shows here. |
+| `untracked_paths` | `untrackedPaths` | New files jj leaves out of the working-copy commit (over its `snapshot.max-new-file-size`, or outside its `snapshot.auto-track`), as jj lists them, a directory ending in `/`. Only the slot holds them, so the slot is `dirty`, and `unpushed_reason` names up to ten. |
+
+```json
+{"slot": "work", "mode": "jj", "state": "ahead", "ahead": 1, "pushed": false,
+ "change_id": "kmvwzlqo...", "conflicted": true, "conflict_paths": ["f.txt"], "...": "..."}
+```
+
 A source slot declared in the manifest but not materialized (one added to an
 existing workspace, a dangling link, or for a git slot a directory that is not
 its own checkout) makes `sync-base`, `push` and the per-slot routes under
@@ -608,6 +632,38 @@ GET /gitops/topology[?with_commits=N]
 Returns the full topology snapshot. `with_commits` opts in to populating
 each git source's recent commit history (`sources[].commits`); omit or
 set to 0 to keep the response cheap.
+
+`summary.conflicted` counts the links of conflicted jj slots, beside their
+states, as `unpushed` counts beside them. `summary.worktrees` counts git
+worktree slots only: a colocated jj slot is registered as a git worktree of
+its cache, but it is not counted.
+
+A source whose cache or local store is a jj repository (it has a `.jj`, as a
+cache has once a jj slot was made from it) lists its jj workspaces in
+`sources[].workspaces`, here and in `GET /sources` and `/sources/{name}/status`.
+Each is `{name, owned, path}`. `owned` is true when the checkout at the path
+this stack's manifest gives one of its jj slots of that repository is that
+workspace (named `<stack>--<workspace>`, or with `--<slot>`), and `path` is
+then that path. Any other workspace, the repository's own (`default`), other
+stacks' slots, and a slot of this stack whose checkout is gone or cannot be
+read alike, has `owned: false` and no `path` (GraphQL: an empty one): jj's
+record of a workspace's path goes stale once it moves, and a stack of the
+same name sharing the repository computes the same names. When one checkout
+holds two such names (one workspace `jj edit`ed the other's working-copy
+commit), neither is owned. A source that is not a jj repository, or an
+operator that found no jj on PATH the first time it looked (it looks once per
+process), omits the field and runs no jj. Listing costs one `jj workspace
+list` per jj source and one `jj log` per slot of this stack that names one of
+its workspaces. A listing jj cannot read is logged as a warning and omitted,
+and the source's state is read from git as before.
+
+```json
+{"name": "app", "kind": "git", "state": "clean", "workspaces": [
+  {"name": "default", "owned": false},
+  {"name": "dev--feature-a", "owned": true, "path": "/srv/stack/workspaces/feature-a/app"},
+  {"name": "staging--feature-a", "owned": false}
+], "...": "..."}
+```
 
 Source diffs:
 

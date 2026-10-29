@@ -162,6 +162,54 @@ func TestHolds(t *testing.T) {
 	}
 }
 
+// TestCheckoutAt reads the working-copy commit jj loads at a directory: a
+// slot's, and the primary's own, each with the workspaces whose commit it
+// is, two once one workspace has `jj edit`ed the other's; and nothing for a
+// directory that is no workspace, a .jj jj cannot load, a missing path or a
+// link to a checkout.
+func TestCheckoutAt(t *testing.T) {
+	f := newPrimary(t)
+	ctx := context.Background()
+	d := driver()
+	a := f.slotSpec("workspaces/a/src", "stack--a", "")
+	b := f.slotSpec("workspaces/b/src", "stack--b", "")
+	for _, s := range []vcs.Slot{a, b} {
+		if err := f.add(s); err != nil {
+			t.Fatalf("Add(%s) error = %v", s.Name, err)
+		}
+	}
+	plain, broken, link := filepath.Join(f.root, "plain"), filepath.Join(f.root, "broken"), filepath.Join(f.root, "link")
+	for _, dir := range []string{plain, filepath.Join(broken, ".jj")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+	}
+	if err := os.Symlink(a.Path, link); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	check := func(name, dir string, want Checkout) {
+		t.Helper()
+		got, err := d.CheckoutAt(ctx, dir)
+		if err != nil || got.ChangeID != want.ChangeID || !slices.Equal(got.Workspaces, want.Workspaces) {
+			t.Errorf("CheckoutAt(%s) = %+v, %v; want %+v", name, got, err, want)
+		}
+	}
+	check("a slot", a.Path, Checkout{ChangeID: f.changeID(a.Path, workingCopy), Workspaces: []string{a.Name}})
+	check("the primary", f.primary, Checkout{ChangeID: f.changeID(f.primary, workingCopy), Workspaces: []string{"default"}})
+	for name, dir := range map[string]string{"a plain directory": plain, "a .jj jj cannot load": broken, "a missing path": filepath.Join(f.root, "missing"), "a link to a slot": link} {
+		check(name, dir, Checkout{})
+	}
+	shared := f.changeID(a.Path, workingCopy)
+	f.jj(b.Path, "edit", shared)
+	got, err := d.CheckoutAt(ctx, a.Path)
+	if want := []string{a.Name, b.Name}; err != nil || got.ChangeID != shared || !slices.Equal(slices.Sorted(slices.Values(got.Workspaces)), want) {
+		t.Errorf("CheckoutAt(a slot whose commit b edits) = %+v, %v; want %s held by %q", got, err, shared, want)
+	}
+	if _, err := d.CheckoutAt(ctx, ""); !errors.Is(err, errNoSlot) {
+		t.Errorf("CheckoutAt(\"\") error = %v, want a refusal", err)
+	}
+}
+
 // TestElsewhere fails closed: it finds a name's checkout at another path,
 // even one jj cannot load there, and nothing when the name is free or its
 // checkout is the slot's own path. A record jj cannot resolve, because the

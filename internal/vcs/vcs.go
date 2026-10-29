@@ -99,7 +99,7 @@ type Status struct {
 	UnpushedReason string
 
 	// The fields below are read from jj slots only; the git driver leaves
-	// them unset, and the API does not carry them yet.
+	// them unset. The service hands them to the API as api.JJSlotState.
 
 	// ChangeID is the change id of the slot's working-copy commit.
 	ChangeID string

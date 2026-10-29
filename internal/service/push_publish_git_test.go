@@ -157,7 +157,7 @@ func TestBranchlessSlotPushAndPublishRunTheirGit(t *testing.T) {
 				dir + " [] rev-list --count HEAD --not --branches --remotes --tags",
 				dir + " [] rev-list --left-right --count --end-of-options main...HEAD",
 			}),
-			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a Exists:true State:clean Branch: Ref:main CurrentRef:<sha> Dirty:false Upstream: Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error:}]",
+			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a Exists:true State:clean Branch: Ref:main CurrentRef:<sha> Dirty:false Upstream: Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error: Workspaces:[] JJSlotState:{ChangeID: BaseBehind:0 Conflicted:false ConflictPaths:[] UntrackedPaths:[]}}]",
 		},
 		{
 			name: "publish untouched",
@@ -215,7 +215,7 @@ func TestBranchlessSlotPushAndPublishRunTheirGit(t *testing.T) {
 				dirty,
 				dir + " [] rev-list --left-right --count --end-of-options origin/feature-a...HEAD",
 			},
-			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a Exists:true State:clean Branch: Ref:main CurrentRef:feature-a Dirty:false Upstream:origin/feature-a Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error:}]",
+			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a Exists:true State:clean Branch: Ref:main CurrentRef:feature-a Dirty:false Upstream:origin/feature-a Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error: Workspaces:[] JJSlotState:{ChangeID: BaseBehind:0 Conflicted:false ConflictPaths:[] UntrackedPaths:[]}}]",
 		},
 	})
 }
@@ -247,7 +247,7 @@ func TestBranchSlotPushAndPublishRunTheirGit(t *testing.T) {
 	}
 	forkURL := dir + " [] config --get-all --end-of-options remote.fork.url"
 	status := []string{dirty, dir + " [] rev-list --left-right --count --end-of-options fork/feature-a...HEAD"}
-	slotState := "{Slot:app Source:app Kind:git Mode:worktree Branch:feature-a Ref:main Subpath:app Path:<base>/.angee/workspaces/feature-a/app Exists:true State:clean CurrentRef:feature-a Dirty:false Upstream:fork/feature-a Ahead:0 Behind:0 Pushed:true UnpushedReason: Error:}"
+	slotState := "{Slot:app Source:app Kind:git Mode:worktree Branch:feature-a Ref:main Subpath:app Path:<base>/.angee/workspaces/feature-a/app Exists:true State:clean CurrentRef:feature-a Dirty:false Upstream:fork/feature-a Ahead:0 Behind:0 Pushed:true UnpushedReason: Error: JJSlotState:{ChangeID: BaseBehind:0 Conflicted:false ConflictPaths:[] UntrackedPaths:[]}}"
 	checkPushPublishCases(t, recorder, []pushPublishCase{
 		{
 			name: "publish untouched to a named remote",
@@ -275,7 +275,7 @@ func TestBranchSlotPushAndPublishRunTheirGit(t *testing.T) {
 			setup:   func(t *testing.T) { commitFile(t, slot, "more.txt") },
 			call:    func() (any, error) { return platform.WorkspacePush(ctx, workspaceName, "") },
 			git:     concat([]string{dirty}, pushRemote, []string{forkURL, dir + " [] push"}, status),
-			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a/app Exists:true State:clean Branch:feature-a Ref:main CurrentRef:feature-a Dirty:false Upstream:fork/feature-a Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error:}]",
+			outcome: "[{Name:app Slot:app Kind:git Path:<base>/.angee/workspaces/feature-a/app Exists:true State:clean Branch:feature-a Ref:main CurrentRef:feature-a Dirty:false Upstream:fork/feature-a Ahead:0 Commits:[] Behind:0 Pushed:true UnpushedReason: Error: Workspaces:[] JJSlotState:{ChangeID: BaseBehind:0 Conflicted:false ConflictPaths:[] UntrackedPaths:[]}}]",
 		},
 		{
 			name:    "slot push of an explicit ref",
