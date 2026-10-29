@@ -28,9 +28,12 @@ latest tag.
     `snapshot.auto-track`, never reaches the slot's working-copy commit, so
     the slot read as clean and pushed while only it held the file. Status
     now takes its snapshot through `jj status`, without asking git, and
-    counts the untracked paths it lists as uncommitted. A `jj status` report
-    it does not recognize fails the read, rather than passing for one with
-    no untracked paths. What jj neither records nor lists, a nested
+    counts the untracked paths it lists as uncommitted. Its other reads are
+    pinned to the operation that snapshot recorded; when another jj command
+    records one around it, Status snapshots again, up to three times, then
+    fails. A `jj status` report it does not recognize (a heading out of
+    place, or a report cut short) fails the read, rather than passing for
+    one with no untracked paths. What jj neither records nor lists, a nested
     repository or a new file outside the slot's sparse patterns, still reads
     as clean; the plan leaves that to the owner.
   - With a base that exists nowhere, the jj driver returned no verdict at

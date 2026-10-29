@@ -1,6 +1,7 @@
 package jjdriver
 
 import (
+	"context"
 	"flag"
 	"os"
 	"path/filepath"
@@ -116,6 +117,51 @@ func TestStatusReportFixture(t *testing.T) {
 	}
 	if want := []string{"big.bin", "local/"}; !slices.Equal(got, want) {
 		t.Fatalf("parseUntracked(%s) = %q, want %q", statusFixture, got, want)
+	}
+}
+
+// recordedOperation is what jj 0.45.1-f8f808f printed for operationEntryTemplate
+// after the driver's `jj status` snapshotted a slot, with jj's test settings
+// fixing the time, host and user. An operation has no fixture in testdata:
+// its id hashes the command lines before it, which hold the test's temporary
+// paths, so -update could not reproduce it.
+const recordedOperation = `{"id":"0ab3897ccb5927356c85d292ca0fdd84eb35aee6451353e25ab45542efb4e0b9ac304b99fb8eb4cfb377517e706c80fbe705400036cd78506bbbb67b859d515f","parents":["68afa3ea4276ba5ec823b58853abc111c11cf153bf2885e739ce4012c38323c99798da5227868b8918024c00dcf7198934ae8970d107b160d1de11dd2b73c725"],"time":{"start":"2026-10-05T12:00:00Z","end":"2026-10-05T12:00:00Z"},"description":"snapshot working copy","hostname":"angee-test","username":"angee-test","is_snapshot":true,"workspace_name":"stack--ws","attributes":{"args":"jj --no-pager --color never --config 'snapshot.auto-update-stale=true' -R . status"}}` + "\n"
+
+// TestOperationTemplate decodes a recorded operation with no jj, and the
+// operations the installed jj prints: a snapshot and a command that is not
+// one.
+func TestOperationTemplate(t *testing.T) {
+	op, err := decodeOperation("recorded", []byte(recordedOperation))
+	if err != nil {
+		t.Fatalf("decodeOperation() error = %v", err)
+	}
+	if len(op.ID) != 128 || len(op.Parents) != 1 || len(op.Parents[0]) != 128 || !op.IsSnapshot {
+		t.Fatalf("decodeOperation() = %#v, want a snapshot with one parent", op)
+	}
+
+	f := newFixture(t)
+	ctx := context.Background()
+	d := driver()
+	before, err := d.latestOperation(ctx, f.slot)
+	if err != nil {
+		t.Fatalf("latestOperation() error = %v", err)
+	}
+	f.jj(f.primary, "--ignore-working-copy", "bookmark", "create", "other", "-r", "root()")
+	other, err := d.latestOperation(ctx, f.slot)
+	if err != nil {
+		t.Fatalf("latestOperation() error = %v", err)
+	}
+	if other.IsSnapshot || !slices.Equal(other.Parents, []string{before.ID}) {
+		t.Fatalf("a bookmark's operation = %#v, want no snapshot, after %s", other, before.ID)
+	}
+	f.write(f.slot, "new.txt", "unrecorded\n")
+	f.jj(f.slot, "status")
+	snapshot, err := d.latestOperation(ctx, f.slot)
+	if err != nil {
+		t.Fatalf("latestOperation() error = %v", err)
+	}
+	if !snapshot.IsSnapshot || !slices.Equal(snapshot.Parents, []string{other.ID}) {
+		t.Fatalf("jj status's operation = %#v, want a snapshot after %s", snapshot, other.ID)
 	}
 }
 

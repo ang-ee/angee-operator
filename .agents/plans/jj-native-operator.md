@@ -1473,13 +1473,38 @@ driver yet.
       listed. `--quiet` and `ui.quiet` change none of it.
   - So Status reads `jj status`'s listing, which covers both cases, and not
     the warning, which covers one. **`jj status` is the call's snapshot**,
-    run in the slot without `--ignore-working-copy`. The operation the reads
-    are pinned to then comes from `jj op log -n 1` with
-    `--ignore-working-copy` (`runner.latest`): the one the snapshot recorded,
-    or a later one, never an older one, so the reads see every change the
-    report saw. That is one jj run more per status (eight to ten in all), and
-    still one walk of the working copy. Diff keeps `jj op log` as its
-    snapshot.
+    run in the slot without `--ignore-working-copy`, so the working copy is
+    walked once. Diff keeps `jj op log` as its snapshot.
+  - **The reads are pinned to the operation that snapshot left the
+    repository at** (`statusSnapshot`). `jj status` does not print it, and
+    another jj command can record an operation just before or just after
+    it. So Status reads the latest operation (`jj op log -n 1
+    --ignore-working-copy`, `runner.latest`, with jj's `json(self)`) before
+    the snapshot (A) and after it (C), and takes C only when C is A (the
+    snapshot found nothing) or C is a snapshot (`is_snapshot`) whose only
+    parent is A (`settled`). Otherwise it snapshots again from C, at most
+    three times, then fails ("other jj commands recorded operations during
+    each of 3 snapshots"), and the destroy guard refuses. A status is then
+    nine to eleven jj runs.
+    - Probed (jj 0.45): an operation's `json(self)` carries `id`, `parents`,
+      `is_snapshot`, `workspace_name` and `attributes.args`. `jj status`
+      records nothing when nothing changed, and one snapshot after A when
+      something did. It also records operations that are not snapshots:
+      `reset git head` when it updates a stale working copy (D8), and
+      `import git refs` after a `git fetch` in the colocated primary. Each
+      costs one retry.
+    - "C's only parent is A" alone is not enough: when the snapshot records
+      nothing and another command's operation follows A, C's parent is A
+      but `jj status` described A. Requiring a snapshot rules that out. A
+      snapshot of another workspace changes only that workspace's working
+      copy, so it is accepted.
+    - `operationTemplate` stays `id` for Diff's snapshot and for
+      `BackupEvidence` (#136), which reads the bare id;
+      `operationEntryTemplate` is the `json(self)` one. An operation has no
+      testdata fixture: its id hashes the command lines before it, which
+      hold the test's temporary paths. A recorded line sits in
+      `templates_test.go` instead.
+    - Found in the review of #139 (Sourcery).
     - A first version kept `jj op log` as the snapshot and ran `jj status`
       after it, a second snapshot. The review showed the gap: a file written
       between the two was in the report's changes but not in `@` at the
@@ -1494,12 +1519,19 @@ driver yet.
     copy  (@) : …`), jj 0.45 prints `Working copy changes:` and a line per
     changed path, then `Untracked paths:` and its entries, each only when
     there are any, or `The working copy has no changes.` alone. The parser
-    reads up to that line and refuses anything else there: an unknown line
-    (a reworded or added header), a report with none of the three lines,
-    and the untracked line with no entry after it. Status then fails, and
-    the destroy guard refuses. Since D2 makes the baseline the jj on PATH, a
-    newer jj than CI's pin reaches users first, and must fail loudly rather
-    than read as clean.
+    refuses:
+    - an unknown line before the commit's line (a reworded or added
+      header);
+    - one of the three headings anywhere but its place: out of order,
+      twice, inside the untracked listing, or after the commit's line (a
+      listing jj moved);
+    - a report with none of them, or without the commit's line (cut short);
+    - the untracked heading with no entry after it.
+
+    Status then fails, and the destroy guard refuses. Since D2 makes the
+    baseline the jj on PATH, a newer jj than CI's pin reaches users first,
+    and must fail loudly rather than read as clean. The placement and
+    cut-short refusals came from the review of #139.
     - A line in the untracked listing that starts no entry is the rest of a
       name holding a line break, so the name is listed whole. A false
       positive (a changed file whose name holds a line break and a header)
@@ -1530,6 +1562,10 @@ driver yet.
     as untracked. Status reads such a slot clean and pushed, and the destroy
     guard would delete them. A test pins both as a known limit. For the
     owner, under Q10.
+  - **Known limit: check, then delete.** The destroy guard reads a slot and
+    the removal follows, so a file written in between is deleted unseen.
+    The git driver has the same window; only a lock the agents also take
+    could close it.
 - **A missing base keeps the verdicts that need none**, as in the git
   driver:
   - dirty (`@` has changes, or there are untracked paths): not pushed, with a
@@ -1562,12 +1598,20 @@ driver yet.
       alone).
     - the known limit: a nested git repository, and a new file outside the
       sparse patterns, read clean and pushed.
+    - another jj command's operation (a bookmark created in the primary)
+      injected before or after `jj status` by a jj wrapper on PATH: one
+      retry, for a dirty slot and for a clean one whose snapshot records
+      nothing; injected around every attempt, a failure after three; none,
+      one snapshot. A recorded and a live operation decode.
   - Without jj: the parser over jj 0.45's report shapes (no changes,
     changes, untracked, both, conflicts after the commit's line, odd names,
     a line break) and its refusals (a reworded listing, one after "no
-    changes", an unknown line, a listing with no path, nothing); the
-    recorded fixture; the reason's wording, cap and quoting; the runner's
-    `latest` (its arguments, and its refusal of an empty slot).
+    changes", an unknown line, a listing with no path, nothing; a listing
+    after the commit's line, twice, or after "no changes"; changes after the
+    listing; "no changes" after the commit's line; three reports cut short
+    and one with only the commit's lines); `settled` over six operation
+    shapes; the recorded fixture; the reason's wording, cap and quoting; the
+    runner's `latest` (its arguments, and its refusal of an empty slot).
   - The git driver: dirty, on and ahead of its upstream, each on a deleted
     base, with no error.
   - Mutants caught (15): no `jj status` read (the old behaviour); untracked
@@ -1577,8 +1621,15 @@ driver yet.
     dropped; the commit's line not ending the report; a missing base
     returned as before; an undecided slot reported pushed; no upstream count
     without a base; a verdict without a `*vcs.CountError`; a reason that
-    names no paths; names not quoted. Not caught: `operation` snapshotting
-    too, which costs a second walk and changes no result.
+    names no paths; names not quoted. Not caught: the read after the
+    snapshot snapshotting too, which costs a second walk and changes no
+    result.
+  - Mutants caught in the review of #139 (9): no operation check; the
+    weaker "C's parent is A"; no retry; a retry that keeps the first A; one
+    attempt past the bound; headings after the commit's line ignored; the
+    commit's line not required; a heading inside the listing read as a
+    name; the listing allowed after "no changes". The parser as first
+    committed fails eight of the nine new parser cases.
 - **For the rest of phase 6:**
   - `workspaceVCSSlot` sets `Slot.Branch` only for a worktree slot that
     names one. A jj slot needs it too: without it there is no upstream, so a
@@ -1905,6 +1956,11 @@ Q1, Q2 and Q6 are answered. The rest can be answered later.
   Recommendation: the walk for nested repositories before phase 6 turns the
   guard on, since agents do clone into slots, and the docs for sparse
   patterns.
+
+  **Known limit (review of #139): check, then delete.** A file written
+  between the destroy guard's status read and the slot's removal is deleted
+  unseen. The git driver has the same window, and no read of the slot can
+  close it.
 
 ## 6. Corrections to feed back into the proposal
 

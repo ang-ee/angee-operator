@@ -59,13 +59,12 @@ type target struct {
 	name   string
 }
 
-// Status reads the slot. Its first read, `jj status`, snapshots the slot's
-// working copy, so edits jj has recorded nothing of yet count (plan D7), and
-// reports the new files that snapshot left out (Q10). Every read after it is
-// pinned to the operation the repository is at once it has snapshotted, so
-// they see what the report saw, or later, and agree with each other whatever
-// agents do meanwhile. A slot whose working copy another workspace rewrote
-// updates itself (D8).
+// Status reads the slot. Its snapshot, `jj status`, records the edits jj
+// has recorded nothing of yet (plan D7), and reports the new files it left
+// out (Q10). Every read after it is pinned to the operation that snapshot
+// left the repository at (statusSnapshot), so they see what the report saw,
+// and agree with each other whatever agents do meanwhile. A slot whose
+// working copy another workspace rewrote updates itself (D8).
 //
 // For slot branch X (Slot.Branch), base B (Slot.BaseRef on Slot.BaseRemote,
 // else origin, else the local bookmark) and R, the remote git pushes X to
@@ -95,11 +94,7 @@ type target struct {
 // comes with no verdict.
 func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	var status vcs.Status
-	untracked, err := d.untracked(ctx, s.Path)
-	if err != nil {
-		return status, err
-	}
-	op, err := d.operation(ctx, s.Path)
+	untracked, op, err := d.statusSnapshot(ctx, s.Path)
 	if err != nil {
 		return status, err
 	}
@@ -303,33 +298,87 @@ var operationArgs = []string{"op", "log", "--no-graph", "-n", "1", "-T", operati
 // snapshot snapshots the slot's working copy and returns the operation that
 // recorded it: `jj op log` snapshots before it reads. It is the one command of
 // Diff that snapshots; the reads after it are pinned to its operation. Status
-// snapshots through `jj status` instead (untracked), then reads the operation.
+// snapshots through `jj status` instead (statusSnapshot).
 func (d Driver) snapshot(ctx context.Context, dir string) (string, error) {
 	out, err := d.jj.snapshot(ctx, dir, operationArgs...)
 	if err != nil {
 		return "", err
 	}
-	return operationID(dir, out)
-}
-
-// operation returns the repository's latest operation without snapshotting,
-// for a call whose snapshot another command took: the operation that
-// snapshot recorded, or a later one.
-func (d Driver) operation(ctx context.Context, dir string) (string, error) {
-	out, err := d.jj.latest(ctx, dir, operationArgs...)
-	if err != nil {
-		return "", err
-	}
-	return operationID(dir, out)
-}
-
-// operationID reads the one operation id `jj op log -n 1` printed in dir.
-func operationID(dir string, out []byte) (string, error) {
 	op := strings.TrimSpace(string(out))
 	if op == "" || strings.ContainsAny(op, " \n") {
 		return "", fmt.Errorf("jj op log in %s printed %q, want one operation id", dir, out)
 	}
 	return op, nil
+}
+
+// maxSnapshotAttempts bounds how often statusSnapshot snapshots a slot while
+// other jj commands keep recording operations in its repository.
+const maxSnapshotAttempts = 3
+
+// statusSnapshot snapshots the slot through `jj status` (untracked) and
+// returns the untracked paths its report lists, with the operation that
+// report describes, for the reads that follow to be pinned to.
+//
+// `jj status` does not say which operation it ended at, and another jj
+// command can record one before or after it. So statusSnapshot reads the
+// latest operation before the snapshot (A) and after it (C), and takes C only
+// when nothing but that snapshot came between (settled): C is A, since the
+// snapshot found nothing to record, or C is a snapshot whose only parent is
+// A. Otherwise it snapshots again, from C, up to maxSnapshotAttempts times,
+// then fails. `jj status` itself records an operation that is not a snapshot
+// when it updates a stale working copy (`reset git head`) or imports what git
+// changed in the colocated repository (`import git refs`); each costs one
+// more snapshot.
+func (d Driver) statusSnapshot(ctx context.Context, dir string) ([]string, string, error) {
+	before, err := d.latestOperation(ctx, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	for attempt := 1; ; attempt++ {
+		untracked, err := d.untracked(ctx, dir)
+		if err != nil {
+			return nil, "", err
+		}
+		after, err := d.latestOperation(ctx, dir)
+		if err != nil {
+			return nil, "", err
+		}
+		if settled(before, after) {
+			return untracked, after.ID, nil
+		}
+		if attempt == maxSnapshotAttempts {
+			return nil, "", fmt.Errorf("jj status in %s: other jj commands recorded operations during each of %d snapshots; retry once they finish", dir, attempt)
+		}
+		before = after
+	}
+}
+
+// settled reports whether after, the latest operation once a snapshot ran,
+// is before or the snapshot's own: nothing else was recorded in between.
+func settled(before, after operationEntry) bool {
+	return after.ID == before.ID || after.IsSnapshot && slices.Equal(after.Parents, []string{before.ID})
+}
+
+// latestOperation reads the repository's latest operation without
+// snapshotting.
+func (d Driver) latestOperation(ctx context.Context, dir string) (operationEntry, error) {
+	out, err := d.jj.latest(ctx, dir, "op", "log", "--no-graph", "-n", "1", "-T", operationEntryTemplate)
+	if err != nil {
+		return operationEntry{}, err
+	}
+	return decodeOperation(dir, out)
+}
+
+// decodeOperation reads the one operation `jj op log -n 1` printed in dir.
+func decodeOperation(dir string, out []byte) (operationEntry, error) {
+	ops, err := decodeLines[operationEntry](out)
+	if err != nil {
+		return operationEntry{}, fmt.Errorf("jj op log in %s: %w", dir, err)
+	}
+	if len(ops) != 1 || ops[0].ID == "" {
+		return operationEntry{}, fmt.Errorf("jj op log in %s printed %q, want one operation", dir, out)
+	}
+	return ops[0], nil
 }
 
 // workingCopy reads the slot's working-copy commit at operation op.

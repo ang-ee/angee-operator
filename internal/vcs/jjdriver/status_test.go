@@ -3,9 +3,12 @@ package jjdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -615,6 +618,38 @@ func TestParseUntracked(t *testing.T) {
 		{name: "a line nothing explains", report: statusNoChanges + "\nSomething new\n" + commitLines, wantErr: true},
 		{name: "a listing with no path", report: statusUntracked + "\n" + commitLines, wantErr: true},
 		{name: "nothing", report: "", wantErr: true},
+		// A listing anywhere but its place would otherwise go unread.
+		{
+			name:    "the untracked listing after the commit's lines",
+			report:  statusNoChanges + "\n" + commitLines + statusUntracked + "\n? big.bin\n",
+			wantErr: true,
+		},
+		{
+			name:    "a second untracked listing",
+			report:  statusUntracked + "\n? a.bin\n" + statusUntracked + "\n? b.bin\n" + commitLines,
+			wantErr: true,
+		},
+		{
+			name:    "changes after the untracked listing",
+			report:  statusUntracked + "\n? big.bin\n" + statusChanges + "\nM f.txt\n" + commitLines,
+			wantErr: true,
+		},
+		{
+			name:    "an untracked listing after no changes",
+			report:  statusNoChanges + "\n" + statusUntracked + "\n? big.bin\n" + commitLines,
+			wantErr: true,
+		},
+		{
+			name:    "no changes after the commit's lines",
+			report:  statusChanges + "\nM f.txt\n" + commitLines + statusNoChanges + "\n",
+			wantErr: true,
+		},
+		// A report cut short before the commit's line may have lost a
+		// listing.
+		{name: "changes, cut short", report: statusChanges + "\nM f.txt\n", wantErr: true},
+		{name: "an untracked listing, cut short", report: statusUntracked + "\n? big.bin\n", wantErr: true},
+		{name: "no changes, cut short", report: statusNoChanges + "\n", wantErr: true},
+		{name: "only the commit's lines", report: commitLines, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseUntracked([]byte(tc.report))
@@ -699,6 +734,144 @@ func TestReadsArePinnedToTheSnapshot(t *testing.T) {
 	}
 	if n, err := d.count(ctx, f.slot, next, behind); err != nil || n != 1 {
 		t.Fatalf("count() at the next snapshot = %d, %v; want 1", n, err)
+	}
+}
+
+// TestStatusSnapshotsAgainWhenAnotherOperationIntervenes injects another jj
+// command's operation (a bookmark created in the primary, which is not a
+// snapshot) right before or right after the snapshot Status takes with `jj
+// status`. The report and the operation the reads are then pinned to could
+// describe different states, so Status snapshots again, and fails once every
+// attempt was interfered with. A repository nothing else changes takes one
+// snapshot. With a clean slot the snapshot records nothing, so the injected
+// operation follows the one read before it directly: only its not being a
+// snapshot tells it apart.
+func TestStatusSnapshotsAgainWhenAnotherOperationIntervenes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// when the operation is recorded around `jj status`, and for how
+		// many of them.
+		when      string
+		injected  int
+		clean     bool
+		statuses  int
+		wantError bool
+	}{
+		{name: "nothing else", statuses: 1},
+		{name: "an operation before the snapshot", when: "before", injected: 1, statuses: 2},
+		{name: "an operation after the snapshot", when: "after", injected: 1, statuses: 2},
+		{name: "an operation after a snapshot that recorded nothing", when: "after", injected: 1, clean: true, statuses: 2},
+		{name: "an operation around every snapshot", when: "after", injected: maxSnapshotAttempts, statuses: maxSnapshotAttempts, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			// The slot's first jj command may record operations of its own
+			// (importing git's refs); leave those behind.
+			f.jj(f.slot, "status")
+			want := vcs.Status{Dirty: true, UnpushedReason: "uncommitted changes"}
+			if tc.clean {
+				want = vcs.Status{Pushed: true}
+			} else {
+				f.write(f.slot, "new.txt", "unrecorded\n")
+			}
+			statuses := injectOperations(t, f, tc.when, tc.injected)
+			got, err := driver().Status(context.Background(), f.slotAt(""))
+			if n := statuses(); n != tc.statuses {
+				t.Fatalf("Status() ran jj status %d times, want %d", n, tc.statuses)
+			}
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "other jj commands recorded operations") {
+					t.Fatalf("Status() error = %v, want it to give up on a repository that keeps changing", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Status() error = %v", err)
+			}
+			if got.Dirty != want.Dirty || got.Pushed != want.Pushed || got.UnpushedReason != want.UnpushedReason {
+				t.Fatalf("Status() = %#v, want dirty %v, pushed %v", got, want.Dirty, want.Pushed)
+			}
+		})
+	}
+}
+
+// injectOperations puts a jj first on PATH that runs the one found there,
+// and, around each of the first n `jj status` commands it runs (before or
+// after it, as when says), records an operation in the fixture's primary that
+// is not a snapshot, as another agent's jj command would. It returns how many
+// `jj status` commands ran. The driver passes PATH on to jj, but not other
+// variables, so the script holds its paths.
+func injectOperations(t *testing.T, f *fixture, when string, n int) func() int {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the wrapper is a shell script")
+	}
+	real, err := exec.LookPath("jj")
+	if err != nil {
+		t.Fatalf("LookPath(jj) error = %v", err)
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "statuses")
+	for _, path := range []string{real, log, f.primary} {
+		if strings.Contains(path, "'") {
+			t.Skipf("path %s cannot be single-quoted", path)
+		}
+	}
+	inject := fmt.Sprintf(`'%s' -R '%s' --ignore-working-copy bookmark create "injected-$n" -r 'root()' >/dev/null 2>&1 || exit 97`, real, f.primary)
+	before, after := ":", ":"
+	switch when {
+	case "before":
+		before = inject
+	case "after":
+		after = inject
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+case " $* " in
+*" status "*)
+	echo >> '%[1]s'
+	n=$(($(wc -l < '%[1]s')))
+	if [ "$n" -le %[2]d ]; then %[3]s; fi
+	'%[4]s' "$@" || exit $?
+	if [ "$n" -le %[2]d ]; then %[5]s; fi
+	exit 0 ;;
+esac
+exec '%[4]s' "$@"
+`, log, n, before, real, after)
+	if err := os.WriteFile(filepath.Join(dir, "jj"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() int {
+		data, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatalf("ReadFile() error = %v", err)
+		}
+		return strings.Count(string(data), "\n")
+	}
+}
+
+// TestSettled takes the operation after a snapshot only when nothing but the
+// snapshot came after the one before it.
+func TestSettled(t *testing.T) {
+	a := operationEntry{ID: "a"}
+	for _, tc := range []struct {
+		name  string
+		after operationEntry
+		want  bool
+	}{
+		{name: "nothing recorded", after: a, want: true},
+		{name: "the snapshot", after: operationEntry{ID: "s", Parents: []string{"a"}, IsSnapshot: true}, want: true},
+		{name: "another command's operation", after: operationEntry{ID: "o", Parents: []string{"a"}}},
+		{name: "a snapshot after another operation", after: operationEntry{ID: "s", Parents: []string{"o"}, IsSnapshot: true}},
+		{name: "concurrent operations merged", after: operationEntry{ID: "m", Parents: []string{"a", "o"}}},
+		{name: "a snapshot merged with another", after: operationEntry{ID: "s", Parents: []string{"a", "o"}, IsSnapshot: true}},
+	} {
+		if got := settled(a, tc.after); got != tc.want {
+			t.Errorf("%s: settled() = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

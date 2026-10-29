@@ -64,8 +64,8 @@ const waitDelay = 100 * time.Millisecond
 //
 // snapshot lets jj snapshot the slot's working copy before the command, as
 // every slot read and mutation must (plan D7, D8). latest adds
-// --ignore-working-copy, to read which operation a snapshot left the
-// repository at. read adds --ignore-working-copy and --at-op, for the reads
+// --ignore-working-copy, to read the repository's latest operation before
+// and after a snapshot. read adds --ignore-working-copy and --at-op, for the reads
 // that follow a snapshot in the same call: they all see that operation,
 // whatever agents do in the repository meanwhile.
 //
@@ -100,8 +100,8 @@ func (r runner) read(ctx context.Context, slot, op string, args ...string) ([]by
 }
 
 // latest runs a jj command in the slot without snapshotting it, at the
-// repository's latest operation: right after a snapshot, for the operation
-// the reads that follow are pinned to, which is then never older than it.
+// repository's latest operation: around a snapshot, to learn which operation
+// it left the repository at.
 func (r runner) latest(ctx context.Context, slot string, args ...string) ([]byte, error) {
 	if slot == "" {
 		return nil, errNoSlot
