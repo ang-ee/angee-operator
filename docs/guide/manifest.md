@@ -44,6 +44,7 @@ ingress: {}
 secrets: {}
 ports: {}
 volumes: {}
+vcs: git
 sources: {}
 workspaces: {}
 services: {}
@@ -52,6 +53,9 @@ port_leases: {}
 ```
 
 `version`, `kind`, and `name` are required. Empty maps are accepted.
+`vcs` (`git`, the default, or `jj`) is the version control a workspace
+slot that names no `mode` is checked out with; see
+[jj slots](#jj-slots).
 
 ## Operator
 
@@ -550,12 +554,81 @@ TTL values are stored and surfaced by status commands.
 
 Each entry under a workspace's `sources` records how one source was
 materialized into the workspace. `mode` is `worktree` (a git worktree of the
-source's shared cache) or `clone` (a standalone clone). Omitted, a git source
-is cloned and a local source is linked; a local source is linked whatever the
-mode says. Any other value is rejected when the manifest is loaded. A worktree
-source is cut on `branch`. Without a branch it starts on a detached HEAD at
-`ref` and gets its branch when it is published (see
+source's shared cache), `clone` (a standalone clone) or `jj` (a jj workspace
+of the cache, see [jj slots](#jj-slots)). Omitted, the stack's `vcs` decides:
+under `vcs: jj` the slot is a jj slot; otherwise a git source is cloned and a
+local source is linked. A local source is linked under any mode but `jj`.
+Any other value is rejected when the manifest is loaded. A worktree source is
+cut on `branch`. Without a branch it starts on a detached HEAD at `ref` and
+gets its branch when it is published (see
 [workspace commands](./commands.md)).
+
+### jj slots
+
+A jj slot is a [jj](https://jj-vcs.github.io/jj/) workspace of its source's
+primary, made in place at the slot's path. For a git source the primary is
+its cache, which angee colocates with jj (`jj git init --git-repo`) the
+first time a jj slot needs it; git keeps working there and in the cache's
+git worktree slots, so one stack can mix git and jj slots of one source. For
+a `kind: local` source the primary is the local store, which must already be
+a jj repository: angee never makes one.
+
+```yaml
+vcs: jj               # slots with no mode are jj slots
+workspaces:
+  fix-123:
+    template: workspaces/src
+    sources:
+      app:
+        source: app   # no mode: a jj slot under vcs: jj
+        ref: main
+      tree:
+        source: app
+        mode: worktree
+        branch: fix-123
+```
+
+- **Colocated.** A slot of a primary that has a `.git` (a cache always has
+  one) is colocated: it has a `.git` of its own, so git reads it too, on a
+  detached HEAD. A slot of a local store without one has none.
+- **Where it starts.** On the bookmark named by the slot's `branch` when the
+  primary has it, else at the base: `ref` (or the source's `default_ref`) on
+  the source's clone remote, else the local bookmark. A jj slot needs a base.
+  No bookmark or branch is created for it.
+- **Its name.** The jj workspace is named `<stack>--<workspace>`, with
+  `--<slot>` added when a workspace has several jj slots of one primary. The
+  name is computed from the manifest, never stored, so none of the stack,
+  workspace or slot names may be empty, hold `--`, or start or end with `-`.
+  Renaming a stack that has jj slots leaves their workspaces under the old
+  names.
+- **A name already taken.** When the primary already has a workspace of
+  that name that this stack's manifest does not account for, such as one of
+  another stack with the same name that shares the cache, the create is
+  refused as a conflict naming it, and nothing is forgotten.
+- **Requirements.** jj with `jj workspace add --colocate` (a current build,
+  such as `brew install --HEAD jj`), git 2.48 or later, since jj's add sets
+  `extensions.relativeWorktrees` on the cache, and not Windows. A create
+  checks them before any slot is cut, and `angee doctor` reports them.
+- **Containers.** A slot's `.git` and `.jj` lead to the primary by path. A
+  cache inside the stack root is reachable wherever the stack is; one
+  outside it (an absolute `cache_path`) must already exist where angee runs,
+  so an operator in a container must mount it at the same path. Otherwise
+  the create is refused naming the path, rather than cloning a cache only
+  the container sees.
+- **What angee does with one.** `workspace create`, `status`, `git`,
+  `repair` and `destroy` handle jj slots: status reads them through jj,
+  which snapshots the working copy first, so an edit no jj command has
+  recorded yet counts as uncommitted, and a jj slot is never
+  `branch-mismatch`. The other slot verbs do not run on a jj slot yet (see
+  [workspace commands](./commands.md#jj-slots)).
+- **Not supported.** angee never makes a jj slot sparse, so files outside
+  sparse patterns are not looked at. jj does not record a repository nested
+  in a slot (a `git clone` into it, say), so status reads such a slot clean;
+  `workspace destroy` refuses it until the nested repository is gone.
+
+`vcs` applies to every slot that names no mode, existing ones included: the
+manifest keeps a slot's mode as written. Set it before creating workspaces,
+or give existing slots an explicit `mode`.
 
 ### Workspace defaults
 

@@ -540,6 +540,8 @@ re-adds it, instead of failing with `already exists and is not empty`. It
 only reclaims a genuine git worktree at the destination and never touches
 sibling worktrees that share the same source cache. (A stale "missing but
 already registered" worktree is reclaimed automatically, without `--sync`.)
+A jj slot left behind is kept as it is instead, working copy and all (see
+[jj slots](#jj-slots)).
 
 Workspaces are a **pure file primitive**: `create`/`update` render a Copier
 template and materialize git or local sources. They do **not** own service
@@ -678,6 +680,39 @@ angee workspace source publish <workspace> <slot> [--remote name] [--branch name
 Convergence ops (`merge`/`rebase`/aborts/continue/publish) return a
 `GitOpResult{ok, conflicted, conflictFiles, message}` — print as text
 or `--json`.
+
+### jj slots
+
+A slot whose mode is `jj` (or that names none under `vcs: jj`) is a jj
+workspace of its source's cache or local store; see
+[jj slots](/cli/manifest#jj-slots) for how it is made and named.
+
+- `workspace create` checks that this machine can run jj slots (jj with
+  `jj workspace add --colocate`, git 2.48 or later, not Windows) and that
+  each slot's primary is where the manifest says, before it cuts any slot,
+  and refuses with code `PRECONDITION_FAILED`, cause `jj_unavailable` and a
+  hint otherwise. A name the primary already has for another stack's slot is
+  a `CONFLICT` naming it.
+- `create --sync` keeps a jj slot that is still its workspace's checkout as
+  it is, so its uncommitted work and its working-copy commit stay; it never
+  forgets and re-adds a slot. A slot whose directory is gone is added again
+  by `create` of a declared workspace and by `workspace repair`. A rollback
+  removes the jj slots it made, forgets their workspaces, and puts back an
+  empty directory a slot was made in.
+- `workspace status` and `workspace git` read a jj slot through jj: `dirty`
+  when its working-copy commit has changes, including an edit no jj command
+  has recorded yet, `ahead`, `behind` or `diverged` against its bookmark's
+  remote bookmark, else its base, and never `branch-mismatch`.
+- `workspace destroy` refuses while a jj slot holds work nothing else does,
+  as status reports it, and while a git or jj repository sits inside the
+  slot, which jj does not record, naming each. `--purge` forgets the slot's
+  jj workspace and leaves no git worktree registration.
+- The other slot verbs do not run on a jj slot yet: `workspace source
+  fetch`, `pull`, `push`, `diff`, `merge`, `rebase`, `merge-abort`,
+  `rebase-abort`, `rebase-continue` and `publish`, and `workspace push` and
+  `workspace sync-base` over a workspace that has one, are refused before
+  they touch any slot, with code `INVALID_INPUT` (HTTP 400) and cause
+  `jj_slot_unsupported`. Use jj in the slot meanwhile.
 
 ### Workspace preflight
 

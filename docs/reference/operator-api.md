@@ -96,6 +96,7 @@ their diagnostics, and their words are passed through.
 | `slot_missing` | `PRECONDITION_FAILED` | A declared slot is not on disk; the hint names `angee workspace repair`. |
 | `branch_mismatch` | `PRECONDITION_FAILED` | A slot is not on its workspace branch. |
 | `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push. |
+| `jj_unavailable` | `PRECONDITION_FAILED` | A workspace with a jj slot needs jj with `workspace add --colocate`, git 2.48 or later, and not Windows; the hint says what to install. |
 | `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot yet (fetch, pull, push, publish, merge, rebase, the aborts and continue, diff), or `workspace push` or `sync-base` over a workspace that has one; `slot` or `paths` name the jj slots. Use jj in the slot. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
