@@ -115,8 +115,12 @@ type ComplexityRoot struct {
 
 	GitOpsLink struct {
 		Ahead          func(childComplexity int) int
+		BaseBehind     func(childComplexity int) int
 		Behind         func(childComplexity int) int
 		Branch         func(childComplexity int) int
+		ChangeID       func(childComplexity int) int
+		ConflictPaths  func(childComplexity int) int
+		Conflicted     func(childComplexity int) int
 		CurrentRef     func(childComplexity int) int
 		Dirty          func(childComplexity int) int
 		Error          func(childComplexity int) int
@@ -131,6 +135,7 @@ type ComplexityRoot struct {
 		Source         func(childComplexity int) int
 		State          func(childComplexity int) int
 		UnpushedReason func(childComplexity int) int
+		UntrackedPaths func(childComplexity int) int
 		Upstream       func(childComplexity int) int
 		Workspace      func(childComplexity int) int
 	}
@@ -140,6 +145,7 @@ type ComplexityRoot struct {
 		Behind         func(childComplexity int) int
 		BranchMismatch func(childComplexity int) int
 		Clean          func(childComplexity int) int
+		Conflicted     func(childComplexity int) int
 		Dirty          func(childComplexity int) int
 		Diverged       func(childComplexity int) int
 		Error          func(childComplexity int) int
@@ -373,9 +379,13 @@ type ComplexityRoot struct {
 
 	SourceState struct {
 		Ahead          func(childComplexity int) int
+		BaseBehind     func(childComplexity int) int
 		Behind         func(childComplexity int) int
 		Branch         func(childComplexity int) int
+		ChangeID       func(childComplexity int) int
 		Commits        func(childComplexity int) int
+		ConflictPaths  func(childComplexity int) int
+		Conflicted     func(childComplexity int) int
 		CurrentRef     func(childComplexity int) int
 		Dirty          func(childComplexity int) int
 		Error          func(childComplexity int) int
@@ -389,7 +399,15 @@ type ComplexityRoot struct {
 		Slot           func(childComplexity int) int
 		State          func(childComplexity int) int
 		UnpushedReason func(childComplexity int) int
+		UntrackedPaths func(childComplexity int) int
 		Upstream       func(childComplexity int) int
+		Workspaces     func(childComplexity int) int
+	}
+
+	SourceWorkspace struct {
+		Name  func(childComplexity int) int
+		Owned func(childComplexity int) int
+		Path  func(childComplexity int) int
 	}
 
 	SourcesGroupKey struct {
@@ -551,8 +569,12 @@ type ComplexityRoot struct {
 
 	WorkspaceSourceStatus struct {
 		Ahead          func(childComplexity int) int
+		BaseBehind     func(childComplexity int) int
 		Behind         func(childComplexity int) int
 		Branch         func(childComplexity int) int
+		ChangeID       func(childComplexity int) int
+		ConflictPaths  func(childComplexity int) int
+		Conflicted     func(childComplexity int) int
 		CurrentRef     func(childComplexity int) int
 		Dirty          func(childComplexity int) int
 		Error          func(childComplexity int) int
@@ -567,6 +589,7 @@ type ComplexityRoot struct {
 		State          func(childComplexity int) int
 		Subpath        func(childComplexity int) int
 		UnpushedReason func(childComplexity int) int
+		UntrackedPaths func(childComplexity int) int
 		Upstream       func(childComplexity int) int
 	}
 
@@ -1089,6 +1112,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.GitOpsLink.Ahead(childComplexity), true
+	case "GitOpsLink.baseBehind":
+		if e.ComplexityRoot.GitOpsLink.BaseBehind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLink.BaseBehind(childComplexity), true
 	case "GitOpsLink.behind":
 		if e.ComplexityRoot.GitOpsLink.Behind == nil {
 			break
@@ -1101,6 +1130,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.GitOpsLink.Branch(childComplexity), true
+	case "GitOpsLink.changeId":
+		if e.ComplexityRoot.GitOpsLink.ChangeID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLink.ChangeID(childComplexity), true
+	case "GitOpsLink.conflictPaths":
+		if e.ComplexityRoot.GitOpsLink.ConflictPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLink.ConflictPaths(childComplexity), true
+	case "GitOpsLink.conflicted":
+		if e.ComplexityRoot.GitOpsLink.Conflicted == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLink.Conflicted(childComplexity), true
 	case "GitOpsLink.currentRef":
 		if e.ComplexityRoot.GitOpsLink.CurrentRef == nil {
 			break
@@ -1185,6 +1232,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.GitOpsLink.UnpushedReason(childComplexity), true
+	case "GitOpsLink.untrackedPaths":
+		if e.ComplexityRoot.GitOpsLink.UntrackedPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsLink.UntrackedPaths(childComplexity), true
 	case "GitOpsLink.upstream":
 		if e.ComplexityRoot.GitOpsLink.Upstream == nil {
 			break
@@ -1222,6 +1275,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.GitOpsSummary.Clean(childComplexity), true
+	case "GitOpsSummary.conflicted":
+		if e.ComplexityRoot.GitOpsSummary.Conflicted == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GitOpsSummary.Conflicted(childComplexity), true
 	case "GitOpsSummary.dirty":
 		if e.ComplexityRoot.GitOpsSummary.Dirty == nil {
 			break
@@ -2656,6 +2715,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SourceState.Ahead(childComplexity), true
+	case "SourceState.baseBehind":
+		if e.ComplexityRoot.SourceState.BaseBehind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceState.BaseBehind(childComplexity), true
 	case "SourceState.behind":
 		if e.ComplexityRoot.SourceState.Behind == nil {
 			break
@@ -2668,12 +2733,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SourceState.Branch(childComplexity), true
+	case "SourceState.changeId":
+		if e.ComplexityRoot.SourceState.ChangeID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceState.ChangeID(childComplexity), true
 	case "SourceState.commits":
 		if e.ComplexityRoot.SourceState.Commits == nil {
 			break
 		}
 
 		return e.ComplexityRoot.SourceState.Commits(childComplexity), true
+	case "SourceState.conflictPaths":
+		if e.ComplexityRoot.SourceState.ConflictPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceState.ConflictPaths(childComplexity), true
+	case "SourceState.conflicted":
+		if e.ComplexityRoot.SourceState.Conflicted == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceState.Conflicted(childComplexity), true
 	case "SourceState.currentRef":
 		if e.ComplexityRoot.SourceState.CurrentRef == nil {
 			break
@@ -2752,12 +2835,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SourceState.UnpushedReason(childComplexity), true
+	case "SourceState.untrackedPaths":
+		if e.ComplexityRoot.SourceState.UntrackedPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceState.UntrackedPaths(childComplexity), true
 	case "SourceState.upstream":
 		if e.ComplexityRoot.SourceState.Upstream == nil {
 			break
 		}
 
 		return e.ComplexityRoot.SourceState.Upstream(childComplexity), true
+	case "SourceState.workspaces":
+		if e.ComplexityRoot.SourceState.Workspaces == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceState.Workspaces(childComplexity), true
+
+	case "SourceWorkspace.name":
+		if e.ComplexityRoot.SourceWorkspace.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceWorkspace.Name(childComplexity), true
+	case "SourceWorkspace.owned":
+		if e.ComplexityRoot.SourceWorkspace.Owned == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceWorkspace.Owned(childComplexity), true
+	case "SourceWorkspace.path":
+		if e.ComplexityRoot.SourceWorkspace.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceWorkspace.Path(childComplexity), true
 
 	case "SourcesGroupKey.branch":
 		if e.ComplexityRoot.SourcesGroupKey.Branch == nil {
@@ -3446,6 +3560,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceSourceStatus.Ahead(childComplexity), true
+	case "WorkspaceSourceStatus.baseBehind":
+		if e.ComplexityRoot.WorkspaceSourceStatus.BaseBehind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatus.BaseBehind(childComplexity), true
 	case "WorkspaceSourceStatus.behind":
 		if e.ComplexityRoot.WorkspaceSourceStatus.Behind == nil {
 			break
@@ -3458,6 +3578,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceSourceStatus.Branch(childComplexity), true
+	case "WorkspaceSourceStatus.changeId":
+		if e.ComplexityRoot.WorkspaceSourceStatus.ChangeID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatus.ChangeID(childComplexity), true
+	case "WorkspaceSourceStatus.conflictPaths":
+		if e.ComplexityRoot.WorkspaceSourceStatus.ConflictPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatus.ConflictPaths(childComplexity), true
+	case "WorkspaceSourceStatus.conflicted":
+		if e.ComplexityRoot.WorkspaceSourceStatus.Conflicted == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatus.Conflicted(childComplexity), true
 	case "WorkspaceSourceStatus.currentRef":
 		if e.ComplexityRoot.WorkspaceSourceStatus.CurrentRef == nil {
 			break
@@ -3542,6 +3680,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceSourceStatus.UnpushedReason(childComplexity), true
+	case "WorkspaceSourceStatus.untrackedPaths":
+		if e.ComplexityRoot.WorkspaceSourceStatus.UntrackedPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceSourceStatus.UntrackedPaths(childComplexity), true
 	case "WorkspaceSourceStatus.upstream":
 		if e.ComplexityRoot.WorkspaceSourceStatus.Upstream == nil {
 			break
@@ -4199,6 +4343,10 @@ type WorkspaceRef {
   ttlExpiresAt: String
 }
 
+"""
+A source's cache or local store, or, with slot set, one workspace slot of it
+(workspaceGit, workspacePush, workspaceSyncBase).
+"""
 type SourceState {
   id: ID!
   name: String!
@@ -4218,6 +4366,50 @@ type SourceState {
   unpushedReason: String
   error: String
   commits: [CommitRef!]
+  """
+  The jj workspaces of a source whose cache or store is a jj repository, when
+  the operator found jj the first time it looked; null otherwise, and for a
+  slot.
+  """
+  workspaces: [SourceWorkspace!]
+  "The change id of a jj slot's working-copy commit; empty for any other slot."
+  changeId: String
+  """
+  The commits of a jj slot's base it lacks, even when behind counts against
+  its upstream; 0 for any other slot.
+  """
+  baseBehind: Int
+  """
+  A conflicted commit among a jj slot's own; false for any other slot. jj
+  records a conflict in the commit and goes on, so a slot in any state can be
+  conflicted, and state never says so. Conflicts are read from the slot's
+  base, so a slot whose base does not resolve (state error) reads false.
+  """
+  conflicted: Boolean!
+  "The conflicted files of a jj slot's own commits, sorted."
+  conflictPaths: [String!]
+  """
+  New files jj leaves out of a jj slot's working-copy commit (over its
+  snapshot.max-new-file-size, or outside its snapshot.auto-track), relative to
+  the slot, a directory ending in /. Only the slot holds them, so it is dirty.
+  """
+  untrackedPaths: [String!]
+}
+
+"""
+A jj workspace of a source's jj repository, as jj lists it. owned is true when
+the checkout at the path this stack's manifest gives one of its jj slots of
+that repository is that workspace, and path is then that path. Any other
+workspace, the repository's own (default), other stacks' slots, and a slot of
+this stack whose checkout is gone or cannot be read alike, is not owned and its
+path is empty: jj's record of a workspace's path goes stale once the workspace
+moves. Two names one checkout holds (one workspace ` + "`" + `jj edit` + "`" + `ed the other's
+working-copy commit) are neither owned.
+"""
+type SourceWorkspace {
+  name: String!
+  owned: Boolean!
+  path: String
 }
 
 type CommitRef {
@@ -4276,6 +4468,28 @@ type WorkspaceSourceStatus {
   pushed: Boolean!
   unpushedReason: String
   error: String
+  "The change id of a jj slot's working-copy commit; empty for any other slot."
+  changeId: String
+  """
+  The commits of a jj slot's base it lacks, even when behind counts against
+  its upstream; 0 for any other slot.
+  """
+  baseBehind: Int
+  """
+  A conflicted commit among a jj slot's own; false for any other slot. jj
+  records a conflict in the commit and goes on, so a slot in any state can be
+  conflicted, and state never says so. Conflicts are read from the slot's
+  base, so a slot whose base does not resolve (state error) reads false.
+  """
+  conflicted: Boolean!
+  "The conflicted files of a jj slot's own commits, sorted."
+  conflictPaths: [String!]
+  """
+  New files jj leaves out of a jj slot's working-copy commit (over its
+  snapshot.max-new-file-size, or outside its snapshot.auto-track), relative to
+  the slot, a directory ending in /. Only the slot holds them, so it is dirty.
+  """
+  untrackedPaths: [String!]
 }
 
 """
@@ -4329,8 +4543,36 @@ type GitOpsLink {
   pushed: Boolean!
   unpushedReason: String
   error: String
+  "The change id of a jj slot's working-copy commit; empty for any other slot."
+  changeId: String
+  """
+  The commits of a jj slot's base it lacks, even when behind counts against
+  its upstream; 0 for any other slot.
+  """
+  baseBehind: Int
+  """
+  A conflicted commit among a jj slot's own; false for any other slot. jj
+  records a conflict in the commit and goes on, so a slot in any state can be
+  conflicted, and state never says so. Conflicts are read from the slot's
+  base, so a slot whose base does not resolve (state error) reads false.
+  """
+  conflicted: Boolean!
+  "The conflicted files of a jj slot's own commits, sorted."
+  conflictPaths: [String!]
+  """
+  New files jj leaves out of a jj slot's working-copy commit (over its
+  snapshot.max-new-file-size, or outside its snapshot.auto-track), relative to
+  the slot, a directory ending in /. Only the slot holds them, so it is dirty.
+  """
+  untrackedPaths: [String!]
 }
 
+"""
+The topology's sources and links counted by state. worktrees counts git
+worktree slots, not jj slots. unpushed and conflicted count beside the states:
+a source or link in any state can be unpushed, and a jj slot in any state
+conflicted.
+"""
 type GitOpsSummary {
   sources: Int!
   workspaces: Int!
@@ -4344,6 +4586,7 @@ type GitOpsSummary {
   missing: Int!
   error: Int!
   unpushed: Int!
+  conflicted: Int!
 }
 
 """
@@ -5361,6 +5604,16 @@ func (ec *executionContext) childFields_GitOpsLink(ctx context.Context, field gr
 		return ec.fieldContext_GitOpsLink_unpushedReason(ctx, field)
 	case "error":
 		return ec.fieldContext_GitOpsLink_error(ctx, field)
+	case "changeId":
+		return ec.fieldContext_GitOpsLink_changeId(ctx, field)
+	case "baseBehind":
+		return ec.fieldContext_GitOpsLink_baseBehind(ctx, field)
+	case "conflicted":
+		return ec.fieldContext_GitOpsLink_conflicted(ctx, field)
+	case "conflictPaths":
+		return ec.fieldContext_GitOpsLink_conflictPaths(ctx, field)
+	case "untrackedPaths":
+		return ec.fieldContext_GitOpsLink_untrackedPaths(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type GitOpsLink", field.Name)
 }
@@ -5391,6 +5644,8 @@ func (ec *executionContext) childFields_GitOpsSummary(ctx context.Context, field
 		return ec.fieldContext_GitOpsSummary_error(ctx, field)
 	case "unpushed":
 		return ec.fieldContext_GitOpsSummary_unpushed(ctx, field)
+	case "conflicted":
+		return ec.fieldContext_GitOpsSummary_conflicted(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type GitOpsSummary", field.Name)
 }
@@ -5695,8 +5950,32 @@ func (ec *executionContext) childFields_SourceState(ctx context.Context, field g
 		return ec.fieldContext_SourceState_error(ctx, field)
 	case "commits":
 		return ec.fieldContext_SourceState_commits(ctx, field)
+	case "workspaces":
+		return ec.fieldContext_SourceState_workspaces(ctx, field)
+	case "changeId":
+		return ec.fieldContext_SourceState_changeId(ctx, field)
+	case "baseBehind":
+		return ec.fieldContext_SourceState_baseBehind(ctx, field)
+	case "conflicted":
+		return ec.fieldContext_SourceState_conflicted(ctx, field)
+	case "conflictPaths":
+		return ec.fieldContext_SourceState_conflictPaths(ctx, field)
+	case "untrackedPaths":
+		return ec.fieldContext_SourceState_untrackedPaths(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SourceState", field.Name)
+}
+
+func (ec *executionContext) childFields_SourceWorkspace(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_SourceWorkspace_name(ctx, field)
+	case "owned":
+		return ec.fieldContext_SourceWorkspace_owned(ctx, field)
+	case "path":
+		return ec.fieldContext_SourceWorkspace_path(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SourceWorkspace", field.Name)
 }
 
 func (ec *executionContext) childFields_SourcesGroupKey(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -6023,6 +6302,16 @@ func (ec *executionContext) childFields_WorkspaceSourceStatus(ctx context.Contex
 		return ec.fieldContext_WorkspaceSourceStatus_unpushedReason(ctx, field)
 	case "error":
 		return ec.fieldContext_WorkspaceSourceStatus_error(ctx, field)
+	case "changeId":
+		return ec.fieldContext_WorkspaceSourceStatus_changeId(ctx, field)
+	case "baseBehind":
+		return ec.fieldContext_WorkspaceSourceStatus_baseBehind(ctx, field)
+	case "conflicted":
+		return ec.fieldContext_WorkspaceSourceStatus_conflicted(ctx, field)
+	case "conflictPaths":
+		return ec.fieldContext_WorkspaceSourceStatus_conflictPaths(ctx, field)
+	case "untrackedPaths":
+		return ec.fieldContext_WorkspaceSourceStatus_untrackedPaths(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type WorkspaceSourceStatus", field.Name)
 }
@@ -9801,6 +10090,121 @@ func (ec *executionContext) fieldContext_GitOpsLink_error(_ context.Context, fie
 	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _GitOpsLink_changeId(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLink_changeId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ChangeID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLink_changeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpsLink_baseBehind(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLink_baseBehind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.BaseBehind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalOInt2int(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLink_baseBehind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpsLink_conflicted(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLink_conflicted(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflicted, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLink_conflicted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpsLink_conflictPaths(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLink_conflictPaths(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConflictPaths, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLink_conflictPaths(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpsLink_untrackedPaths(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsLink_untrackedPaths(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UntrackedPaths, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsLink_untrackedPaths(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsLink", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _GitOpsSummary_sources(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsSummary) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -10074,6 +10478,29 @@ func (ec *executionContext) _GitOpsSummary_unpushed(ctx context.Context, field g
 	)
 }
 func (ec *executionContext) fieldContext_GitOpsSummary_unpushed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GitOpsSummary", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GitOpsSummary_conflicted(ctx context.Context, field graphql.CollectedField, obj *api.GitOpsSummary) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GitOpsSummary_conflicted(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflicted, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GitOpsSummary_conflicted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("GitOpsSummary", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
@@ -16085,6 +16512,222 @@ func (ec *executionContext) fieldContext_SourceState_commits(_ context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _SourceState_workspaces(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceState_workspaces(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Workspaces, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []api.SourceWorkspace) graphql.Marshaler {
+			return ec.marshalOSourceWorkspace2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceWorkspaceᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourceState_workspaces(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SourceWorkspace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceState_changeId(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceState_changeId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ChangeID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourceState_changeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourceState_baseBehind(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceState_baseBehind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.BaseBehind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalOInt2int(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourceState_baseBehind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceState", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _SourceState_conflicted(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceState_conflicted(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflicted, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SourceState_conflicted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceState", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _SourceState_conflictPaths(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceState_conflictPaths(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConflictPaths, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourceState_conflictPaths(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourceState_untrackedPaths(ctx context.Context, field graphql.CollectedField, obj *api.SourceState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceState_untrackedPaths(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UntrackedPaths, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourceState_untrackedPaths(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceState", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourceWorkspace_name(ctx context.Context, field graphql.CollectedField, obj *api.SourceWorkspace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceWorkspace_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SourceWorkspace_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceWorkspace", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SourceWorkspace_owned(ctx context.Context, field graphql.CollectedField, obj *api.SourceWorkspace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceWorkspace_owned(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Owned, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SourceWorkspace_owned(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceWorkspace", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _SourceWorkspace_path(ctx context.Context, field graphql.CollectedField, obj *api.SourceWorkspace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SourceWorkspace_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SourceWorkspace_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SourceWorkspace", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _SourcesGroupKey_kind(ctx context.Context, field graphql.CollectedField, obj *model.SourcesGroupKey) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -19279,6 +19922,121 @@ func (ec *executionContext) _WorkspaceSourceStatus_error(ctx context.Context, fi
 	)
 }
 func (ec *executionContext) fieldContext_WorkspaceSourceStatus_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceSourceStatus_changeId(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceSourceStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatus_changeId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ChangeID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatus_changeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceSourceStatus_baseBehind(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceSourceStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatus_baseBehind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.BaseBehind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalOInt2int(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatus_baseBehind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceSourceStatus_conflicted(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceSourceStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatus_conflicted(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflicted, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatus_conflicted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceSourceStatus_conflictPaths(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceSourceStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatus_conflictPaths(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConflictPaths, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatus_conflictPaths(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceSourceStatus_untrackedPaths(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceSourceStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceSourceStatus_untrackedPaths(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UntrackedPaths, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceSourceStatus_untrackedPaths(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("WorkspaceSourceStatus", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -25025,6 +25783,19 @@ func (ec *executionContext) _GitOpsLink(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._GitOpsLink_unpushedReason(ctx, field, obj)
 		case "error":
 			out.Values[i] = ec._GitOpsLink_error(ctx, field, obj)
+		case "changeId":
+			out.Values[i] = ec._GitOpsLink_changeId(ctx, field, obj)
+		case "baseBehind":
+			out.Values[i] = ec._GitOpsLink_baseBehind(ctx, field, obj)
+		case "conflicted":
+			out.Values[i] = ec._GitOpsLink_conflicted(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "conflictPaths":
+			out.Values[i] = ec._GitOpsLink_conflictPaths(ctx, field, obj)
+		case "untrackedPaths":
+			out.Values[i] = ec._GitOpsLink_untrackedPaths(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -25116,6 +25887,11 @@ func (ec *executionContext) _GitOpsSummary(ctx context.Context, sel ast.Selectio
 			}
 		case "unpushed":
 			out.Values[i] = ec._GitOpsSummary_unpushed(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "conflicted":
+			out.Values[i] = ec._GitOpsSummary_conflicted(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -27388,6 +28164,67 @@ func (ec *executionContext) _SourceState(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._SourceState_error(ctx, field, obj)
 		case "commits":
 			out.Values[i] = ec._SourceState_commits(ctx, field, obj)
+		case "workspaces":
+			out.Values[i] = ec._SourceState_workspaces(ctx, field, obj)
+		case "changeId":
+			out.Values[i] = ec._SourceState_changeId(ctx, field, obj)
+		case "baseBehind":
+			out.Values[i] = ec._SourceState_baseBehind(ctx, field, obj)
+		case "conflicted":
+			out.Values[i] = ec._SourceState_conflicted(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "conflictPaths":
+			out.Values[i] = ec._SourceState_conflictPaths(ctx, field, obj)
+		case "untrackedPaths":
+			out.Values[i] = ec._SourceState_untrackedPaths(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var sourceWorkspaceImplementors = []string{"SourceWorkspace"}
+
+func (ec *executionContext) _SourceWorkspace(ctx context.Context, sel ast.SelectionSet, obj *api.SourceWorkspace) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sourceWorkspaceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SourceWorkspace")
+		case "name":
+			out.Values[i] = ec._SourceWorkspace_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "owned":
+			out.Values[i] = ec._SourceWorkspace_owned(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "path":
+			out.Values[i] = ec._SourceWorkspace_path(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -28739,6 +29576,19 @@ func (ec *executionContext) _WorkspaceSourceStatus(ctx context.Context, sel ast.
 			out.Values[i] = ec._WorkspaceSourceStatus_unpushedReason(ctx, field, obj)
 		case "error":
 			out.Values[i] = ec._WorkspaceSourceStatus_error(ctx, field, obj)
+		case "changeId":
+			out.Values[i] = ec._WorkspaceSourceStatus_changeId(ctx, field, obj)
+		case "baseBehind":
+			out.Values[i] = ec._WorkspaceSourceStatus_baseBehind(ctx, field, obj)
+		case "conflicted":
+			out.Values[i] = ec._WorkspaceSourceStatus_conflicted(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "conflictPaths":
+			out.Values[i] = ec._WorkspaceSourceStatus_conflictPaths(ctx, field, obj)
+		case "untrackedPaths":
+			out.Values[i] = ec._WorkspaceSourceStatus_untrackedPaths(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -30633,6 +31483,10 @@ func (ec *executionContext) marshalNSourceState2ᚖgithubᚗcomᚋangᚑeeᚋang
 	return ec._SourceState(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNSourceWorkspace2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceWorkspace(ctx context.Context, sel ast.SelectionSet, v api.SourceWorkspace) graphql.Marshaler {
+	return ec._SourceWorkspace(ctx, sel, &v)
+}
+
 func (ec *executionContext) unmarshalNSourcesGroupBySpec2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupBySpecᚄ(ctx context.Context, v any) ([]*model.SourcesGroupBySpec, error) {
 	var vSlice []any
 	vSlice = graphql.CoerceList(v)
@@ -31830,6 +32684,25 @@ func (ec *executionContext) marshalOSourceState2ᚖgithubᚗcomᚋangᚑeeᚋang
 		return graphql.Null
 	}
 	return ec._SourceState(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOSourceWorkspace2ᚕgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceWorkspaceᚄ(ctx context.Context, sel ast.SelectionSet, v []api.SourceWorkspace) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNSourceWorkspace2githubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐSourceWorkspace(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalOSourcesGroupOrder2ᚕᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋinternalᚋoperatorᚋgqlᚋmodelᚐSourcesGroupOrderᚄ(ctx context.Context, v any) ([]*model.SourcesGroupOrder, error) {

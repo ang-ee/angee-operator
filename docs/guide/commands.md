@@ -702,7 +702,12 @@ workspace of its source's cache or local store; see
 - `workspace status` and `workspace git` read a jj slot through jj: `dirty`
   when its working-copy commit has changes, including an edit no jj command
   has recorded yet, `ahead`, `behind` or `diverged` against its bookmark's
-  remote bookmark, else its base, and never `branch-mismatch`.
+  remote bookmark, else its base, and never `branch-mismatch`. A slot that
+  holds a conflicted commit, as a rebase in it can leave, prints
+  `conflicted:` and up to ten of its conflicted files after its state, whatever
+  the state is. `--json` adds `conflicted`, `conflict_paths`, `change_id`,
+  `base_behind` and `untracked_paths` (see the
+  [operator API](../reference/operator-api.md)).
 - `workspace destroy` refuses while a jj slot holds work nothing else does,
   as status reports it, and while a git or jj repository sits inside the
   slot, which jj does not record, naming each. `--purge` forgets the slot's

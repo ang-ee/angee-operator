@@ -359,6 +359,68 @@ name: inner
 	}
 }
 
+// The jj fields resolve on every GraphQL type that reports a slot, and on
+// the summary, through the struct the DTOs embed: for a git worktree slot,
+// conflicted is false, the change id empty and the lists null, and a cache
+// that is not a jj repository has no workspaces. REST carries the same flag.
+func TestOperatorReportsTheJJFieldsOfAGitSlot(t *testing.T) {
+	root, workspaceName, _, _ := setupOperatorGitWorkspace(t)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	const jjFields = `changeId baseBehind conflicted conflictPaths untrackedPaths`
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{
+			gitOpsTopology {
+				summary { conflicted }
+				sources { name workspaces { name owned path } ` + jjFields + ` }
+				links { slot ` + jjFields + ` }
+				workspaces { sources { slot ` + jjFields + ` } }
+			}
+			workspaceGit(name: "` + workspaceName + `") { slot ` + jjFields + ` }
+		}`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL errors = %#v", resp.Errors)
+	}
+	topology := resp.Data["gitOpsTopology"].(map[string]any)
+	if summary := topology["summary"].(map[string]any); summary["conflicted"] != float64(0) {
+		t.Errorf("summary = %#v, want conflicted 0", summary)
+	}
+	slots := []any{
+		topology["sources"].([]any)[0],
+		topology["links"].([]any)[0],
+		topology["workspaces"].([]any)[0].(map[string]any)["sources"].([]any)[0],
+		resp.Data["workspaceGit"].([]any)[0],
+	}
+	for i, slot := range slots {
+		fields := slot.(map[string]any)
+		if fields["conflicted"] != false || fields["changeId"] != "" || fields["baseBehind"] != float64(0) {
+			t.Errorf("entry %d = %#v, want conflicted false, an empty change id and no base behind", i, fields)
+		}
+		for _, key := range []string{"conflictPaths", "untrackedPaths"} {
+			if fields[key] != nil {
+				t.Errorf("entry %d %s = %#v, want null", i, key, fields[key])
+			}
+		}
+	}
+	if source := slots[0].(map[string]any); source["workspaces"] != nil {
+		t.Errorf("source workspaces = %#v, want null for a cache that is not a jj repository", source["workspaces"])
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/workspaces/"+workspaceName+"/status", nil)
+	rec := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rec, req)
+	var status map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("REST status = %d %s, %v", rec.Code, rec.Body.String(), err)
+	}
+	if source := status["sources"].([]any)[0].(map[string]any); source["conflicted"] != false {
+		t.Errorf("REST source = %#v, want conflicted false", source)
+	}
+}
+
 func TestOperatorWorkspaceBranchIdentityStatusAndSyncBase(t *testing.T) {
 	root, workspaceName, workspaceSourcePath, cache := setupOperatorGitWorkspace(t)
 	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})

@@ -18,9 +18,9 @@
 // The primary's lock (plan D9) is the caller's: EnsurePrimary (which creates
 // the primary's .jj), Add and Remove (which add and forget a workspace, and
 // drop its git worktree registration) run under it. jj merges
-// concurrent operations on its own, so nothing else needs it: Exists, Holds,
-// Elsewhere, ForgetName (of a slot whose directory is gone), Status, Diff and
-// the slot verbs take none.
+// concurrent operations on its own, so nothing else needs it: Exists,
+// Workspaces, CheckoutAt, Holds, Elsewhere, ForgetName (of a slot whose
+// directory is gone), Status, Diff and the slot verbs take none.
 package jjdriver
 
 import (
@@ -29,9 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
@@ -193,25 +191,13 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 const maxReasonPaths = 10
 
 // dirtyReason says what a dirty slot holds that nothing else does: changes
-// recorded in its working-copy commit, untracked paths, or both. A path with
-// a character that does not print is quoted: jj prints names as they are,
-// and the reason reaches terminals and API clients.
+// recorded in its working-copy commit, untracked paths, or both. The paths
+// are named as vcs.NamePaths names them, quoted where they would not print.
 func dirtyReason(changed bool, untracked []string) string {
 	if len(untracked) == 0 {
 		return "uncommitted changes"
 	}
-	shown := untracked[:min(len(untracked), maxReasonPaths)]
-	names := make([]string, len(shown))
-	for i, path := range shown {
-		if strings.ContainsFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) {
-			path = strconv.Quote(path)
-		}
-		names[i] = path
-	}
-	reason := "untracked paths jj does not snapshot: " + strings.Join(names, ", ")
-	if more := len(untracked) - len(shown); more > 0 {
-		reason += fmt.Sprintf(" and %d more", more)
-	}
+	reason := "untracked paths jj does not snapshot: " + vcs.NamePaths(untracked, maxReasonPaths)
 	if changed {
 		return "uncommitted changes, and " + reason
 	}

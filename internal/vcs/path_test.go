@@ -3,6 +3,8 @@ package vcs
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +47,30 @@ func TestCanonicalPath(t *testing.T) {
 	} {
 		if got := PathInside(real, path); got != want {
 			t.Errorf("PathInside(%s, %s) = %v, want %v", real, path, got, want)
+		}
+	}
+}
+
+// NamePaths names up to its limit and counts the rest, quoting a name that
+// does not print or that holds the separator, and nothing else.
+func TestNamePaths(t *testing.T) {
+	many := make([]string, 12)
+	for i := range many {
+		many[i] = "p" + strconv.Itoa(i)
+	}
+	for _, tc := range []struct {
+		paths []string
+		limit int
+		want  string
+	}{
+		{paths: nil, limit: 10, want: ""},
+		{paths: []string{"a.txt", "dir/", "ünï.txt"}, limit: 10, want: "a.txt, dir/, ünï.txt"},
+		{paths: many, limit: 10, want: strings.Join(many[:10], ", ") + " and 2 more"},
+		{paths: []string{"a", "b"}, limit: 0, want: " and 2 more"},
+		{paths: []string{"nl\nname", "esc\x1b[31m", "a, b", "a,b"}, limit: 10, want: `"nl\nname", "esc\x1b[31m", "a, b", a,b`},
+	} {
+		if got := NamePaths(tc.paths, tc.limit); got != tc.want {
+			t.Errorf("NamePaths(%q, %d) = %q, want %q", tc.paths, tc.limit, got, tc.want)
 		}
 	}
 }

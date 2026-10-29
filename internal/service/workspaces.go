@@ -447,21 +447,40 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 	}
 	target := workspaceVCSSlot(path, source, wsSource)
 	read, err := p.slotDriver(target).Status(ctx, target)
+	setSlotStatus(&status, read, err)
+	return status
+}
+
+// setSlotStatus fills status with what the slot's driver read, read and err
+// being what vcs.Driver.Status returned. It is the one mapping from a
+// driver's read to the API: every DTO that reports a slot or a source's
+// cache (SourceState, GitOpsLink) is made from the WorkspaceSourceStatus it
+// fills. A read that failed makes the slot an error and not pushed, and
+// keeps what the driver read before it failed, as a jj slot on a missing base
+// keeps its counts. The jj fields are copied as they are, so they are zero
+// for a git slot.
+func setSlotStatus(status *api.WorkspaceSourceStatus, read vcs.Status, err error) {
 	status.CurrentRef = read.CurrentRef
 	status.Dirty = read.Dirty
 	status.Upstream = read.Upstream
 	status.Ahead = read.Ahead
 	status.Behind = read.Behind
+	status.JJSlotState = api.JJSlotState{
+		ChangeID:       read.ChangeID,
+		BaseBehind:     read.BaseBehind,
+		Conflicted:     read.Conflicted,
+		ConflictPaths:  read.ConflictPaths,
+		UntrackedPaths: read.UntrackedPaths,
+	}
 	if err != nil {
 		status.State = "error"
 		status.Pushed = false
 		status.Error = err.Error()
-		return status
+		return
 	}
 	status.State = workspaceSourceStateOf(read)
 	status.Pushed = read.Pushed
 	status.UnpushedReason = read.UnpushedReason
-	return status
 }
 
 // workspaceSourceStateOf names the state a slot's driver status puts it in.
@@ -1504,6 +1523,7 @@ func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.Source
 		Pushed:         status.Pushed,
 		UnpushedReason: status.UnpushedReason,
 		Error:          status.Error,
+		JJSlotState:    status.JJSlotState,
 	}
 }
 
