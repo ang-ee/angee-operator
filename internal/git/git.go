@@ -231,19 +231,69 @@ func (c Client) runText(ctx context.Context, dir string, args ...string) (string
 
 // runStdout runs git in dir and returns its standard output alone, for a
 // caller that parses it, so a warning git prints is not read as output. A
-// failure carries standard error.
-func (c Client) runStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd, trace := c.command(ctx, dir, nil, args)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+// failure carries standard error. git reads the repository at dir whatever
+// the process environment says (repositoryEnvKeys), and an output of more
+// than limit bytes stops git and fails, so a pathological history cannot be
+// read into memory.
+func (c Client) runStdout(ctx context.Context, dir string, limit int, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	env := slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		key, _, _ := strings.Cut(entry, "=")
+		return slices.Contains(repositoryEnvKeys, key)
+	})
+	if c.NonInteractive {
+		env = NonInteractiveEnv(env)
+	}
+	cmd, trace := c.command(ctx, dir, env, args)
+	stdout := &cappedBuffer{limit: limit, cancel: cancel}
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	trace(logctx.CombinedOutput(stdout.Bytes(), stderr.Bytes()), err)
+	if stdout.over {
+		return nil, commandError(args, stderr.Bytes(), fmt.Errorf("output exceeds %d bytes", limit))
+	}
 	if err != nil {
 		return nil, commandError(args, stderr.Bytes(), err)
 	}
 	return stdout.Bytes(), nil
 }
+
+// repositoryEnvKeys are the variables that point git at another repository,
+// work tree, index or object store than the one in its directory. runStdout
+// leaves them out; the ones that only bound the search for a repository
+// (GIT_CEILING_DIRECTORIES) stay.
+var repositoryEnvKeys = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+}
+
+// stdoutLimit bounds what runStdout reads from one git command.
+const stdoutLimit = 32 << 20
+
+// cappedBuffer holds a command's output up to limit bytes; a write past it
+// marks the buffer over and cancels the command instead. The buffer is a
+// field, not embedded, so io.Copy cannot bypass Write through its ReadFrom.
+type cappedBuffer struct {
+	buf    bytes.Buffer
+	limit  int
+	cancel context.CancelFunc
+	over   bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.limit {
+		b.over = true
+		b.cancel()
+		return 0, errors.New("output limit reached")
+	}
+	return b.buf.Write(p)
+}
+
+// Bytes is the output held so far.
+func (b *cappedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 // NonInteractiveEnv returns env configured so git and SSH cannot prompt. An
 // existing GIT_SSH_COMMAND is preserved verbatim.
@@ -824,7 +874,8 @@ type LogCommit struct {
 }
 
 // logFormat prints a commit's fields a line each, the message last, since it
-// may span lines. With -z a NUL ends each commit, which no field holds.
+// may span lines. With -z a NUL ends each commit, which no field holds: git
+// prints a message only up to a NUL it contains.
 const logFormat = "%H%n%P%n%ct%n%an%n%ae%n%B"
 
 // Log lists up to limit commits reachable from HEAD in the repository at dir,
@@ -839,14 +890,14 @@ func (c Client) Log(ctx context.Context, dir string, limit int) ([]LogCommit, er
 		return nil, nil
 	}
 	// The -- keeps a file named HEAD from making HEAD ambiguous.
-	out, err := c.runStdout(ctx, dir, "--no-replace-objects", "log", "-z", "--no-show-signature", "--encoding=UTF-8",
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "--no-replace-objects", "log", "-z", "--no-show-signature", "--encoding=UTF-8",
 		"--max-count="+strconv.Itoa(limit), "--format="+logFormat, "HEAD", "--")
 	if err != nil {
 		// rev-parse exits 1 for a HEAD that names nothing, an unborn branch,
 		// but 0 for one that names a missing object, and 128 outside a
 		// repository: only the first is an empty history.
 		var exitErr *exec.ExitError
-		if _, headErr := c.runStdout(ctx, dir, "rev-parse", "--verify", "--quiet", "HEAD"); errors.As(headErr, &exitErr) && exitErr.ExitCode() == 1 {
+		if _, headErr := c.runStdout(ctx, dir, stdoutLimit, "rev-parse", "--verify", "--quiet", "HEAD"); errors.As(headErr, &exitErr) && exitErr.ExitCode() == 1 {
 			return nil, nil
 		}
 		return nil, err
@@ -881,7 +932,7 @@ func (c Client) Log(ctx context.Context, dir string, limit int) ([]LogCommit, er
 // is left out, and an annotated tag is keyed by its tag object, not by the
 // commit it tags. Like Log, it runs the git CLI.
 func (c Client) RefTargets(ctx context.Context, dir string) (map[string][]string, error) {
-	out, err := c.runStdout(ctx, dir, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
 	if err != nil {
 		return nil, err
 	}

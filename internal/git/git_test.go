@@ -925,6 +925,73 @@ func TestLog(t *testing.T) {
 	}
 }
 
+// Log and RefTargets read the repository in their directory even when the
+// process environment points git at another one.
+func TestCLIReadsIgnoreRepositoryOverrides(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo, other := filepath.Join(base, "repo"), filepath.Join(base, "other")
+	for _, dir := range []string{repo, other} {
+		runGit(t, "", "init", "-q", "--initial-branch=main", dir)
+		commitAt(t, dir, "2026-01-01T00:00:00Z", filepath.Base(dir))
+	}
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	commits, err := New().Log(ctx, repo, 10)
+	if err != nil || len(commits) != 1 || commits[0].Message != "repo\n" {
+		t.Fatalf("Log(repo) under GIT_DIR=other = %+v, %v; want repo's commit", commits, err)
+	}
+	targets, err := New().RefTargets(ctx, repo)
+	if err != nil || !slices.Contains(targets[commits[0].Hash], "refs/heads/main") {
+		t.Fatalf("RefTargets(repo) under GIT_DIR=other = %v, %v; want repo's main", targets, err)
+	}
+}
+
+// A command whose output outgrows runStdout's limit is stopped and fails
+// rather than being read whole.
+func TestRunStdoutStopsAtItsLimit(t *testing.T) {
+	isolateGitConfig(t)
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	commitAt(t, repo, "2026-01-01T00:00:00Z", strings.Repeat("a long message ", 1000))
+	_, err := New().runStdout(context.Background(), repo, 1024, "log", "--format=%B")
+	if err == nil || !strings.Contains(err.Error(), "output exceeds 1024 bytes") {
+		t.Fatalf("runStdout() past its limit error = %v, want the limit named", err)
+	}
+	if out, err := New().runStdout(context.Background(), repo, stdoutLimit, "log", "--format=%B"); err != nil || len(out) < 15000 {
+		t.Fatalf("runStdout() within its limit = %d bytes, %v", len(out), err)
+	}
+}
+
+// A commit object whose message holds a NUL, which git commit refuses but
+// other tools can write, still parses as one commit: git prints a message only
+// up to its NUL, so the NUL ending each record stays unambiguous.
+func TestLogReadsAMessageHoldingANUL(t *testing.T) {
+	isolateGitConfig(t)
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	commitAt(t, repo, "2026-01-01T00:00:00Z", "first")
+	object := fmt.Sprintf("tree %s\nparent %s\nauthor A <a@example.com> 1767225600 +0000\ncommitter A <a@example.com> 1767225600 +0000\n\nbefore\x00after\nmore\n",
+		gitOutput(t, repo, "rev-parse", "HEAD^{tree}"), gitOutput(t, repo, "rev-parse", "HEAD"))
+	cmd := exec.Command("git", "hash-object", "-t", "commit", "-w", "--literally", "--stdin")
+	cmd.Dir, cmd.Stdin = repo, strings.NewReader(object)
+	id, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hash-object error = %v", err)
+	}
+	runGit(t, repo, "update-ref", "HEAD", strings.TrimSpace(string(id)))
+	commits, err := New().Log(context.Background(), repo, 10)
+	if err != nil || len(commits) != 2 || commits[0].Message != "before" || commits[1].Message != "first\n" {
+		t.Fatalf("Log() = %+v, %v; want the NUL commit's message cut at its NUL, then first", commits, err)
+	}
+}
+
 // RefTargets keys each ref by what it points at: a commit for branches,
 // remote-tracking branches and lightweight tags, the tag object for an
 // annotated tag. A symbolic ref (origin/HEAD) is left out.
