@@ -779,8 +779,13 @@ workspace of its source's cache or local store; see
   needed). The remote is `--remote`, else the one git pushes that branch to
   from the slot, in the order a git slot's publish follows, and is always
   named to jj. A publish to a remote other than that default records it as
-  the branch's push remote (`branch.<branch>.pushRemote`), as `git push -u`
-  records an upstream, so the slot's status, and later publishes, follow it.
+  the branch's push remote (`branch.<branch>.pushRemote` in the source
+  cache's git config, replacing what it had, as `git push -u` replaces an
+  upstream), so the slot's status, and later publishes, follow it. A
+  `kind: local` store's git config is the user's and is never written: the
+  push goes through, a warning in the result says the remote was not
+  recorded, and status keeps counting against the store's default push
+  remote.
   Publish sends the commit under the working copy, `@-`, so the
   slot must hold nothing uncommitted: changes in its working-copy commit are
   refused with `uncommitted_changes` and jj's command that commits them, and
@@ -797,13 +802,17 @@ workspace of its source's cache or local store; see
   `INVALID_INPUT`, is a branch that is not the slot's to set: one a git
   worktree of the same source has checked out, which moving it would leave
   on no branch, and one the remote has that this repository does not track
-  (someone else's), which jj would not push over. So is a branch that exists
-  and is not the slot's (one it neither names in the manifest nor holds only
-  its own commits on), such as `--branch develop`, which publish would move
-  onto the slot's commits. A branch that holds commits the slot does not,
-  such as a collaborator's pushed onto it and fetched since, is refused with
-  `PRECONDITION_FAILED` and cause `branch_moved`, naming them: the push
-  would drop them, though jj's lease passes once they are fetched. Merge
+  (someone else's), which jj would not push over. So is a branch that exists,
+  here or on the remote, and is not the slot's (one it neither names in the
+  manifest nor holds only its own commits on), such as `--branch develop`,
+  which publish would move onto the slot's commits. A branch that holds
+  work the slot does not is refused with `PRECONDITION_FAILED` and cause
+  `branch_moved`, naming the commits: a collaborator's commit pushed onto
+  it, or a collaborator's new version of one of the slot's commits, fetched
+  since. The push would drop them, though jj's lease passes once they are
+  fetched. The remote branch may hold the old versions of the slot's own
+  commits that a rebase leaves behind; the slot's own bookmark may point
+  only into the slot's history. Merge
   the remote branch into the slot (`workspace source merge <workspace>
   <slot> <branch>@<remote>`), then publish. A working-copy commit with
   two parents has no one commit to publish (`PRECONDITION_FAILED`), and a

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -406,5 +407,43 @@ func TestWorkspaceSourceFetchRefusesALocalStoreSlot(t *testing.T) {
 	if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodeInvalidInput || !strings.Contains(err.Error(), "angee never fetches into") ||
 		!strings.Contains(err.Error(), "`angee workspace source rebase ws notes main`") {
 		t.Fatalf("WorkspaceSourceFetch() error = %v (%+v), want INVALID_INPUT pointing at the rebase", err, opErr)
+	}
+}
+
+// A publish of a `kind: local` store's jj slot to another remote pushes
+// there, but leaves the store's git config alone (angee does not change a
+// user's store): the result says the remote was not recorded, and status
+// keeps counting against the store's default push remote.
+func TestPublishOfALocalStoreSlotRecordsNoRemote(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	store, origin, fork := filepath.Join(f.base, "store"), filepath.Join(f.base, "store.git"), filepath.Join(f.base, "fork.git")
+	for _, bare := range []string{origin, fork} {
+		runGit(t, f.base, "init", "-q", "--bare", "-b", "main", bare)
+	}
+	runGit(t, f.base, "init", "-q", "-b", "main", store)
+	runGit(t, store, "remote", "add", "origin", origin)
+	runGit(t, store, "remote", "add", "fork", fork)
+	f.jj(store, "git", "init", "--colocate")
+	f.jjCommit(store, "f.txt", "one\n", "base")
+	f.jj(store, "bookmark", "create", "main", "-r", "@-")
+	if err := f.create(f.template("local", map[string]string{"notes": "source: notes\nkind: local\npath: " + store + "\ndefault_ref: main\nmode: jj\nbranch: ws-notes\nsubpath: notes"}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	slot := filepath.Join(f.workspace("ws"), "notes")
+	f.jjCommit(slot, "n.txt", "notes\n", "the store's slot")
+
+	result, err := f.platform.WorkspaceSourcePublish(ctx, "ws", "notes", "fork", "")
+	if err != nil || !result.OK || !strings.Contains(result.Message, "not recorded as the push remote of ws-notes") {
+		t.Fatalf("WorkspaceSourcePublish(fork) = %+v, %v, want it pushed and the remote not recorded", result, err)
+	}
+	if sha, _, _ := strings.Cut(strings.TrimSpace(runGitOutput(t, "", "ls-remote", fork, "refs/heads/ws-notes")), "\t"); sha != f.revision(slot, "@-", "commit_id") {
+		t.Fatalf("fork has ws-notes at %q, want the slot's commit", sha)
+	}
+	if out, err := exec.Command("git", "-C", store, "config", "--get", "branch.ws-notes.pushRemote").Output(); err == nil {
+		t.Fatalf("the store's branch.ws-notes.pushRemote = %q, want it left unset", out)
+	}
+	if got := f.slotStatus("ws", "notes"); got.Upstream == "ws-notes@fork" || got.Pushed {
+		t.Fatalf("status = %+v, want it still counted against the default push remote, origin", got)
 	}
 }

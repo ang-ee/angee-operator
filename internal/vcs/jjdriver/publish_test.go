@@ -476,10 +476,10 @@ func TestPublishRefusesABookmarkMovedOntoOtherWork(t *testing.T) {
 	}
 }
 
-// A bookmark left on an older version of the slot's own commit passes the
-// check, and jj itself refuses to move it sideways: that refusal is jj's own
-// error.
-func TestPreparePublishLeavesABookmarkJJWillNotMove(t *testing.T) {
+// A bookmark left on an older version of the slot's own commit is off the
+// slot's history, so the plan refuses it, naming that commit, before jj
+// would refuse to move it sideways; it is left where it is.
+func TestPublishRefusesABookmarkOffTheSlotsHistory(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	d := driver()
@@ -488,14 +488,10 @@ func TestPreparePublishLeavesABookmarkJJWillNotMove(t *testing.T) {
 	old := f.commitID(f.slot, workingCopy.parents())
 	f.jj(f.slot, "describe", "-r", "@-", "-m", "slot change, reworded")
 	f.jj(f.slot, "bookmark", "set", "feature", "--allow-backwards", "-r", commitOf(old).String())
-	plan, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Branch: "feature"})
-	if err != nil {
-		t.Fatalf("PlanPublish() error = %v", err)
-	}
-	err = d.PreparePublish(ctx, s, plan)
-	var command *CommandError
-	if !errors.As(err, &command) || !strings.Contains(command.Line(), "Refusing to move bookmark backwards or sideways") {
-		t.Fatalf("PreparePublish() over a bookmark on an old version error = %v, want jj's refusal", err)
+	_, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Branch: "feature"})
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) || moved.Remote != "" || !slices.Equal(moved.Commits, []string{shortID(old)}) {
+		t.Fatalf("PlanPublish() over a bookmark on an old version error = %v, want it refused, naming %s", err, shortID(old))
 	}
 	if got := f.commitID(f.slot, localBookmark("feature")); got != old {
 		t.Fatalf("bookmark feature at %s, want it left at %s", got, old)
@@ -765,5 +761,119 @@ func TestPublishWarnsWhenTheRemoteReadsBackElsewhere(t *testing.T) {
 				t.Fatalf("Publish() = %+v, %v, want OK with a warning saying %q", result, err, tc.want)
 			}
 		})
+	}
+}
+
+// The order the second review found (PR #144): the slot publishes C1 and
+// sync-base rebases it to C1'; a jj collaborator squashes a fix into C1,
+// keeping its change, and pushes it as C1x; the slot fetches, and bookmark
+// X is conflicted between C1' and C1x. C1x shares the slot's change, so the
+// remote's leniency lets it by, but it is off the slot's history: publish
+// refuses, naming C1x as the remote's, and the remote keeps it. Merging
+// X@R, resolving the conflict, and publishing then sends the merge, which
+// holds C1x.
+func TestPublishRefusesACollaboratorsAmendOfTheSlotsChange(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	f.publish(s, vcs.PublishIntent{Branch: "feature"})
+	f.pushBase("h.txt", "upstream\n")
+	if err := d.Fetch(ctx, s); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if result, err := d.SyncBase(ctx, s, "main@origin", vcs.SyncDefault); err != nil || !result.OK {
+		t.Fatalf("SyncBase() = %+v, %v", result, err)
+	}
+	collaborator := filepath.Join(f.root, "collaborator")
+	f.jj(f.root, "git", "clone", f.remote, collaborator)
+	f.jj(collaborator, "bookmark", "track", "feature", "--remote", "origin")
+	f.jj(collaborator, "new", "feature")
+	f.write(collaborator, "g.txt", "mine, fixed\n")
+	f.jj(collaborator, "squash", "-m", "slot change, fixed")
+	f.jj(collaborator, "git", "push", "--bookmark", "feature")
+	amended := f.remoteBranch(f.remote, "feature")
+	if err := d.Fetch(ctx, s); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+
+	_, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Branch: "feature"})
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) || moved.Remote != "origin" || !slices.Equal(moved.Commits, []string{shortID(amended)}) {
+		t.Fatalf("PlanPublish() after the collaborator's amend error = %v, want feature@origin moved, naming %s", err, shortID(amended))
+	}
+	if got := f.remoteBranch(f.remote, "feature"); got != amended {
+		t.Fatalf("the remote has feature at %s, want the collaborator's %s kept", got, amended)
+	}
+
+	if result, err := d.Merge(ctx, s, "feature@origin"); err != nil || !result.OK || !result.Conflicted {
+		t.Fatalf("Merge(feature@origin) = %+v, %v, want the amend merged, conflicting in g.txt", result, err)
+	}
+	f.write(f.slot, "g.txt", "mine, fixed\n")
+	f.jj(f.slot, "squash")
+	plan := f.publish(s, vcs.PublishIntent{Branch: "feature"})
+	if got := f.remoteBranch(f.remote, "feature"); got != plan.Commit {
+		t.Fatalf("the remote has feature at %s, want the merge %s", got, plan.Commit)
+	}
+	if holds := f.jj(f.slot, "--ignore-working-copy", "log", "--no-graph", "-r", commitOf(amended).and(commitOf(plan.Commit).ancestors()).String(), "-T", "commit_id"); holds != amended {
+		t.Fatalf("the published merge does not hold the collaborator's %s", amended)
+	}
+}
+
+// A branch the remote has and the repository tracks, with no local bookmark
+// (deleted here), counts as existing: `--ref develop` is refused, wrapping
+// vcs.ErrBranchExists, rather than moving origin/develop onto the slot's
+// commits.
+func TestPublishRefusesATrackedRemoteBranchWithNoBookmark(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	f.git(f.seed, "push", "-q", "origin", "HEAD:develop")
+	if err := d.Fetch(ctx, s); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	f.jj(f.slot, "bookmark", "track", "develop", "--remote", "origin")
+	f.jj(f.slot, "bookmark", "delete", "develop")
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	develop := f.remoteBranch(f.remote, "develop")
+	if _, err := d.PlanPush(ctx, s, "develop", "feature"); !errors.Is(err, vcs.ErrBranchExists) {
+		t.Fatalf("PlanPush(develop) error = %v, want vcs.ErrBranchExists", err)
+	}
+	if got := f.remoteBranch(f.remote, "develop"); got != develop {
+		t.Fatalf("the remote has develop at %s, want it left at %s", got, develop)
+	}
+}
+
+// A publish of a `kind: local` store's slot (Unmanaged) to a remote other
+// than its default pushes, but writes nothing to the store's git config: a
+// warning says the remote was not recorded.
+func TestPublishLeavesALocalStoresConfigAlone(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	fork := filepath.Join(f.root, "fork.git")
+	f.git(f.root, "init", "-q", "--bare", "-b", "main", fork)
+	f.git(f.primary, "remote", "add", "fork", fork)
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	plan, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Remote: "fork", Branch: "feature", Unmanaged: true})
+	if err != nil || !plan.RecordRemote || !plan.Unmanaged {
+		t.Fatalf("PlanPublish() = %+v, %v, want an unmanaged plan to another remote", plan, err)
+	}
+	if err := d.PreparePublish(ctx, s, plan); err != nil {
+		t.Fatalf("PreparePublish() error = %v", err)
+	}
+	result, err := d.Publish(ctx, s, plan)
+	var warned *vcs.Warning
+	if !errors.As(err, &warned) || !result.OK || !strings.Contains(warned.Text, "not recorded") {
+		t.Fatalf("Publish() = %+v, %v, want OK with a warning that fork was not recorded", result, err)
+	}
+	if got := f.remoteBranch(fork, "feature"); got != plan.Commit {
+		t.Fatalf("fork has feature at %q, want %s", got, plan.Commit)
+	}
+	if got := f.gitConfig("branch.feature.pushRemote"); got != "" {
+		t.Fatalf("branch.feature.pushRemote = %q, want the store's config left alone", got)
 	}
 }

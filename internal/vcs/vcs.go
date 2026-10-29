@@ -410,6 +410,10 @@ type PublishPlan struct {
 	// checkout's status, and later pushes, then follow it. Only a driver
 	// whose push remote is otherwise git's default (jj) sets it.
 	RecordRemote bool
+	// Unmanaged carries PublishIntent.Unmanaged: the checkout is of a store
+	// the operator does not manage, a user's, whose git config Publish never
+	// writes, so a RecordRemote plan warns that it did not record the remote.
+	Unmanaged bool
 }
 
 var (

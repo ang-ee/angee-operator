@@ -91,8 +91,10 @@ latest tag.
     remote git pushes that branch to from the slot, the order a git slot's
     publish follows, so the source's `push_default` decides for both. A
     publish to another remote records it as the branch's push remote
-    (`branch.<branch>.pushRemote`), as `git push -u` records an upstream, so
-    status, later publishes and destroy follow it. It
+    (`branch.<branch>.pushRemote` in the source cache), as `git push -u`
+    records an upstream, so status, later publishes and destroy follow it;
+    a `kind: local` store's git config is never written, and the result
+    says the remote was not recorded. It
     sends the commits since the branch on the remote, else since the base,
     as `jj bookmark set <branch> -r @-` and `jj git push --remote <remote>
     --bookmark <branch>`, and returns `ok` with `nothing to publish` when
@@ -111,11 +113,12 @@ latest tag.
     `undescribed_commits`). So is a branch that is not the slot's to set
     (`INVALID_INPUT`): one a git worktree of the source has checked out, and
     one the remote has that the repository does not track, and one that
-    exists and is not the slot's, which publish would move onto the slot's
-    commits. A branch that holds commits the slot lacks, such as a
-    collaborator's pushed onto it and fetched since, is refused naming them
-    (`PRECONDITION_FAILED`, cause `branch_moved`): jj's lease passes once
-    they are fetched, and the push would drop them. Any other refusal of the
+    exists, here or on the remote, and is not the slot's, which publish
+    would move onto the slot's commits. A branch that holds work the slot
+    lacks, such as a collaborator's commit pushed onto it, or their new
+    version of one of the slot's commits, fetched since, is refused naming
+    them (`PRECONDITION_FAILED`, cause `branch_moved`): jj's lease passes
+    once they are fetched, and the push would drop them. Any other refusal of the
     push quotes jj (`GIT_FAILED`, cause `push_failed`).
   - `workspace source push` and `workspace push` publish a jj slot to its
     default remote, under `--ref` when given, else its branch, and leave a

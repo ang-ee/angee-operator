@@ -2475,6 +2475,21 @@ everything a git slot does but migrate, and is never pulled.
     `TestGitSlotVerbsKeepTheirRefusals`, which still passes on main's code.
   - The owner's Q8 answer is built with it (above): `PublishPlan.RecordRemote`,
     `git.Client.SetBranchPushRemote`.
+  - *Third pass (2026-10-29), three gaps, all confirmed with probes and
+    fixed.* A jj collaborator who squashes a fix into the published commit
+    keeps its change, so C1x passed the change rule while bookmark X was
+    conflicted between C1' and C1x, and the push dropped C1x: the change
+    rule now applies to X@R alone (which may hold the old versions a rebase
+    leaves), and bookmark X must be on the slot's history (`X ~ ::@-`
+    empty), its stray targets reported as X@R's when they are the remote's,
+    so the merge hint names one commit; the merge remedy passes, both sides
+    being ancestors of the merge, and a test runs the order then the merge,
+    resolved, published with C1x in it. A tracked X@R with no bookmark X
+    escaped the existing-branch check: it now runs for either, and `B..X@R`
+    must be non-empty and only the slot's changes. The recorded push remote
+    is the cache's to replace and never a local store's (Q8 above). Six more
+    mutants caught. A bookmark on an old version of the slot's own commit is
+    now refused by the plan, where jj refused it at `bookmark set` before.
   - Eighteen more mutants caught: `ownBranch` skipped, its change match, its
     base rule, the existing-branch check and its working-copy rule, the
     record and the default-remote test, the read-back, the described empty
@@ -2716,7 +2731,13 @@ Q1 to Q7 and Q10 are answered; Q8 and Q9 are built as recommended.
   (`PushRemoteFor`), later publishes and the destroy guard then follow that
   remote. Built in phase 8's second half, for a slot colocated with git; a
   store jj keeps without git has no config to record it in, so it names its
-  remote on every publish.
+  remote on every publish. *Within that rule (coordinator, 2026-10-29):* a
+  `kind: git` cache is angee's, so the record replaces whatever the branch
+  had, as `git push -u` would, and the caller's latest explicit publish
+  wins; a `kind: local` store's git config is the user's and is never
+  written, so the publish warns that the remote was not recorded, and
+  status keeps counting against the default push remote
+  (`PublishPlan.Unmanaged`).
 - **Q9. Where does jj's repository config live? Built as recommended in
   #126 for the operator; the agents' side is open.** jj 0.45 keeps `jj
   config set --repo` values in the user's config directory
