@@ -811,6 +811,13 @@
             "jj"
           ]
         },
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "jj"
+          ]
+        },
         "branch": {
           "type": "string"
         },

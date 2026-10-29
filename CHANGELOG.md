@@ -8,6 +8,23 @@ latest tag.
 
 ### Fixed
 
+- **Changing a stack's `vcs` no longer changes what its existing slots
+  are.** A slot that names no `mode` followed the stack's `vcs`, existing
+  ones too, so switching a stack from `vcs: jj` to `git` read its jj slots
+  as git clones: status read them through git, and destroy removed them
+  without forgetting their jj workspaces, whose names then refused the next
+  create of the workspace as a `CONFLICT` (the gap phase 6 of
+  `.agents/plans/jj-native-operator.md` left). `angee workspace create` now
+  records, on each slot that names no mode, the `vcs` it was cut with (`vcs:
+  git` or `vcs: jj` beside `source:`), and that slot follows it rather than
+  the stack's, so a stack's `vcs` decides only for workspaces created after
+  it changes. It is not a mode: `sync-base` and `workspace push` still walk
+  only slots whose manifest names a mode (plan Q7), so a work-state `.work`
+  slot stays out of them. A slot recorded by v0.25.0 or earlier records no
+  `vcs` and follows the stack's as before; give it one by hand before
+  changing the stack's `vcs`. An unknown slot `vcs` is refused when the
+  manifest loads.
+
 - **A jj slot's branch publishes to a second remote.** A branch already
   published to one remote (origin) could not be published to another: jj
   refuses to create a remote bookmark for a bookmark that tracks another

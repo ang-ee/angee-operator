@@ -2015,6 +2015,12 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			return result, cleanup, err
 		}
 		finish(nil)
+		// A slot that names no mode follows a vcs: record the one it was cut
+		// with, so a later change of the stack's vcs does not read it as
+		// another kind of checkout (plan phase 9, the gap phase 6 left).
+		if item.resolved.Mode == "" && item.resolved.VCS == "" {
+			item.resolved.VCS = stack.SlotVCS()
+		}
 		result[item.slot] = item.resolved
 	}
 	return result, cleanup, nil
