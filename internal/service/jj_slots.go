@@ -7,12 +7,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/vcs"
@@ -160,36 +159,11 @@ func checkJJNamePart(what, part string) error {
 	return &InvalidInputError{Field: "name", Reason: fmt.Sprintf(`%s %q cannot name a jj workspace: jj slots are named <stack>--<workspace>, plus --<slot> when a workspace has two of one repository, so each part must be non-empty, hold no "--", and neither start nor end with "-"`, what, part)}
 }
 
-// jjSlotMinGit is the oldest git a jj slot runs on: jj's `workspace add
-// --colocate` sets extensions.relativeWorktrees on the source cache, which
-// older git refuses, for the cache and its git worktree slots alike.
-const jjSlotMinGit = "2.48"
-
-const jjSlotMinGitMajor, jjSlotMinGitMinor = 2, 48
-
-var gitVersionNumber = regexp.MustCompile(`(\d+)\.(\d+)`)
-
-// gitVersionAtLeast reports whether a `git --version` line names
-// major.minor or later.
-func gitVersionAtLeast(versionLine string, major, minor int) bool {
-	m := gitVersionNumber.FindStringSubmatch(versionLine)
-	if m == nil {
-		return false
-	}
-	gotMajor, err := strconv.Atoi(m[1])
-	if err != nil {
-		return false
-	}
-	gotMinor, err := strconv.Atoi(m[2])
-	if err != nil {
-		return false
-	}
-	return gotMajor > major || gotMajor == major && gotMinor >= minor
-}
-
 // requireJJSlots refuses to create a jj slot on a machine that cannot run
-// one: jj without `workspace add --colocate`, git older than jjSlotMinGit,
-// or Windows (jjdriver.Probe, cached for the process). The refusal is a
+// one: jj without `workspace add --colocate`, git older than
+// git.RelativeWorktreesVersion (2.48), whose extensions.relativeWorktrees
+// jj's add sets on the source cache, or Windows (jjdriver.Probe, cached for
+// the process). The refusal is a
 // precondition, cause jj_unavailable, whose hint says what to install, and
 // it matches vcs.ErrUnsupported.
 func (p *Platform) requireJJSlots(ctx context.Context) error {
@@ -205,9 +179,9 @@ func (p *Platform) requireJJSlots(ctx context.Context) error {
 		unsupported.Causes = append(unsupported.Causes, probed.Causes...)
 		hints = append(hints, probed.Hint)
 	}
-	if caps.GitErr == nil && !gitVersionAtLeast(caps.Git, jjSlotMinGitMajor, jjSlotMinGitMinor) {
-		unsupported.Causes = append(unsupported.Causes, fmt.Errorf("%s is older than %s, which jj slots need: jj's workspace add sets extensions.relativeWorktrees on the source cache", caps.Git, jjSlotMinGit))
-		hints = append(hints, "Upgrade git to "+jjSlotMinGit+" or later.")
+	if caps.GitErr == nil && !git.VersionAtLeast(caps.Git, git.RelativeWorktreesVersion) {
+		unsupported.Causes = append(unsupported.Causes, fmt.Errorf("%s is older than %s, which jj slots need: jj's workspace add sets extensions.relativeWorktrees on the source cache", caps.Git, git.RelativeWorktreesVersion))
+		hints = append(hints, "Upgrade git to "+git.RelativeWorktreesVersion+" or later.")
 	}
 	if len(unsupported.Causes) == 0 {
 		return nil
@@ -469,4 +443,57 @@ func (p *Platform) refuseJJSlots(verb, workspaceName string, workspace manifest.
 		return nil
 	}
 	return jjSlotNotYet(verb, workspaceName, slots, paths)
+}
+
+// maxNestedShown caps how many nested repositories a destroy refusal names.
+const maxNestedShown = 10
+
+// nestedRepositories lists, relative to the jj slot at path, the repositories
+// inside it: every .jj directory and every .git (a clone's directory, or the
+// file a git worktree or submodule checkout has) below the slot's own. jj
+// neither records nor lists such a directory, so the slot's status reads
+// clean and pushed over the work it holds, and only the destroy guard, which
+// would delete it, looks (owner, 2026-10-29; plan Q10). It walks the slot
+// through os.Root, following no link and skipping nothing else, and does not
+// descend into the repository metadata it finds.
+func nestedRepositories(path string) ([]string, error) {
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	var found []string
+	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		base := entry.Name()
+		switch {
+		case name == "." || base != ".git" && base != ".jj":
+			return nil
+		case name == base:
+			// The slot's own .jj, and the .git that colocates it.
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		case entry.IsDir():
+			found = append(found, filepath.FromSlash(name))
+			return fs.SkipDir
+		case base == ".git" && entry.Type().IsRegular():
+			found = append(found, filepath.FromSlash(name))
+		}
+		return nil
+	})
+	return found, err
+}
+
+// nestedRepositoriesReason says why a destroy keeps a jj slot that holds
+// nested repositories, naming up to maxNestedShown of them.
+func nestedRepositoriesReason(nested []string) string {
+	shown := strings.Join(nested[:min(len(nested), maxNestedShown)], ", ")
+	if more := len(nested) - maxNestedShown; more > 0 {
+		shown += fmt.Sprintf(" and %d more", more)
+	}
+	return "repositories inside it that jj does not record: " + shown
 }

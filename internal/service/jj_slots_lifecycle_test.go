@@ -685,9 +685,6 @@ func TestJJSlotCreateWithoutTheCapability(t *testing.T) {
 			}
 		})
 	}
-	if !gitVersionAtLeast("git version 2.48.0", 2, 48) || !gitVersionAtLeast("git version 3.0.0", 2, 48) || gitVersionAtLeast("git version 2.47.9 (Apple Git-1)", 2, 48) || gitVersionAtLeast("git", 2, 48) {
-		t.Errorf("gitVersionAtLeast() misreads a version line")
-	}
 }
 
 // A jj slot's primary must be where the manifest says (plan phase 6 step 8):
@@ -844,5 +841,73 @@ func TestJJSlotRollbackWhileTheCacheLockIsHeld(t *testing.T) {
 	}
 	if regs := f.registrations(f.cache()); len(regs) != 1 || strings.Contains(regs[0], "prunable") {
 		t.Errorf("git worktrees after the next create = %q, want the new slot's alone", regs)
+	}
+}
+
+// nestedRepositories finds the .git directories and files and the .jj
+// directories below a slot's own, and nothing a link leads to: a link named
+// .git, a link to a repository, and the metadata of a nested repository are
+// not looked into.
+func TestNestedRepositories(t *testing.T) {
+	slot, outside := filepath.Join(t.TempDir(), "slot"), t.TempDir()
+	for _, dir := range []string{".jj/working_copy", "a/b/.git/objects", "a/b/.git/x/.jj", "c/.jj", "node_modules/pkg/.git"} {
+		mustMkdirAll(t, filepath.Join(slot, filepath.FromSlash(dir)))
+	}
+	mustMkdirAll(t, filepath.Join(outside, ".git"))
+	mustWriteFile(t, filepath.Join(slot, ".git"), "gitdir: ../primary/.git/worktrees/slot\n")
+	mustMkdirAll(t, filepath.Join(slot, "d"))
+	mustWriteFile(t, filepath.Join(slot, "d", ".git"), "gitdir: /elsewhere\n")
+	mustMkdirAll(t, filepath.Join(slot, "e"))
+	for link, target := range map[string]string{"link": outside, "e/.git": filepath.Join(outside, ".git")} {
+		if err := os.Symlink(target, filepath.Join(slot, filepath.FromSlash(link))); err != nil {
+			t.Fatalf("Symlink() error = %v", err)
+		}
+	}
+	got, err := nestedRepositories(slot)
+	if err != nil {
+		t.Fatalf("nestedRepositories() error = %v", err)
+	}
+	want := []string{filepath.FromSlash("a/b/.git"), filepath.FromSlash("c/.jj"), filepath.FromSlash("d/.git"), filepath.FromSlash("node_modules/pkg/.git")}
+	if !slices.Equal(got, want) {
+		t.Errorf("nestedRepositories() = %q, want %q", got, want)
+	}
+	if reason := nestedRepositoriesReason(slices.Repeat([]string{"x/.git"}, 12)); !strings.HasSuffix(reason, "x/.git and 2 more") {
+		t.Errorf("nestedRepositoriesReason() = %q, want ten named and the rest counted", reason)
+	}
+}
+
+// A clone or a jj repository made inside a jj slot is invisible to jj, so the
+// slot's status stays clean and pushed (owner, 2026-10-29), but destroy
+// refuses to delete it, naming each, until they are gone.
+func TestJJSlotDestroyRefusesNestedRepositories(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	if err := f.create(f.template("jj", map[string]string{"work": f.app("mode: jj\nref: main\nsubpath: work")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	work := filepath.Join(f.workspace("ws"), "work")
+	clone, inner := filepath.Join(work, "vendor", "lib"), filepath.Join(work, "notes", "inner")
+	runGit(t, f.base, "clone", "-q", f.remote, clone)
+	mustMkdirAll(t, filepath.Dir(inner))
+	f.jj(f.base, "git", "init", "--no-colocate", inner)
+	if got := f.slotStatus("ws", "work"); got.State != "clean" || !got.Pushed {
+		t.Errorf("status with nested repositories = %+v, want clean and pushed, as jj sees it", got)
+	}
+	err := f.platform.WorkspaceDestroy(ctx, "ws", true)
+	for _, want := range []string{"work (repositories inside it that jj does not record:", filepath.Join("vendor", "lib", ".git"), filepath.Join("notes", "inner", ".jj")} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("WorkspaceDestroy() error = %v, want a refusal naming %q", err, want)
+		}
+	}
+	if !pathExists(t, filepath.Join(clone, "f.txt")) {
+		t.Fatalf("the refused destroy removed the nested clone")
+	}
+	for _, dir := range []string{filepath.Dir(clone), filepath.Dir(inner)} {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatalf("RemoveAll() error = %v", err)
+		}
+	}
+	if err := f.platform.WorkspaceDestroy(ctx, "ws", true); err != nil {
+		t.Fatalf("WorkspaceDestroy() once they are gone error = %v", err)
 	}
 }

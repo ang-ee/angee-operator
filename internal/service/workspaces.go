@@ -580,7 +580,9 @@ func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
 }
 
 // ensureWorkspaceGitSourcesPushed refuses to let a workspace go while a slot
-// holds work nothing else does, as its driver's status reports it.
+// holds work nothing else does, as its driver's status reports it, or, in a
+// jj slot, while a repository jj does not record is nested in it
+// (nestedRepositories).
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
 	unpushed := []string{}
 	for _, slot := range sortedKeys(workspace.Sources) {
@@ -617,6 +619,18 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		}
 		if !read.Pushed {
 			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, read.UnpushedReason))
+			continue
+		}
+		// jj records no repository nested in a jj slot, such as a clone an
+		// agent made in it, so its status says nothing of their work.
+		if wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+			nested, err := nestedRepositories(path)
+			if err != nil {
+				return fmt.Errorf("workspace %q source %q: look for repositories inside it: %w", workspaceName, slot, err)
+			}
+			if len(nested) > 0 {
+				unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, nestedRepositoriesReason(nested)))
+			}
 		}
 	}
 	if len(unpushed) > 0 {
