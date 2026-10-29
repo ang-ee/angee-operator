@@ -416,6 +416,10 @@ func (r *queryResolver) JobRunOperation(ctx context.Context, id string) (*model.
 	if err != nil {
 		return nil, err
 	}
+	// A backup's receipt is the admin bearer's alone, as on REST.
+	if service.IsBackupReceipt(op) && (r.IsAdmin == nil || !r.IsAdmin(ctx)) {
+		return nil, &service.NotFoundError{Kind: "job run", Name: op.ID}
+	}
 	return jobRunOperationModel(op), nil
 }
 

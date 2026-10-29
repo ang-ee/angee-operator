@@ -141,6 +141,33 @@ func TestPrefixLines(t *testing.T) {
 	}
 }
 
+// Terminal controls leave captured output, with their payload: the window
+// title process-compose sets names the host. The text around them is kept.
+func TestStripTerminalControls(t *testing.T) {
+	tests := []struct{ text, want string }{
+		{"plain\ttext\n", "plain\ttext\n"},
+		{"\x1b]0;process-compose: razor.local/001\ahello\n", "hello\n"},
+		{"\x1b]2;title\x1b\\after", "after"},
+		{"\x1b[31mred\x1b[0m \x1b[1;32mbold\x1b[m\n", "red bold\n"},
+		{"\x1b[?25lhidden cursor\x1b[2K", "hidden cursor"},
+		{"tput\x1b(B\x1b[m reset\x1b7\x1b8", "tput reset"},
+		// An unterminated title ends with its line; a bare ESC goes alone.
+		{"\x1b]0;host.example\nnext line\n", "\nnext line\n"},
+		{"\x1b]0;host.example", ""},
+		{"lone\x1b\nescape\x1b", "lone\nescape"},
+		// Other control strings go with their payload, as a title does.
+		{"\x1bPtmux;passthrough\x1b\\after\x1b_app\a.", "after."},
+		// A title ended by the next escape sequence leaves that one too.
+		{"\x1b]0;host\x1b[1mbold", "bold"},
+		{"naïve \x1b[4mü\x1b[24m", "naïve ü"},
+	}
+	for _, tt := range tests {
+		if got := StripTerminalControls(tt.text); got != tt.want {
+			t.Errorf("StripTerminalControls(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
+
 // A byte limit keeps the newest whole lines, cut at a line boundary, behind a
 // leading marker that counts toward the limit (#118). The result stays within
 // the limit and a second pass leaves it unchanged.

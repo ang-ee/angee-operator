@@ -196,6 +196,9 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("GET /stack/dev/stream", s.auth(http.HandlerFunc(s.stackDevStream)))
 	mux.Handle("GET /ingress/status", s.auth(http.HandlerFunc(s.ingressStatus)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobList)))
+	mux.Handle("POST /backups/preview", s.adminAuth(http.HandlerFunc(s.backupPreview)))
+	mux.Handle("POST /backups", s.adminAuth(http.HandlerFunc(s.backupStart)))
+	mux.Handle("GET /backups/{id}/archive", s.adminAuth(http.HandlerFunc(s.backupArchive)))
 	mux.Handle("POST /jobs/{name}/run", s.auth(http.HandlerFunc(s.jobRun)))
 	mux.Handle("GET /jobs/{name}/run-preview", s.auth(http.HandlerFunc(s.jobRunPreview)))
 	mux.Handle("GET /job-runs/latest", s.auth(http.HandlerFunc(s.latestJobRun)))
@@ -730,6 +733,12 @@ func (s *Server) jobRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jobRunGet(w http.ResponseWriter, r *http.Request) {
 	op, err := s.platform.JobRunGet(r.Context(), r.PathValue("id"))
+	if err == nil && service.IsBackupReceipt(op) && !s.isAdmin(r.Context()) {
+		// As /backups requires the admin bearer, so does its receipt; to any
+		// other caller it does not exist, so a guessed request_id confirms
+		// nothing.
+		err = &service.NotFoundError{Kind: "job run", Name: op.ID}
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -1092,6 +1101,27 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
+// adminAuth composes the canonical bearer authentication with the authority
+// required by archive capture/recovery secrets. Minted actor tokens do not
+// become admin credentials, regardless of their advisory scopes.
+func (s *Server) adminAuth(next http.Handler) http.Handler {
+	return s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isAdmin(r.Context()) {
+			writeJSON(w, http.StatusForbidden, api.ErrorResponse{Error: "operator admin bearer required"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// isAdmin reports whether the request behind ctx authenticated with the
+// configured admin bearer: not a minted actor token, and not unauthenticated
+// dev mode, which has no admin to speak for.
+func (s *Server) isAdmin(ctx context.Context) bool {
+	_, minted := actorScopeFromContext(ctx)
+	return !minted && s.config.Token != ""
+}
+
 // parseBearer extracts the credential from an Authorization-style value,
 // requiring the "Bearer " scheme prefix. ok is false when the prefix is
 // absent. Shared by the HTTP auth middleware and the WebSocket InitFunc so the
@@ -1169,6 +1199,32 @@ func decode[T any](r *http.Request) (T, error) {
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(&value); err != nil && !errors.Is(err, io.EOF) {
 		return value, err
+	}
+	return value, nil
+}
+
+// decodeStrict is decode for a request body whose every field matters, such as
+// a backup selection, where a misspelled field must not silently capture less:
+// it rejects unknown fields and anything after the one JSON value. An empty
+// body still decodes to the zero value.
+func decodeStrict[T any](r *http.Request) (T, error) {
+	var value T
+	if r.Body == nil {
+		return value, nil
+	}
+	r.Body = http.MaxBytesReader(nil, r.Body, maxRESTBodyBytes)
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		if errors.Is(err, io.EOF) {
+			return value, nil
+		}
+		return value, err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return value, errors.New("request body must contain exactly one JSON value")
 	}
 	return value, nil
 }

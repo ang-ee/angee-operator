@@ -33,6 +33,7 @@ type API interface {
 	RuntimeAPI
 	ServiceAPI
 	JobAPI
+	BackupAPI
 	WorkspaceAPI
 	SourceAPI
 	WorkspaceSourceAPI
@@ -41,6 +42,13 @@ type API interface {
 	FileAPI
 	IngressAPI
 	TemplateAPI
+}
+
+// BackupAPI captures manifest-owned resources using existing operation receipts.
+type BackupAPI interface {
+	BackupPreview(context.Context, api.BackupRequest) (api.BackupPreview, error)
+	BackupStart(context.Context, api.BackupRequest) (api.JobRunOperation, error)
+	BackupArchive(context.Context, string) (io.ReadCloser, api.BackupArtifact, error)
 }
 
 // StackAPI covers stack lifecycle and compilation.

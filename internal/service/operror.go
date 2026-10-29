@@ -33,19 +33,20 @@ const (
 // step was doing, never from reading a tool's output: git's own words are
 // passed through in the message and the detail.
 const (
-	CauseUncommittedChanges = "uncommitted_changes"
-	CauseSlotMissing        = "slot_missing"
-	CauseBranchMismatch     = "branch_mismatch"
-	CauseDetachedHead       = "detached_head"
-	CauseSourceCacheMissing = "source_cache_missing"
-	CauseStackRootExists    = "stack_root_exists"
-	CauseTemplateTooNew     = "template_too_new"
-	CauseGitUnavailable     = "git_unavailable"
-	CauseFetchFailed        = "fetch_failed"
-	CausePushFailed         = "push_failed"
-	CauseCloneFailed        = "clone_failed"
-	CauseMergeConflict      = "merge_conflict"
-	CauseDependencyFailed   = "dependency_failed"
+	CauseUncommittedChanges    = "uncommitted_changes"
+	CauseSlotMissing           = "slot_missing"
+	CauseBranchMismatch        = "branch_mismatch"
+	CauseDetachedHead          = "detached_head"
+	CauseSourceCacheMissing    = "source_cache_missing"
+	CauseStackRootExists       = "stack_root_exists"
+	CauseTemplateTooNew        = "template_too_new"
+	CauseGitUnavailable        = "git_unavailable"
+	CauseFetchFailed           = "fetch_failed"
+	CausePushFailed            = "push_failed"
+	CauseCloneFailed           = "clone_failed"
+	CauseMergeConflict         = "merge_conflict"
+	CauseDependencyFailed      = "dependency_failed"
+	CauseBackupRequestConflict = "backup_request_conflict"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.

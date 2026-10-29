@@ -61,6 +61,7 @@ func newGraphQLHandler(s *Server) (post, ws http.Handler, err error) {
 				}
 				return s.logStreamDescriptor(ctx, req.scheme, req.host, service)
 			},
+			IsAdmin: s.isAdmin,
 		},
 	}))
 	// SSE must be registered before POST so the Accept-based dispatch picks
