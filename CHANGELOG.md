@@ -15,6 +15,30 @@ latest tag.
   one. Like the rest of the driver, it is not reachable from a manifest until
   phase 6.
 
+### Changed
+
+- **The jj driver counts files jj will not snapshot as uncommitted, and
+  keeps a pushed verdict when a slot's base is gone** (the prerequisites of
+  phase 6 step 5 in `.agents/plans/jj-native-operator.md`, settling its
+  Q10). Nothing a user can reach changes: no manifest can select the jj
+  driver until phase 6, whose destroy guard needs both.
+  - A new file over jj's `snapshot.max-new-file-size`, or outside its
+    `snapshot.auto-track`, never reaches the slot's working-copy commit, so
+    the slot read as clean and pushed while only it held the file. Status
+    now takes its snapshot through `jj status`, without asking git, and
+    counts the untracked paths it lists as uncommitted. A `jj status` report
+    it does not recognize fails the read, rather than passing for one with
+    no untracked paths. What jj neither records nor lists, a nested
+    repository or a new file outside the slot's sparse patterns, still reads
+    as clean; the plan leaves that to the owner.
+  - With a base that exists nowhere, the jj driver returned no verdict at
+    all. Like the git driver, it now keeps the verdict wherever one needs no
+    base: a dirty slot is not pushed, and one with an upstream is pushed when
+    nothing is ahead of it. Unlike git, which reads no base there, it returns
+    that verdict with the base's error as a `*vcs.CountError`, since the
+    conflicts it reads are bounded by the base. A clean slot with no
+    upstream still gets the base's error alone, so a destroy refuses it.
+
 ### Fixed
 
 - **Workspace merges and rebases commit as you, not as

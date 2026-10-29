@@ -23,7 +23,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
@@ -52,18 +54,22 @@ type target struct {
 	name   string
 }
 
-// Status reads the slot. Its first read snapshots the slot's working copy,
-// so edits jj has recorded nothing of yet count (plan D7), except files jj
-// refuses to snapshot (open question Q10); every read after it is pinned to
-// the operation that snapshot recorded, so they agree with each other
-// whatever agents do meanwhile. A slot whose working copy another workspace
-// rewrote updates itself (D8).
+// Status reads the slot. Its first read, `jj status`, snapshots the slot's
+// working copy, so edits jj has recorded nothing of yet count (plan D7), and
+// reports the new files that snapshot left out (Q10). Every read after it is
+// pinned to the operation the repository is at once it has snapshotted, so
+// they see what the report saw, or later, and agree with each other whatever
+// agents do meanwhile. A slot whose working copy another workspace rewrote
+// updates itself (D8).
 //
 // For slot branch X (Slot.Branch), base B (Slot.BaseRef on Slot.BaseRemote,
 // else origin, else the local bookmark) and R, the remote git pushes X to
 // from the slot (git.Client.PushRemoteFor, as publish resolves it for git
 // slots; a jj git.push setting plays no part):
-//   - Dirty: the working-copy commit `@` is not empty.
+//   - UntrackedPaths: the new paths `jj status` lists as untracked, files
+//     over snapshot.max-new-file-size or outside snapshot.auto-track.
+//   - Dirty: the working-copy commit `@` is not empty, or there are
+//     UntrackedPaths.
 //   - Upstream: X@R when the slot has a branch, git names R, and that remote
 //     bookmark exists.
 //   - Ahead and Behind: from `@-`, against Upstream when set, else B.
@@ -74,11 +80,21 @@ type target struct {
 //   - ChangeID: the change id of `@`.
 //   - Pushed: not dirty and nothing ahead.
 //
-// A base that exists neither on its remote nor locally is an error wrapping
-// vcs.ErrBaseNotFound, returned with what was read before it.
+// A base that exists neither on its remote nor locally (vcs.ErrBaseNotFound)
+// leaves out what only B bounds: BaseBehind, the conflicts and CurrentRef's
+// X, and, with no upstream, Ahead and Behind. As the git driver does, Status
+// keeps the verdict wherever it needs no base, for a dirty slot or one with
+// an upstream; unlike it, it returns the verdict with a *vcs.CountError
+// wrapping the base's error, since what B bounds is unread. A clean slot with
+// no upstream has only B to measure its own commits by, so the base's error
+// comes with no verdict.
 func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	var status vcs.Status
-	op, err := d.snapshot(ctx, s.Path)
+	untracked, err := d.untracked(ctx, s.Path)
+	if err != nil {
+		return status, err
+	}
+	op, err := d.operation(ctx, s.Path)
 	if err != nil {
 		return status, err
 	}
@@ -87,7 +103,8 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 		return status, err
 	}
 	status.ChangeID = wc.Commit.ChangeID
-	status.Dirty = !wc.Empty
+	status.UntrackedPaths = untracked
+	status.Dirty = !wc.Empty || len(untracked) > 0
 	if len(wc.ParentsShort) > 0 {
 		status.CurrentRef = wc.ParentsShort[0]
 	}
@@ -96,56 +113,67 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	if err != nil {
 		return status, err
 	}
-	base, err := resolveBase(marks, s.BaseRef, s.BaseRemote)
-	if err != nil {
-		return status, err
-	}
-	counted := base
 	upstream, hasUpstream, err := d.upstream(ctx, s.Path, s.Branch, marks)
 	if err != nil {
 		return status, err
 	}
 	if hasUpstream {
 		status.Upstream = upstream.name
-		counted = upstream
 	}
+	base, baseErr := resolveBase(marks, s.BaseRef, s.BaseRemote)
+	if baseErr != nil && !errors.Is(baseErr, vcs.ErrBaseNotFound) {
+		return status, baseErr
+	}
+	hasBase := baseErr == nil
 
-	own, err := d.commits(ctx, s.Path, op, base.revset.to(workingCopy))
-	if err != nil {
-		return status, err
-	}
-	var conflictPaths []string
-	for _, c := range own {
-		if c.Conflict {
-			status.Conflicted = true
-			conflictPaths = append(conflictPaths, c.ConflictedFiles...)
+	if hasBase {
+		own, err := d.commits(ctx, s.Path, op, base.revset.to(workingCopy))
+		if err != nil {
+			return status, err
 		}
-		if s.Branch != "" && c.hasLocalBookmark(s.Branch) {
-			status.CurrentRef = s.Branch
+		var conflictPaths []string
+		for _, c := range own {
+			if c.Conflict {
+				status.Conflicted = true
+				conflictPaths = append(conflictPaths, c.ConflictedFiles...)
+			}
+			if s.Branch != "" && c.hasLocalBookmark(s.Branch) {
+				status.CurrentRef = s.Branch
+			}
 		}
-	}
-	if status.Conflicted {
-		slices.Sort(conflictPaths)
-		status.ConflictPaths = slices.Compact(conflictPaths)
+		if status.Conflicted {
+			slices.Sort(conflictPaths)
+			status.ConflictPaths = slices.Compact(conflictPaths)
+		}
 	}
 
 	from := workingCopy.parents()
-	if status.Ahead, err = d.count(ctx, s.Path, op, counted.revset.to(from)); err != nil {
-		return status, err
-	}
-	if status.Behind, err = d.count(ctx, s.Path, op, from.to(counted.revset)); err != nil {
-		return status, err
-	}
-	status.BaseBehind = status.Behind
+	counted, hasCounted := base, hasBase
 	if hasUpstream {
-		if status.BaseBehind, err = d.count(ctx, s.Path, op, from.to(base.revset)); err != nil {
+		counted, hasCounted = upstream, true
+	}
+	if hasCounted {
+		if status.Ahead, err = d.count(ctx, s.Path, op, counted.revset.to(from)); err != nil {
 			return status, err
+		}
+		if status.Behind, err = d.count(ctx, s.Path, op, from.to(counted.revset)); err != nil {
+			return status, err
+		}
+	}
+	if hasBase {
+		status.BaseBehind = status.Behind
+		if hasUpstream {
+			if status.BaseBehind, err = d.count(ctx, s.Path, op, from.to(base.revset)); err != nil {
+				return status, err
+			}
 		}
 	}
 
 	switch {
 	case status.Dirty:
-		status.UnpushedReason = "uncommitted changes"
+		status.UnpushedReason = dirtyReason(!wc.Empty, status.UntrackedPaths)
+	case !hasCounted:
+		return status, baseErr
 	case status.Ahead > 0 && hasUpstream:
 		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", status.Ahead, upstream.name)
 	case status.Ahead > 0:
@@ -153,7 +181,40 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	default:
 		status.Pushed = true
 	}
+	if !hasBase {
+		return status, &vcs.CountError{Err: baseErr}
+	}
 	return status, nil
+}
+
+// maxReasonPaths is how many untracked paths dirtyReason names, as many as
+// the service names in a message.
+const maxReasonPaths = 10
+
+// dirtyReason says what a dirty slot holds that nothing else does: changes
+// recorded in its working-copy commit, untracked paths, or both. A path with
+// a character that does not print is quoted: jj prints names as they are,
+// and the reason reaches terminals and API clients.
+func dirtyReason(changed bool, untracked []string) string {
+	if len(untracked) == 0 {
+		return "uncommitted changes"
+	}
+	shown := untracked[:min(len(untracked), maxReasonPaths)]
+	names := make([]string, len(shown))
+	for i, path := range shown {
+		if strings.ContainsFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) {
+			path = strconv.Quote(path)
+		}
+		names[i] = path
+	}
+	reason := "untracked paths jj does not snapshot: " + strings.Join(names, ", ")
+	if more := len(untracked) - len(shown); more > 0 {
+		reason += fmt.Sprintf(" and %d more", more)
+	}
+	if changed {
+		return "uncommitted changes, and " + reason
+	}
+	return reason
 }
 
 // resolveBase picks the slot's base from the bookmarks listed for it: the
@@ -231,14 +292,34 @@ func hasBookmark(marks []bookmark, name, remote string) bool {
 	})
 }
 
+// operationArgs print the repository's latest operation.
+var operationArgs = []string{"op", "log", "--no-graph", "-n", "1", "-T", operationTemplate}
+
 // snapshot snapshots the slot's working copy and returns the operation that
 // recorded it: `jj op log` snapshots before it reads. It is the one command of
-// a call that may snapshot; the reads after it are pinned to its operation.
+// Diff that snapshots; the reads after it are pinned to its operation. Status
+// snapshots through `jj status` instead (untracked), then reads the operation.
 func (d Driver) snapshot(ctx context.Context, dir string) (string, error) {
-	out, err := d.jj.snapshot(ctx, dir, "op", "log", "--no-graph", "-n", "1", "-T", operationTemplate)
+	out, err := d.jj.snapshot(ctx, dir, operationArgs...)
 	if err != nil {
 		return "", err
 	}
+	return operationID(dir, out)
+}
+
+// operation returns the repository's latest operation without snapshotting,
+// for a call whose snapshot another command took: the operation that
+// snapshot recorded, or a later one.
+func (d Driver) operation(ctx context.Context, dir string) (string, error) {
+	out, err := d.jj.latest(ctx, dir, operationArgs...)
+	if err != nil {
+		return "", err
+	}
+	return operationID(dir, out)
+}
+
+// operationID reads the one operation id `jj op log -n 1` printed in dir.
+func operationID(dir string, out []byte) (string, error) {
 	op := strings.TrimSpace(string(out))
 	if op == "" || strings.ContainsAny(op, " \n") {
 		return "", fmt.Errorf("jj op log in %s printed %q, want one operation id", dir, out)

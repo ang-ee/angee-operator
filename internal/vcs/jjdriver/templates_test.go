@@ -12,14 +12,18 @@ import (
 
 var update = flag.Bool("update", false, "regenerate testdata from the installed jj")
 
-// The recorded output of each template, regenerated with -update from the
+// The recorded output of each template, and of the `jj status` report the
+// driver reads untracked paths from, regenerated with -update from the
 // installed jj (CI pins it in .github/jj-rev). The scenario is the conflict
 // probe: a slot that committed and published `feature`, then was rebased onto
-// a base that conflicts with it.
+// a base that conflicts with it. For the report, the slot then holds a file
+// jj tracks, one over snapshot.max-new-file-size and a directory outside
+// snapshot.auto-track.
 const (
 	commitsFixture    = "testdata/commits.ndjson"
 	bookmarksFixture  = "testdata/bookmarks.ndjson"
 	workspacesFixture = "testdata/workspaces.ndjson"
+	statusFixture     = "testdata/status.txt"
 )
 
 var (
@@ -97,6 +101,24 @@ func TestTemplateFixtures(t *testing.T) {
 	}
 }
 
+// TestStatusReportFixture reads the untracked paths of what jj printed for
+// `jj status`, after a list of changes and before the working-copy commit's
+// lines and the conflict warning, with no jj. A jj that rewords its report
+// shows up as a diff in the fixture, and fails here.
+func TestStatusReportFixture(t *testing.T) {
+	report, err := os.ReadFile(statusFixture)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", statusFixture, err)
+	}
+	got, err := parseUntracked(report)
+	if err != nil {
+		t.Fatalf("parseUntracked(%s) error = %v", statusFixture, err)
+	}
+	if want := []string{"big.bin", "local/"}; !slices.Equal(got, want) {
+		t.Fatalf("parseUntracked(%s) = %q, want %q", statusFixture, got, want)
+	}
+}
+
 func decodeFixture[T any](t *testing.T, path string) []T {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -139,4 +161,12 @@ func regenerateFixtures(t *testing.T) {
 	record(commitsFixture, f.jj(f.slot, "--ignore-working-copy", "log", "--no-graph", "-r", base.to(workingCopy).String(), "-T", commitsTemplate))
 	record(bookmarksFixture, f.jj(f.slot, "--ignore-working-copy", "bookmark", "list", "--all-remotes", "-T", bookmarksTemplate))
 	record(workspacesFixture, f.jj(f.slot, "--ignore-working-copy", "workspace", "list", "-T", workspacesTemplate))
+
+	f.write(f.slot, "small.txt", "tracked\n")
+	f.write(f.slot, "big.bin", strings.Repeat("x", 200))
+	if err := os.Mkdir(filepath.Join(f.slot, "local"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	f.write(filepath.Join(f.slot, "local"), "notes.txt", "left out\n")
+	record(statusFixture, f.jj(f.slot, "--config", "snapshot.max-new-file-size=16", "--config", `snapshot.auto-track='~root:"local"'`, "status"))
 }

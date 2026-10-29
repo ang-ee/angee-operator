@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -330,40 +331,228 @@ func TestStatusRecoversAStaleSlot(t *testing.T) {
 	}
 }
 
-// TestStatusWithoutBase reports a base that exists nowhere as
-// vcs.ErrBaseNotFound, with what Status read before it.
+// TestStatusWithoutBase reads a slot whose base exists nowhere, such as a base
+// branch deleted after it merged. Like the git driver, Status keeps the
+// verdict wherever it needs no base, with a *vcs.CountError wrapping
+// vcs.ErrBaseNotFound, so the destroy guard reads both drivers alike: a dirty
+// slot is not pushed, and a slot with an upstream is pushed when nothing is
+// ahead of it. A clean slot with no upstream has only the base to measure its
+// own commits by, so it gets the base's error and no verdict, as a git branch
+// with no upstream does.
 func TestStatusWithoutBase(t *testing.T) {
-	f := newFixture(t)
-	f.write(f.slot, "new.txt", "unrecorded\n")
-	slot := f.slotAt("")
-	slot.BaseRef = "gone"
-	got, err := driver().Status(context.Background(), slot)
-	if !errors.Is(err, vcs.ErrBaseNotFound) {
-		t.Fatalf("Status() error = %v, want vcs.ErrBaseNotFound", err)
-	}
-	if !got.Dirty || got.ChangeID == "" {
-		t.Fatalf("Status() = %#v, want the dirty working copy read before the base", got)
-	}
-}
-
-// TestStatusKnownLimitFilesJJDoesNotSnapshot pins a known limit, open
-// question Q10 of the plan. A new file jj refuses to snapshot (one over
-// snapshot.max-new-file-size) or one snapshot.auto-track leaves out never
-// reaches the working-copy commit: the snapshot exits 0 and `@` stays empty,
-// so Status reports the slot clean and pushed while the file exists only in
-// it. jj says so only in human-readable output (a "Refused to snapshot some
-// files" warning, `jj status`'s untracked paths), and git is not asked (plan
-// section 2). Phase 6 must settle Q10 before the destroy guard reads a jj
-// slot's Pushed; this test changes with that decision.
-func TestStatusKnownLimitFilesJJDoesNotSnapshot(t *testing.T) {
-	for _, tc := range []struct{ name, key, value string }{
-		{name: "a new file over snapshot.max-new-file-size", key: "snapshot.max-new-file-size", value: "16"},
-		{name: "a new file snapshot.auto-track leaves out", key: "snapshot.auto-track", value: "none()"},
+	for _, tc := range []struct {
+		name   string
+		branch string
+		// prepare changes the fixture and returns the Status to expect, less
+		// CurrentRef (always `@-`'s short id: the base bounds the bookmark
+		// search) and ChangeID.
+		prepare func(f *fixture) vcs.Status
+		// decided: the verdict comes with a *vcs.CountError; else the error
+		// is the base's alone.
+		decided bool
+	}{
+		{
+			name: "dirty",
+			prepare: func(f *fixture) vcs.Status {
+				f.write(f.slot, "new.txt", "unrecorded\n")
+				return vcs.Status{Dirty: true, UnpushedReason: "uncommitted changes"}
+			},
+			decided: true,
+		},
+		{
+			name: "holding a file jj does not snapshot",
+			prepare: func(f *fixture) vcs.Status {
+				f.jj(f.primary, "config", "set", "--repo", "snapshot.max-new-file-size", "16")
+				f.write(f.slot, "only-here.bin", strings.Repeat("x", 200))
+				return vcs.Status{
+					Dirty:          true,
+					UntrackedPaths: []string{"only-here.bin"},
+					UnpushedReason: "untracked paths jj does not snapshot: only-here.bin",
+				}
+			},
+			decided: true,
+		},
+		{
+			name:    "clean, with no upstream",
+			prepare: func(*fixture) vcs.Status { return vcs.Status{} },
+		},
+		{
+			name: "a commit of its own, with no upstream",
+			prepare: func(f *fixture) vcs.Status {
+				f.commit(f.slot, "f.txt", "one\nslot\n", "slot change")
+				return vcs.Status{}
+			},
+		},
+		{
+			name:   "on its upstream",
+			branch: "feature",
+			prepare: func(f *fixture) vcs.Status {
+				f.commit(f.slot, "f.txt", "one\nslot\n", "slot change")
+				f.jj(f.slot, "bookmark", "create", "feature", "-r", "@-")
+				f.jj(f.slot, "git", "push", "--bookmark", "feature")
+				return vcs.Status{Upstream: "feature@origin", Pushed: true}
+			},
+			decided: true,
+		},
+		{
+			name:   "ahead of its upstream",
+			branch: "feature",
+			prepare: func(f *fixture) vcs.Status {
+				f.commit(f.slot, "f.txt", "one\nslot\n", "slot change")
+				f.jj(f.slot, "bookmark", "create", "feature", "-r", "@-")
+				f.jj(f.slot, "git", "push", "--bookmark", "feature")
+				f.commit(f.slot, "g.txt", "more\n", "second change")
+				return vcs.Status{Upstream: "feature@origin", Ahead: 1, UnpushedReason: "1 commit(s) ahead of feature@origin"}
+			},
+			decided: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
-			f.jj(f.primary, "config", "set", "--repo", tc.key, tc.value)
-			f.write(f.slot, "only-here.bin", strings.Repeat("x", 200))
+			want := tc.prepare(f)
+			want.CurrentRef = f.shortID(f.slot, workingCopy.parents())
+			want.ChangeID = f.changeID(f.slot, workingCopy)
+			slot := f.slotAt(tc.branch)
+			slot.BaseRef = "gone"
+			got, err := driver().Status(context.Background(), slot)
+			if !errors.Is(err, vcs.ErrBaseNotFound) {
+				t.Fatalf("Status() error = %v, want vcs.ErrBaseNotFound", err)
+			}
+			var countErr *vcs.CountError
+			if decided := errors.As(err, &countErr); decided != tc.decided {
+				t.Fatalf("Status() error = %#v: a *vcs.CountError is %v, want %v", err, decided, tc.decided)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("Status() = %#v\nwant %#v", got, want)
+			}
+		})
+	}
+}
+
+// TestStatusCountsFilesJJDoesNotSnapshot settles open question Q10 of the plan
+// as it recommends: a new file jj refuses to snapshot (one over
+// snapshot.max-new-file-size) or one snapshot.auto-track leaves out never
+// reaches the working-copy commit, the snapshot exits 0 and `@` stays empty,
+// yet only the slot holds the file. Status takes jj's own report of it, the
+// untracked paths of `jj status`, as dirty, so the destroy guard does not
+// delete it; git is not asked (plan section 2). An ignored file is neither.
+func TestStatusCountsFilesJJDoesNotSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		config  map[string]string
+		prepare func(f *fixture)
+		// untracked is the paths to expect; changed, that `@` holds changes
+		// of its own too.
+		untracked []string
+		changed   bool
+	}{
+		{
+			name:      "a new file over snapshot.max-new-file-size",
+			config:    map[string]string{"snapshot.max-new-file-size": "16"},
+			prepare:   func(f *fixture) { f.write(f.slot, "only-here.bin", strings.Repeat("x", 200)) },
+			untracked: []string{"only-here.bin"},
+		},
+		{
+			name:      "a new file snapshot.auto-track leaves out",
+			config:    map[string]string{"snapshot.auto-track": "none()"},
+			prepare:   func(f *fixture) { f.write(f.slot, "only-here.bin", strings.Repeat("x", 200)) },
+			untracked: []string{"only-here.bin"},
+		},
+		{
+			// jj config set reads a value that is not a bare word as TOML,
+			// so the fileset is a TOML literal string.
+			name:   "a directory snapshot.auto-track leaves out, beside a file it tracks",
+			config: map[string]string{"snapshot.auto-track": `'~root:"local"'`},
+			prepare: func(f *fixture) {
+				f.write(f.slot, "tracked.txt", "recorded\n")
+				if err := os.MkdirAll(filepath.Join(f.slot, "local", "deep"), 0o755); err != nil {
+					f.t.Fatalf("MkdirAll() error = %v", err)
+				}
+				f.write(filepath.Join(f.slot, "local"), "a.txt", "left out\n")
+				f.write(filepath.Join(f.slot, "local", "deep"), "b.txt", "left out\n")
+			},
+			untracked: []string{"local/"},
+			changed:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			for key, value := range tc.config {
+				f.jj(f.primary, "config", "set", "--repo", key, value)
+			}
+			tc.prepare(f)
+			got, err := driver().Status(context.Background(), f.slotAt(""))
+			if err != nil {
+				t.Fatalf("Status() error = %v", err)
+			}
+			if got.Dirty != true || got.Pushed || !slices.Equal(got.UntrackedPaths, tc.untracked) {
+				t.Fatalf("Status() = %#v, want dirty and unpushed with untracked paths %q", got, tc.untracked)
+			}
+			if want := dirtyReason(tc.changed, tc.untracked); got.UnpushedReason != want {
+				t.Fatalf("Status().UnpushedReason = %q, want %q", got.UnpushedReason, want)
+			}
+			// Status only reads jj's report: the files stay out of the
+			// working-copy commit.
+			for file := range strings.SplitSeq(strings.TrimSpace(f.jj(f.slot, "--ignore-working-copy", "file", "list", "-r", "@")), "\n") {
+				for _, path := range tc.untracked {
+					if file == path || strings.HasSuffix(path, "/") && strings.HasPrefix(file, path) {
+						t.Fatalf("the working-copy commit holds %s after Status, want it left untracked", file)
+					}
+				}
+			}
+		})
+	}
+
+	t.Run("an ignored file", func(t *testing.T) {
+		f := newFixture(t)
+		f.jj(f.primary, "config", "set", "--repo", "snapshot.max-new-file-size", "16")
+		f.commit(f.slot, ".gitignore", "*.bin\n", "ignore binaries")
+		f.write(f.slot, "ignored.bin", strings.Repeat("x", 200))
+		got, err := driver().Status(context.Background(), f.slotAt(""))
+		if err != nil {
+			t.Fatalf("Status() error = %v", err)
+		}
+		if got.Dirty || got.UntrackedPaths != nil {
+			t.Fatalf("Status() = %#v, want an ignored file neither dirty nor untracked", got)
+		}
+	})
+}
+
+// TestStatusKnownLimitWhatJJNeitherRecordsNorReports pins what Q10's answer
+// does not cover, found in its review: jj leaves a directory holding a
+// repository of its own, and a new file outside the slot's sparse patterns,
+// out of the working-copy commit and out of `jj status` alike. Status then
+// reports a slot holding only those clean and pushed, and the destroy guard
+// would delete them. The plan records this under Q10 for the owner; this test
+// changes with that decision.
+func TestStatusKnownLimitWhatJJNeitherRecordsNorReports(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(f *fixture)
+	}{
+		{
+			name: "a nested git repository",
+			prepare: func(f *fixture) {
+				nested := filepath.Join(f.slot, "nested")
+				f.git(f.slot, "init", "-q", nested)
+				f.write(nested, "work.txt", "only here\n")
+			},
+		},
+		{
+			name: "a new file outside the sparse patterns",
+			prepare: func(f *fixture) {
+				f.jj(f.slot, "sparse", "set", "--clear", "--add", "f.txt")
+				outside := filepath.Join(f.slot, "outside")
+				if err := os.Mkdir(outside, 0o755); err != nil {
+					f.t.Fatalf("Mkdir() error = %v", err)
+				}
+				f.write(outside, "new.txt", "only here\n")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.prepare(f)
 			got, err := driver().Status(context.Background(), f.slotAt(""))
 			if err != nil {
 				t.Fatalf("Status() error = %v", err)
@@ -373,6 +562,95 @@ func TestStatusKnownLimitFilesJJDoesNotSnapshot(t *testing.T) {
 				t.Fatalf("Status() = %#v\nwant the known limit %#v", got, want)
 			}
 		})
+	}
+}
+
+// TestParseUntracked reads the untracked listing of `jj status` reports as
+// jj 0.45 prints them, and fails closed on a report it does not recognize,
+// so a jj that rewords or rearranges the report cannot make a slot holding
+// only untracked paths read as clean.
+func TestParseUntracked(t *testing.T) {
+	const commitLines = "Working copy  (@) : nzpzszsr 0efbe793 (empty) (no description set)\n" +
+		"Parent commit (@-): pzkqsxmm e1024b09 base\n"
+	for _, tc := range []struct {
+		name    string
+		report  string
+		want    []string
+		wantErr bool
+	}{
+		{name: "no changes", report: statusNoChanges + "\n" + commitLines},
+		{name: "changes only", report: statusChanges + "\nM f.txt\n" + commitLines},
+		{
+			name:   "untracked only",
+			report: statusUntracked + "\n? big.bin\n? d/\n" + commitLines,
+			want:   []string{"big.bin", "d/"},
+		},
+		{
+			// Paths print as they are; the commit lines end the listing.
+			name:   "changes and untracked",
+			report: statusChanges + "\nA small.txt\n" + statusUntracked + "\n? sp ace \"q\".txt\n? ünï.txt\n" + commitLines,
+			want:   []string{"sp ace \"q\".txt", "ünï.txt"},
+		},
+		{
+			// What follows the commit's line is not read, whatever it says.
+			name:   "conflicts after the commit's lines",
+			report: statusUntracked + "\n? big.bin\n" + commitLines + "Warning: There are unresolved conflicts at these paths:\nf.txt    2-sided conflict\n",
+			want:   []string{"big.bin"},
+		},
+		{
+			// A line in the listing that starts no entry is the rest of a
+			// name holding a line break.
+			name:   "a name with a line break",
+			report: statusUntracked + "\n? nl\nname\n? after.txt\n" + commitLines,
+			want:   []string{"nl\nname", "after.txt"},
+		},
+		{name: "a reworded untracked listing", report: "Untracked files:\n? big.bin\n" + commitLines, wantErr: true},
+		{
+			// A jj that both rewords the listing and says there are no changes
+			// would otherwise pass for one with no untracked paths.
+			name:    "a reworded untracked listing after no changes",
+			report:  statusNoChanges + "\nUntracked files:\n? big.bin\n" + commitLines,
+			wantErr: true,
+		},
+		{name: "a line nothing explains", report: statusNoChanges + "\nSomething new\n" + commitLines, wantErr: true},
+		{name: "a listing with no path", report: statusUntracked + "\n" + commitLines, wantErr: true},
+		{name: "nothing", report: "", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseUntracked([]byte(tc.report))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseUntracked() error = %v, want error %v", err, tc.wantErr)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("parseUntracked() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDirtyReason names what only a dirty slot holds, and at most
+// maxReasonPaths untracked paths, quoting a name that does not print.
+func TestDirtyReason(t *testing.T) {
+	many := make([]string, maxReasonPaths+2)
+	for i := range many {
+		many[i] = "p" + strconv.Itoa(i)
+	}
+	for _, tc := range []struct {
+		changed   bool
+		untracked []string
+		want      string
+	}{
+		{changed: true, want: "uncommitted changes"},
+		{untracked: []string{"a.bin", "d/"}, want: "untracked paths jj does not snapshot: a.bin, d/"},
+		{changed: true, untracked: []string{"a.bin"}, want: "uncommitted changes, and untracked paths jj does not snapshot: a.bin"},
+		{untracked: many, want: "untracked paths jj does not snapshot: " + strings.Join(many[:maxReasonPaths], ", ") + " and 2 more"},
+		// jj prints names as they are; the reason quotes one that does not
+		// print.
+		{untracked: []string{"nl\nname", "esc\x1b[31m", "ünï.txt"}, want: `untracked paths jj does not snapshot: "nl\nname", "esc\x1b[31m", ünï.txt`},
+	} {
+		if got := dirtyReason(tc.changed, tc.untracked); got != tc.want {
+			t.Errorf("dirtyReason(%v, %q) = %q, want %q", tc.changed, tc.untracked, got, tc.want)
+		}
 	}
 }
 
