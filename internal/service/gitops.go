@@ -49,7 +49,7 @@ func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits in
 			return api.GitOpsTopologyResponse{}, err
 		}
 		source := stack.Sources[name]
-		state, err := p.sourceState(ctx, name, source)
+		state, err := p.sourceState(ctx, stack, name)
 		if err != nil {
 			state = api.SourceState{
 				Name:   name,
@@ -83,7 +83,7 @@ func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits in
 		},
 	}
 	for _, source := range sources {
-		countGitOpsState(&topology.Summary, source.State, source.Pushed)
+		countGitOpsState(&topology.Summary, source.State, source.Pushed, source.Conflicted)
 	}
 	for _, name := range sortedKeys(stack.Workspaces) {
 		if err := ctx.Err(); err != nil {
@@ -97,10 +97,13 @@ func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits in
 		for _, source := range status.Sources {
 			link := gitOpsLinkFromWorkspaceSource(status.Name, source)
 			topology.Links = append(topology.Links, link)
+			// Mode is the effective one, so a jj slot, with or without
+			// `mode: jj`, is not counted, though git registers it as a
+			// worktree of a colocated cache.
 			if link.Kind == "git" && link.Mode == manifest.WorkspaceSourceModeWorktree {
 				topology.Summary.Worktrees++
 			}
-			countGitOpsState(&topology.Summary, link.State, link.Pushed)
+			countGitOpsState(&topology.Summary, link.State, link.Pushed, link.Conflicted)
 		}
 	}
 	return topology, nil
@@ -127,15 +130,23 @@ func gitOpsLinkFromWorkspaceSource(workspace string, source api.WorkspaceSourceS
 		Pushed:         source.Pushed,
 		UnpushedReason: source.UnpushedReason,
 		Error:          source.Error,
+		JJSlotState:    source.JJSlotState,
 	}
 }
 
-func countGitOpsState(summary *api.GitOpsSummary, state string, pushed bool) {
+// countGitOpsState counts a source or link of the topology by its state, and
+// as unpushed or conflicted beside it.
+func countGitOpsState(summary *api.GitOpsSummary, state string, pushed, conflicted bool) {
 	normalized := strings.ToLower(state)
 	// A clean or behind source can still hold commits of its own, such as a
 	// detached HEAD with no base to count against.
 	if !pushed && normalized != "error" {
 		summary.Unpushed++
+	}
+	// jj records a conflict in a commit and goes on, so a jj slot in any
+	// state can hold one.
+	if conflicted {
+		summary.Conflicted++
 	}
 	switch normalized {
 	case "clean", "ready":

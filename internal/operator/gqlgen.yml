@@ -52,6 +52,9 @@ models:
     fields:
       id:
         resolver: true
+  SourceWorkspace:
+    model:
+      - github.com/ang-ee/angee-operator/api.SourceWorkspace
   WorkspaceSourceStatus:
     model:
       - github.com/ang-ee/angee-operator/api.WorkspaceSourceStatus

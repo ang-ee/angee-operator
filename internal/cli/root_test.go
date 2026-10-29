@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -985,6 +986,86 @@ func TestWorkspaceStatusAndLogsForAWorkspaceRecordedWithAChain(t *testing.T) {
 	}
 }
 
+// `workspace git` and `workspace status` print a conflicted jj slot's flag
+// and files, after its state, and nothing more for a slot that is not
+// conflicted. Past ten files the rest are counted, and a name holding a
+// character that does not print is quoted.
+func TestWorkspaceGitAndStatusPrintAConflictedJJSlot(t *testing.T) {
+	many := make([]string, 12)
+	for i := range many {
+		many[i] = fmt.Sprintf("f%02d.txt", i)
+	}
+	many[0] = "esc\x1b[31m.txt"
+	conflicted := api.JJSlotState{ChangeID: "kxyz", Conflicted: true, ConflictPaths: []string{"a.txt", "dir/b.txt"}}
+	statuses := []api.WorkspaceSourceStatus{
+		{Slot: "work", Source: "app", Kind: "git", Mode: "jj", Path: "/stack/workspaces/ws/work", State: "ahead", CurrentRef: "3f2a1b", Ahead: 1, UnpushedReason: "1 commit(s) ahead of base ref main@origin with no upstream", JJSlotState: conflicted},
+		{Slot: "many", Source: "app", Kind: "git", Mode: "jj", Path: "/stack/workspaces/ws/many", State: "dirty", Dirty: true, JJSlotState: api.JJSlotState{Conflicted: true, ConflictPaths: many}},
+		{Slot: "tree", Source: "app", Kind: "git", Mode: "worktree", Path: "/stack/workspaces/ws/tree", State: "clean", CurrentRef: "ws", Pushed: true},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /workspaces/ws/status":
+			_ = json.NewEncoder(w).Encode(api.WorkspaceStatusResponse{Name: "ws", State: "ready", Sources: statuses})
+		case "GET /workspaces/ws/git":
+			states := make([]api.SourceState, len(statuses))
+			for i, s := range statuses {
+				states[i] = api.SourceState{Name: s.Source, Slot: s.Slot, Kind: s.Kind, Path: s.Path, State: s.State, CurrentRef: s.CurrentRef, UnpushedReason: s.UnpushedReason, JJSlotState: s.JJSlotState}
+			}
+			_ = json.NewEncoder(w).Encode(states)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	stdout, _, err := runCLI(t, "--operator", server.URL, "workspace", "git", "ws")
+	if err != nil {
+		t.Fatalf("workspace git: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	want := []string{
+		"work\t3f2a1b\tahead 1 commit(s) ahead of base ref main@origin with no upstream conflicted: a.txt, dir/b.txt\t/stack/workspaces/ws/work",
+		"many\t\tdirty conflicted: \"esc\\x1b[31m.txt\", f01.txt, f02.txt, f03.txt, f04.txt, f05.txt, f06.txt, f07.txt, f08.txt, f09.txt and 2 more\t/stack/workspaces/ws/many",
+		"tree\tws\tclean\t/stack/workspaces/ws/tree",
+	}
+	if !slices.Equal(lines, want) {
+		t.Errorf("workspace git output =\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+
+	stdout, _, err = runCLI(t, "--operator", server.URL, "workspace", "status", "ws")
+	if err != nil {
+		t.Fatalf("workspace status: %v", err)
+	}
+	if line := "  work\tapp\tgit\tjj\t3f2a1b\tahead 1 commit(s) ahead of base ref main@origin with no upstream ahead=1 behind=0 conflicted: a.txt, dir/b.txt\t/stack/workspaces/ws/work\n"; !strings.Contains(stdout, line) {
+		t.Errorf("workspace status output = %q, want the line %q", stdout, line)
+	}
+	if line := "  tree\tapp\tgit\tworktree\tws\tclean\t/stack/workspaces/ws/tree\n"; !strings.Contains(stdout, line) {
+		t.Errorf("workspace status output = %q, want the line %q", stdout, line)
+	}
+	if strings.Contains(stdout, "\x1b") {
+		t.Errorf("workspace status output = %q, want the escape sequence quoted", stdout)
+	}
+
+	stdout, _, err = runCLI(t, "--operator", server.URL, "--json", "workspace", "git", "ws")
+	if err != nil {
+		t.Fatalf("workspace git --json: %v", err)
+	}
+	var states []map[string]any
+	if err := json.Unmarshal([]byte(stdout), &states); err != nil {
+		t.Fatalf("decode workspace git --json: %v", err)
+	}
+	if len(states) != len(statuses) {
+		t.Fatalf("workspace git --json = %v, want %d slots", states, len(statuses))
+	}
+	if got, ok := states[1]["conflict_paths"].([]any); !ok || len(got) != len(many) {
+		t.Errorf("workspace git --json conflict_paths = %v, want all %d", states[1]["conflict_paths"], len(many))
+	}
+	if states[0]["conflicted"] != true || states[0]["change_id"] != "kxyz" || states[2]["conflicted"] != false {
+		t.Errorf("workspace git --json = %v, want conflicted and change_id per slot", states)
+	}
+}
+
 func TestWorkspaceSyncBaseInfersCurrentWorkspace(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, ".angee")
@@ -1036,7 +1117,8 @@ func TestWorkspaceSyncBaseSendsTheMethodAsked(t *testing.T) {
 			}
 			got = &api.WorkspaceSyncBaseRequest{}
 			_ = json.NewDecoder(r.Body).Decode(got)
-			_ = json.NewEncoder(w).Encode([]api.SourceState{{Name: "app", Slot: "work", State: "ahead", CurrentRef: "0123abcd", Path: "/ws/work", Conflicted: true, ConflictPaths: []string{"a.txt", "b.txt"}}})
+			_ = json.NewEncoder(w).Encode([]api.SourceState{{Name: "app", Slot: "work", State: "ahead", CurrentRef: "0123abcd", Path: "/ws/work",
+				JJSlotState: api.JJSlotState{Conflicted: true, ConflictPaths: []string{"a.txt", "b.txt"}}}})
 		}))
 		var stdout, stderr bytes.Buffer
 		cmd := NewRoot(&stdout, &stderr)
@@ -1049,7 +1131,7 @@ func TestWorkspaceSyncBaseSendsTheMethodAsked(t *testing.T) {
 		if got == nil || got.Method != tc.want {
 			t.Errorf("sync-base %q sent %+v, want method %q", tc.flags, got, tc.want)
 		}
-		if want := "work\t0123abcd\tahead\t/ws/work\nwork\tconflicted in a.txt, b.txt\n"; stdout.String() != want {
+		if want := "work\t0123abcd\tahead conflicted: a.txt, b.txt\t/ws/work\n"; stdout.String() != want {
 			t.Errorf("sync-base %q printed %q, want %q", tc.flags, stdout.String(), want)
 		}
 	}

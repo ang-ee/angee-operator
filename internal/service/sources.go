@@ -263,7 +263,7 @@ func (p *Platform) SourceList(ctx context.Context, q query.Args) ([]api.SourceSt
 	}
 	states := make([]api.SourceState, 0, len(stack.Sources))
 	for _, name := range sortedKeys(stack.Sources) {
-		state, err := p.sourceState(ctx, name, stack.Sources[name])
+		state, err := p.sourceState(ctx, stack, name)
 		if err != nil {
 			state = api.SourceState{Name: name, Kind: stack.Sources[name].Kind, Path: p.sourcePath(name, stack.Sources[name]), State: "error", Error: err.Error()}
 		}
@@ -291,7 +291,7 @@ func (p *Platform) SourceFetch(ctx context.Context, name string) (state api.Sour
 	if err := p.materializeSource(ctx, name, source, false); err != nil {
 		return api.SourceState{}, err
 	}
-	return p.sourceState(ctx, name, source)
+	return p.sourceState(ctx, stack, name)
 }
 
 func (p *Platform) SourceStatus(ctx context.Context, name string) (api.SourceState, error) {
@@ -299,11 +299,10 @@ func (p *Platform) SourceStatus(ctx context.Context, name string) (api.SourceSta
 	if err != nil {
 		return api.SourceState{}, err
 	}
-	source, ok := stack.Sources[name]
-	if !ok {
+	if _, ok := stack.Sources[name]; !ok {
 		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
-	return p.sourceState(ctx, name, source)
+	return p.sourceState(ctx, stack, name)
 }
 
 func (p *Platform) SourcePull(ctx context.Context, name string) (state api.SourceState, err error) {
@@ -336,7 +335,7 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (state api.Sourc
 	}); err != nil {
 		return api.SourceState{}, err
 	}
-	return p.sourceState(ctx, name, source)
+	return p.sourceState(ctx, stack, name)
 }
 
 func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.SourceState, err error) {
@@ -384,7 +383,7 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 	}); err != nil {
 		return api.SourceState{}, err
 	}
-	return p.sourceState(ctx, name, source)
+	return p.sourceState(ctx, stack, name)
 }
 
 // materializeSource ensures a source's cache exists on disk. A missing cache is
@@ -854,35 +853,45 @@ func redactedURLAgainst(rawURL, other string) string {
 	return redacted
 }
 
-func (p *Platform) sourceState(ctx context.Context, name string, source manifest.Source) (api.SourceState, error) {
+// sourceState reads source name of stack: its cache or local store, and,
+// when that is a jj repository, its jj workspaces (sourceJJWorkspaces).
+func (p *Platform) sourceState(ctx context.Context, stack *manifest.Stack, name string) (api.SourceState, error) {
+	source := stack.Sources[name]
 	path := p.sourcePath(name, source)
 	state := api.SourceState{Name: name, Kind: source.Kind, Path: path, State: "missing", Pushed: true}
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return state, nil
 		}
 		return state, err
 	}
 	state.Exists = true
-	if source.Kind != "git" {
+	if source.Kind == "git" {
+		// A cache is not a slot, but the git driver reads any git checkout, so
+		// the cache and its slots share one status rule, and one mapping to
+		// the API (setSlotStatus).
+		read, err := gitdriver.New(p.gitClient()).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef, BaseRemote: sourceBaseRemote(source)})
+		if err != nil {
+			return state, err
+		}
+		cache := api.WorkspaceSourceStatus{Source: name, Kind: source.Kind, Path: path, Exists: true}
+		setSlotStatus(&cache, read, nil)
+		state = sourceStateFromWorkspaceStatus(cache)
+		state.Ref = read.CurrentRef
+	} else {
 		state.State = "ready"
+	}
+	if !info.IsDir() {
 		return state, nil
 	}
-	// A cache is not a slot, but the git driver reads any git checkout, so the
-	// cache and its slots share one status rule.
-	read, err := gitdriver.New(p.gitClient()).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef, BaseRemote: sourceBaseRemote(source)})
-	if err != nil {
-		return state, err
+	workspaces, err := p.sourceJJWorkspaces(ctx, stack, path)
+	switch {
+	case err == nil:
+		state.Workspaces = workspaces
+	case ctx.Err() == nil:
+		logctx.From(ctx).Warn(fmt.Sprintf("list the jj workspaces of source %s: %v", name, err))
 	}
-	state.Ref = read.CurrentRef
-	state.CurrentRef = read.CurrentRef
-	state.Dirty = read.Dirty
-	state.Upstream = read.Upstream
-	state.Ahead = read.Ahead
-	state.Behind = read.Behind
-	state.State = workspaceSourceStateOf(read)
-	state.Pushed = read.Pushed
-	state.UnpushedReason = read.UnpushedReason
 	return state, nil
 }
 

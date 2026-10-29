@@ -73,14 +73,46 @@ func (d Driver) Exists(ctx context.Context, s vcs.Slot) (bool, error) {
 	return ok, err
 }
 
+// ListedWorkspace is a workspace as its repository lists it: its name, and
+// the change id of its working-copy commit.
+type ListedWorkspace struct {
+	Name     string
+	ChangeID string
+}
+
+// Workspaces lists the workspaces of the jj repository at primary, sorted
+// by name: its own (default, for one EnsurePrimary made) and every secondary
+// one, such as the slots of any stack that shares it. It reads the workspace
+// list as Exists does, by name and touching no working copy, and returns no
+// paths, since jj's record of one goes stale once its workspace moves (plan
+// section 2). Which directory is which workspace's checkout is CheckoutAt's
+// to say.
+func (d Driver) Workspaces(ctx context.Context, primary string) ([]ListedWorkspace, error) {
+	workspaces, err := d.workspaces(ctx, primary)
+	if err != nil {
+		return nil, err
+	}
+	listed := make([]ListedWorkspace, len(workspaces))
+	for i, w := range workspaces {
+		listed[i] = ListedWorkspace{Name: w.Name, ChangeID: w.Target.ChangeID}
+	}
+	slices.SortFunc(listed, func(a, b ListedWorkspace) int { return strings.Compare(a.Name, b.Name) })
+	return listed, nil
+}
+
+// workspaces lists the workspaces of the jj repository at primary.
+func (d Driver) workspaces(ctx context.Context, primary string) ([]workspace, error) {
+	out, err := d.jj.store(ctx, primary, "workspace", "list", "-T", workspacesTemplate)
+	if err != nil {
+		return nil, err
+	}
+	return decodeLines[workspace](out)
+}
+
 // workspace returns the primary's workspace named Slot.Name, and whether it
 // has one.
 func (d Driver) workspace(ctx context.Context, s vcs.Slot) (workspace, bool, error) {
-	out, err := d.jj.store(ctx, s.Primary, "workspace", "list", "-T", workspacesTemplate)
-	if err != nil {
-		return workspace{}, false, err
-	}
-	workspaces, err := decodeLines[workspace](out)
+	workspaces, err := d.workspaces(ctx, s.Primary)
 	if err != nil {
 		return workspace{}, false, err
 	}
@@ -100,13 +132,12 @@ func (d Driver) Holds(ctx context.Context, s vcs.Slot, dir string) (bool, error)
 
 // HeldChange returns the change id of the working-copy commit of the
 // primary's workspace Slot.Name when dir is that workspace's checkout, and
-// "" when it is not: dir must be a real directory, never a link to one, and
-// jj, run in it, must load a workspace whose working-copy
-// commit is that workspace's, by name and by change id (a snapshot keeps the
-// change id, and another repository's ids never match). It touches no
-// working copy and reads no path jj recorded. A directory with no .jj, or one
-// jj cannot load as a workspace, holds none. Known limit: a workspace that
-// has `jj edit`ed another's working-copy commit shares it, and reads as held.
+// "" when it is not: jj, run in dir, must load a workspace (CheckoutAt)
+// whose working-copy commit is that workspace's, by name and by change id
+// (a snapshot keeps the change id, and another repository's ids match only
+// for a commit both imported from git). It touches no working copy and reads
+// no path jj recorded. Known limit: a workspace that has `jj edit`ed
+// another's working-copy commit shares it, and reads as held.
 //
 // The service asks it before it keeps what --sync finds at a slot's path
 // (plan phase 6 step 4), and before it forgets the name of a slot it
@@ -115,40 +146,64 @@ func (d Driver) HeldChange(ctx context.Context, s vcs.Slot, dir string) (string,
 	if err := lifecycleFacts(s); err != nil {
 		return "", err
 	}
+	checkout, err := d.CheckoutAt(ctx, dir)
+	if err != nil || !slices.Contains(checkout.Workspaces, s.Name) {
+		return "", err
+	}
+	named, ok, err := d.workspace(ctx, s)
+	if err != nil || !ok || named.Target.ChangeID != checkout.ChangeID {
+		return "", err
+	}
+	return named.Target.ChangeID, nil
+}
+
+// Checkout is the working-copy commit jj loads at a directory: its change
+// id, and the workspaces whose working-copy commit it is, the one checked
+// out there among them (several only when one has `jj edit`ed another's).
+// It is zero for a directory that holds no workspace.
+type Checkout struct {
+	ChangeID   string
+	Workspaces []string
+}
+
+// CheckoutAt reads the working-copy commit jj loads at dir, with one `jj
+// log` and touching no working copy. dir must be a real directory holding a
+// real .jj directory, never a link to either; anything else, a missing dir
+// included, holds no workspace, and so does one jj cannot load as a
+// workspace (it exits non-zero, as for a .jj it cannot read). The caller
+// compares the result with the primary's own list (Workspaces), as
+// HeldChange does.
+func (d Driver) CheckoutAt(ctx context.Context, dir string) (Checkout, error) {
 	if dir == "" {
-		return "", errNoSlot
+		return Checkout{}, errNoSlot
 	}
 	for _, path := range []string{dir, filepath.Join(dir, ".jj")} {
 		info, err := os.Lstat(path)
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", nil
+			return Checkout{}, nil
 		}
 		if err != nil {
-			return "", err
+			return Checkout{}, err
 		}
 		if !info.IsDir() {
-			return "", nil
+			return Checkout{}, nil
 		}
 	}
 	out, err := d.jj.store(ctx, dir, "log", "--no-graph", "-r", workingCopy.String(), "-T", commitsTemplate)
 	if exited(ctx, err) {
-		return "", nil
+		return Checkout{}, nil
 	}
 	if err != nil {
-		return "", err
+		return Checkout{}, err
 	}
 	entries, err := decodeLines[commitEntry](out)
 	if err != nil {
-		return "", err
+		return Checkout{}, err
 	}
-	if len(entries) != 1 || !slices.Contains(entries[0].WorkingCopies, s.Name) {
-		return "", nil
+	if len(entries) != 1 {
+		return Checkout{}, nil
 	}
-	named, ok, err := d.workspace(ctx, s)
-	if err != nil || !ok || named.Target.ChangeID != entries[0].Commit.ChangeID {
-		return "", err
-	}
-	return named.Target.ChangeID, nil
+	return Checkout{ChangeID: entries[0].Commit.ChangeID, Workspaces: entries[0].WorkingCopies}, nil
 }
 
 // ErrRootUnresolved is wrapped by Elsewhere when nothing is at the path jj

@@ -26,6 +26,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
@@ -1270,6 +1271,9 @@ func workspaceGitCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 				if state.UnpushedReason != "" {
 					stateText += " " + state.UnpushedReason
 				}
+				if conflict := conflictDetail(state.JJSlotState); conflict != "" {
+					stateText += " " + conflict
+				}
 				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
@@ -1354,13 +1358,12 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 				if ref == "" {
 					ref = state.Ref
 				}
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, state.State, state.Path); err != nil {
-					return err
+				stateText := state.State
+				if conflict := conflictDetail(state.JJSlotState); conflict != "" {
+					stateText += " " + conflict
 				}
-				if state.Conflicted {
-					if _, err := fmt.Fprintf(stdout, "%s\tconflicted in %s\n", state.Slot, strings.Join(state.ConflictPaths, ", ")); err != nil {
-						return err
-					}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -1656,6 +1659,9 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 			if source.Ahead > 0 || source.Behind > 0 {
 				detail += fmt.Sprintf(" ahead=%d behind=%d", source.Ahead, source.Behind)
 			}
+			if conflict := conflictDetail(source.JJSlotState); conflict != "" {
+				detail += " " + conflict
+			}
 			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n", source.Slot, source.Source, source.Kind, source.Mode, ref, detail, source.Path); err != nil {
 				return err
 			}
@@ -1672,6 +1678,24 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 		}
 	}
 	return nil
+}
+
+// maxConflictPathsShown caps how many conflicted files a status line names;
+// --json lists them all.
+const maxConflictPathsShown = 10
+
+// conflictDetail says that a jj slot holds a conflicted commit, naming up to
+// maxConflictPathsShown of its conflicted files, or is "" for a slot that
+// holds none. The files are named as vcs.NamePaths names them, so an escape
+// sequence in a name stays off the terminal.
+func conflictDetail(jj api.JJSlotState) string {
+	if !jj.Conflicted {
+		return ""
+	}
+	if len(jj.ConflictPaths) == 0 {
+		return "conflicted"
+	}
+	return "conflicted: " + vcs.NamePaths(jj.ConflictPaths, maxConflictPathsShown)
 }
 
 func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {

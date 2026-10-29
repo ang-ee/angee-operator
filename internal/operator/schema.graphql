@@ -157,6 +157,10 @@ type WorkspaceRef {
   ttlExpiresAt: String
 }
 
+"""
+A source's cache or local store, or, with slot set, one workspace slot of it
+(workspaceGit, workspacePush, workspaceSyncBase).
+"""
 type SourceState {
   id: ID!
   name: String!
@@ -176,6 +180,50 @@ type SourceState {
   unpushedReason: String
   error: String
   commits: [CommitRef!]
+  """
+  The jj workspaces of a source whose cache or store is a jj repository, when
+  the operator found jj the first time it looked; null otherwise, and for a
+  slot.
+  """
+  workspaces: [SourceWorkspace!]
+  "The change id of a jj slot's working-copy commit; empty for any other slot."
+  changeId: String
+  """
+  The commits of a jj slot's base it lacks, even when behind counts against
+  its upstream; 0 for any other slot.
+  """
+  baseBehind: Int
+  """
+  A conflicted commit among a jj slot's own; false for any other slot. jj
+  records a conflict in the commit and goes on, so a slot in any state can be
+  conflicted, and state never says so. Conflicts are read from the slot's
+  base, so a slot whose base does not resolve (state error) reads false.
+  """
+  conflicted: Boolean!
+  "The conflicted files of a jj slot's own commits, sorted."
+  conflictPaths: [String!]
+  """
+  New files jj leaves out of a jj slot's working-copy commit (over its
+  snapshot.max-new-file-size, or outside its snapshot.auto-track), relative to
+  the slot, a directory ending in /. Only the slot holds them, so it is dirty.
+  """
+  untrackedPaths: [String!]
+}
+
+"""
+A jj workspace of a source's jj repository, as jj lists it. owned is true when
+the checkout at the path this stack's manifest gives one of its jj slots of
+that repository is that workspace, and path is then that path. Any other
+workspace, the repository's own (default), other stacks' slots, and a slot of
+this stack whose checkout is gone or cannot be read alike, is not owned and its
+path is empty: jj's record of a workspace's path goes stale once the workspace
+moves. Two names one checkout holds (one workspace `jj edit`ed the other's
+working-copy commit) are neither owned.
+"""
+type SourceWorkspace {
+  name: String!
+  owned: Boolean!
+  path: String
 }
 
 type CommitRef {
@@ -234,6 +282,28 @@ type WorkspaceSourceStatus {
   pushed: Boolean!
   unpushedReason: String
   error: String
+  "The change id of a jj slot's working-copy commit; empty for any other slot."
+  changeId: String
+  """
+  The commits of a jj slot's base it lacks, even when behind counts against
+  its upstream; 0 for any other slot.
+  """
+  baseBehind: Int
+  """
+  A conflicted commit among a jj slot's own; false for any other slot. jj
+  records a conflict in the commit and goes on, so a slot in any state can be
+  conflicted, and state never says so. Conflicts are read from the slot's
+  base, so a slot whose base does not resolve (state error) reads false.
+  """
+  conflicted: Boolean!
+  "The conflicted files of a jj slot's own commits, sorted."
+  conflictPaths: [String!]
+  """
+  New files jj leaves out of a jj slot's working-copy commit (over its
+  snapshot.max-new-file-size, or outside its snapshot.auto-track), relative to
+  the slot, a directory ending in /. Only the slot holds them, so it is dirty.
+  """
+  untrackedPaths: [String!]
 }
 
 """
@@ -287,8 +357,36 @@ type GitOpsLink {
   pushed: Boolean!
   unpushedReason: String
   error: String
+  "The change id of a jj slot's working-copy commit; empty for any other slot."
+  changeId: String
+  """
+  The commits of a jj slot's base it lacks, even when behind counts against
+  its upstream; 0 for any other slot.
+  """
+  baseBehind: Int
+  """
+  A conflicted commit among a jj slot's own; false for any other slot. jj
+  records a conflict in the commit and goes on, so a slot in any state can be
+  conflicted, and state never says so. Conflicts are read from the slot's
+  base, so a slot whose base does not resolve (state error) reads false.
+  """
+  conflicted: Boolean!
+  "The conflicted files of a jj slot's own commits, sorted."
+  conflictPaths: [String!]
+  """
+  New files jj leaves out of a jj slot's working-copy commit (over its
+  snapshot.max-new-file-size, or outside its snapshot.auto-track), relative to
+  the slot, a directory ending in /. Only the slot holds them, so it is dirty.
+  """
+  untrackedPaths: [String!]
 }
 
+"""
+The topology's sources and links counted by state. worktrees counts git
+worktree slots, not jj slots. unpushed and conflicted count beside the states:
+a source or link in any state can be unpushed, and a jj slot in any state
+conflicted.
+"""
 type GitOpsSummary {
   sources: Int!
   workspaces: Int!
@@ -302,6 +400,7 @@ type GitOpsSummary {
   missing: Int!
   error: Int!
   unpushed: Int!
+  conflicted: Int!
 }
 
 """

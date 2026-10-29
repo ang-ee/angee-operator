@@ -8,6 +8,37 @@ latest tag.
 
 ### Added
 
+- **Status reports a jj slot's conflicts, change id and base, and the
+  topology lists a source's jj workspaces** (phase 7 of
+  `.agents/plans/jj-native-operator.md`). jj records a conflict in a commit
+  and goes on, so a jj slot could be conflicted with nothing saying so.
+  - Workspace status, `repair`'s slot status, the topology's links and
+    `workspace git` now carry, for a jj slot, `conflicted` and
+    `conflict_paths` (the conflicted files of the slot's own commits),
+    `change_id` (its working-copy commit's), `base_behind` (the commits of
+    its base it lacks, even when `behind` counts against its upstream), and
+    `untracked_paths` (the new files jj leaves out of the working-copy
+    commit, which make it dirty), in JSON and GraphQL alike. The per-slot
+    verbs, `push` and `sync-base` return the same fields once phase 8 runs
+    them on jj slots.
+  - The state vocabulary does not change: `conflicted` is a flag beside
+    `state`, so existing clients read a slot as before. It is `false`, and
+    the other fields absent, for every other slot. `summary.conflicted`
+    counts conflicted slots, and `summary.worktrees` still counts git
+    worktree slots only.
+  - A source whose cache or store is a jj repository lists its jj
+    workspaces, in the topology and in source status and list, as
+    `workspaces: [{name, owned, path}]`. A workspace is `owned`, with the
+    slot's `path`, when the checkout at a path this stack's manifest gives
+    one of its jj slots is that workspace; the repository's own, other
+    stacks' slots (a stack of the same name included) and a slot whose
+    checkout is gone or cannot be read are not owned and have no path, since
+    jj's record of a workspace's path goes stale once it moves. A source that
+    is not a jj repository, or an operator that found no jj on PATH, lists
+    none and runs no jj.
+  - `workspace git` and `workspace status` print `conflicted:` and up to ten
+    of a slot's conflicted files after its state.
+
 - **`workspace sync-base` rebases jj slots** (the first half of phase 8 of
   `.agents/plans/jj-native-operator.md`). With no method, each slot is now
   synced its own way: a git worktree slot is merged, as before, and a jj slot
@@ -21,8 +52,8 @@ latest tag.
     publish of such a slot force-updates its remote branch** (jj does so with
     a lease). The default merge of a git slot never rewrites.
   - A jj slot's conflict is recorded in its commits and reported on its state
-    (`conflicted`, `conflict_paths`, and a `conflicted in <paths>` line in
-    the CLI's output), and the sync goes on to the next slot; a git slot that
+    (`conflicted`, `conflict_paths`, and `conflicted: <paths>` after the
+    state in the CLI's output), and the sync goes on to the next slot; a git slot that
     stops on conflicts still fails the sync with `merge_conflict`. A failure
     that is not a conflict quotes jj (`... failed. jj: Error: ...`).
   - A rebase that would rewrite another checkout's commits is refused
@@ -42,6 +73,14 @@ latest tag.
     has a merge or rebase in progress.
 
 ### Changed
+
+- **Go API: `api.WorkspaceSourceStatus` and `api.GitOpsLink` are no longer
+  comparable with `==`**, since the embedded `api.JJSlotState` holds slices
+  (`api.SourceState` already held some). Its fields are promoted, so they
+  read as before, but a composite literal sets them through `JJSlotState:`.
+- **A file name in a jj slot's `unpushed_reason` that holds `", "` is
+  quoted**, as one that does not print already was, so it does not read as
+  two names.
 
 - **`sync-base` and `workspace push` walk only the slots whose manifest names
   a mode** (owner's answer to Q7 of the jj plan). A slot that names none is

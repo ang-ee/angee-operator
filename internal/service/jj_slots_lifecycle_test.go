@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -982,9 +983,28 @@ func TestJJSlotRecordedNameTakenByAnotherStack(t *testing.T) {
 			t.Fatalf("%s: dev--ws's working copy = %q, want the first stack's %s kept", when, got, change)
 		}
 	}
-	refused("readable", declare(), first)
+	other := declare()
+	refused("readable", other, first)
 	if got := strings.TrimSpace(runGitOutput(t, first, "rev-parse", "--is-inside-work-tree")); got != "true" {
 		t.Errorf("the first stack's slot no longer works with git: %q", got)
+	}
+	// The second stack computes the same name for its slot, which it never
+	// made, so the shared cache's dev--ws is the first stack's alone.
+	for _, tc := range []struct {
+		name     string
+		platform *Platform
+		want     api.SourceWorkspace
+	}{
+		{name: "first", platform: f.platform, want: api.SourceWorkspace{Name: "dev--ws", Owned: true, Path: first}},
+		{name: "second", platform: other, want: api.SourceWorkspace{Name: "dev--ws"}},
+	} {
+		state, err := tc.platform.SourceStatus(context.Background(), "app")
+		if err != nil {
+			t.Fatalf("SourceStatus() in the %s stack error = %v", tc.name, err)
+		}
+		if want := []api.SourceWorkspace{{Name: "default"}, tc.want}; !reflect.DeepEqual(state.Workspaces, want) {
+			t.Errorf("the %s stack's source workspaces = %+v, want %+v", tc.name, state.Workspaces, want)
+		}
 	}
 
 	jjDir := filepath.Join(first, ".jj")
@@ -1249,5 +1269,368 @@ func TestJJSlotDestroyCleanupOutlivesTheRequest(t *testing.T) {
 	}
 	if names := sortedKeys(f.jjWorkspaces(f.cache())); !slices.Equal(names, []string{"default"}) {
 		t.Errorf("jj workspaces = %q, want dev--ws forgotten", names)
+	}
+}
+
+// A jj slot whose rebase conflicted says so beside its state, with its
+// conflicted files, wherever a slot is reported: workspace status, workspace
+// git, and the topology's link and summary. Its state keeps the vocabulary
+// (ahead here, not a state of its own), the worktree slot beside it reports
+// no jj fields, and the flag clears once the conflict is resolved. Before the
+// rebase, the moved base shows in base_behind. A file jj will not snapshot
+// shows in untracked_paths.
+func TestJJSlotReportsItsConflicts(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	template := f.template("mixed", map[string]string{
+		"tree": f.app("mode: worktree\nbranch: \"${inputs.branch}\"\nref: main\nsubpath: tree"),
+		"work": f.app("mode: jj\nref: main\nsubpath: work"),
+	})
+	if err := f.create(template, "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	work := filepath.Join(f.workspace("ws"), "work")
+	got := f.slotStatus("ws", "work")
+	if want := f.jj(work, "log", "--no-graph", "-r", "@", "-T", "change_id"); got.ChangeID != want || got.Conflicted || got.ConflictPaths != nil || got.BaseBehind != 0 {
+		t.Errorf("new jj slot = %+v, want change id %s and no conflict", got.JJSlotState, want)
+	}
+
+	mustWriteFile(t, filepath.Join(work, "f.txt"), "slot\n")
+	f.jj(work, "commit", "-m", "slot edit")
+	mustWriteFile(t, filepath.Join(f.seed, "f.txt"), "base\n")
+	runGit(t, f.seed, "commit", "-q", "-am", "base edit")
+	runGit(t, f.seed, "push", "-q", "origin", "HEAD:main")
+	if _, err := f.platform.SourceFetch(ctx, "app"); err != nil {
+		t.Fatalf("SourceFetch() error = %v", err)
+	}
+	if got := f.slotStatus("ws", "work"); got.State != "diverged" || got.BaseBehind != 1 || got.Conflicted {
+		t.Errorf("jj slot after the base moved = %+v, want diverged, one behind its base, no conflict", got)
+	}
+
+	f.jj(work, "rebase", "-b", "@", "--onto", "main@origin")
+	conflicted := func(where, state string, jj api.JJSlotState) {
+		t.Helper()
+		if state != "ahead" || !jj.Conflicted || !slices.Equal(jj.ConflictPaths, []string{"f.txt"}) || jj.BaseBehind != 0 || jj.ChangeID == "" {
+			t.Errorf("%s: conflicted jj slot = %s %+v, want ahead, conflicted in f.txt", where, state, jj)
+		}
+	}
+	none := func(where, slot string, jj api.JJSlotState) {
+		t.Helper()
+		if !reflect.DeepEqual(jj, api.JJSlotState{}) {
+			t.Errorf("%s: worktree slot %s jj fields = %+v, want none", where, slot, jj)
+		}
+	}
+	status, err := f.platform.WorkspaceStatus(ctx, "ws")
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	for _, source := range status.Sources {
+		if source.Slot == "work" {
+			conflicted("workspace status", source.State, source.JJSlotState)
+		} else {
+			none("workspace status", source.Slot, source.JJSlotState)
+		}
+	}
+	states, err := f.platform.WorkspaceGitStatus(ctx, "ws")
+	if err != nil {
+		t.Fatalf("WorkspaceGitStatus() error = %v", err)
+	}
+	for _, state := range states {
+		if state.Slot == "work" {
+			conflicted("workspace git", state.State, state.JJSlotState)
+		} else {
+			none("workspace git", state.Slot, state.JJSlotState)
+		}
+	}
+	topology, err := f.platform.GitOpsTopology(ctx)
+	if err != nil {
+		t.Fatalf("GitOpsTopology() error = %v", err)
+	}
+	for _, link := range topology.Links {
+		if link.Slot == "work" {
+			conflicted("topology link", link.State, link.JJSlotState)
+		} else {
+			none("topology link", link.Slot, link.JJSlotState)
+		}
+	}
+	if topology.Summary.Conflicted != 1 || topology.Summary.Worktrees != 1 {
+		t.Errorf("topology summary = %+v, want one conflicted slot and one worktree, the jj slot not counted as one", topology.Summary)
+	}
+
+	mustWriteFile(t, filepath.Join(work, "f.txt"), "resolved\n")
+	f.jj(work, "squash")
+	if got := f.slotStatus("ws", "work"); got.Conflicted || got.ConflictPaths != nil || got.State != "ahead" {
+		t.Errorf("jj slot after resolving = %+v, want ahead and no conflict", got)
+	}
+
+	// A file over jj's size limit stays out of the working-copy commit: it is
+	// listed, and the slot is dirty.
+	f.jj(f.cache(), "config", "set", "--repo", "snapshot.max-new-file-size", "16")
+	mustWriteFile(t, filepath.Join(work, "big.bin"), strings.Repeat("x", 200))
+	if got := f.slotStatus("ws", "work"); got.State != "dirty" || !slices.Equal(got.UntrackedPaths, []string{"big.bin"}) {
+		t.Errorf("jj slot holding a file jj does not snapshot = %+v, want dirty with big.bin untracked", got)
+	}
+	states, err = f.platform.WorkspaceGitStatus(ctx, "ws")
+	if err != nil {
+		t.Fatalf("WorkspaceGitStatus() error = %v", err)
+	}
+	for _, state := range states {
+		if state.Slot == "work" && !slices.Equal(state.UntrackedPaths, []string{"big.bin"}) {
+			t.Errorf("workspace git untracked paths = %q, want big.bin", state.UntrackedPaths)
+		}
+	}
+}
+
+// The topology lists the jj workspaces of a source whose cache or store is a
+// jj repository, and source status does too. One whose checkout is at the
+// path this stack's manifest gives one of its jj slots is owned, with that
+// path: the longer name create gave a slot whose optional sibling was
+// skipped included, and each of two primaries' workspaces of one name with
+// its own slot's path. The cache's own, another stack's, and this stack's
+// whose checkout is gone are not owned and have no path. A local store not
+// colocated with git lists its workspaces too. A cache no jj slot has
+// colocated yet lists none and runs no jj, and its worktree slot counts as
+// the only worktree. A jj repository jj cannot read is warned about, and the
+// source is reported from git as before, with no workspaces; an operator
+// without jj lists none and warns of nothing.
+func TestGitOpsTopologyListsTheJJWorkspacesOfASource(t *testing.T) {
+	f := newJJFixture(t, "")
+	var warnings bytes.Buffer
+	ctx := logctx.With(context.Background(), slog.New(logctx.NewCLIHandler(&warnings, slog.LevelWarn)))
+	if err := f.create(f.template("plain", map[string]string{"tree": f.app("mode: worktree\nbranch: \"${inputs.branch}\"\nref: main\nsubpath: tree")}), "plain", false); err != nil {
+		t.Fatalf("WorkspaceCreate(plain) error = %v", err)
+	}
+	// A local source can be a file, which holds no .jj to look for.
+	stack, err := manifest.LoadFile(manifest.Path(f.root))
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	notes := filepath.Join(f.base, "notes.txt")
+	mustWriteFile(t, notes, "notes\n")
+	stack.Sources["notes"] = manifest.Source{Kind: "local", Path: notes}
+	if err := manifest.SaveFile(manifest.Path(f.root), stack); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	topology, err := f.platform.GitOpsTopology(ctx)
+	if err != nil {
+		t.Fatalf("GitOpsTopology() error = %v", err)
+	}
+	if len(topology.Sources) != 2 || topology.Sources[0].Workspaces != nil || topology.Sources[1].Workspaces != nil || topology.Summary.Worktrees != 1 || warnings.Len() != 0 {
+		t.Fatalf("topology before any jj slot = %+v, %+v, warnings %q; want sources with no jj workspaces, one worktree, and no jj run", topology.Sources, topology.Summary, warnings.String())
+	}
+	mustMkdirAll(t, filepath.Join(f.cache(), ".jj"))
+	topology, err = f.platform.GitOpsTopology(ctx)
+	if err != nil {
+		t.Fatalf("GitOpsTopology() over a broken .jj error = %v", err)
+	}
+	if source := topology.Sources[0]; source.Workspaces != nil || source.State != "clean" || source.Error != "" || !strings.Contains(warnings.String(), "list the jj workspaces of source app") {
+		t.Fatalf("topology over a broken .jj = %+v, warnings %q; want the source read from git, no workspaces, and a warning", source, warnings.String())
+	}
+	if err := os.Remove(filepath.Join(f.cache(), ".jj")); err != nil {
+		t.Fatalf("Remove(.jj) error = %v", err)
+	}
+
+	if err := f.create(f.template("mixed", map[string]string{
+		"tree": f.app("mode: worktree\nbranch: \"${inputs.branch}\"\nref: main\nsubpath: tree"),
+		"work": f.app("mode: jj\nref: main\nsubpath: work"),
+	}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate(ws) error = %v", err)
+	}
+	if err := f.create(f.template("siblings", map[string]string{
+		"a": f.app("mode: jj\nref: main\nsubpath: a"),
+		"b": f.app("mode: jj\nref: no-such-base\nsubpath: b\noptional: true"),
+	}), "solo", false); err != nil {
+		t.Fatalf("WorkspaceCreate(solo) error = %v", err)
+	}
+	mustMkdirAll(t, filepath.Join(f.base, "other"))
+	f.jj(f.cache(), "workspace", "add", "--colocate", "--name", "other--ws", "-r", "main@origin", filepath.Join(f.base, "other", "ws"))
+
+	want := []api.SourceWorkspace{
+		{Name: "default"},
+		{Name: "dev--solo--a", Owned: true, Path: filepath.Join(f.workspace("solo"), "a")},
+		{Name: "dev--ws", Owned: true, Path: filepath.Join(f.workspace("ws"), "work")},
+		{Name: "other--ws"},
+	}
+	topology, err = f.platform.GitOpsTopology(ctx)
+	if err != nil {
+		t.Fatalf("GitOpsTopology() error = %v", err)
+	}
+	if len(topology.Sources) != 2 || topology.Sources[0].Name != "app" || !reflect.DeepEqual(topology.Sources[0].Workspaces, want) {
+		t.Errorf("topology source workspaces = %+v, want app's %+v", topology.Sources, want)
+	}
+	if topology.Summary.Worktrees != 2 {
+		t.Errorf("topology worktrees = %d, want the two worktree slots, not the jj slots", topology.Summary.Worktrees)
+	}
+	for _, link := range topology.Links {
+		if link.Mode == manifest.WorkspaceSourceModeJJ && link.Path != filepath.Join(f.workspace("ws"), "work") && link.Path != filepath.Join(f.workspace("solo"), "a") {
+			t.Errorf("jj link %s at %s, want the path an owned workspace names", link.ID, link.Path)
+		}
+	}
+	state, err := f.platform.SourceStatus(ctx, "app")
+	if err != nil {
+		t.Fatalf("SourceStatus() error = %v", err)
+	}
+	if !reflect.DeepEqual(state.Workspaces, want) {
+		t.Errorf("source status workspaces = %+v, want %+v", state.Workspaces, want)
+	}
+
+	store := filepath.Join(f.base, "store")
+	f.jj(f.base, "git", "init", "--no-colocate", store)
+	mustWriteFile(t, filepath.Join(store, "f.txt"), "one\n")
+	f.jj(store, "commit", "-m", "base")
+	f.jj(store, "bookmark", "create", "main", "-r", "@-")
+	if err := f.create(f.template("two", map[string]string{
+		"work":  f.app("mode: jj\nref: main\nsubpath: work"),
+		"store": "source: store\nkind: local\npath: " + store + "\ndefault_ref: main\nmode: jj\nsubpath: store",
+	}), "two", false); err != nil {
+		t.Fatalf("WorkspaceCreate(two) error = %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(f.workspace("solo"), "a")); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	listed := func() map[string][]api.SourceWorkspace {
+		t.Helper()
+		topology, err := f.platform.GitOpsTopology(ctx)
+		if err != nil {
+			t.Fatalf("GitOpsTopology() error = %v", err)
+		}
+		bySource := map[string][]api.SourceWorkspace{}
+		for _, source := range topology.Sources {
+			bySource[source.Name] = source.Workspaces
+		}
+		return bySource
+	}
+	wantBySource := map[string][]api.SourceWorkspace{
+		"notes": nil,
+		"app": {
+			{Name: "default"},
+			{Name: "dev--solo--a"},
+			{Name: "dev--two", Owned: true, Path: filepath.Join(f.workspace("two"), "work")},
+			{Name: "dev--ws", Owned: true, Path: filepath.Join(f.workspace("ws"), "work")},
+			{Name: "other--ws"},
+		},
+		"store": {
+			{Name: "default"},
+			{Name: "dev--two", Owned: true, Path: filepath.Join(f.workspace("two"), "store")},
+		},
+	}
+	if got := listed(); !reflect.DeepEqual(got, wantBySource) {
+		t.Errorf("topology workspaces by source = %+v, want %+v", got, wantBySource)
+	}
+
+	// A slot that cannot be read is not owned, and the rest is listed.
+	unreadable := filepath.Join(f.workspace("ws"), "work")
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+	wantBySource["app"][3] = api.SourceWorkspace{Name: "dev--ws"}
+	if got := listed(); !reflect.DeepEqual(got, wantBySource) {
+		t.Errorf("topology workspaces with an unreadable slot = %+v, want %+v", got, wantBySource)
+	}
+	if err := os.Chmod(unreadable, 0o755); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	f.platform.jjProbe = func(context.Context) jjdriver.Capabilities {
+		return jjdriver.Capabilities{JJErr: errors.New("jj is not on PATH"), Git: "git version 2.50.1"}
+	}
+	warnings.Reset()
+	if got := listed(); got["app"] != nil || got["store"] != nil || warnings.Len() != 0 {
+		t.Errorf("topology workspaces without jj = %+v, warnings %q; want none, and no warning", got, warnings.String())
+	}
+}
+
+// A slot made as its workspace's only jj slot of a cache keeps the name
+// <stack>--<workspace> after a second jj slot of the cache is added to the
+// manifest by hand and repaired in, as <stack>--<workspace>--<slot>, while
+// the manifest now computes the longer name for both: each reads as owned,
+// with its own path, from its checkout.
+func TestJJWorkspacesOwnASlotUnderTheNameCreateGaveIt(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	if err := f.create(f.template("jj", map[string]string{"a": f.app("mode: jj\nref: main\nsubpath: a")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	stack, err := manifest.LoadFile(manifest.Path(f.root))
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	b := stack.Workspaces["ws"].Sources["a"]
+	b.Subpath = "b"
+	stack.Workspaces["ws"].Sources["b"] = b
+	if err := manifest.SaveFile(manifest.Path(f.root), stack); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	if result, err := f.platform.WorkspaceRepair(ctx, "ws"); err != nil {
+		t.Fatalf("WorkspaceRepair() error = %v (%+v)", err, result)
+	}
+	state, err := f.platform.SourceStatus(ctx, "app")
+	if err != nil {
+		t.Fatalf("SourceStatus() error = %v", err)
+	}
+	want := []api.SourceWorkspace{
+		{Name: "default"},
+		{Name: "dev--ws", Owned: true, Path: filepath.Join(f.workspace("ws"), "a")},
+		{Name: "dev--ws--b", Owned: true, Path: filepath.Join(f.workspace("ws"), "b")},
+	}
+	if !reflect.DeepEqual(state.Workspaces, want) {
+		t.Errorf("source workspaces = %+v, want %+v", state.Workspaces, want)
+	}
+}
+
+// A name is owned only when one checkout of this stack holds it, and that
+// checkout no other name: once a workspace elsewhere named as this stack
+// could have named the slot (`<stack>--<workspace>--<slot>`) has `jj edit`ed
+// the slot's working-copy commit, the slot's checkout holds both names, and
+// neither is owned. Before that, the one elsewhere is not owned.
+func TestJJWorkspacesOwnNoneOfTwoNamesOneCheckoutHolds(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	if err := f.create(f.template("jj", map[string]string{"work": f.app("mode: jj\nref: main\nsubpath: work")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	elsewhere := filepath.Join(f.base, "elsewhere")
+	f.jj(f.cache(), "workspace", "add", "--colocate", "--name", "dev--ws--work", "-r", "main@origin", elsewhere)
+	work := filepath.Join(f.workspace("ws"), "work")
+	check := func(when string, want []api.SourceWorkspace) {
+		t.Helper()
+		state, err := f.platform.SourceStatus(ctx, "app")
+		if err != nil {
+			t.Fatalf("SourceStatus() error = %v", err)
+		}
+		if !reflect.DeepEqual(state.Workspaces, want) {
+			t.Errorf("source workspaces %s = %+v, want %+v", when, state.Workspaces, want)
+		}
+	}
+	check("with one elsewhere", []api.SourceWorkspace{{Name: "default"}, {Name: "dev--ws", Owned: true, Path: work}, {Name: "dev--ws--work"}})
+	f.jj(elsewhere, "edit", strings.TrimSpace(f.jj(work, "log", "--no-graph", "-r", "@", "-T", "change_id")))
+	check("once it edits the slot's commit", []api.SourceWorkspace{{Name: "default"}, {Name: "dev--ws"}, {Name: "dev--ws--work"}})
+}
+
+// A checkout of another repository at the slot's path, under the slot's own
+// name, is not the cache's workspace of that name: its working-copy change
+// is not the one the cache lists for the name, so the cache's is not owned.
+func TestJJWorkspacesOwnNoCheckoutOfAnotherRepository(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	if err := f.create(f.template("jj", map[string]string{"work": f.app("mode: jj\nref: main\nsubpath: work")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	work := filepath.Join(f.workspace("ws"), "work")
+	if err := os.RemoveAll(work); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	other := filepath.Join(f.base, "other-repo")
+	f.jj(f.base, "git", "init", "--no-colocate", other)
+	mustWriteFile(t, filepath.Join(other, "f.txt"), "other\n")
+	f.jj(other, "commit", "-m", "other")
+	f.jj(other, "workspace", "add", "--name", "dev--ws", work)
+	state, err := f.platform.SourceStatus(ctx, "app")
+	if err != nil {
+		t.Fatalf("SourceStatus() error = %v", err)
+	}
+	if want := []api.SourceWorkspace{{Name: "default"}, {Name: "dev--ws"}}; !reflect.DeepEqual(state.Workspaces, want) {
+		t.Errorf("source workspaces = %+v, want %+v", state.Workspaces, want)
 	}
 }

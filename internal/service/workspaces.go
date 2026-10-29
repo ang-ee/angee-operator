@@ -447,21 +447,40 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 	}
 	target := workspaceVCSSlot(path, source, wsSource)
 	read, err := p.slotDriver(target).Status(ctx, target)
+	setSlotStatus(&status, read, err)
+	return status
+}
+
+// setSlotStatus fills status with what the slot's driver read, read and err
+// being what vcs.Driver.Status returned. It is the one mapping from a
+// driver's read to the API: every DTO that reports a slot or a source's
+// cache (SourceState, GitOpsLink) is made from the WorkspaceSourceStatus it
+// fills. A read that failed makes the slot an error and not pushed, and
+// keeps what the driver read before it failed, as a jj slot on a missing base
+// keeps its counts. The jj fields are copied as they are, so they are zero
+// for a git slot.
+func setSlotStatus(status *api.WorkspaceSourceStatus, read vcs.Status, err error) {
 	status.CurrentRef = read.CurrentRef
 	status.Dirty = read.Dirty
 	status.Upstream = read.Upstream
 	status.Ahead = read.Ahead
 	status.Behind = read.Behind
+	status.JJSlotState = api.JJSlotState{
+		ChangeID:       read.ChangeID,
+		BaseBehind:     read.BaseBehind,
+		Conflicted:     read.Conflicted,
+		ConflictPaths:  read.ConflictPaths,
+		UntrackedPaths: read.UntrackedPaths,
+	}
 	if err != nil {
 		status.State = "error"
 		status.Pushed = false
 		status.Error = err.Error()
-		return status
+		return
 	}
 	status.State = workspaceSourceStateOf(read)
 	status.Pushed = read.Pushed
 	status.UnpushedReason = read.UnpushedReason
-	return status
 }
 
 // workspaceSourceStateOf names the state a slot's driver status puts it in.
@@ -1419,8 +1438,9 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 // Every slot is checked, fetched, has its base resolved and, when it is to
 // be rebased, what the rebase would rewrite checked (vcs.Driver.CheckRebase,
 // plan D12) before any is synced, so a refusal leaves no slot changed. A jj
-// slot's conflict is recorded in its commits and reported on its state
-// (conflicted, conflict_paths), and the sync goes on to the next slot; a git
+// slot's conflict is recorded in its commits and reported on its state, read
+// from its status (conflicted, conflict_paths), and the sync goes on to the
+// next slot; a git
 // slot that stops on conflicts ends the sync with merge_conflict, as before.
 // A local source's jj store is the user's, so angee never fetches it: such a
 // slot is rebased onto its base as the store has it.
@@ -1529,11 +1549,8 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 		if err != nil {
 			return nil, err
 		}
-		if result.Conflicted {
-			// Recorded in the slot's commits (jj): the slot synced, and says so.
-			state.Conflicted = true
-			state.ConflictPaths = result.ConflictFiles
-		}
+		// A conflict recorded in the slot's commits (jj) reaches its state
+		// through its status, as conflicted and conflict_paths.
 		if syncErr != nil && state.Error == "" {
 			// The slot synced, but what the sync left could not be read: the
 			// sync goes on, and the slot's state says so.
@@ -1615,6 +1632,7 @@ func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.Source
 		Pushed:         status.Pushed,
 		UnpushedReason: status.UnpushedReason,
 		Error:          status.Error,
+		JJSlotState:    status.JJSlotState,
 	}
 }
 

@@ -25,8 +25,9 @@ and the primary lock of D9) as #125 (`39cbd1f`), which completes phase 4.
 Phase 5 step 6 (the jj slot lifecycle) is merged as #131 (`2708e40`), which
 completes phase 5, and the prerequisites phase 6 found as #138 (`0e5b28a`,
 the cache's git format) and #139 (`4775021`, Q10 (a) and a pushed verdict
-on a missing base). Phase 6 (`mode: jj` lifecycle and status) is in review
-in the PR that updates this paragraph; phase 7 is next.
+on a missing base). Phase 6 (`mode: jj` lifecycle and status) is merged as
+#140 (`7eccb17`) and released in v0.24.0. Phase 7 (status fields and
+topology) is merged as #142 (`50a4f38`).
 Q1 (jj slots are created in place), Q2 (2026-10-09:
 `<stack>--<workspace>`, a clash is refused), Q6 (2026-10-10: slot state is
 read on demand, so every read snapshots and there is no interval, which
@@ -165,9 +166,9 @@ entry; and a pass of the `go-code-reviewer` agent.
 2  remotes with roles                               (git only; merged)
 4a..4d  vcs.Driver seam, git driver only            (after 1; merged, 4c in #125)
 5  jj driver package + doctor probe + CI            (after 4; merged in #126 and #131)
-6  mode: jj lifecycle + status, other verbs refuse  (after 5; step 5's driver prerequisites in review)
-7  status fields and topology                       (after 6)
-8  sync-base, publish, push, merge on jj slots      (after 7; needs 2)
+6  mode: jj lifecycle + status, other verbs refuse  (after 5; merged in #140)
+7  status fields and topology                       (after 6; merged in #142)
+8  sync-base, publish, push, merge on jj slots      (after 7; needs 2; sync-base and rebase in review)
 9  ws source migrate                                (after 8)
 10 op-heads watch: dropped, slot state is read on demand (Q6)
 11 templates, docs, live check                      (after 8, 9)
@@ -1889,6 +1890,138 @@ guard, the guard's wording, and a bare `vcs.ErrBaseNotFound` refusing.
 Tests: JSON shape tests for the new fields; a conflicted slot reports paths;
 `make check-generated`.
 
+**As built (2026-10-29).**
+
+- **Step 1, the fields.** `api.JJSlotState` holds `change_id`, `base_behind`,
+  `conflicted`, `conflict_paths` and `untracked_paths`, and is embedded in
+  `WorkspaceSourceStatus`, `GitOpsLink` and `SourceState`, so the JSON keys sit
+  beside `state` and the three DTOs cannot drift apart. `conflicted` is always
+  present (`false` for a git slot, `Boolean!` in GraphQL); the others are
+  omitted when empty. `GitOpsSummary.Conflicted` counts beside the states, as
+  `Unpushed` does (`countGitOpsState`). gqlgen binds the promoted fields with
+  no resolver; a nullable `String` or `Int` bound to a Go value answers `""`
+  or `0`, as `currentRef` already does.
+- **One mapping.** `setSlotStatus(status, read, err)` (`workspaces.go`) is the
+  only place a `vcs.Status` becomes API fields. `workspaceSourceStatus` calls
+  it, the cache read in `sourceState` now goes through it too, and
+  `sourceStateFromWorkspaceStatus` and `gitOpsLinkFromWorkspaceSource` copy
+  `JJSlotState` whole. Phase 8's sync-base on jj slots reports `conflicted`
+  through `workspaceSourceState` with no change here.
+- **`untracked_paths` is carried** (decided here; the list predates #139,
+  whose as-built note said phase 7 adds the paths). They are the one case
+  where a jj slot holds work no commit has, publish will not push, and
+  destroy would delete, so a client should be able to name them, and
+  `unpushed_reason` stops at ten. Raw, as jj lists them: JSON escapes what
+  does not print, and the CLI does not print them (the reason already
+  quotes them).
+- **Step 2, topology.** `SourceState.Workspaces` (`[{name, owned, path}]`,
+  `api.SourceWorkspace`) is set by `sourceState`, so source status and list
+  carry it too, not only the topology. It is listed for any source whose path
+  has a `.jj` directory, a local store that is not colocated with git
+  included, since its jj slots are workspaces all the same; a source without
+  one, or an operator whose jj probe (`probeJJ`, kept for the process) found
+  no jj, runs no jj and warns of nothing. `jjdriver.Driver.Workspaces` reads
+  `jj workspace list` by name, as `Exists` does, with each workspace's
+  working-copy change id (`ListedWorkspace`).
+  - **Ownership is read from the checkout, not the name (review).** The plan
+    said `owned` comes from comparing jj's list with the names this stack's
+    manifest computes. That marks another stack's workspace as this stack's,
+    with a path where nothing is: a stack of the same name sharing the cache
+    computes the same names (`sharedCacheStacks`), which phase 6 already
+    found for destroy. So `jjSlotCandidates` lists, per name, the paths of
+    the slots this stack could have given it (the computed name, and both
+    `<stack>--<workspace>` and `<stack>--<workspace>--<slot>`, as
+    `recordedJJSlotTarget` and `destroyedJJSlot` allow), and a listed name is
+    owned only when the checkout at one of them is that workspace, by
+    `HeldChange`'s rule: `CheckoutAt` (one `jj log` per path, `HeldChange`'s
+    first half, which it now calls) lists the name among the working copies
+    there, with the change the listing gives the name. `path` is that one.
+    Every other workspace, the primary's own (`default`), other stacks', and
+    this stack's whose checkout is gone or cannot be read, is not owned and
+    has no path. A path that cannot be read only leaves its slot not owned
+    (debug log); only a cancelled context fails the listing. Both name forms
+    make the drift of create's names harmless: an optional sibling skipped at
+    create, and a second slot added to the manifest by hand and repaired in.
+  - **Ambiguity owns nothing.** `HeldChange`'s known limit (a workspace that
+    `jj edit`ed another's working-copy commit shares it) would make two names
+    read as held at one path. A name is owned only when exactly one path
+    holds it and that path holds no other name, so the case reads as not
+    owned rather than as either guess.
+  - Cost: one workspace list per jj source, and one `jj log` per distinct
+    candidate path whose name is listed (about one per jj slot of this stack
+    on that primary), on every source status, source list and topology
+    read. A first version ran `Holds` per candidate, which listed the
+    workspaces again each time (1 + 2N).
+  - The primary's own workspace is listed: `WorkspaceRef` has no marker for
+    the current workspace, and telling it apart needs another jj call per
+    source.
+  - A listing jj cannot read is a warning and is omitted, as the commits are;
+    the source's git state is reported as before.
+- **The worktree count stays right.** It counts links whose effective mode is
+  `worktree`, so a jj slot, `mode: jj` or unmoded under `vcs: jj`, is not
+  counted, although git registers a colocated jj slot as a worktree of its
+  cache. A test pins it with both kinds of slot of one cache.
+- **Step 3, CLI.** `workspace git` and `workspace status` append
+  `conflicted: <paths>` after the state, naming up to ten
+  (`conflictDetail`). `vcs.NamePaths` now names paths for it and for the jj
+  driver's `dirtyReason` alike: up to a limit, then "and N more", quoting a
+  name that does not print or that holds ", ". `sync-base`'s and `push`'s
+  lines are unchanged, for phase 8 to extend with the same helper.
+- **Tests.** The JSON shape of all four DTOs, `workspaces` included; a GraphQL
+  query of every new field on a git slot; a real jj slot rebased into a
+  conflict reporting `f.txt` through workspace status, workspace git, the
+  topology's link and summary, clearing once resolved, with `base_behind`
+  before the rebase and `untracked_paths` for a file over jj's size limit;
+  the topology's `workspaces` with the cache's own, owned slots (one under
+  the longer name), another stack's, this stack's whose checkout is gone, two
+  primaries' workspaces of one name each with its own path, a local store
+  not colocated with git, none and no jj run before any jj slot or without
+  jj, and a warning over a broken `.jj`; a same-named stack that does not
+  own the first's workspace; a hand-added second slot; the driver's
+  `Workspaces` and `CheckoutAt` (a slot, the primary, a shared commit, a
+  link, a plain or broken directory); a slot that cannot be read leaving the
+  rest listed; two names one checkout holds owning neither; another
+  repository's checkout at the slot's path under its name; `NamePaths`; the
+  CLI's lines, cap and quoting. Twenty-three mutants caught: each of the
+  five fields' mapping, the copies into `SourceState` and the link, the
+  summary count, the cache read, the source's workspaces, the `.jj`,
+  directory and probe gates, ownership by name without the checkout, the
+  change id check, the ambiguity rule, an unreadable slot failing the
+  listing, either name form missing, both quotings of `NamePaths`, the CLI's
+  cap and its line. Survive, as they should: dropping `jjSlotCandidates`'
+  primary filter, which only spares jj calls, and the working-copy name
+  check, which the change id implies within one repository (kept, as
+  `HeldChange` keeps it).
+- **Review record (`go-code-reviewer`, 2026-10-29).** One blocker, fixed:
+  `owned` by name alone (above). Should-fixes taken: no jj run or warning
+  for an operator without jj (a container that mounts a host cache); the
+  docs no longer say push, sync-base and the per-slot verbs carry the fields
+  today (they refuse jj slots until phase 8); tests for the primary filter
+  (two primaries), a non-colocated store and `untracked_paths`. Nits taken:
+  `conflicted` documented as false for a slot whose base does not resolve;
+  the empty GraphQL `path` documented; the Go API change (DTOs no longer
+  comparable) in the changelog; `NamePaths` shared, quoting ", " too; a test
+  assertion that panicked. Not taken: giving a slot's `SourceState` the
+  GraphQL id `<source>:<slot>`. Today a slot's entry and the cache share the
+  source's name as id, so a client that normalizes by id merges them; that
+  is so for `state` and `dirty` already, and the id of an existing type is
+  the owner's call. Rewriting the `%+v` expectations in
+  `push_publish_git_test.go` as struct comparisons is left as it is.
+- **Second review (`go-code-reviewer`, 2026-10-29), of the fixes.** The
+  blocker is resolved. Taken: one unreadable slot no longer drops the whole
+  listing; the ownership check runs one `jj log` per path against the
+  listing in hand instead of `Holds` per candidate; two names one checkout
+  holds own neither; the docs say a slot that cannot be read is not owned,
+  and that the probe is kept for the process (an operator started before jj
+  was installed lists nothing until it restarts); the candidates' comment no
+  longer says another repository's change ids never match (an imported git
+  commit has the same one in two clones). Each CLI `source status` or `list`
+  on a jj source now runs the probe's three commands once.
+- **For phase 8.** Sync-base, rebase and merge on a jj slot should return
+  each slot's state through `workspaceSourceState` (or `setSlotStatus`), so
+  a conflict is `conflicted: true` with its paths; the CLI's `sync-base`
+  line can print it with `conflictDetail`.
+
 ### Phase 8. Sync-base, publish, push and merge on jj slots
 
 Replaces the phase 6 refusals verb by verb. May land as two PRs (sync-base
@@ -2034,9 +2167,11 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
     and the slot's rebase says it was the read that failed. The result is
     `OK` and `Conflicted`; a git conflict stays
     `Conflicted` without `OK`, which is how the service tells the two apart,
-    without asking the slot's mode. A recorded conflict sets the slot's
-    `SourceState.Conflicted` and `ConflictPaths` (from the result, added in
-    their own commit with phase 7's JSON names), and the loop goes on. A git
+    without asking the slot's mode. A recorded conflict reaches the slot's
+    state through its status (phase 7's `api.JJSlotState`, from
+    `setSlotStatus`), and the loop goes on. (A stopgap commit had added
+    `conflicted` and `conflict_paths` to `SourceState` alone, set from the
+    result; merging #142 replaced it with phase 7's struct.) A git
     conflict still ends the sync with `merge_conflict`. A non-conflict
     failure ends the sync as that slot's error, quoting jj (`vcs.ToolError`).
   - The state after a sync is the slot's status, as for git.
@@ -2116,10 +2251,6 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
   - `jjSlotVerbs` grows with each verb, and `workspace push` drops
     `refuseJJSlots` once it selects jj slots by recorded mode, as sync-base
     does.
-  - The GraphQL `SourceState` has no `conflicted` yet: phase 7's lane adds it
-    with the other status fields. Once `WorkspaceSourceStatus` carries
-    `vcs.Status.Conflicted`, sync-base can take a slot's conflict from its
-    status rather than from the rebase's result.
   - Bookmarks on the commits a rebase rewrites that no worktree has checked
     out (another slot's published bookmark, say) move with them silently,
     within D12 as written; publish will then force-push them. Decide before

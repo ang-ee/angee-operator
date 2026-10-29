@@ -567,6 +567,36 @@ func TestExists(t *testing.T) {
 	check("after Remove", s, false)
 }
 
+// TestWorkspaces lists the primary's workspaces by name, sorted, each with
+// its working-copy change: its own (default) and each slot added, a name a
+// revset would misread included, and not one that was removed.
+func TestWorkspaces(t *testing.T) {
+	f := newPrimary(t)
+	ctx := context.Background()
+	d := driver()
+	check := func(when string, want ...ListedWorkspace) {
+		t.Helper()
+		if got, err := d.Workspaces(ctx, f.primary); !slices.Equal(got, want) || err != nil {
+			t.Errorf("Workspaces() %s = %+v, %v; want %+v", when, got, err, want)
+		}
+	}
+	primary := ListedWorkspace{Name: "default", ChangeID: f.changeID(f.primary, workingCopy)}
+	check("of a new primary", primary)
+	b := f.slotSpec("workspaces/b/src", "stack--b", "")
+	a := f.slotSpec("workspaces/a/src", `stack--"a"@`, "")
+	for _, s := range []vcs.Slot{b, a} {
+		if err := f.add(s); err != nil {
+			t.Fatalf("Add(%s) error = %v", s.Name, err)
+		}
+	}
+	listedA := ListedWorkspace{Name: a.Name, ChangeID: f.changeID(a.Path, workingCopy)}
+	check("after two adds", primary, listedA, ListedWorkspace{Name: b.Name, ChangeID: f.changeID(b.Path, workingCopy)})
+	if err := d.Remove(ctx, b, f.dest(b)); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	check("after a remove", primary, listedA)
+}
+
 // TestLifecycleHostileNames makes, finds and removes slots whose workspace
 // names a revset, a flag parser or a shell would misread: each reaches jj
 // as one argument and comes back as it went in.
@@ -618,6 +648,7 @@ func TestLifecycleRefusesMissingFacts(t *testing.T) {
 		is   error
 	}{
 		"EnsurePrimary, no primary": {call: func() error { return d.EnsurePrimary(ctx, "") }},
+		"Workspaces, no primary":    {call: func() error { _, err := d.Workspaces(ctx, ""); return err }},
 		"Exists, no name":           {call: func() error { _, err := d.Exists(ctx, noName); return err }},
 		"Exists, no primary":        {call: func() error { _, err := d.Exists(ctx, noPrimary); return err }},
 		"Add, no name":              {call: func() error { return d.Add(ctx, noName, nil, nil) }},

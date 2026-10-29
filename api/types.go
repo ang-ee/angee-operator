@@ -261,6 +261,12 @@ type WorkspaceStatusResponse struct {
 	InnerError string               `json:"inner_error,omitempty"`
 }
 
+// WorkspaceSourceStatus is one slot of a workspace as its driver reads it.
+// State is one of missing, ready (a linked local source), clean, dirty,
+// ahead, behind, diverged, branch-mismatch or error. JJSlotState's fields
+// are read from jj slots only: Conflicted is a flag beside State, never a
+// state of its own, so a client that does not know it reads the slot as
+// before.
 type WorkspaceSourceStatus struct {
 	Slot           string `json:"slot"`
 	Source         string `json:"source"`
@@ -280,6 +286,28 @@ type WorkspaceSourceStatus struct {
 	Pushed         bool   `json:"pushed"`
 	UnpushedReason string `json:"unpushed_reason,omitempty"`
 	Error          string `json:"error,omitempty"`
+	JJSlotState
+}
+
+// JJSlotState is what the status of a jj slot reads beyond a git slot's,
+// shared by every DTO that reports a slot. Its fields are zero for any other
+// slot. jj records a conflict in the commit and goes on, so a slot can be
+// conflicted in any state.
+type JJSlotState struct {
+	// ChangeID is the change id of the slot's working-copy commit.
+	ChangeID string `json:"change_id,omitempty"`
+	// BaseBehind counts the commits of the slot's base it lacks, so a moved
+	// base shows even when Behind counts against the slot's upstream.
+	BaseBehind int `json:"base_behind,omitempty"`
+	// Conflicted reports a conflicted commit among the slot's own, and
+	// ConflictPaths lists the conflicted files, sorted.
+	Conflicted    bool     `json:"conflicted"`
+	ConflictPaths []string `json:"conflict_paths,omitempty"`
+	// UntrackedPaths lists the new files jj leaves out of the working-copy
+	// commit (over its snapshot.max-new-file-size, or outside its
+	// snapshot.auto-track), relative to the slot, a directory ending in "/".
+	// Only the slot holds them, so they make it dirty.
+	UntrackedPaths []string `json:"untracked_paths,omitempty"`
 }
 
 type WorkspacePersistPath struct {
@@ -323,8 +351,14 @@ type GitOpsLink struct {
 	Pushed         bool   `json:"pushed"`
 	UnpushedReason string `json:"unpushed_reason,omitempty"`
 	Error          string `json:"error,omitempty"`
+	JJSlotState
 }
 
+// GitOpsSummary counts the topology's sources and links by state. Worktrees
+// counts the links of git worktree slots, so not jj slots, although git
+// lists a colocated jj slot among its primary's worktrees. Unpushed and
+// Conflicted count beside the states: a source or link in any state can be
+// unpushed, and a jj slot in any state conflicted.
 type GitOpsSummary struct {
 	Sources        int `json:"sources"`
 	Workspaces     int `json:"workspaces"`
@@ -338,6 +372,7 @@ type GitOpsSummary struct {
 	Missing        int `json:"missing"`
 	Error          int `json:"error"`
 	Unpushed       int `json:"unpushed"`
+	Conflicted     int `json:"conflicted"`
 }
 
 type ServiceInitRequest struct {
@@ -700,26 +735,44 @@ type WorkspaceRepairSlot struct {
 	Status *WorkspaceSourceStatus `yaml:"status,omitempty" json:"status,omitempty"`
 }
 
+// SourceState is a source's cache or local store, or, with Slot set, one
+// workspace slot of it (workspace git, push and sync-base). Workspaces is
+// set for a source whose cache or store is a jj repository, when the
+// operator found jj on PATH the first time it looked.
 type SourceState struct {
-	Name           string      `json:"name"`
-	Slot           string      `json:"slot,omitempty"`
-	Kind           string      `json:"kind"`
-	Path           string      `json:"path"`
-	Exists         bool        `json:"exists"`
-	State          string      `json:"state,omitempty"`
-	Branch         string      `json:"branch,omitempty"`
-	Ref            string      `json:"ref,omitempty"`
-	CurrentRef     string      `json:"current_ref,omitempty"`
-	Dirty          bool        `json:"dirty,omitempty"`
-	Upstream       string      `json:"upstream,omitempty"`
-	Ahead          int         `json:"ahead,omitempty"`
-	Commits        []CommitRef `json:"commits,omitempty"`
-	Behind         int         `json:"behind,omitempty"`
-	Pushed         bool        `json:"pushed"`
-	UnpushedReason string      `json:"unpushed_reason,omitempty"`
-	// Conflicted reports a conflict recorded in the slot's own commits, as
-	// a jj slot's sync-base leaves one; ConflictPaths lists its files.
-	Conflicted    bool     `json:"conflicted,omitempty"`
-	ConflictPaths []string `json:"conflict_paths,omitempty"`
-	Error         string   `json:"error,omitempty"`
+	Name           string            `json:"name"`
+	Slot           string            `json:"slot,omitempty"`
+	Kind           string            `json:"kind"`
+	Path           string            `json:"path"`
+	Exists         bool              `json:"exists"`
+	State          string            `json:"state,omitempty"`
+	Branch         string            `json:"branch,omitempty"`
+	Ref            string            `json:"ref,omitempty"`
+	CurrentRef     string            `json:"current_ref,omitempty"`
+	Dirty          bool              `json:"dirty,omitempty"`
+	Upstream       string            `json:"upstream,omitempty"`
+	Ahead          int               `json:"ahead,omitempty"`
+	Commits        []CommitRef       `json:"commits,omitempty"`
+	Behind         int               `json:"behind,omitempty"`
+	Pushed         bool              `json:"pushed"`
+	UnpushedReason string            `json:"unpushed_reason,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	Workspaces     []SourceWorkspace `json:"workspaces,omitempty"`
+	JJSlotState
+}
+
+// SourceWorkspace is one jj workspace of a source's jj repository, as jj
+// lists it. Owned reports that the checkout at the path this stack's
+// manifest gives one of its jj slots of that repository is that workspace,
+// and Path is then that path. Every other workspace, the repository's own
+// (default), other stacks' slots, and a slot of this stack whose checkout is
+// gone or cannot be read alike, is not owned and has no path: jj's record of
+// a workspace's path goes stale once the workspace moves, so it is not
+// reported. Nor is a workspace owned whose checkout holds another of the
+// names this stack could have given the slot, as when one `jj edit`ed the
+// other's working-copy commit, since which is this stack's cannot be told.
+type SourceWorkspace struct {
+	Name  string `json:"name"`
+	Owned bool   `json:"owned"`
+	Path  string `json:"path,omitempty"`
 }

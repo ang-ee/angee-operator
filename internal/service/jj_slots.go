@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
@@ -19,12 +20,15 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
-// jjLifecycle is what creating and removing a jj slot asks of its driver
-// beyond vcs.Driver, which jjdriver.Driver answers. A git primary needs none
-// of it, so it is not part of vcs.Driver (plan D2).
+// jjLifecycle is what creating and removing a jj slot, and listing a
+// primary's jj workspaces, asks of its driver beyond vcs.Driver, which
+// jjdriver.Driver answers. A git primary needs none of it, so it is not part
+// of vcs.Driver (plan D2).
 type jjLifecycle interface {
 	vcs.Driver
 	EnsurePrimary(ctx context.Context, primary string) error
+	Workspaces(ctx context.Context, primary string) ([]jjdriver.ListedWorkspace, error)
+	CheckoutAt(ctx context.Context, dir string) (jjdriver.Checkout, error)
 	Holds(ctx context.Context, s vcs.Slot, dir string) (bool, error)
 	HeldChange(ctx context.Context, s vcs.Slot, dir string) (string, error)
 	Recorded(ctx context.Context, s vcs.Slot) (string, bool, error)
@@ -93,6 +97,122 @@ func (p *Platform) jjWorkspaceNames(stack *manifest.Stack, workspaceName string,
 		}
 	}
 	return names, nil
+}
+
+// sourceJJWorkspaces lists the jj workspaces of primary, a source's cache or
+// local store, when it is a jj repository (it has a .jj directory) and this
+// machine had jj when the process first looked (probeJJ), and nil
+// otherwise, so a source no jj slot uses, or an operator without jj, runs
+// nothing and warns of nothing (plan phase 7). A workspace is owned when the
+// checkout at the path this stack's manifest gives one of its jj slots of
+// primary is that workspace, as HeldChange decides it: jj loads there a
+// working copy that lists the name, and is that workspace's working-copy
+// change in primary's list. Its path is then that slot's. Any other, the
+// repository's own, other stacks' slots, and a slot of this stack whose
+// checkout is gone or cannot be read alike, is not owned and has no path:
+// jj's record of where a workspace is goes stale once it moves (plan section
+// 2), and a name alone does not say whose it is, since a stack of the same
+// name sharing the primary computes the same names. A checkout that holds
+// two of the names, or a name two checkouts hold (a workspace that `jj
+// edit`ed another's working-copy commit), owns none, since which is this
+// stack's cannot be told.
+//
+// It runs one workspace list, and one `jj log` per candidate path whose name
+// the list has. A path that cannot be read only leaves its slot not owned;
+// the slot's status reports why.
+func (p *Platform) sourceJJWorkspaces(ctx context.Context, stack *manifest.Stack, primary string) ([]api.SourceWorkspace, error) {
+	if info, err := os.Lstat(filepath.Join(primary, ".jj")); errors.Is(err, fs.ErrNotExist) || err == nil && !info.IsDir() {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if p.probeJJ(ctx).JJ == "" {
+		return nil, nil
+	}
+	jj, ok := p.slotDriver(vcs.Slot{Mode: vcs.ModeJJ}).(jjLifecycle)
+	if !ok {
+		return nil, fmt.Errorf("the jj driver cannot list the workspaces of %s", primary)
+	}
+	listed, err := jj.Workspaces(ctx, primary)
+	if err != nil {
+		return nil, err
+	}
+	candidates := p.jjSlotCandidates(stack, primary)
+	checkouts := map[string]jjdriver.Checkout{}
+	heldAt := map[string][]int{}
+	for i, w := range listed {
+		for _, path := range candidates[w.Name] {
+			checkout, read := checkouts[path]
+			if !read {
+				if checkout, err = jj.CheckoutAt(ctx, path); err != nil {
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					logctx.From(ctx).Debug(fmt.Sprintf("could not tell whether %s is jj workspace %q of %s: %v", path, w.Name, primary, err))
+				}
+				checkouts[path] = checkout
+			}
+			if checkout.ChangeID != "" && checkout.ChangeID == w.ChangeID && slices.Contains(checkout.Workspaces, w.Name) {
+				heldAt[path] = append(heldAt[path], i)
+			}
+		}
+	}
+	// A name is owned only when one path holds it, and that path no other.
+	heldBy := map[int][]string{}
+	for path, held := range heldAt {
+		for _, i := range held {
+			heldBy[i] = append(heldBy[i], path)
+		}
+	}
+	workspaces := make([]api.SourceWorkspace, len(listed))
+	for i, w := range listed {
+		workspaces[i] = api.SourceWorkspace{Name: w.Name}
+		if at := heldBy[i]; len(at) == 1 && len(heldAt[at[0]]) == 1 {
+			workspaces[i].Owned, workspaces[i].Path = true, at[0]
+		}
+	}
+	return workspaces, nil
+}
+
+// jjSlotCandidates maps each jj workspace name this stack's manifest could
+// have given one of its jj slots of primary to the paths of the slots it
+// could be. A slot has the name jjWorkspaceNames computes now, but create
+// named it by the jj slots of its primary it resolved then, so it may have
+// either `<stack>--<workspace>` or `<stack>--<workspace>--<slot>`, as
+// recordedJJSlotTarget and destroyedJJSlot allow for: the longer one when an
+// optional sibling was skipped and never recorded, the shorter when a second
+// slot was added to the manifest since. Only the shorter can be several
+// slots', and only the checkout tells which (sourceJJWorkspaces). Slots of
+// other primaries are left out: their checkouts are another repository's,
+// and are not read. A workspace whose names jj could not take (an invalid
+// part) has no slot under any.
+func (p *Platform) jjSlotCandidates(stack *manifest.Stack, primary string) map[string][]string {
+	primary = filepath.Clean(primary)
+	candidates := map[string][]string{}
+	for _, workspaceName := range sortedKeys(stack.Workspaces) {
+		sources := stack.Workspaces[workspaceName].Sources
+		names, err := p.jjWorkspaceNames(stack, workspaceName, sources)
+		if err != nil {
+			continue
+		}
+		base := stack.Name + "--" + workspaceName
+		for _, slot := range sortedKeys(names) {
+			wsSource := withEffectiveMode(stack, sources[slot])
+			if filepath.Clean(p.sourcePath(wsSource.Source, stack.Sources[wsSource.Source])) != primary {
+				continue
+			}
+			_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+			if err != nil {
+				continue
+			}
+			for _, name := range []string{names[slot], base, base + "--" + slot} {
+				if !slices.Contains(candidates[name], path) {
+					candidates[name] = append(candidates[name], path)
+				}
+			}
+		}
+	}
+	return candidates
 }
 
 // jjSlotTargets names the jj slots among the slots a create resolved (items),
@@ -198,11 +318,7 @@ func checkJJNamePart(what, part string) error {
 // precondition, cause jj_unavailable, whose hint says what to install, and
 // it matches vcs.ErrUnsupported.
 func (p *Platform) requireJJSlots(ctx context.Context) error {
-	probe := p.jjProbe
-	if probe == nil {
-		probe = jjdriver.Probe
-	}
-	caps := probe(ctx)
+	caps := p.probeJJ(ctx)
 	unsupported := &jjdriver.UnsupportedError{}
 	var hints []string
 	// git's version is judged against the jj slots' floor alone, so a git
@@ -231,6 +347,15 @@ func (p *Platform) requireJJSlots(ctx context.Context) error {
 		Summary: fmt.Sprintf("%v. %s", unsupported, unsupported.Hint),
 		Err:     unsupported,
 	}
+}
+
+// probeJJ reports what this machine offers jj slots: jjdriver.Probe, kept
+// for the process, or the probe a test set (Platform.jjProbe).
+func (p *Platform) probeJJ(ctx context.Context) jjdriver.Capabilities {
+	if p.jjProbe != nil {
+		return p.jjProbe(ctx)
+	}
+	return jjdriver.Probe(ctx)
 }
 
 // checkJJPrimary refuses a jj slot whose primary is not where the manifest
