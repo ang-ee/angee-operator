@@ -28,6 +28,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,7 +37,8 @@ type Platform struct {
 	composeBackend  runtime.Backend
 	procBackend     runtime.Backend
 	portUnavailable func(int) bool
-	slotDrivers     func(vcs.Slot) vcs.Driver // nil selects slotDriver's default
+	slotDrivers     func(vcs.Slot) vcs.Driver                   // nil selects slotDriver's default
+	jjProbe         func(context.Context) jjdriver.Capabilities // nil probes this machine (jjdriver.Probe)
 	jobOutput       *jobOutputSink
 	interactive     bool
 	jobRunsMu       sync.RWMutex

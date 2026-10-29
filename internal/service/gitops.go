@@ -265,7 +265,7 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceNam
 		refusal.Source = wsSource.Source
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", refusal
 	}
-	if err := requireWorkspaceSlotsOnDisk(workspaceName, []workspaceSlotPath{{slot: slot, path: path, source: source}}); err != nil {
+	if err := requireWorkspaceSlotsOnDisk(workspaceName, []workspaceSlotPath{{slot: slot, path: path, source: source, mode: stack.EffectiveSourceMode(wsSource)}}); err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
 	}
 	return stack, wsSource, source, path, nil

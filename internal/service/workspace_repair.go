@@ -130,7 +130,8 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 	}
 	run.claimed[path] = slot
 	source, declared := stack.Sources[wsSource.Source]
-	disk, err := inspectWorkspaceSlot(path, source)
+	mode := stack.EffectiveSourceMode(wsSource)
+	disk, err := inspectWorkspaceSlot(path, source, mode)
 	if err != nil {
 		return finish(api.WorkspaceRepairFailed, repairReason(err))
 	}
@@ -144,7 +145,11 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 	case workspaceSlotDangling:
 		return finish(api.WorkspaceRepairNeedsAttention, fmt.Sprintf("%s is a link whose target is missing; remove it and repair again", path))
 	case workspaceSlotNotCheckout:
-		return finish(api.WorkspaceRepairNeedsAttention, fmt.Sprintf("%s exists but is not a git checkout; move it aside and repair again", path))
+		checkout := "a git checkout"
+		if mode == manifest.WorkspaceSourceModeJJ {
+			checkout = "a jj workspace"
+		}
+		return finish(api.WorkspaceRepairNeedsAttention, fmt.Sprintf("%s exists but is not %s; move it aside and repair again", path, checkout))
 	}
 	if !declared {
 		return vacate(fmt.Sprintf("source %q is not declared", wsSource.Source))
@@ -162,7 +167,7 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 	if err != nil {
 		return vacate(repairReason(err))
 	}
-	return finish(api.WorkspaceRepairCreated, describeWorkspaceSlotCut(source, wsSource))
+	return finish(api.WorkspaceRepairCreated, describeWorkspaceSlotCut(source, withEffectiveMode(stack, wsSource)))
 }
 
 // repairReason renders an error as a slot outcome's reason: on one line, with
@@ -202,7 +207,15 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 		defer cancel()
 		retErr = joinRollbackErrors(retErr, func() error { return cleanup.Rollback(cleanupCtx) })
 	}()
-	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false); err != nil {
+	ws = withEffectiveMode(stack, ws)
+	var jj jjSlotTarget
+	if ws.Mode == manifest.WorkspaceSourceModeJJ {
+		var err error
+		if jj, err = p.recordedJJSlotTarget(stack, workspaceName, slot); err != nil {
+			return err
+		}
+	}
+	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false, jj); err != nil {
 		return err
 	}
 	// Every git verb refuses a slot off its branch, so do not leave one behind.
@@ -251,13 +264,18 @@ func withUnpushedReason(reason string, status api.WorkspaceSourceStatus) string 
 	return reason + ": " + status.UnpushedReason
 }
 
-// describeWorkspaceSlotCut says how a slot repair created was materialized.
+// describeWorkspaceSlotCut says how a slot repair created was materialized;
+// ws's mode is the effective one.
 func describeWorkspaceSlotCut(source manifest.Source, ws manifest.WorkspaceSource) string {
 	base := workspaceSourceBaseRef(source, ws)
 	if base == "" {
 		base = "the cache's HEAD"
 	}
 	switch {
+	case ws.Mode == manifest.WorkspaceSourceModeJJ && ws.Branch != "":
+		return fmt.Sprintf("jj workspace on bookmark %q when it exists, else at base %s", ws.Branch, base)
+	case ws.Mode == manifest.WorkspaceSourceModeJJ:
+		return "jj workspace at base " + base
 	case source.Kind != "git":
 		return fmt.Sprintf("linked to source %q", ws.Source)
 	case ws.Mode == manifest.WorkspaceSourceModeWorktree && ws.Branch != "":

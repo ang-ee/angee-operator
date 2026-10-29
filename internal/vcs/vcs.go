@@ -23,16 +23,20 @@ const (
 	ModeWorktree = "worktree"
 	// ModeClone is a repository of its own, cloned from Slot.CloneURL.
 	ModeClone = "clone"
+	// ModeJJ is a jj workspace of Slot.Primary named Slot.Name, the jj
+	// driver's one kind of slot.
+	ModeJJ = "jj"
 )
 
 // Slot identifies one slot checkout and the facts a driver needs about it.
 type Slot struct {
 	Path string // the checkout
 	// Mode, Primary, CloneURL and Name say how the checkout is made; only the
-	// lifecycle (Exists, Add, Remove) reads them. Mode is ModeWorktree or
-	// ModeClone, for the git driver; the jj driver makes every slot one way.
-	// Primary is the repository a worktree or a jj slot is a checkout of, its
-	// source's cache; CloneURL is the URL a clone is cloned from, as the
+	// lifecycle (Exists, Add, Remove) reads them, except that ModeJJ also
+	// selects the jj driver for a slot's reads and verbs. Mode is ModeWorktree
+	// or ModeClone, for the git driver, or ModeJJ. Primary is the repository a
+	// worktree or a jj slot is a checkout of: its source's cache, or a local
+	// source's jj store; CloneURL is the URL a clone is cloned from, as the
 	// remote BaseRemote names.
 	Mode     string
 	Primary  string
@@ -207,8 +211,9 @@ type Driver interface {
 	// For jj it means only that the name is taken in the primary, possibly
 	// by another live slot (one that moved, or another stack's whose name
 	// collides), which Remove would forget, deleting its .git. So a jj slot
-	// must not go through the git leftover removal (addWorktreeSlot); plan
-	// phase 6 step 4 decides what a taken name means.
+	// never goes through the git leftover removal (addWorktreeSlot): the
+	// service decides what a taken name means (addJJSlot, plan phase 6 step
+	// 4).
 	Exists(ctx context.Context, s Slot) (bool, error)
 	// Add makes the slot's checkout at Slot.Path, writing there only through
 	// d, which holds nothing or an empty directory: a worktree of
