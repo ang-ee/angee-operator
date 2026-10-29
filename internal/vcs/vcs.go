@@ -135,9 +135,12 @@ const (
 // Verb names a verb whose preconditions Driver.Ready answers.
 type Verb string
 
+// The verbs Driver.Ready answers.
 const (
 	// VerbSyncBase is sync-base: bringing the slot's base into it.
 	VerbSyncBase Verb = "sync-base"
+	// VerbRebase is a slot's rebase onto a ref a caller names.
+	VerbRebase Verb = "rebase"
 	// VerbPull is pull: bringing the commits of the checkout's upstream into
 	// it.
 	VerbPull Verb = "pull"
@@ -180,6 +183,31 @@ type UncommittedError struct {
 func (e *UncommittedError) Error() string {
 	return "uncommitted changes in " + strings.Join(e.Paths, ", ")
 }
+
+// UntrackedPathsError is returned by Driver.Ready when the verb would move
+// the checkout under files only it holds and its version control does not
+// track (for jj, the paths `jj status` lists as untracked: over
+// snapshot.max-new-file-size, or outside snapshot.auto-track). A rebase
+// whose new base adds such a path keeps the local file, and the next
+// snapshot records it as a change that undoes the base's. Paths lists them.
+type UntrackedPathsError struct {
+	Paths []string
+}
+
+func (e *UntrackedPathsError) Error() string {
+	return "untracked paths only the checkout holds: " + NamePaths(e.Paths, 10)
+}
+
+// Warning is what a version-control tool warned of while it made an
+// operation, in its own words: jj's "1 of those updates were skipped", say,
+// when the working copy held a file (an ignored one) where the new commit
+// has one, which the next snapshot then records as a change. A driver
+// returns it beside an OK result.
+type Warning struct {
+	Text string
+}
+
+func (e *Warning) Error() string { return e.Text }
 
 // CheckedOutBranch is a branch a git worktree of a primary has checked out,
 // and where.
@@ -402,13 +430,15 @@ type Driver interface {
 	Diff(ctx context.Context, s Slot, ref string) ([]api.DiffFile, error)
 
 	// Ready reports whether verb may run on the checkout as it stands: nil,
-	// or why not, as a *BranchMismatchError or an *UncommittedError, for the
-	// service to word. What a verb needs is the driver's to say: a git
-	// sync-base, pull or push needs the checkout on Slot.Branch and clean,
-	// while a jj slot's working-copy commit rides along with its rebase, and
-	// a jj publish, push or merge acts on the commits under the working copy,
-	// so it needs the working copy clean. A verb the driver does not run, or
-	// does not know, is an error wrapping ErrUnsupported.
+	// or why not, as a *BranchMismatchError, an *UncommittedError or an
+	// *UntrackedPathsError, for the service to word. What a verb needs is the
+	// driver's to say: a git sync-base, pull or push needs the checkout on
+	// Slot.Branch and clean, while a jj slot's working-copy commit rides
+	// along with its rebase, but not files jj does not track, and a jj
+	// publish, push or merge acts on the commits under the working copy, so
+	// it needs the working copy clean and nothing untracked. A verb the
+	// driver does not run, or does not know, is an error wrapping
+	// ErrUnsupported.
 	Ready(ctx context.Context, s Slot, verb Verb) error
 	// BranchMismatch says how the checkout differs from Slot.Branch, or
 	// returns "" when it is on it or Slot.Branch is empty.
@@ -470,7 +500,8 @@ type Driver interface {
 	// not an error: OK and Conflicted when the version control system
 	// records it in the commits and goes on (jj), Conflicted alone when the
 	// checkout stopped mid-rebase (git). An error with OK set means the
-	// rebase was made but what it left could not be read.
+	// rebase was made, with something its caller must hear: a *Warning the
+	// tool printed, or a failure to read what the rebase left.
 	Rebase(ctx context.Context, s Slot, ref string) (api.GitOpResult, error)
 	// MergeAbort, RebaseAbort and RebaseContinue drive a checkout that Merge
 	// or Rebase left stopped on conflicts. MergeAbort and RebaseAbort return

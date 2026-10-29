@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -280,5 +281,74 @@ func TestSyncBaseSkipsASlotWithNoMode(t *testing.T) {
 	}
 	if got := f.slotStatus("ws", "work"); got.Mode != manifest.WorkspaceSourceModeJJ || got.Behind != 0 || got.Error != "" {
 		t.Errorf("status after the rebase = %+v, want a jj slot on the moved base", got)
+	}
+}
+
+// A jj slot holding files jj does not track (Q10) is refused by sync-base and
+// by its rebase, naming them, before anything is fetched or rebased: a base
+// that adds the same path would have the local file kept over its own, and
+// the next snapshot record it as undoing the base's. The jj slot sorted
+// before it is not rebased either.
+func TestSyncBaseRefusesAJJSlotWithUntrackedPaths(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	if err := f.create(f.template("two", map[string]string{
+		"a": f.app("mode: jj\nref: main\nsubpath: a"),
+		"b": f.app("mode: jj\nref: main\nsubpath: b"),
+	}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	a, b := filepath.Join(f.workspace("ws"), "a"), filepath.Join(f.workspace("ws"), "b")
+	f.jjCommit(a, "a.txt", "a\n", "a's change")
+	aOwn := f.revision(a, "@-", "commit_id")
+	mustWriteFile(t, os.Getenv("JJ_CONFIG"), "[snapshot]\nmax-new-file-size = 8\n")
+	mustWriteFile(t, filepath.Join(b, "big.txt"), "more than eight bytes\n")
+	f.moveBase("big.txt", "upstream\n")
+	baseBefore := strings.TrimSpace(runGitOutput(t, f.cache(), "rev-parse", "origin/main"))
+
+	for name, call := range map[string]func() error{
+		"sync-base": func() error { _, err := f.platform.WorkspaceSyncBase(ctx, "ws", ""); return err },
+		"rebase":    func() error { _, err := f.platform.WorkspaceSourceRebase(ctx, "ws", "b", "main@origin"); return err },
+	} {
+		err := call()
+		if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodePreconditionFailed || opErr.Cause != CauseUntrackedPaths || opErr.Slot != "b" ||
+			!slices.Equal(opErr.Paths, []string{"big.txt"}) || !strings.Contains(err.Error(), "big.txt") {
+			t.Fatalf("%s error = %v (%+v), want untracked_paths naming big.txt in b", name, err, opErr)
+		}
+	}
+	if got := strings.TrimSpace(runGitOutput(t, f.cache(), "rev-parse", "origin/main")); got != baseBefore {
+		t.Errorf("a refused sync-base fetched the base: origin/main %s, was %s", got, baseBefore)
+	}
+	if got := f.revision(a, "@-", "commit_id"); got != aOwn {
+		t.Errorf("a refused sync-base rebased slot a: %s became %s", aOwn, got)
+	}
+}
+
+// When a git slot stops on conflicts after a jj slot sorted before it was
+// rebased, the merge_conflict names the jj slot as synced, since it stays
+// synced.
+func TestSyncBaseConflictNamesTheSlotsSyncedBeforeIt(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	if err := f.create(f.template("mixed", map[string]string{
+		"a":    f.app("mode: jj\nref: main\nsubpath: a"),
+		"tree": f.app("mode: worktree\nbranch: \"${inputs.branch}\"\nref: main\nsubpath: tree"),
+	}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	a, tree := filepath.Join(f.workspace("ws"), "a"), filepath.Join(f.workspace("ws"), "tree")
+	f.jjCommit(a, "a.txt", "a\n", "a's change")
+	mustWriteFile(t, filepath.Join(tree, "f.txt"), "one\ntree\n")
+	runGit(t, tree, "commit", "-q", "-am", "tree's change")
+	f.moveBase("f.txt", "one\nupstream\n")
+
+	_, err := f.platform.WorkspaceSyncBase(ctx, "ws", "")
+	opErr := AsOperationError(err)
+	if opErr == nil || opErr.Cause != CauseMergeConflict || opErr.Slot != "tree" || !strings.Contains(err.Error(), `source slot "a" synced before it, and stay synced.`) {
+		t.Fatalf("WorkspaceSyncBase() error = %v (%+v), want tree's merge_conflict naming a as synced", err, opErr)
+	}
+	newBase := strings.TrimSpace(runGitOutput(t, f.cache(), "rev-parse", "origin/main"))
+	if got := f.revision(a, "(@-)-", "commit_id"); got != newBase {
+		t.Errorf("slot a's commit sits on %s, want the base %s it was rebased onto", got, newBase)
 	}
 }

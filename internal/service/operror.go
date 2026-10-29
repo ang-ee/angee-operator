@@ -51,6 +51,7 @@ const (
 	CauseJJUnavailable         = "jj_unavailable"
 	CauseSharedCommits         = "shared_commits"
 	CauseImmutableCommits      = "immutable_commits"
+	CauseUntrackedPaths        = "untracked_paths"
 	CauseConflictedCommits     = "conflicted_commits"
 	CauseUndescribedCommits    = "undescribed_commits"
 )

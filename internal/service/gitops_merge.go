@@ -27,7 +27,7 @@ func (p *Platform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, re
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "merge ref is required"}
 	}
-	return p.runReadyWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("merging %s into", ref)}, workspace, slot, vcs.VerbMerge, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("merging %s into", ref)}, vcs.VerbMerge, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
 		return d.Merge(ctx, s, ref)
 	})
 }
@@ -45,12 +45,7 @@ func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, r
 	if strings.TrimSpace(ref) == "" {
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "rebase ref is required"}
 	}
-	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
-		if s.Mode == vcs.ModeJJ {
-			if err := p.requireJJSlots(ctx); err != nil {
-				return api.GitOpResult{}, err
-			}
-		}
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, vcs.VerbRebase, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
 		return d.Rebase(ctx, s, ref)
 	})
 }
@@ -58,7 +53,7 @@ func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, r
 // WorkspaceSourceMergeAbort aborts an in-progress merge.
 func (p *Platform) WorkspaceSourceMergeAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
 	op := workspaceSlotOperation("workspace.source-merge-abort", "Abort merge", workspace, slot)
-	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "aborting the merge in"}, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "aborting the merge in"}, "", workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
 		return d.MergeAbort(ctx, s)
 	})
 }
@@ -66,7 +61,7 @@ func (p *Platform) WorkspaceSourceMergeAbort(ctx context.Context, workspace, slo
 // WorkspaceSourceRebaseAbort aborts an in-progress rebase.
 func (p *Platform) WorkspaceSourceRebaseAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
 	op := workspaceSlotOperation("workspace.source-rebase-abort", "Abort rebase", workspace, slot)
-	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "aborting the rebase in"}, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "aborting the rebase in"}, "", workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
 		return d.RebaseAbort(ctx, s)
 	})
 }
@@ -75,7 +70,7 @@ func (p *Platform) WorkspaceSourceRebaseAbort(ctx context.Context, workspace, sl
 // caller has resolved conflicts in the worktree.
 func (p *Platform) WorkspaceSourceRebaseContinue(ctx context.Context, workspace, slot string) (api.GitOpResult, error) {
 	op := workspaceSlotOperation("workspace.source-rebase-continue", "Continue rebase", workspace, slot)
-	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "continuing the rebase in"}, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
+	return p.runWorkspaceGitOp(ctx, op, gitStep{action: "continuing the rebase in"}, "", workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
 		return d.RebaseContinue(ctx, s)
 	})
 }
@@ -219,16 +214,12 @@ type slotOp func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult
 // runWorkspaceGitOp runs a local operation in a slot through its driver. step
 // names the action for a failure's message; its object and slot are filled in
 // here. The verb a refusal names is the operation's, as the CLI spells it
-// (`merge-abort` for workspace.source-merge-abort).
-func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step gitStep, workspace, slot string, run slotOp) (api.GitOpResult, error) {
-	return p.runReadyWorkspaceGitOp(ctx, op, step, workspace, slot, "", run)
-}
-
-// runReadyWorkspaceGitOp is runWorkspaceGitOp for an operation whose
-// preconditions the slot's driver answers (vcs.Driver.Ready) as verb, which
-// it asks first, on a machine that can run a jj slot's jj (requireJJSlot);
-// an empty verb asks nothing.
-func (p *Platform) runReadyWorkspaceGitOp(ctx context.Context, op operation, step gitStep, workspace, slot string, verb vcs.Verb, run slotOp) (result api.GitOpResult, err error) {
+// (`merge-abort` for workspace.source-merge-abort). ready, when set, is the
+// verb whose preconditions the slot's driver answers first (vcs.Driver.Ready),
+// after a jj slot's machine is checked for jj (requireJJSlots).
+// An operation the driver made but warned of (*vcs.Warning) is its result,
+// whose message carries the warning.
+func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step gitStep, ready vcs.Verb, workspace, slot string, run slotOp) (result api.GitOpResult, err error) {
 	defer op.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
 	if err != nil {
@@ -243,17 +234,24 @@ func (p *Platform) runReadyWorkspaceGitOp(ctx context.Context, op operation, ste
 	step.slot = slot
 	step.source = wsSource.Source
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
-	if verb != "" {
-		if err := p.requireJJSlot(ctx, target); err != nil {
-			return api.GitOpResult{}, err
+	if ready != "" {
+		// A verb with preconditions runs the slot's tool: a machine that
+		// cannot run jj slots says so first.
+		if target.Mode == vcs.ModeJJ {
+			if err := p.requireJJSlots(ctx); err != nil {
+				return api.GitOpResult{}, err
+			}
 		}
-		if err := requireSlotReady(ctx, driver, target, verb, workspace, slot, wsSource.Source); err != nil {
+		if err := requireSlotReady(ctx, driver, target, ready, workspace, slot, wsSource.Source); err != nil {
 			return api.GitOpResult{}, err
 		}
 	}
 	result, err = run(ctx, driver, target)
 	if refusal := rebaseRefusal(err, workspace, slot, wsSource.Source); refusal != nil {
 		return result, refusal
+	}
+	if warned := (*vcs.Warning)(nil); result.OK && errors.As(err, &warned) {
+		return result, nil
 	}
 	if err != nil && result.OK {
 		// The operation was made; what failed is reading what it left.

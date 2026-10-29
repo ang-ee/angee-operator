@@ -18,20 +18,33 @@ import (
 // `jj git push` refuses such commits. The fallback is the git driver's rule
 // (git.Client.Identity): git's configured identity, else angee's placeholder
 // only when git has none either. It is resolved once per runner, which the
-// service makes for one slot operation, on the first run that needs it.
+// service makes for one slot operation, on the first run that needs it. There
+// is no cache across operations, so a long-running operator sees a user's
+// identity change on the next one; each costs the first recording run of an
+// operation one `jj config list`, and a `git var` when jj has no identity.
 type identity struct {
-	git  git.Client
-	once sync.Once
-	vars []string
+	git      git.Client
+	mu       sync.Mutex
+	resolved bool
+	vars     []string
 }
 
 // env returns the fallback for a run whose commits belong to the repository
-// at dir, resolving it on the first call. A nil identity has none.
+// at dir, resolving it on the first call. A resolution its context cut short
+// is not kept, so the next run tries again. A nil identity has none.
 func (id *identity) env(ctx context.Context, r runner, dir string) []string {
 	if id == nil {
 		return nil
 	}
-	id.once.Do(func() { id.vars = id.resolve(ctx, runner{bin: r.bin}, dir) })
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	if !id.resolved {
+		vars := id.resolve(ctx, runner{bin: r.bin}, dir)
+		if ctx.Err() != nil {
+			return vars
+		}
+		id.vars, id.resolved = vars, true
+	}
 	return id.vars
 }
 
@@ -40,14 +53,18 @@ func (id *identity) env(ctx context.Context, r runner, dir string) []string {
 // override), and names git's author identity for each that is empty. git runs
 // in dir when it is colocated with git, and in the system temporary directory
 // otherwise, where it reads the user's own config only: git run in a jj
-// store without a .git would read whatever repository encloses it. When git
-// names none and refuses otherwise (an invalid configured name, say), it adds
-// nothing, so jj records what it has, as the git driver's commit then
-// reports git's refusal.
+// store without a .git would read whatever repository encloses it. When jj's
+// config cannot be read, or git names none and refuses otherwise (an invalid
+// configured name, say), it adds nothing, so jj records what it has, as the
+// git driver's commit then reports git's refusal: a guess must never
+// override an identity jj has.
 func (id *identity) resolve(ctx context.Context, jj runner, dir string) []string {
 	user, email := os.Getenv("JJ_USER"), os.Getenv("JJ_EMAIL")
 	if user == "" || email == "" {
-		user, email = jj.identityConfig(ctx, dir)
+		var ok bool
+		if user, email, ok = jj.identityConfig(ctx, dir); !ok {
+			return nil
+		}
 	}
 	if user != "" && email != "" {
 		return nil
@@ -76,9 +93,8 @@ func (id *identity) resolve(ctx context.Context, jj runner, dir string) []string
 // JJ_EMAIL included. jj's defaults are empty strings. For a dir that holds no
 // jj repository yet (a cache before `jj git init`), jj reads the user's
 // config alone, in the system temporary directory: run in dir, it would load
-// any jj repository above it. A read that fails counts as empty: the fallback
-// then overrides a config jj could not read, and the run itself reports why.
-func (r runner) identityConfig(ctx context.Context, dir string) (user, email string) {
+// any jj repository above it. ok is false when the read fails.
+func (r runner) identityConfig(ctx context.Context, dir string) (user, email string, ok bool) {
 	args := []string{"--ignore-working-copy", "config", "list", "--include-defaults", "-T", identityConfigTemplate, "user"}
 	if _, err := os.Lstat(filepath.Join(dir, ".jj")); err == nil {
 		args = append([]string{"-R", "."}, args...)
@@ -87,7 +103,7 @@ func (r runner) identityConfig(ctx context.Context, dir string) (user, email str
 	}
 	out, err := r.run(ctx, dir, args)
 	if err != nil {
-		return "", ""
+		return "", "", false
 	}
 	for line := range strings.SplitSeq(string(out), "\n") {
 		name, raw, ok := strings.Cut(line, "\t")
@@ -102,7 +118,7 @@ func (r runner) identityConfig(ctx context.Context, dir string) (user, email str
 			email = value
 		}
 	}
-	return user, email
+	return user, email, true
 }
 
 // identityConfigTemplate prints a config entry as its name, a tab, and its

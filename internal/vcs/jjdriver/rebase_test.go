@@ -146,6 +146,16 @@ func TestRebaseRefusesSharedCommits(t *testing.T) {
 			f.git(f.primary, "worktree", "add", "-q", "-b", "topic", tree, own)
 			return &vcs.SharedCommitsError{Branches: []vcs.CheckedOutBranch{{Branch: "topic", Path: mustEval(t, tree)}}}
 		}},
+		{"a git worktree's branch, from a slot with no .git", func(f *fixture, own string) *vcs.SharedCommitsError {
+			// The worktrees are the primary's: a slot that lost its .git, or
+			// one jj made without, still rewrites what they have checked out.
+			if err := os.Remove(filepath.Join(f.slot, ".git")); err != nil {
+				t.Fatalf("Remove(.git) error = %v", err)
+			}
+			tree := filepath.Join(f.root, "tree")
+			f.git(f.primary, "worktree", "add", "-q", "-b", "topic", tree, own)
+			return &vcs.SharedCommitsError{Branches: []vcs.CheckedOutBranch{{Branch: "topic", Path: mustEval(t, tree)}}}
+		}},
 		{"the slot's own branch", func(f *fixture, _ string) *vcs.SharedCommitsError {
 			f.git(f.slot, "switch", "-q", "-c", "mine")
 			return nil
@@ -267,5 +277,123 @@ func TestCommandErrorLine(t *testing.T) {
 		if got := e.Line(); got != want || e.Tool() != "jj" || e.Output() != stderr {
 			t.Errorf("Line() of %q = %q, want %q", stderr, got, want)
 		}
+	}
+}
+
+// The rebase acts on what its check read: the working-copy change and the
+// base commit. A base that moves after the check is not followed, and a
+// working copy an agent moved to another change meanwhile fails the rebase
+// rather than rebase what was not checked.
+func TestRebaseActsOnWhatItChecked(t *testing.T) {
+	ctx := context.Background()
+	t.Run("the base moves after the check", func(t *testing.T) {
+		f := newFixture(t)
+		d := driver()
+		s := f.slotAt("")
+		f.commit(f.slot, "g.txt", "mine\n", "slot change")
+		f.advanceBase("f.txt", "one\nchecked\n")
+		checked := f.shortID(f.slot, base)
+		pin, err := d.checkScope(ctx, s, destination(s, "main@origin"))
+		if err != nil {
+			t.Fatalf("checkScope() error = %v", err)
+		}
+		f.advanceBase("h.txt", "later\n")
+		if result, err := d.rebasePinned(ctx, s, pin); err != nil || !result.OK {
+			t.Fatalf("rebasePinned() = %+v, %v", result, err)
+		}
+		if got := f.shortID(f.slot, revset("(@-)-")); got != checked {
+			t.Errorf("the slot's commit sits on %s, want the checked base %s", got, checked)
+		}
+	})
+	t.Run("the working copy moves after the check", func(t *testing.T) {
+		f := newFixture(t)
+		d := driver()
+		s := f.slotAt("")
+		f.commit(f.slot, "g.txt", "mine\n", "slot change")
+		f.advanceBase("f.txt", "one\nupstream\n")
+		pin, err := d.checkScope(ctx, s, destination(s, "main@origin"))
+		if err != nil {
+			t.Fatalf("checkScope() error = %v", err)
+		}
+		// The empty working-copy commit the check read is abandoned.
+		f.jj(f.slot, "new", f.base().String())
+		own := f.shortID(f.slot, revset("all() ~ ::"+f.base().String()+" ~ @"))
+		if _, err := d.rebasePinned(ctx, s, pin); err == nil {
+			t.Fatal("rebasePinned() of a change that is gone error = nil, want it to fail")
+		}
+		if got := f.shortID(f.slot, revset("all() ~ ::"+f.base().String()+" ~ @")); got != own {
+			t.Errorf("a failed rebase rewrote %s into %s", own, got)
+		}
+	})
+}
+
+// sync-base and rebase refuse a jj slot holding files jj does not track
+// (Q10): a rebase whose base adds the same path would keep the local file,
+// and the next snapshot would record it as undoing the base's.
+func TestReadyRefusesUntrackedPaths(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("")
+	for _, verb := range []vcs.Verb{vcs.VerbSyncBase, vcs.VerbRebase} {
+		if err := d.Ready(ctx, s, verb); err != nil {
+			t.Fatalf("Ready(%s) of a clean slot error = %v", verb, err)
+		}
+	}
+	f.write(f.slot, "wip.txt", "recorded\n")
+	if err := d.Ready(ctx, s, vcs.VerbSyncBase); err != nil {
+		t.Fatalf("Ready() of a slot with changes jj records error = %v, want none: they ride along", err)
+	}
+	f.write(filepath.Dir(os.Getenv("JJ_CONFIG")), filepath.Base(os.Getenv("JJ_CONFIG")), "[snapshot]\nmax-new-file-size = 8\n")
+	f.write(f.slot, "big.txt", "more than eight bytes\n")
+	for _, verb := range []vcs.Verb{vcs.VerbSyncBase, vcs.VerbRebase} {
+		var untracked *vcs.UntrackedPathsError
+		if err := d.Ready(ctx, s, verb); !errors.As(err, &untracked) || !slices.Equal(untracked.Paths, []string{"big.txt"}) {
+			t.Fatalf("Ready(%s) error = %v, want big.txt refused", verb, err)
+		}
+	}
+}
+
+// When jj skips updating a file the working copy holds where the new base
+// has one, here an ignored file the base adds, the rebase is made, and jj's
+// warning comes with the OK result, in jj's words: the next snapshot records
+// the local file as a change.
+func TestRebaseCarriesJJsWarning(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	f.write(f.seed, ".gitignore", "local.env\n")
+	f.git(f.seed, "add", ".")
+	f.git(f.seed, "commit", "-q", "-m", "ignore local.env")
+	f.git(f.seed, "push", "-q", "origin", "HEAD:main")
+	f.jj(f.primary, "git", "fetch")
+	f.jj(f.slot, "rebase", "-b", "@", "--onto", f.base().String())
+	f.write(f.slot, "local.env", "mine\n")
+	f.write(f.seed, "local.env", "theirs\n")
+	f.git(f.seed, "add", "-f", "local.env")
+	f.git(f.seed, "commit", "-q", "-m", "add local.env")
+	f.git(f.seed, "push", "-q", "origin", "HEAD:main")
+	f.jj(f.primary, "git", "fetch")
+
+	result, err := driver().SyncBase(ctx, f.slotAt(""), "main@origin", vcs.SyncDefault)
+	var warned *vcs.Warning
+	if !result.OK || !errors.As(err, &warned) || !strings.Contains(warned.Text, "skipped") || !strings.HasPrefix(warned.Text, "Warning: ") {
+		t.Fatalf("SyncBase() = %+v, %v, want OK with jj's warning that it skipped an update", result, err)
+	}
+}
+
+// warnings carries jj's warnings and their hints, but not the one that says
+// conflicts were left, which the result reports already.
+func TestWarnings(t *testing.T) {
+	report := "Rebased 2 commits to destination.\nAdded 1 files, modified 0 files, removed 0 files\n" +
+		"Warning: 1 of those updates were skipped because there were conflicting changes in the working copy.\n" +
+		"Hint: Inspect the changes compared to the intended target with `jj diff --from 0123`.\n" +
+		"Warning: There are unresolved conflicts at these paths:\na.txt    2-sided conflict\nNew conflicts appeared in 1 commits:"
+	want := "Warning: 1 of those updates were skipped because there were conflicting changes in the working copy. " +
+		"Hint: Inspect the changes compared to the intended target with `jj diff --from 0123`."
+	if got := warnings(report); got != want {
+		t.Errorf("warnings() = %q, want %q", got, want)
+	}
+	if got := warnings("Rebased 1 commits to destination.\nWarning: There are unresolved conflicts at these paths:\na.txt"); got != "" {
+		t.Errorf("warnings() of a conflict alone = %q, want none", got)
 	}
 }

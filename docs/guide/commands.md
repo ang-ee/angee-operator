@@ -738,7 +738,21 @@ workspace of its source's cache or local store; see
   (`... failed. jj: Error: ...`).
 - A rebase rewrites the commits it moves, so a slot whose commits were
   already published gets new ones, and the next publish force-updates its
-  remote branch.
+  remote branch. A bookmark on those commits that nothing has checked out
+  moves with them, as jj moves it, and a pushed one force-updates, with a
+  lease, on its next publish.
+- sync-base and `workspace source rebase` refuse a jj slot that holds files
+  jj does not track (the untracked paths `jj status` lists, such as one over
+  `snapshot.max-new-file-size`), naming them, with cause `untracked_paths`,
+  before anything is fetched: a base that adds the same path would have the
+  local file kept over its own, and the next snapshot record it as undoing
+  the base's. jj cannot be asked the same of an ignored file, so when jj
+  warns while it rebases a slot (it skipped updating a file the working copy
+  held), its words are on that slot's `error` in sync-base, and in the
+  result's `message` for the slot's rebase.
+- A slot's sync that fails after other slots synced, such as a git slot that
+  stops on conflicts after a jj slot was rebased, names the slots synced
+  before it, which stay synced.
 - A rebase also rewrites every descendant of those commits, so sync-base and
   `workspace source rebase` refuse a jj slot when another checkout holds some
   of them: another jj workspace's working-copy commit (a slot stacked on this
@@ -746,7 +760,9 @@ workspace of its source's cache or local store; see
   git worktree of the same cache has checked out at one of them. The refusal
   names them, with code `PRECONDITION_FAILED` (HTTP 409) and cause
   `shared_commits`, and sync-base checks every slot first, so it rebases
-  none. So is a rebase that would rewrite a commit jj holds immutable (one a
+  none. The worktrees are the cache's, whether or not the slot has a `.git`
+  of its own, and a worktree jj would move the branch of is left detached
+  from it. So is a rebase that would rewrite a commit jj holds immutable (one a
   tag or an untracked remote bookmark holds), with cause
   `immutable_commits`, naming the commits, before jj's own rebase would
   refuse it partway through the sync. A machine that cannot run jj slots

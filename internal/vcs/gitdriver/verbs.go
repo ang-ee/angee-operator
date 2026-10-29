@@ -15,9 +15,10 @@ import (
 // uncommitted changes, which a merge or rebase would mix into the base's and
 // a push would leave behind. Destroy, and repair's check of a slot it made,
 // need only the branch: the destroy guard reads what the checkout holds from
-// Status. Publish and merge need nothing: publish pushes what is committed,
-// creating the branch on a detached HEAD, and git refuses a merge that would
-// overwrite an uncommitted change itself.
+// Status. A slot's own rebase, publish and merge need nothing: git refuses a
+// rebase over uncommitted changes, and a merge that would overwrite one,
+// itself, and publish pushes what is committed, creating the branch on a
+// detached HEAD.
 func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 	switch verb {
 	case vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush:
@@ -34,7 +35,7 @@ func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 		return nil
 	case vcs.VerbDestroy, vcs.VerbRepair:
 		return d.onBranch(ctx, s)
-	case vcs.VerbPublish, vcs.VerbMerge:
+	case vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge:
 		return nil
 	}
 	return fmt.Errorf("no preconditions for %s on a git slot: %w", verb, vcs.ErrUnsupported)

@@ -611,16 +611,38 @@ func branchMismatch(workspaceName, slot, source, path string, mismatch *vcs.Bran
 
 // requireSlotReady refuses verb on a workspace slot when its driver says the
 // slot is not ready for it (vcs.Driver.Ready), in the service's words: a
-// branch mismatch or uncommitted changes, each with the fix the driver names.
+// branch mismatch or uncommitted changes, each with the fix the driver
+// names, or untracked paths only the slot holds.
 func requireSlotReady(ctx context.Context, driver vcs.Driver, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) error {
 	err := driver.Ready(ctx, target, verb)
 	var mismatch *vcs.BranchMismatchError
 	var uncommitted *vcs.UncommittedError
+	var untracked *vcs.UntrackedPathsError
 	switch {
 	case errors.As(err, &mismatch):
 		return branchMismatch(workspaceName, slot, source, target.Path, mismatch)
 	case errors.As(err, &uncommitted):
 		return uncommittedChanges(uncommitted.Paths, uncommitted.Fix, fmt.Sprintf("source slot %q", slot), slot, source)
+	case errors.As(err, &untracked):
+		// A rebase could keep them over the base's own; every other verb
+		// that refuses them acts on commits, which leave them out.
+		why := "a rebase could keep over the base's own"
+		if verb != vcs.VerbSyncBase && verb != vcs.VerbRebase {
+			why = fmt.Sprintf("%s leaves out, since no commit holds them", verb)
+		}
+		hint := "Track them (`jj file track`), move them out of the slot, or ignore them, then retry."
+		return &OperationError{
+			Code:      CodePreconditionFailed,
+			Cause:     CauseUntrackedPaths,
+			Workspace: workspaceName,
+			Slot:      slot,
+			Source:    source,
+			Paths:     untracked.Paths[:min(len(untracked.Paths), maxErrorPaths)],
+			Hint:      hint,
+			Summary: fmt.Sprintf("source slot %q holds files jj does not track, only it has, and %s: %s. %s",
+				slot, why, vcs.NamePaths(untracked.Paths, maxMessagePaths), hint),
+			Err: err,
+		}
 	}
 	return err
 }
@@ -1495,11 +1517,15 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 //
 // Every slot is checked, fetched, has its base resolved and, when it is to
 // be rebased, what the rebase would rewrite checked (vcs.Driver.CheckRebase,
-// plan D12) before any is synced, so a refusal leaves no slot changed. A jj
-// slot's conflict is recorded in its commits and reported on its state, read
-// from its status (conflicted, conflict_paths), and the sync goes on to the
-// next slot; a git
+// plan D12) before any is synced, so a refusal those checks make leaves no
+// slot changed. A slot's sync can still fail once earlier ones are synced:
+// its rebase checks again just before it runs, and git or jj can fail it.
+// That error names the slots already synced. A jj slot's conflict is recorded
+// in its commits and reported on its state, read from its status
+// (conflicted, conflict_paths), and the sync goes on to the next slot; a git
 // slot that stops on conflicts ends the sync with merge_conflict, as before.
+// What jj warned of while it synced a slot, and a failure to read what the
+// sync left, are on that slot's state (error), and the sync goes on.
 // A local source's jj store is the user's, so angee never fetches it: such a
 // slot is rebased onto its base as the store has it.
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (states []api.SourceState, err error) {
@@ -1594,29 +1620,73 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 		}
 	}
 	states = []api.SourceState{}
+	var synced []string
 	for i, target := range targets {
 		result, syncErr := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], methods[i])
 		if syncErr != nil && !result.OK {
-			return nil, syncFailure(syncErr, steps[i], name)
+			return nil, afterSynced(syncFailure(syncErr, steps[i], name), synced)
 		}
 		if result.Conflicted && !result.OK {
 			// The slot stopped mid-merge or mid-rebase (git).
-			return nil, syncConflict(result, steps[i])
+			return nil, afterSynced(syncConflict(result, steps[i]), synced)
 		}
+		synced = append(synced, target.slot)
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {
 			return nil, err
 		}
 		// A conflict recorded in the slot's commits (jj) reaches its state
-		// through its status, as conflicted and conflict_paths.
-		if syncErr != nil && state.Error == "" {
-			// The slot synced, but what the sync left could not be read: the
-			// sync goes on, and the slot's state says so.
-			state.Error = fmt.Sprintf("synced, but reading what %s left failed: %v", steps[i].action, syncErr)
+		// through its status, as conflicted and conflict_paths. The slot
+		// synced, but what jj warned of, or a failure to read what the sync
+		// left, is on its state, and the sync goes on.
+		var warned *vcs.Warning
+		switch {
+		case syncErr == nil:
+		case errors.As(syncErr, &warned):
+			state.Error = joinNonEmpty(state.Error, fmt.Sprintf("synced, but jj warned while %s: %s", steps[i].action, warned.Text))
+		default:
+			state.Error = joinNonEmpty(state.Error, fmt.Sprintf("synced, but reading what %s left failed: %v", steps[i].action, syncErr))
 		}
 		states = append(states, state)
 	}
 	return states, nil
+}
+
+// joinNonEmpty joins the non-empty of a and b with "; ".
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
+}
+
+// afterSynced makes err, the failure of a slot's sync, name the slots synced
+// before it, which it leaves synced: in the message, before the remedy, and
+// in the detail. err is an *OperationError, as syncFailure and syncConflict
+// return; anything else passes through.
+func afterSynced(err error, synced []string) error {
+	var opErr *OperationError
+	if len(synced) == 0 || !errors.As(err, &opErr) {
+		return err
+	}
+	quoted := make([]string, len(synced))
+	for i, slot := range synced {
+		quoted[i] = fmt.Sprintf("%q", slot)
+	}
+	noun := "source slot"
+	if len(synced) > 1 {
+		noun = "source slots"
+	}
+	note := fmt.Sprintf("%s %s synced before it, and stay synced.", noun, strings.Join(quoted, ", "))
+	if opErr.Summary == "" {
+		opErr.Summary = opErr.Error()
+	}
+	opErr.Summary += " " + note
+	opErr.Detail = joinNonEmpty(note, opErr.Detail)
+	return opErr
 }
 
 // syncFailure is a slot's sync failure in the service's words: a rebase that

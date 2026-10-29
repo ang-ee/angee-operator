@@ -24,39 +24,50 @@ func neverPulled() error {
 	return fmt.Errorf("a jj slot is never pulled: jj takes in a base by rebasing the slot onto it, as %s does: %w", vcs.VerbSyncBase, vcs.ErrUnsupported)
 }
 
-// Ready answers a verb's preconditions on a jj slot:
-//   - sync-base: none. The working-copy commit rides along with the rebase,
-//     and there is no branch to be on.
-//   - publish, push and merge: no uncommitted changes (DirtyPaths), since
-//     each acts on the commit under the working copy, `@-`: publish and push
-//     send it, and merge makes a commit on it and starts a new working copy,
-//     leaving behind whatever the old one held. The refusal is a
-//     *vcs.UncommittedError listing the paths, with jj's own command when
-//     the working-copy commit holds changes; untracked paths jj leaves out of
-//     it are listed too, since only the slot holds them.
-//   - destroy, and repair's check of a slot it made: none. The destroy guard
-//     reads the slot's own work from Status, and a jj slot keeps no branch
-//     checked out.
-//   - pull: refused (neverPulled).
-//
-// Only publish, push and merge run jj.
+// Ready answers a verb's preconditions on a jj slot. Each read snapshots the
+// slot first.
+//   - sync-base and rebase: no untracked paths (`jj status`'s, plan Q10),
+//     refused with a *vcs.UntrackedPathsError: they are work only the slot
+//     holds, and a rebase whose new base adds the same path keeps the local
+//     file, which the next snapshot records as a change undoing the base's.
+//     The working-copy commit rides along with the rebase, and there is no
+//     branch to be on.
+//   - publish, push and merge: no uncommitted changes and no untracked
+//     paths, since each acts on the commit under the working copy, `@-`:
+//     publish and push send it, and merge makes a commit on it and starts a
+//     new working copy, so what the working copy holds, recorded or not, is
+//     left out. Changes in the working-copy commit are a
+//     *vcs.UncommittedError with jj's own command that commits them;
+//     without any, untracked paths are a *vcs.UntrackedPathsError.
+//   - destroy, and repair's check of a slot it made: none, and nothing runs.
+//     The destroy guard reads the slot's own work from Status, and a jj slot
+//     keeps no branch checked out.
+//   - pull: refused (neverPulled), and nothing runs.
 func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 	switch verb {
-	case vcs.VerbSyncBase, vcs.VerbDestroy, vcs.VerbRepair:
+	case vcs.VerbSyncBase, vcs.VerbRebase:
+		untracked, err := d.untracked(ctx, s.Path)
+		if err != nil {
+			return err
+		}
+		if len(untracked) > 0 {
+			return &vcs.UntrackedPathsError{Paths: untracked}
+		}
 		return nil
 	case vcs.VerbPublish, vcs.VerbPush, vcs.VerbMerge:
 		changed, untracked, err := d.uncommitted(ctx, s.Path)
 		if err != nil {
 			return err
 		}
-		if len(changed) == 0 && len(untracked) == 0 {
-			return nil
-		}
-		refused := &vcs.UncommittedError{Paths: append(changed, untracked...)}
 		if len(changed) > 0 {
-			refused.Fix = fmt.Sprintf("jj -R %s commit -m <message>", s.Path)
+			return &vcs.UncommittedError{Paths: changed, Fix: fmt.Sprintf("jj -R %s commit -m <message>", s.Path)}
 		}
-		return refused
+		if len(untracked) > 0 {
+			return &vcs.UntrackedPathsError{Paths: untracked}
+		}
+		return nil
+	case vcs.VerbDestroy, vcs.VerbRepair:
+		return nil
 	case vcs.VerbPull:
 		return neverPulled()
 	}

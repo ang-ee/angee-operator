@@ -43,9 +43,6 @@ func TestVerbsNotImplementedYet(t *testing.T) {
 			t.Errorf("SyncMethod(%q) = %q, %v, want a rebase", method, got, err)
 		}
 	}
-	if err := d.Ready(ctx, s, vcs.VerbSyncBase); err != nil {
-		t.Errorf("Ready(sync-base) error = %v, want none: the working copy rides along", err)
-	}
 	if url := d.FetchURL(ctx, s); url != "" {
 		t.Errorf("FetchURL() of a slot without git = %q, want none", url)
 	}

@@ -91,7 +91,7 @@ changes what gets built, so challenge them here rather than in a PR:
 | D9 | The operator takes one cross-process file lock for a primary, git or jj, at `<parent>/.<name>.angee.lock` beside the primary, around its registrations, clone, fetch, pull and push: adding and pruning git worktrees (jj: workspace add and forget), cloning or fetching the primary, and pulling or pushing it. The verbs on a slot take none. (Narrowed 2026-10-11, review of #125, from "every mutation of a primary".) | `beginMutation` is an in-process, per-`Platform` try-lease (`platform.go:105`). It does not serialize two stacks, or the CLI and the operator, on one shared primary. What interleaves badly is a registration being added while another process prunes, and two clones or fetches of one primary; a slot verb is safe without the lock, because git's ref transactions keep each ref update whole and no verb prunes a registration, and jj's operation log merges concurrent commands, so jj needs the lock only around workspace add and forget. The lock sits outside the primary because `.jj` does not exist before initialization. Order: stack mutation lease, then the root lock, then the primary lock. |
 | D10 | The jj driver uses `jj rebase --onto`. | `-d/--destination` is no longer in `jj rebase --help`; it still parses as a legacy alias. |
 | D11 | `sync-base` treats an unset method as "the driver's default": merge for git slots, rebase for jj slots. An explicit `--merge` on a workspace that has a jj slot is refused before any slot is touched. | The CLI hardcodes `method := "merge"` (`cli/root.go:1231`), so the service cannot tell a default from an explicit choice. Silently rebasing when merge was asked for is worse than refusing. |
-| D12 | A rebase on a jj slot is refused when the commits it would rewrite, `(B..N@)::`, include another workspace's working copy or the checked-out branch of a git worktree of the same primary. | `jj rebase -b` rewrites descendants too, so one Angee workspace's sync could rewrite another's commits. For a git worktree the moved branch ref shows up as a dirty tree. |
+| D12 | A rebase on a jj slot is refused when the commits it would rewrite, `(B..N@)::`, include another workspace's working copy or the checked-out branch of a git worktree of the same primary. A bookmark on them that nothing has checked out is allowed to move (owner, 2026-10-29). | `jj rebase -b` rewrites descendants too, so one Angee workspace's sync could rewrite another's commits. For a git worktree, jj moves the branch, and jj 0.45 detaches that worktree when it exports the moved branch (probed), leaving it off its branch. A bookmark nothing has checked out moves as jj moves it, and a pushed one force-updates, with a lease, on its next publish. |
 | D13 | Workspace names and refs are always quoted when placed in a revset (`"<name>"@`), and a name collision is reported by the operator before `jj workspace add` runs. | Names come from stack and workspace names, which are barely validated (`manifest.go:504`, `workspaces.go:2080`). |
 
 ## 2. What the probes established
@@ -2114,7 +2114,9 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
   in the system temporary directory, never in a store without a `.git`.
   `runner.exec` now returns standard error too, for a mutation's message.
 - **Step 1, the rebase scope (D12).** `jjdriver/rebase.go` `checkScope`:
-  snapshot, then at that operation `(B..@)::` with the commits template.
+  the primary's git worktrees, then a snapshot, then at that operation
+  `(B..@)::` with the commits template (the second review, below, changed
+  how the worktrees are found and what the rebase then acts on).
   Refused, with a `*vcs.SharedCommitsError`, when it holds another jj
   workspace's working-copy commit, or a commit at which a git worktree of the
   primary (`git.Client.Worktrees`, `worktree list --porcelain -z`, the main
@@ -2188,8 +2190,9 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
   answers "may this verb run", for `vcs.VerbSyncBase` only so far: git checks
   the branch (when the slot must be on one) and the uncommitted paths and
   returns `*vcs.BranchMismatchError{Reason, Fix}` (Fix is git's own `git -C …
-  switch …`) or `*vcs.UncommittedError{Paths}`; jj returns nil, since its
-  working-copy commit rides along. `requireSlotReady` words them as before,
+  switch …`) or `*vcs.UncommittedError{Paths}`; jj lets its working-copy
+  commit ride along, and refuses only untracked paths (second review,
+  below). `vcs.VerbRebase` is the slot's own rebase (git: no preconditions). `requireSlotReady` words them as before,
   so git's messages are unchanged. Failures quote the tool: a driver error
   that is a `vcs.ToolError` (`jjdriver.CommandError`: `Tool`, `Line`, the
   first `Error:` line, `Output`) fills `OperationError.Tool` and `ToolLine`
@@ -2223,6 +2226,51 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
   unread. git: `Ready`, `SyncMethod`, `Worktrees`. Mutants caught: no
   identity fallback, no pre-check of every slot's scope, a local store
   fetched, conflicts ending the loop, slots with no mode selected.
+- **Second review (an independent `go-code-reviewer` pass on #143,
+  2026-10-29).** No blockers. Each finding was checked before it was built:
+  - *The git worktree check skipped a slot with no `.git`* (confirmed): the
+    worktrees are the primary's, so `checkScope` now lists them from the
+    repository `jj --ignore-working-copy git root` names, whatever the slot
+    has, and fails closed when jj names none. A test removes the slot's
+    `.git`.
+  - *Check, then act* (confirmed): the rebase now runs `jj rebase -b
+    'exactly(change_id(<C>), 1)' --onto 'exactly(commit_id(<B>), 1)'` with
+    the working-copy change and the base commit the check read (`pinned`),
+    so a base that moves after the check is not followed, and a working
+    copy moved meanwhile, or a divergent change, fails. The worktrees are
+    listed before the snapshot, and a branch is matched by jj's bookmark of
+    its name as well as by its commit, so one a worktree commits to between
+    the two is still found. Tests: the base moving, and the working copy
+    moving, after the check.
+  - *A failed identity read could replace a real identity*: half right. A
+    cancelled context could not produce the placeholder, since
+    `git.Client.Identity` also refuses on a cancelled context; but a `jj
+    config list` that failed any other way was read as empty, so git's
+    identity (or the placeholder) could override one jj has. A failed read
+    now adds nothing, and a resolution its context cut short is not kept
+    (`sync.Once` became a mutex and a flag). Tested.
+  - *Extra processes per status* (as asked, left): each operation's first
+    recording run costs one `jj config list`, and one `git var` when jj has
+    no identity. Status is read on demand (Q6), and a process-wide cache
+    would keep a long-running operator from seeing an identity change.
+  - *A rebase could revert the base's file* (confirmed, and also for an
+    ignored file): jj keeps a file the working copy holds where the new base
+    adds one, says "1 of those updates were skipped", and the next snapshot
+    records it as undoing the base's. `Ready` now refuses sync-base and the
+    slot's rebase while `jj status` lists untracked paths
+    (`*vcs.UntrackedPathsError`, cause `untracked_paths`, naming up to ten),
+    before anything is fetched. An ignored file cannot be seen ahead, so jj's
+    warnings (each `Warning:` line with its hints, but for the one that says
+    conflicts were left) come back as a `*vcs.Warning` beside the OK result:
+    on the slot's state (`error`) in sync-base, in the result's message in
+    the slot's rebase.
+  - *The git refusal order* is in the changelog now.
+  - *A mixed workspace hid earlier jj rebases* (confirmed): a slot's sync
+    that fails after others synced names them, in the message and the
+    detail (`afterSynced`).
+  - The comment on sync-base no longer says a refusal leaves no slot
+    changed: the checks before the syncs do, and a later failure names
+    what synced.
 - **Review record (`go-code-reviewer`, 2026-10-29).** No blockers. Fixed:
   an immutable commit failing the sync partway (now pre-checked); a rebase
   jj made reported as failed when the conflict read after it failed (and a
@@ -2252,9 +2300,10 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
     `refuseJJSlots` once it selects jj slots by recorded mode, as sync-base
     does.
   - Bookmarks on the commits a rebase rewrites that no worktree has checked
-    out (another slot's published bookmark, say) move with them silently,
-    within D12 as written; publish will then force-push them. Decide before
-    publish lands whether that needs a refusal too.
+    out (another slot's published bookmark, say) move with them.
+    *Answered (owner, 2026-10-29): allowed, as jj does.* The rebase moves
+    them, and a pushed one force-updates, with a lease, on its next publish;
+    D12 says so, and so do the docs and the changelog.
 
 ### Phase 9. `ws source migrate`
 

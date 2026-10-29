@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
@@ -99,32 +100,46 @@ func (d Driver) SyncBase(ctx context.Context, s vcs.Slot, onto, method string) (
 	return d.rebase(ctx, s, destination(s, onto))
 }
 
-// Rebase rebases the slot onto ref (destination): `jj rebase -b @ --onto
-// <ref>` in the slot, which moves every commit of the slot's own that ref
-// lacks, the working-copy commit with its uncommitted changes included, and
-// their descendants. It first checks that those are the slot's alone
-// (CheckRebase). jj records a conflict in the rebased commits and exits 0
+// Rebase rebases the slot onto ref (destination): `jj rebase -b <change>
+// --onto <commit>` in the slot, which moves every commit of the slot's own
+// that ref lacks, the working-copy commit with its uncommitted changes
+// included, and their descendants. It first checks that those are the slot's
+// alone and may be rewritten (checkScope), and then rebases exactly what it
+// checked: the working-copy change and the base commit that check read, each
+// required to be one commit, so an agent's `jj edit` or a moved bookmark in
+// between, or a change that became divergent, fails rather than rebase what
+// was not checked. jj records a conflict in the rebased commits and exits 0
 // (plan D5), so the conflicts are read after it: the result is OK, and
 // Conflicted with ConflictFiles, the files of the conflicted commits the slot
-// now has beyond ref. A failure that is not a conflict is jj's error. The slot stays usable
-// either way: jj never stops mid-rebase. When jj made the rebase but its
-// conflicts cannot be read after, the result is OK and the error says so.
+// now has beyond ref. A failure that is not a conflict is jj's error. The
+// slot stays usable either way: jj never stops mid-rebase. When jj made the
+// rebase but warned (it skipped updating a file the working copy held, which
+// the next snapshot records as a change), or its conflicts cannot be read
+// after, the result is OK with an error saying so: a *vcs.Warning in jj's
+// words, or the read's failure.
 func (d Driver) Rebase(ctx context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
 	return d.rebase(ctx, s, destination(s, ref))
 }
 
 func (d Driver) rebase(ctx context.Context, s vcs.Slot, onto revset) (api.GitOpResult, error) {
-	result := api.GitOpResult{ConflictFiles: []string{}}
-	if err := d.checkScope(ctx, s, onto); err != nil {
-		return result, err
+	pin, err := d.checkScope(ctx, s, onto)
+	if err != nil {
+		return api.GitOpResult{ConflictFiles: []string{}}, err
 	}
-	_, stderr, err := d.jj.snapshotOutputs(ctx, s.Path, "rebase", "-b", workingCopy.String(), "--onto", onto.String())
+	return d.rebasePinned(ctx, s, pin)
+}
+
+// rebasePinned rebases what checkScope checked (pin), and reads what the
+// rebase left.
+func (d Driver) rebasePinned(ctx context.Context, s vcs.Slot, pin pinned) (api.GitOpResult, error) {
+	result := api.GitOpResult{ConflictFiles: []string{}}
+	_, stderr, err := d.jj.snapshotOutputs(ctx, s.Path, "rebase", "-b", pin.branch().String(), "--onto", pin.destination().String())
 	result.Message = logctx.RedactText(strings.TrimSpace(string(stderr)))
 	if err != nil {
 		return result, err
 	}
 	result.OK = true
-	own, err := d.conflictsBeyond(ctx, s.Path, onto)
+	own, err := d.conflictsBeyond(ctx, s.Path, pin.destination())
 	if err != nil {
 		return result, fmt.Errorf("jj rebased %s, but reading the conflicts it left failed: %w", s.Path, err)
 	}
@@ -136,7 +151,33 @@ func (d Driver) rebase(ctx context.Context, s vcs.Slot, onto revset) (api.GitOpR
 	}
 	slices.Sort(result.ConflictFiles)
 	result.ConflictFiles = slices.Compact(result.ConflictFiles)
+	if warned := warnings(result.Message); warned != "" {
+		return result, &vcs.Warning{Text: warned}
+	}
 	return result, nil
+}
+
+// conflictsWarning starts jj's warning that a command left conflicts, which
+// Conflicted reports already (jj 0.45's wording; a reworded one is carried as
+// a warning, which only repeats it).
+const conflictsWarning = "Warning: There are unresolved conflicts"
+
+// warnings is what jj warned of in a mutation's report: each "Warning:" line
+// and the lines after it, up to the next warning, but for the warning that
+// conflicts were left.
+func warnings(report string) string {
+	var carried []string
+	carrying := false
+	for line := range strings.SplitSeq(report, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Warning:") {
+			carrying = !strings.HasPrefix(line, conflictsWarning)
+		}
+		if carrying && line != "" {
+			carried = append(carried, line)
+		}
+	}
+	return strings.Join(carried, " ")
 }
 
 // conflictsBeyond lists the slot's commits beyond onto, as the latest
@@ -150,85 +191,135 @@ func (d Driver) conflictsBeyond(ctx context.Context, dir string, onto revset) ([
 }
 
 // CheckRebase reports whether rebasing the slot onto onto (destination)
-// rewrites only the slot's own commits (checkScope).
+// rewrites only the slot's own commits, and none jj holds immutable
+// (checkScope).
 func (d Driver) CheckRebase(ctx context.Context, s vcs.Slot, onto string) error {
-	return d.checkScope(ctx, s, destination(s, onto))
+	_, err := d.checkScope(ctx, s, destination(s, onto))
+	return err
 }
 
+// pinned is what a rebase checked, for the rebase to act on: the change id of
+// the slot's working-copy commit, and the commit id of its destination.
+type pinned struct {
+	change, onto string
+}
+
+// branch is the checked change, which must still be one commit.
+func (p pinned) branch() revset { return changeOf(p.change).single() }
+
+// destination is the checked destination commit.
+func (p pinned) destination() revset { return commitOf(p.onto).single() }
+
 // checkScope refuses a rebase of the slot onto onto that would rewrite
-// another checkout's work (plan D12), or what jj will not rewrite. `jj rebase
-// -b @ --onto B` rewrites (B..@):: , the slot's own commits and every
-// descendant of them, and moves the bookmarks on them. So it refuses, with a
-// *vcs.SharedCommitsError, when that set holds another jj workspace's
-// working-copy commit (one stacked on the slot's commits, or sharing its
-// working-copy commit), or a commit at which another git worktree of the
-// same primary has a branch checked out: jj would move the branch under that
-// worktree, which git then shows as changes there. And it refuses, with a
+// another checkout's work (plan D12), or what jj will not rewrite, and
+// returns what it checked (pinned). `jj rebase -b @ --onto B` rewrites
+// (B..@):: , the slot's own commits and every descendant of them, and moves
+// the bookmarks on them. So it refuses, with a *vcs.SharedCommitsError, when
+// that set holds another jj workspace's working-copy commit (one stacked on
+// the slot's commits, or sharing its working-copy commit), or a commit that a
+// branch another git worktree of the primary has checked out points at, by
+// its commit or by jj's bookmark of that name: jj would move the branch, and
+// that worktree is left detached when jj exports it. And it refuses, with a
 // *vcs.ImmutableCommitsError, when the set holds an immutable commit (one a
 // tag or an untracked remote bookmark holds, say), which jj's rebase would
-// refuse only once it runs. The slot is snapshotted first, and every read
-// pinned to that snapshot.
+// refuse only once it runs. A bookmark on those commits that nothing has
+// checked out moves with them, as jj moves it (owner, 2026-10-29).
+//
+// The git worktrees are the primary's, whether or not the slot has a .git of
+// its own: they are listed from the repository jj's store is backed by (`jj
+// git root`), before the slot is snapshotted, so a branch a worktree commits
+// to meanwhile is still in the list, and found by its name. Then the slot is
+// snapshotted, and every read pinned to that snapshot.
 //
 // The slot's own working-copy commit is the one jj names `@` here; jj does
 // not say which workspace the slot is, so when another workspace's
 // working-copy commit is that same commit, every workspace holding it is
 // named.
-func (d Driver) checkScope(ctx context.Context, s vcs.Slot, onto revset) error {
+func (d Driver) checkScope(ctx context.Context, s vcs.Slot, onto revset) (pinned, error) {
+	worktrees, err := d.primaryWorktrees(ctx, s.Path)
+	if err != nil {
+		return pinned{}, err
+	}
 	op, err := d.snapshot(ctx, s.Path)
 	if err != nil {
-		return err
+		return pinned{}, err
 	}
 	wc, err := d.workingCopy(ctx, s.Path, op)
 	if err != nil {
-		return err
+		return pinned{}, err
+	}
+	base, err := d.commits(ctx, s.Path, op, onto)
+	if err != nil {
+		return pinned{}, err
+	}
+	if len(base) != 1 {
+		return pinned{}, fmt.Errorf("jj log -r %s in %s printed %d commits, want 1", onto, s.Path, len(base))
 	}
 	rewritten := onto.to(workingCopy).descendants()
 	scope, err := d.commits(ctx, s.Path, op, rewritten)
 	if err != nil {
-		return err
+		return pinned{}, err
 	}
 	frozen, err := d.commits(ctx, s.Path, op, rewritten.and(immutable))
 	if err != nil {
-		return err
+		return pinned{}, err
 	}
 	if len(frozen) > 0 {
 		refused := &vcs.ImmutableCommitsError{}
 		for _, c := range frozen {
 			refused.Commits = append(refused.Commits, shortID(c.Commit.CommitID))
 		}
-		return refused
+		return pinned{}, refused
 	}
 	shared := &vcs.SharedCommitsError{}
-	inScope := map[string]bool{}
+	inScope, marked := map[string]bool{}, map[string]bool{}
 	for _, c := range scope {
 		inScope[c.Commit.CommitID] = true
+		for _, b := range c.Bookmarks {
+			if b.Remote == "" {
+				marked[b.Name] = true
+			}
+		}
 		if c.Commit.CommitID == wc.Commit.CommitID && len(c.WorkingCopies) <= 1 {
 			continue
 		}
 		shared.Workspaces = append(shared.Workspaces, c.WorkingCopies...)
 	}
-	if ok, err := colocated(s.Path); err != nil {
-		return err
-	} else if ok {
-		worktrees, err := d.git.Worktrees(ctx, s.Path)
-		if err != nil {
-			return fmt.Errorf("list the git worktrees of jj slot %s: %w", s.Path, err)
-		}
-		own := vcs.CanonicalPath(s.Path)
-		for _, w := range worktrees {
-			// The slot's own worktree is on a branch only when someone
-			// switched it with git; jj moves that branch with the slot.
-			if w.Branch != "" && inScope[w.Head] && vcs.CanonicalPath(w.Path) != own {
-				shared.Branches = append(shared.Branches, vcs.CheckedOutBranch{Branch: w.Branch, Path: w.Path})
-			}
+	own := vcs.CanonicalPath(s.Path)
+	for _, w := range worktrees {
+		// The slot's own worktree is on a branch only when someone switched
+		// it with git; jj moves that branch with the slot.
+		if w.Branch != "" && (inScope[w.Head] || marked[w.Branch]) && vcs.CanonicalPath(w.Path) != own {
+			shared.Branches = append(shared.Branches, vcs.CheckedOutBranch{Branch: w.Branch, Path: w.Path})
 		}
 	}
-	if len(shared.Workspaces) == 0 && len(shared.Branches) == 0 {
-		return nil
+	if len(shared.Workspaces) > 0 || len(shared.Branches) > 0 {
+		slices.Sort(shared.Workspaces)
+		shared.Workspaces = slices.Compact(shared.Workspaces)
+		return pinned{}, shared
 	}
-	slices.Sort(shared.Workspaces)
-	shared.Workspaces = slices.Compact(shared.Workspaces)
-	return shared
+	return pinned{change: wc.Commit.ChangeID, onto: base[0].Commit.CommitID}, nil
+}
+
+// primaryWorktrees lists the git worktrees of the repository the slot's jj
+// store is backed by (`jj --ignore-working-copy git root`): a colocated
+// primary's .git, whether or not the slot has a .git of its own, or, for a
+// store jj keeps without git's working tree, its internal repository, which
+// has none. A store jj cannot name a git repository for fails the check.
+func (d Driver) primaryWorktrees(ctx context.Context, slot string) ([]git.Worktree, error) {
+	out, err := d.jj.store(ctx, slot, "git", "root")
+	if err != nil {
+		return nil, err
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return nil, fmt.Errorf("jj git root in %s printed no repository", slot)
+	}
+	worktrees, err := d.git.Worktrees(ctx, root)
+	if err != nil {
+		return nil, fmt.Errorf("list the git worktrees of %s, the repository of jj slot %s: %w", root, slot, err)
+	}
+	return worktrees, nil
 }
 
 // shortID is a commit id cut to the length jj shows by default.

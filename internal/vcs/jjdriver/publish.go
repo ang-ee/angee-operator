@@ -241,7 +241,7 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 	if len(wc.Commit.Parents) != 1 || wc.Commit.Parents[0] != plan.Commit {
 		return fmt.Errorf("jj slot %s moved while its publish was checked: its working copy no longer sits on %s; publish again", s.Path, shortID(plan.Commit))
 	}
-	if _, err := d.jj.snapshot(ctx, s.Path, "bookmark", "set", "-r", commitRevision(plan.Commit).String(), "--", quote(plan.Branch)); err != nil {
+	if _, err := d.jj.snapshot(ctx, s.Path, "bookmark", "set", "-r", commitOf(plan.Commit).String(), "--", quote(plan.Branch)); err != nil {
 		return fmt.Errorf("set bookmark %q in %s: %w", plan.Branch, s.Path, err)
 	}
 	return nil

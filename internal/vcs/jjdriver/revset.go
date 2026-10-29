@@ -44,6 +44,12 @@ func refRevision(ref string) revset {
 	return symbol(ref)
 }
 
+// changeOf is the commits of change id (all of them, when it is divergent).
+func changeOf(id string) revset { return revset("change_id(" + quote(id) + ")") }
+
+// commitOf is the commit with commit id.
+func commitOf(id string) revset { return revset("commit_id(" + quote(id) + ")") }
+
 // localBookmark is the target of local bookmark name; nothing when there is
 // no such bookmark.
 func localBookmark(name string) revset {
@@ -61,9 +67,6 @@ func remoteBookmark(name, remote string) revset {
 func remoteBookmarksOn(remote string) revset {
 	return revset("remote_bookmarks(remote=" + exact(remote) + ")")
 }
-
-// commitRevision is the commit whose full id is id.
-func commitRevision(id string) revset { return revset("commit_id(" + quote(id) + ")") }
 
 // workspaceCommit is the working-copy commit of workspace name, from any
 // workspace of the repository ("name"@).
