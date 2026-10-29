@@ -189,6 +189,11 @@ func (d Driver) SyncBase(ctx context.Context, s vcs.Slot, onto, method string) (
 	return d.syncResult(ctx, s.Path, err)
 }
 
+// CheckRebase lets every rebase run: git rebases only the checkout's branch,
+// which git lets no other worktree check out, and leaves the commits it
+// replays where they were for anything else built on them.
+func (Driver) CheckRebase(context.Context, vcs.Slot, string) error { return nil }
+
 // Merge merges ref with --no-ff, so a merge commit is recorded even when the
 // branch could fast-forward. The commit is the user's (commitIdentity).
 func (d Driver) Merge(ctx context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {

@@ -1318,14 +1318,24 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 	var rebase bool
 	cmd := &cobra.Command{
 		Use:   "sync-base [name]",
-		Short: "Update workspace git sources from their base ref without changing branches",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Update workspace sources from their base ref without changing branches",
+		Long: "Update each workspace slot whose manifest names a mode that syncs (worktree or jj) from its base ref; " +
+			"a slot that names no mode is skipped. With neither flag, each slot is synced its own way: " +
+			"a git worktree by merging, a jj slot by rebasing. --merge is refused for a workspace with a slot that names mode jj.\n\n" +
+			"Example:\n  angee workspace sync-base feature-a\n  angee workspace sync-base feature-a --rebase",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if merge && rebase {
 				return fmt.Errorf("choose only one of --merge or --rebase")
 			}
-			method := "merge"
-			if rebase {
+			// No flag sends no method, so the operator picks each slot's own
+			// sync (plan D11) and can tell an explicit --merge from the
+			// default.
+			method := ""
+			switch {
+			case merge:
+				method = "merge"
+			case rebase:
 				method = "rebase"
 			}
 			platform, name, err := workspaceTarget(args, root, operatorURL, "sync-base")
@@ -1347,12 +1357,17 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, state.State, state.Path); err != nil {
 					return err
 				}
+				if state.Conflicted {
+					if _, err := fmt.Fprintf(stdout, "%s\tconflicted in %s\n", state.Slot, strings.Join(state.ConflictPaths, ", ")); err != nil {
+						return err
+					}
+				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each workspace branch (default)")
-	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each workspace branch onto its base ref")
+	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each git worktree's branch (git's default; refused with a jj slot)")
+	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each slot onto its base ref (a jj slot's default)")
 	return cmd
 }
 

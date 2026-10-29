@@ -49,6 +49,8 @@ const (
 	CauseBackupRequestConflict = "backup_request_conflict"
 	CauseJJSlotUnsupported     = "jj_slot_unsupported"
 	CauseJJUnavailable         = "jj_unavailable"
+	CauseSharedCommits         = "shared_commits"
+	CauseImmutableCommits      = "immutable_commits"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.
@@ -326,7 +328,11 @@ func gitFailure(err error, step gitStep) error {
 		cause = CauseGitUnavailable
 		summary += ": git is not installed."
 	case errors.Is(err, exec.ErrNotFound):
+		code, cause = CodePreconditionFailed, CauseJJUnavailable
 		summary += ": " + tool + " is not installed."
+	case line == "" && tool == "" && !errors.As(err, new(*git.CommandError)):
+		// Neither git's nor a tool's words: the error is all there is.
+		summary += ": " + logctx.RedactText(err.Error()) + "."
 	default:
 		summary += "."
 	}

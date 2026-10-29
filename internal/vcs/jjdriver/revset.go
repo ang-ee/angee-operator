@@ -33,6 +33,17 @@ const unpublished revset = "all() ~ ::(" + published + `) ~ (working_copies() & 
 // name.
 func symbol(name string) revset { return revset(quote(name)) }
 
+// refRevision is a ref a caller names, spelled as jj spells revisions:
+// `name@remote` is bookmark name on remote, with both parts quoted (a
+// remote's name holds no "@"); anything else is one name (symbol). A git
+// spelling such as origin/main names nothing in jj.
+func refRevision(ref string) revset {
+	if i := strings.LastIndexByte(ref, '@'); i > 0 && i < len(ref)-1 {
+		return revset(quote(ref[:i]) + "@" + quote(ref[i+1:]))
+	}
+	return symbol(ref)
+}
+
 // localBookmark is the target of local bookmark name; nothing when there is
 // no such bookmark.
 func localBookmark(name string) revset {
@@ -51,6 +62,20 @@ func workspaceCommit(name string) revset { return revset(quote(name) + "@") }
 
 // parents is the parents of r (r-).
 func (r revset) parents() revset { return "(" + r + ")-" }
+
+// immutable is every commit jj refuses to rewrite: its immutable_heads()
+// (trunk(), tags, untracked remote bookmarks) and their ancestors.
+const immutable revset = "immutable()"
+
+// and is the commits both r and o hold.
+func (r revset) and(o revset) revset { return "(" + r + ") & (" + o + ")" }
+
+// descendants is r and every commit descending from it (r::).
+func (r revset) descendants() revset { return "(" + r + ")::" }
+
+// single is r when it is exactly one commit, and an error from jj otherwise,
+// so a conflicted bookmark is never taken for its several targets.
+func (r revset) single() revset { return "exactly(" + r + ", 1)" }
 
 // firstParent is the first parent of each commit of r.
 func (r revset) firstParent() revset { return "first_parent(" + r + ")" }

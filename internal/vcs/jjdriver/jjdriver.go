@@ -1,9 +1,10 @@
 // Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces of
 // a source's primary, colocated with git when the primary is. It makes and
-// removes a slot (lifecycle.go) and reads its status and diff; every other
-// verb waits for phase 8 of .agents/plans/jj-native-operator.md and reports
-// vcs.ErrUnsupported. The service selects it for a slot whose mode is jj, and
-// refuses those verbs on a jj slot itself before it asks the driver. Source
+// removes a slot (lifecycle.go), reads its status and diff, and fetches,
+// syncs and rebases it (rebase.go); the push, publish, pull and merge verbs
+// wait for the rest of phase 8 of .agents/plans/jj-native-operator.md and
+// report vcs.ErrUnsupported. The service selects it for a slot whose mode is
+// jj, and refuses those verbs on a jj slot itself before it asks the driver. Source
 // captures also use it as the vcs.BackupLayer over a Git checkout, which
 // plans nothing unless colocated JJ metadata is present.
 //

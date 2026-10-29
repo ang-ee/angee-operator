@@ -1017,6 +1017,44 @@ func TestWorkspaceSyncBaseInfersCurrentWorkspace(t *testing.T) {
 	}
 }
 
+// sync-base sends no method unless --merge or --rebase names one, so the
+// operator syncs each slot its own way and can refuse an explicit merge of a
+// jj slot; a slot whose conflict was recorded is printed with its files.
+func TestWorkspaceSyncBaseSendsTheMethodAsked(t *testing.T) {
+	for _, tc := range []struct {
+		flags []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{"--merge"}, "merge"},
+		{[]string{"--rebase"}, "rebase"},
+	} {
+		var got *api.WorkspaceSyncBaseRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.EscapedPath() != "/workspaces/feature-a/sync-base" {
+				t.Errorf("request = %s %s", r.Method, r.URL.EscapedPath())
+			}
+			got = &api.WorkspaceSyncBaseRequest{}
+			_ = json.NewDecoder(r.Body).Decode(got)
+			_ = json.NewEncoder(w).Encode([]api.SourceState{{Name: "app", Slot: "work", State: "ahead", CurrentRef: "0123abcd", Path: "/ws/work", Conflicted: true, ConflictPaths: []string{"a.txt", "b.txt"}}})
+		}))
+		var stdout, stderr bytes.Buffer
+		cmd := NewRoot(&stdout, &stderr)
+		cmd.SetArgs(append([]string{"--operator", server.URL, "workspace", "sync-base", "feature-a"}, tc.flags...))
+		err := cmd.Execute()
+		server.Close()
+		if err != nil {
+			t.Fatalf("sync-base %q: Execute() error = %v", tc.flags, err)
+		}
+		if got == nil || got.Method != tc.want {
+			t.Errorf("sync-base %q sent %+v, want method %q", tc.flags, got, tc.want)
+		}
+		if want := "work\t0123abcd\tahead\t/ws/work\nwork\tconflicted in a.txt, b.txt\n"; stdout.String() != want {
+			t.Errorf("sync-base %q printed %q, want %q", tc.flags, stdout.String(), want)
+		}
+	}
+}
+
 func writeStackTemplate(t *testing.T, root string) string {
 	t.Helper()
 	templateRoot := filepath.Join(root, ".templates", "stacks", "dev")

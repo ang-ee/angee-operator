@@ -38,7 +38,12 @@ Q8 (a jj slot pushes to git's push remote) and Q9 (the runner passes
 snapshot: jj's own report counts as dirty) in #139; what jj does not report,
 the owner answered on 2026-10-29: the destroy guard refuses a jj slot that
 holds a nested repository, and files outside sparse patterns are
-unsupported. Q7 (`workspace push` and clone slots with no mode) is open.
+unsupported. Q7 is answered (2026-10-29): the verbs that walk a whole
+workspace act only on slots whose manifest names a mode. Phase 8's first
+half (sync-base and rebase on jj slots, the identity fallback, and the
+preconditions sync-base needs answered per driver) is in review in the PR
+that adds "As built: sync-base and rebase" to phase 8; publish, push and
+merge are the second half.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -1948,6 +1953,178 @@ already published, so the next publish force-updates the remote branch (jj
 does this with a lease). That is the proposal's intent, and different from
 today's default merge.
 
+Settled by Q7 (owner, 2026-10-29): sync-base, and `ws push` in the second
+half, walk only the slots whose manifest names a mode, so a slot with no mode
+under `vcs: jj` (`.work`) is skipped by them and reached only by the per-slot
+verbs.
+
+**As built: sync-base and rebase (2026-10-29).** The first of the two PRs:
+steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
+
+- **Step 0, identity.** `jjdriver/identity.go`. A runner made by `New`
+  holds an `identity`, resolved once per runner (the service makes one
+  driver per slot operation) on the first run that may record commits:
+  `snapshot` (so every status, fetch and rebase), `inPrimary` (`jj workspace
+  add`) and `recording` (`jj git init` in the system temporary directory).
+  Reads with `--ignore-working-copy` record nothing and get nothing. The
+  identity is the repository's whose commits the run records: `jj git init`
+  runs in the temporary directory but resolves it for the primary (found in
+  review), so a repository-level or `includeIf` git identity counts. The
+  operator's own `JJ_USER` and `JJ_EMAIL` need no probe; otherwise one `jj -R
+  . --ignore-working-copy config list --include-defaults -T <name, json
+  value> user` gives both values (in the temporary directory, for the user's
+  config alone, where the directory holds no `.jj` yet; jj's defaults are
+  `""`), and for each that is empty, git's author identity:
+  `git.Client.Identity`, the git ops' rule moved from `gitdriver` (git's
+  configured identity, angee's placeholder only when git has none, nothing
+  when git refuses otherwise). git runs in the slot when it is colocated, else
+  in the system temporary directory, never in a store without a `.git`.
+  `runner.exec` now returns standard error too, for a mutation's message.
+- **Step 1, the rebase scope (D12).** `jjdriver/rebase.go` `checkScope`:
+  snapshot, then at that operation `(B..@)::` with the commits template.
+  Refused, with a `*vcs.SharedCommitsError`, when it holds another jj
+  workspace's working-copy commit, or a commit at which a git worktree of the
+  primary (`git.Client.Worktrees`, `worktree list --porcelain -z`, the main
+  worktree included, the slot's own skipped) has a branch checked out; and,
+  with a `*vcs.ImmutableCommitsError` (cause `immutable_commits`), when it
+  holds an `immutable()` commit, which `jj rebase` would refuse only once
+  the sync is under way (found in review). jj does not say which
+  workspace runs a command, so the slot's own working-copy commit is `@`, and
+  when another workspace shares it every name holding it is listed. It is
+  `vcs.Driver.CheckRebase` (the git driver answers nil: git rebases only the
+  checkout's own branch, which no other worktree can have checked out), and
+  the jj rebases check it again right before running. The service maps it to
+  `PRECONDITION_FAILED`, cause `shared_commits`, naming the holders, with the
+  worktrees in `paths`. Known limit: check, then rebase; an agent stacking a
+  workspace in between is rewritten, as jj itself would.
+- **Step 2, sync-base.**
+  - A machine that cannot run jj slots (`requireJJSlots`) refuses sync-base
+    and rebase of one as `jj_unavailable` before anything is fetched; a jj
+    that vanished later is `jj_unavailable` from `gitFailure` too.
+  - D11: the CLI sends no method unless `--merge` or `--rebase`.
+    `vcs.Driver.SyncMethod(method)` resolves each slot's method before any
+    slot is read (git: merge by default; jj: rebase, and a merge wraps
+    `vcs.ErrUnsupported`), so an explicit merge with a jj slot is refused
+    (`INVALID_INPUT`, naming the slot) before anything is fetched, and the
+    failure wording says what each slot does.
+  - Selection (Q7): `workspaceGitSlots` selects by recorded mode, now
+    `worktree` and `jj`, and a jj slot of a `kind: local` store too.
+  - The aggregate keeps its order and extends it: every slot's method, then
+    readiness and base ref, then fetch and base, then **the scope of every
+    rebase**, then the syncs. So a scope refusal, like every refusal, leaves
+    no slot changed (a test pins that the free slot sorted first is not
+    rebased).
+  - jj `Fetch` is `jj git fetch --all-remotes` **in the slot**, under
+    `ANGEE_GIT_TIMEOUT`, not on the primary: the slot shares the primary's
+    store, so it is the primary's fetch, and it is the step 1 snapshot. It
+    takes no primary lock, as a git worktree slot's fetch takes none (D9:
+    slot verbs). `--all-remotes` mirrors git's `fetch --all`. A `kind: local`
+    store is never fetched (angee never changes a user's store, as at
+    create): its slot is rebased onto its base as the store has it.
+  - `ResolveBase` names B as Status picks it (`main@origin`, else the local
+    `main`), at the latest operation. `destination` maps that name back to
+    the exact bookmark, wrapped in `exactly(…, 1)`, so a tag of that name never
+    wins and a conflicted bookmark is an error, never a merge of its targets;
+    any other ref is `refRevision`.
+  - `jj rebase -b @ --onto <B>` runs in the slot through `snapshot`; its
+    standard error is the result's message. Conflicts are read after it at
+    the latest operation (D5): the conflicted commits of `B..@` and their
+    files. When that read fails after jj succeeded, the result stays `OK`
+    with the error: sync-base records it on the slot's state and goes on,
+    and the slot's rebase says it was the read that failed. The result is
+    `OK` and `Conflicted`; a git conflict stays
+    `Conflicted` without `OK`, which is how the service tells the two apart,
+    without asking the slot's mode. A recorded conflict sets the slot's
+    `SourceState.Conflicted` and `ConflictPaths` (from the result, added in
+    their own commit with phase 7's JSON names), and the loop goes on. A git
+    conflict still ends the sync with `merge_conflict`. A non-conflict
+    failure ends the sync as that slot's error, quoting jj (`vcs.ToolError`).
+  - The state after a sync is the slot's status, as for git.
+- **Step 5, rebase.** `jjdriver.Rebase(ref)`: the scope check, then the same
+  rebase. `ref` is jj's spelling: `refRevision` quotes `name@remote` as
+  `"name"@"remote"` (split at the last `@`) and anything else as one name,
+  so `origin/main` names nothing, and it must be exactly one commit, so a
+  conflicted bookmark is an error, never a merge of its targets. Merge stays
+  refused.
+- **Step 6.** The three verbs reach the driver, whose
+  `noOperationInProgress` wraps `vcs.ErrUnsupported`; `classifyOperationError`
+  reports it once as `INVALID_INPUT` on the slot.
+- **Step 7, the part sync-base needs.** `vcs.Driver.Ready(ctx, s, verb)`
+  answers "may this verb run", for `vcs.VerbSyncBase` only so far: git checks
+  the branch (when the slot must be on one) and the uncommitted paths and
+  returns `*vcs.BranchMismatchError{Reason, Fix}` (Fix is git's own `git -C …
+  switch …`) or `*vcs.UncommittedError{Paths}`; jj returns nil, since its
+  working-copy commit rides along. `requireSlotReady` words them as before,
+  so git's messages are unchanged. Failures quote the tool: a driver error
+  that is a `vcs.ToolError` (`jjdriver.CommandError`: `Tool`, `Line`, the
+  first `Error:` line, `Output`) fills `OperationError.Tool` and `ToolLine`
+  (was `GitLine`), and the message ends ` jj: <line>`. A failure with
+  neither tool's words now ends with the error's own text (it said only
+  "failed." before, losing a decode error, say).
+- **Refusals lifted.** `workspaceSourceTarget` lets `jjSlotVerbs` (rebase and
+  the three state-machine verbs) through, and now hands the verb the slot's
+  effective mode, so a slot with no mode under `vcs: jj` gets the jj driver.
+  `refuseJJSlots` is gone from sync-base, and for `workspace push` counts only
+  slots whose manifest names mode `jj` (Q7). Fetch, pull, push, publish,
+  merge and diff stay refused.
+- **Tests.** Real jj (`ANGEE_REQUIRE_JJ=1`): the driver's fetch, base, sync
+  with an unrecorded edit riding along, a recorded conflict that resolves,
+  rebase onto a named ref and a refused revset, the scope (a stacked
+  workspace, a shared working-copy commit, a git worktree's branch, the
+  slot's own git branch and checkouts on the base let through), immutable
+  commits refused, a bad ref as jj's error, the base's fallback and
+  `exactly`; the identity (git's, the placeholder, jj's name with git's
+  email). The service: two jj slots and a worktree slot synced by default
+  (one conflict, reported, the rest synced, the workspace usable, a second
+  sync clean; `--merge` refused first, nothing fetched); a stacked slot
+  refused by sync-base and rebase from both sides, nothing rebased, the
+  free slot included; a tagged commit refused before the slot sorted first
+  is rebased; a slot with no mode skipped under `vcs: jj` and reached by
+  rebase; a `kind: local` store rebased without a fetch; the state-machine
+  verbs; the D11 refusal; no jj (`jj_unavailable`); the operator contract
+  for both `INVALID_INPUT` refusals over REST and GraphQL. Fake tools: the
+  identity probe, which runs get it, a new primary's resolved for the
+  primary. Fake driver: readiness worded, dispatch order, a sync made but
+  unread. git: `Ready`, `SyncMethod`, `Worktrees`. Mutants caught: no
+  identity fallback, no pre-check of every slot's scope, a local store
+  fetched, conflicts ending the loop, slots with no mode selected.
+- **Review record (`go-code-reviewer`, 2026-10-29).** No blockers. Fixed:
+  an immutable commit failing the sync partway (now pre-checked); a rebase
+  jj made reported as failed when the conflict read after it failed (and a
+  shadowed `err` that dropped it); the identity resolved for the temporary
+  directory of `jj git init`; a missing jj reported as a fetch failure; a
+  caller's ref not forced to one commit; the slot's own git branch read as
+  another checkout's; the forget command in the `shared_commits` hint; two
+  probes where one `config list` does; failures that lost their error text;
+  stderr not redacted in the result's message; the Q7 wording of `--merge`;
+  a stale comment. Tests added for each. Not taken: keeping every slot's
+  branch check before any slot's clean check (git's refusal order across
+  slots changed: with slot `a` dirty and `b` off its branch, `a` is now
+  named; nothing is touched either way), and `GIT_CEILING_DIRECTORIES` for
+  the identity probe in the temporary directory.
+- **For the second half (publish, push, merge).**
+  - `Ready` takes the other verbs: jj `VerbPublish` and `VerbMerge` refuse a
+    non-empty `@` (`*vcs.UncommittedError`); git's pull and push move from
+    `ensureWorkspaceGitSourceOnExpectedBranch` and `requireCleanSlot` to it,
+    with destroy's branch check, so the service stops naming
+    `git -C … switch` there. `jjdriver.DirtyPaths` must include
+    `UntrackedPaths`, if it is kept at all.
+  - jj `PushURL` still returns "" and `PlanPush`, `Push`, `PlanPublish`,
+    `PreparePublish`, `Publish`, `Pull` and `Merge` are not built; the
+    identity is in place for `jj git push`.
+  - `refRevision` is the spelling for a ref a caller names, Diff's included.
+  - `jjSlotVerbs` grows with each verb, and `workspace push` drops
+    `refuseJJSlots` once it selects jj slots by recorded mode, as sync-base
+    does.
+  - The GraphQL `SourceState` has no `conflicted` yet: phase 7's lane adds it
+    with the other status fields. Once `WorkspaceSourceStatus` carries
+    `vcs.Status.Conflicted`, sync-base can take a slot's conflict from its
+    status rather than from the rebase's result.
+  - Bookmarks on the commits a rebase rewrites that no worktree has checked
+    out (another slot's published bookmark, say) move with them silently,
+    within D12 as written; publish will then force-push them. Decide before
+    publish lands whether that needs a refusal too.
+
 ### Phase 9. `ws source migrate`
 
 New service method `WorkspaceSourceMigrate(workspace, slot, to)` with CLI
@@ -2031,8 +2208,7 @@ happens when no stack has a git slot left, which is a separate decision.
 
 ## 5. Open questions for the owner
 
-Q1 to Q6 and Q10 are answered; Q8 and Q9 are built as recommended, and
-Q7 is open.
+Q1 to Q7 and Q10 are answered; Q8 and Q9 are built as recommended.
 
 - **Q1. How does a jj slot reach its final path? Answered 2026-10-05: in
   place** (D4). The alternatives that were weighed:
@@ -2107,7 +2283,21 @@ Q7 is open.
   always), and would push a clean, ahead `.work` with git, outside the
   work-state store's own publish recipe. Covering them needs a way to
   exclude a work-state slot first: a slot or source flag (`push: false`,
-  say), a dedicated mode for it, or a rule on the work-state source. Open.
+  say), a dedicated mode for it, or a rule on the work-state source.
+
+  *Answered (owner, 2026-10-29): explicit mode only.* The verbs that walk
+  a whole workspace (`sync-base`, and `workspace push` when it reaches jj
+  slots) act only on slots whose manifest names a mode (`worktree`,
+  `clone`, `jj`). A slot that names none is skipped by them, even when the
+  stack's `vcs: jj` makes it a jj slot; the `.work` work-state slot is the
+  case that matters, and it keeps its own publish recipe. The per-slot
+  verbs (`workspace source ...`) still reach such a slot. This matches
+  phase 11, where the code slots get an explicit `slot_mode` and `.work`
+  keeps none. Built for sync-base in phase 8's first half, and for
+  `workspace push`'s refusal of a workspace with a jj slot (it no longer
+  counts a slot with no mode); `workspace push` on jj slots comes with the
+  second half. A clone slot with no mode stays out of `workspace push`, as
+  it was.
 - **Q8. Which remote does a jj slot push to? Built as recommended in
   #126; the owner can still reverse it.** jj reads neither git's
   `remote.pushDefault`, which phase 2 writes from `push_default`, nor a

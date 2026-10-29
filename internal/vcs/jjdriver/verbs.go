@@ -16,9 +16,11 @@ func notYet(verb string) error {
 
 // noOperationInProgress is the error of the verbs that drive a merge or
 // rebase stopped on conflicts: jj never stops one, it records the conflict
-// in the commit and goes on.
+// in the commit and goes on, so a jj slot never has one to abort or
+// continue. It wraps vcs.ErrUnsupported, which the service reports as
+// invalid input.
 func noOperationInProgress(verb string) error {
-	return fmt.Errorf("%s: a jj slot never has a merge or rebase in progress: %w", verb, vcs.ErrUnsupported)
+	return fmt.Errorf("%s: a jj slot never has a merge or rebase in progress, since jj records a conflict in the commit and goes on: %w", verb, vcs.ErrUnsupported)
 }
 
 // Ready lets sync-base run on a jj slot as it stands: the working-copy commit
@@ -55,19 +57,8 @@ func (Driver) DirtyPaths(context.Context, vcs.Slot) ([]string, error) {
 	return nil, notYet("the uncommitted-changes check")
 }
 
-// FetchURL names no remote yet.
-func (Driver) FetchURL(context.Context, vcs.Slot) string { return "" }
-
 // PushURL names no remote yet.
 func (Driver) PushURL(context.Context, vcs.Slot, string) string { return "" }
-
-// ResolveBase is not implemented yet.
-func (Driver) ResolveBase(context.Context, vcs.Slot) (string, error) {
-	return "", notYet("resolving the base")
-}
-
-// Fetch is not implemented yet.
-func (Driver) Fetch(context.Context, vcs.Slot) error { return notYet("fetch") }
 
 // Pull is not implemented yet.
 func (Driver) Pull(context.Context, vcs.Slot) error { return notYet("pull") }
@@ -80,19 +71,9 @@ func (Driver) PlanPush(context.Context, vcs.Slot, string, string) (vcs.PushPlan,
 // Push is not implemented yet.
 func (Driver) Push(context.Context, vcs.Slot, vcs.PushPlan) error { return notYet("push") }
 
-// SyncBase is not implemented yet.
-func (Driver) SyncBase(context.Context, vcs.Slot, string, string) (api.GitOpResult, error) {
-	return api.GitOpResult{}, notYet("sync-base")
-}
-
 // Merge is not implemented yet.
 func (Driver) Merge(context.Context, vcs.Slot, string) (api.GitOpResult, error) {
 	return api.GitOpResult{}, notYet("merge")
-}
-
-// Rebase is not implemented yet.
-func (Driver) Rebase(context.Context, vcs.Slot, string) (api.GitOpResult, error) {
-	return api.GitOpResult{}, notYet("rebase")
 }
 
 // MergeAbort has nothing to abort on a jj slot.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -238,9 +239,10 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 }
 
 // workspaceSourceTarget resolves the slot verb names, for it to act on: the
-// stack, the slot, its source and its path, which must be materialized. A
-// jj slot is refused for every verb that calls it, until phase 8 of the jj
-// plan implements them (jjSlotNotYet).
+// stack, the slot with its effective mode (withEffectiveMode), its source and
+// its path, which must be materialized. A jj slot, one that names no mode
+// under `vcs: jj` included, is refused for every verb but jjSlotVerbs, until
+// phase 8 of the jj plan implements them (jjSlotNotYet).
 func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceName, slot string) (*manifest.Stack, manifest.WorkspaceSource, manifest.Source, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
@@ -265,16 +267,23 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceNam
 	if err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 	}
-	if stack.EffectiveSourceMode(wsSource) == manifest.WorkspaceSourceModeJJ {
+	wsSource = withEffectiveMode(stack, wsSource)
+	if wsSource.Mode == manifest.WorkspaceSourceModeJJ && !slices.Contains(jjSlotVerbs, verb) {
 		refusal := jjSlotNotYet(verb, workspaceName, []string{slot}, []string{path})
 		refusal.Source = wsSource.Source
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", refusal
 	}
-	if err := requireWorkspaceSlotsOnDisk(workspaceName, []workspaceSlotPath{{slot: slot, path: path, source: source, mode: stack.EffectiveSourceMode(wsSource)}}); err != nil {
+	if err := requireWorkspaceSlotsOnDisk(workspaceName, []workspaceSlotPath{{slot: slot, path: path, source: source, mode: wsSource.Mode}}); err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
 	}
 	return stack, wsSource, source, path, nil
 }
+
+// jjSlotVerbs are the slot verbs that run on a jj slot: rebase, and the three
+// that drive a merge or rebase stopped on conflicts, which the jj driver
+// refuses itself, since a jj slot never has one in progress. Every other verb
+// is refused on a jj slot until the rest of phase 8 of the jj plan builds it.
+var jjSlotVerbs = []string{"rebase", "merge-abort", "rebase-abort", "rebase-continue"}
 
 // workspaceSlotOperation names a verb on one workspace source slot, such as
 // `Pull for workspace "src" slot "app"`.

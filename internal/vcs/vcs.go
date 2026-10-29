@@ -100,7 +100,8 @@ type Status struct {
 	UnpushedReason string
 
 	// The fields below are read from jj slots only; the git driver leaves
-	// them unset, and the API does not carry them yet.
+	// them unset. The API does not carry them yet (phase 7 of the jj plan),
+	// except that a sync-base answer carries a rebase's conflicts.
 
 	// ChangeID is the change id of the slot's working-copy commit.
 	ChangeID string
@@ -156,6 +157,49 @@ type UncommittedError struct {
 
 func (e *UncommittedError) Error() string {
 	return "uncommitted changes in " + strings.Join(e.Paths, ", ")
+}
+
+// CheckedOutBranch is a branch a git worktree of a primary has checked out,
+// and where.
+type CheckedOutBranch struct {
+	Branch string
+	Path   string
+}
+
+// SharedCommitsError is returned by Driver.CheckRebase, and by a rebase that
+// checks it, when the commits rebasing the checkout would rewrite are not the
+// checkout's alone (plan D12): jj rewrites the descendants of what it moves,
+// so another checkout's work built on them would be rewritten too. Workspaces
+// names the jj workspaces whose working-copy commit is among them, and
+// Branches the git worktree branches that point at one, which jj would move
+// under their worktrees.
+type SharedCommitsError struct {
+	Workspaces []string
+	Branches   []CheckedOutBranch
+}
+
+func (e *SharedCommitsError) Error() string {
+	var held []string
+	for _, name := range e.Workspaces {
+		held = append(held, fmt.Sprintf("jj workspace %q", name))
+	}
+	for _, branch := range e.Branches {
+		held = append(held, fmt.Sprintf("branch %q checked out at %s", branch.Branch, branch.Path))
+	}
+	return "the rebase would rewrite commits that other checkouts hold: " + strings.Join(held, ", ")
+}
+
+// ImmutableCommitsError is returned by Driver.CheckRebase, and by a rebase
+// that checks it, when the commits the rebase would rewrite include ones the
+// version control system refuses to rewrite: for jj, the ancestors of its
+// immutable_heads() (trunk(), a tag, an untracked remote bookmark). Commits
+// lists them by short id.
+type ImmutableCommitsError struct {
+	Commits []string
+}
+
+func (e *ImmutableCommitsError) Error() string {
+	return "the rebase would rewrite commits jj holds immutable: " + strings.Join(e.Commits, ", ")
 }
 
 // ToolError is a failed version-control command as a driver returns it, so a
@@ -332,13 +376,28 @@ type Driver interface {
 	SyncMethod(method string) (string, error)
 	// SyncBase brings onto, a ref ResolveBase returned, into the checkout's
 	// branch by method (SyncMerge, SyncRebase, or SyncDefault for the
-	// driver's own choice). A conflict is a result, not an error.
+	// driver's own choice). A conflict is a result, not an error, as for
+	// Rebase.
 	SyncBase(ctx context.Context, s Slot, onto, method string) (api.GitOpResult, error)
+	// CheckRebase reports whether rebasing the checkout onto onto, a ref
+	// ResolveBase returned or one a caller named, would rewrite only what is
+	// the checkout's own and may be rewritten: nil, a *SharedCommitsError
+	// naming the other checkouts that hold some of it, or an
+	// *ImmutableCommitsError naming what the version control system will not
+	// rewrite. The rebases check it themselves too;
+	// a caller rebasing several slots asks each first, so a refusal leaves
+	// none rebased. A git rebase rewrites only the checkout's own branch,
+	// which no other worktree can have checked out, so the git driver
+	// answers nil.
+	CheckRebase(ctx context.Context, s Slot, onto string) error
 	// Merge merges ref into the checkout's branch, always recording a merge.
 	// A conflict is a result, not an error.
 	Merge(ctx context.Context, s Slot, ref string) (api.GitOpResult, error)
 	// Rebase rebases the checkout's branch onto ref. A conflict is a result,
-	// not an error.
+	// not an error: OK and Conflicted when the version control system
+	// records it in the commits and goes on (jj), Conflicted alone when the
+	// checkout stopped mid-rebase (git). An error with OK set means the
+	// rebase was made but what it left could not be read.
 	Rebase(ctx context.Context, s Slot, ref string) (api.GitOpResult, error)
 	// MergeAbort, RebaseAbort and RebaseContinue drive a checkout that Merge
 	// or Rebase left stopped on conflicts. MergeAbort and RebaseAbort return

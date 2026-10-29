@@ -6,6 +6,60 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **`workspace sync-base` rebases jj slots** (the first half of phase 8 of
+  `.agents/plans/jj-native-operator.md`). With no method, each slot is now
+  synced its own way: a git worktree slot is merged, as before, and a jj slot
+  is rebased onto its base (`jj git fetch --all-remotes`, then `jj rebase -b
+  @ --onto <base>` in the slot), its working-copy commit with any
+  uncommitted changes riding along. The CLI sends no method unless
+  `--merge` or `--rebase` is given; `--merge` over a workspace with a slot
+  whose manifest names mode `jj` is refused (`INVALID_INPUT`, naming the
+  slot) before anything is fetched.
+  - **A rebase rewrites commits that were already published, so the next
+    publish of such a slot force-updates its remote branch** (jj does so with
+    a lease). The default merge of a git slot never rewrites.
+  - A jj slot's conflict is recorded in its commits and reported on its state
+    (`conflicted`, `conflict_paths`, and a `conflicted in <paths>` line in
+    the CLI's output), and the sync goes on to the next slot; a git slot that
+    stops on conflicts still fails the sync with `merge_conflict`. A failure
+    that is not a conflict quotes jj (`... failed. jj: Error: ...`).
+  - A rebase that would rewrite another checkout's commits is refused
+    before any slot is rebased (`PRECONDITION_FAILED`, cause
+    `shared_commits`, naming them): another jj workspace's working-copy
+    commit stacked on the slot's commits, or a branch a git worktree of the
+    same cache has checked out at one of them. So is one that would rewrite
+    a commit jj holds immutable, such as a tagged one (cause
+    `immutable_commits`), and sync-base or rebase of a jj slot on a machine
+    that cannot run jj slots (cause `jj_unavailable`).
+  - A `kind: local` store's jj slot is rebased onto its base as the store has
+    it; angee fetches nothing into a user's store.
+  - `workspace source rebase` runs on a jj slot (`ref` in jj's spelling, such
+    as `main@origin`), with the same check, and answers a recorded conflict
+    as `ok` and `conflicted`. `merge-abort`, `rebase-abort` and
+    `rebase-continue` on a jj slot answer `INVALID_INPUT`: a jj slot never
+    has a merge or rebase in progress.
+
+### Changed
+
+- **`sync-base` and `workspace push` walk only the slots whose manifest names
+  a mode** (owner's answer to Q7 of the jj plan). A slot that names none is
+  skipped by both, even a jj slot under `vcs: jj`, so a work-state `.work`
+  slot is left to its own workflow, and `workspace push` no longer refuses a
+  workspace for one. The `workspace source` verbs still reach such a slot.
+- **jj slots commit as git's identity when the operator's jj has none.** A
+  jj command angee runs that may record a commit (a snapshot, a slot's
+  creation) reads `user.name` and `user.email` from jj's config, and sets
+  `JJ_USER` or `JJ_EMAIL` only for one that is empty: from git's configured
+  identity, else angee's placeholder when git has none either, as merges and
+  rebases of git slots do. jj recorded an empty author and committer before,
+  which `jj git push` refuses.
+- A failure's message names the tool it quotes: ` jj: <line>` for a jj
+  command, ` git: <line>` for git as before. A step that fails with neither
+  tool's words, such as resolving a base, now ends with the error itself
+  (`resolving the base of source slot "app" failed: <error>.`).
+
 ## v0.24.0 — 2026-10-29
 
 ### Added

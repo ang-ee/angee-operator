@@ -27,8 +27,12 @@ func (p *Platform) WorkspaceSourceMerge(ctx context.Context, workspace, slot, re
 }
 
 // WorkspaceSourceRebase rebases the current branch onto `ref`. On conflict
-// the worktree stays in the rebasing state; callers must
-// `workspaceSourceRebaseContinue` or `workspaceSourceRebaseAbort`.
+// a git worktree stays in the rebasing state; callers must
+// `workspaceSourceRebaseContinue` or `workspaceSourceRebaseAbort`. A jj slot
+// is rebased with `jj rebase -b @ --onto <ref>` (ref in jj's spelling, such
+// as `main@origin`), its working-copy commit included: a conflict is
+// recorded in the commits and reported as OK and conflicted, and a rebase
+// that would rewrite another checkout's commits is refused (shared_commits).
 func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, ref string) (result api.GitOpResult, err error) {
 	op := workspaceSlotOperation("workspace.source-rebase", "Rebase", workspace, slot)
 	defer op.annotate(&err)
@@ -36,6 +40,11 @@ func (p *Platform) WorkspaceSourceRebase(ctx context.Context, workspace, slot, r
 		return api.GitOpResult{}, &InvalidInputError{Field: "ref", Reason: "rebase ref is required"}
 	}
 	return p.runWorkspaceGitOp(ctx, op, gitStep{action: fmt.Sprintf("rebasing onto %s", ref)}, workspace, slot, func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult, error) {
+		if s.Mode == vcs.ModeJJ {
+			if err := p.requireJJSlots(ctx); err != nil {
+				return api.GitOpResult{}, err
+			}
+		}
 		return d.Rebase(ctx, s, ref)
 	})
 }
@@ -180,5 +189,12 @@ func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step git
 	step.source = wsSource.Source
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
 	result, err = run(ctx, driver, target)
+	if refusal := rebaseRefusal(err, workspace, slot, wsSource.Source); refusal != nil {
+		return result, refusal
+	}
+	if err != nil && result.OK {
+		// The operation was made; what failed is reading what it left.
+		step.action = "reading what " + step.action + " left in"
+	}
 	return result, gitFailure(err, step)
 }

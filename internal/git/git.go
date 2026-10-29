@@ -543,6 +543,49 @@ func (c Client) WorktreeRegistered(ctx context.Context, repoDir, dest string) (b
 	return false, nil
 }
 
+// Worktree is one worktree a repository lists, its main one included: where
+// it is checked out, the commit at its HEAD, and the branch it has checked
+// out, by its short name ("" when HEAD is detached).
+type Worktree struct {
+	Path   string
+	Head   string
+	Branch string
+}
+
+// Worktrees lists the worktrees of the repository at dir (`git worktree list
+// --porcelain -z`, so no path is misread), in git's order, its main worktree
+// first.
+func (c Client) Worktrees(ctx context.Context, dir string) ([]Worktree, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return nil, err
+	}
+	return parseWorktrees(string(out)), nil
+}
+
+// parseWorktrees reads `git worktree list --porcelain -z`: each attribute
+// ends in a NUL, and an empty one ends a worktree.
+func parseWorktrees(out string) []Worktree {
+	var worktrees []Worktree
+	var current *Worktree
+	for _, field := range strings.Split(out, "\x00") {
+		key, value, _ := strings.Cut(field, " ")
+		switch {
+		case field == "":
+			current = nil
+		case key == "worktree":
+			worktrees = append(worktrees, Worktree{Path: value})
+			current = &worktrees[len(worktrees)-1]
+		case current == nil:
+		case key == "HEAD":
+			current.Head = value
+		case key == "branch":
+			current.Branch = strings.TrimPrefix(value, "refs/heads/")
+		}
+	}
+	return worktrees
+}
+
 func canonicalWorktreePath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

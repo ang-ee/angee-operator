@@ -570,6 +570,16 @@ For git worktree sources, the branch recorded in the workspace manifest is the
 workspace identity. `sync-base` updates that branch from its base ref (normally
 `origin/main`) without switching to another branch; push commands refuse
 sources whose current branch does not match the manifest branch.
+
+`sync-base` acts on the slots whose manifest entry names a mode that syncs: a
+`worktree` slot and a `jj` slot. A slot that names no mode is skipped, even a
+jj slot under `vcs: jj`, so a work-state `.work` slot is left to its own
+workflow; the `workspace source` verbs still reach it. With neither flag,
+each slot is synced its own way: a worktree slot by merging the base into its
+branch, a jj slot by rebasing. `--rebase` rebases every slot; `--merge`
+merges every worktree slot and is refused, before anything is fetched, for a
+workspace with a slot whose manifest names mode `jj`. sync-base checks every slot, fetches it and resolves
+its base before it syncs any, so a refusal leaves every slot as it was.
 The same contract is exposed through the operator REST and GraphQL APIs:
 workspace status includes `sources[].branch`, `sources[].current_ref` /
 `currentRef`, `sources[].state`, and top-level `state: discrepancy` when any
@@ -658,7 +668,7 @@ lib	created	worktree on branch "feature-a", base main	/srv/stack/workspaces/feat
 | --- | --- | --- |
 | Whole source | `angee source pull <name>` | Fetch + fast-forward the cached top-level source. |
 | One workspace slot | `POST /workspaces/{name}/sources/{slot}/pull` / GraphQL `workspaceSourcePull` | Fast-forward a single workspace slot's worktree from its tracking ref. No CLI subcommand yet. |
-| All slots of a workspace | `angee workspace sync-base [name] [--merge\|--rebase]` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch. |
+| All slots of a workspace | `angee workspace sync-base [name] [--merge\|--rebase]` | Merge or rebase each slot that names a mode (worktree or jj) against its declared base ref: by default a worktree slot is merged and a jj slot rebased. Stays on the workspace branch. |
 
 ### Per-workspace source slots
 
@@ -679,7 +689,9 @@ angee workspace source publish <workspace> <slot> [--remote name] [--branch name
 
 Convergence ops (`merge`/`rebase`/aborts/continue/publish) return a
 `GitOpResult{ok, conflicted, conflictFiles, message}` — print as text
-or `--json`.
+or `--json`. A git slot that stops on conflicts returns `conflicted` with
+`ok` false and stays mid-merge or mid-rebase; a jj slot records the conflict
+in its commits and returns `ok` and `conflicted` together.
 
 ### jj slots
 
@@ -707,12 +719,45 @@ workspace of its source's cache or local store; see
   as status reports it, and while a git or jj repository sits inside the
   slot, which jj does not record, naming each. `--purge` forgets the slot's
   jj workspace and leaves no git worktree registration.
+- `workspace sync-base` rebases a jj slot onto its base: it fetches every
+  remote into the slot's repository (`jj git fetch --all-remotes` in the
+  slot; never into a `kind: local` store, which is rebased onto its base as
+  the store has it), then runs `jj rebase -b @ --onto <base>` in the slot,
+  where the base is the slot's ref on the source's clone remote
+  (`main@origin`), else the local bookmark. There is no uncommitted-changes
+  refusal: the working-copy commit rides along. A conflict is recorded in
+  the slot's commits, as jj does, and reported on that slot's state
+  (`conflicted`, `conflict_paths`, and a `conflicted in <paths>` line in the
+  text output), and the sync goes on to the next slot. Resolve it in the
+  slot with jj. Any other failure ends the sync with jj's own words
+  (`... failed. jj: Error: ...`).
+- A rebase rewrites the commits it moves, so a slot whose commits were
+  already published gets new ones, and the next publish force-updates its
+  remote branch.
+- A rebase also rewrites every descendant of those commits, so sync-base and
+  `workspace source rebase` refuse a jj slot when another checkout holds some
+  of them: another jj workspace's working-copy commit (a slot stacked on this
+  one's commits, in this stack or another sharing the cache), or a branch a
+  git worktree of the same cache has checked out at one of them. The refusal
+  names them, with code `PRECONDITION_FAILED` (HTTP 409) and cause
+  `shared_commits`, and sync-base checks every slot first, so it rebases
+  none. So is a rebase that would rewrite a commit jj holds immutable (one a
+  tag or an untracked remote bookmark holds), with cause
+  `immutable_commits`, naming the commits, before jj's own rebase would
+  refuse it partway through the sync. A machine that cannot run jj slots
+  refuses sync-base and rebase of one with cause `jj_unavailable`.
+- `workspace source rebase <workspace> <slot> <ref>` rebases a jj slot the
+  same way onto `ref`, in jj's spelling (`main@origin` for a remote
+  bookmark, not `origin/main`), and returns `ok` and `conflicted` with the
+  files for a recorded conflict. `merge-abort`, `rebase-abort` and
+  `rebase-continue` are refused with `INVALID_INPUT`: a jj slot never has a
+  merge or rebase in progress.
 - The other slot verbs do not run on a jj slot yet: `workspace source
-  fetch`, `pull`, `push`, `diff`, `merge`, `rebase`, `merge-abort`,
-  `rebase-abort`, `rebase-continue` and `publish`, and `workspace push` and
-  `workspace sync-base` over a workspace that has one, are refused before
-  they touch any slot, with code `INVALID_INPUT` (HTTP 400) and cause
-  `jj_slot_unsupported`. Use jj in the slot meanwhile.
+  fetch`, `pull`, `push`, `diff`, `merge` and `publish`, and `workspace push`
+  over a workspace with a slot whose manifest names mode `jj`, are refused
+  before they touch any slot, with code `INVALID_INPUT` (HTTP 400) and cause
+  `jj_slot_unsupported`. Use jj in the slot meanwhile. `workspace push`, like
+  sync-base, skips a slot that names no mode.
 
 ### Workspace preflight
 
