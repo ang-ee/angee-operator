@@ -2443,3 +2443,130 @@ func TestBackendStatusReturnsParseError(t *testing.T) {
 		t.Fatalf("statuses = %v, want nil", got)
 	}
 }
+
+func TestTransientNativeLogTailDoesNotExposeTruncatedSecrets(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	for _, secret := range []string{"boundary-secret-abcdefghijklmnopqrstuvwxyz", "private-first-line\nprivate-sensitive-last-line"} {
+		t.Run(strings.ReplaceAll(secret, "\n", "-"), func(t *testing.T) {
+			root := t.TempDir()
+			logctx.RegisterSecrets(secret)
+			payload := secret + "\n" + strings.Repeat("x", maxJobOutputBytes+8-len(secret)-1)
+			fixture := filepath.Join(root, "fixture.log")
+			if err := os.WriteFile(fixture, []byte(payload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(root, "fake-process-compose")
+			script := fmt.Sprintf("#!/bin/sh\ncp %q \"$3\"\nexit 1\n", fixture)
+			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+			output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			if !strings.HasPrefix(string(output), runtime.LogTruncatedMarker) {
+				t.Fatalf("native fallback was not exercised: %q", output)
+			}
+			if strings.Contains(string(output), secret[8:]) || strings.Contains(string(output), "private-sensitive-last-line") {
+				t.Fatal("truncated native log exposed secret fragment")
+			}
+		})
+	}
+}
+
+func TestTransientNativeStdoutTailRedactsMultilineSecrets(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	material := "local-secret-material-long-line"
+	secret := "BEGIN-PRIVATE-KEY-LINE\n" + material + "\nEND-PRIVATE-KEY-LINE"
+	logctx.RegisterSecrets(secret)
+	payload := secret + "\n" + strings.Repeat("x\n", (maxJobOutputBytes+6-len(secret)-1)/2)
+	fixture := filepath.Join(root, "fixture.log")
+	if err := os.WriteFile(fixture, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\nexit 1\n", fixture)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if strings.Contains(string(output), material) {
+		t.Fatal("native stdout tail exposed complete private-key line after dropping registered multiline key prefix")
+	}
+}
+
+// process-compose's foreground run sets the terminal's title to
+// "process-compose: <host>/<directory>". Neither that nor a capture's colours
+// reach the output or the error a receipt keeps.
+func TestTransientNativeDiagnosticsDropTerminalControls(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	script := "#!/bin/sh\nprintf '\\033]0;process-compose: razor.local/001\\007pg_dump: \\033[31merror\\033[0m: connection refused\\n'\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if string(output) != "pg_dump: error: connection refused\n" {
+		t.Fatalf("output = %q, want the capture's text alone", output)
+	}
+	if message := err.Error(); strings.Contains(message, "\x1b") || strings.Contains(message, "razor.local") || !strings.Contains(message, "native output: pg_dump: error: connection refused") {
+		t.Fatalf("error = %q, want the capture's text without terminal controls", message)
+	}
+}
+
+// A transient job stays out of the registration path that serves a process the
+// supervisor has not loaded (addMissingProcess): it runs under its own
+// foreground supervisor, so the shared one gets no request at all, let alone a
+// project post that would relaunch the processes it runs.
+func TestRunJobKeepsTransientJobOutOfTheSharedSupervisor(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	supervisor := &fakeSupervisor{name: "capture", missing: true}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		supervisor.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho transient-ok\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"capture": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{Runner: supervisor, LookupPath: func(string) (string, error) { return binary, nil }}
+	// A job run through the shared supervisor would wait on it for good.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	output, err := backend.RunJob(ctx, runtime.Target{Root: root, ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "capture", Configuration: config, Transient: true})
+	if err != nil || !strings.Contains(string(output), "transient-ok") {
+		t.Fatalf("RunJob() = %q, %v; want the foreground run's output", output, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("shared supervisor got %d requests; want none", got)
+	}
+	if posts, restarts, _ := supervisor.observed(); posts != 0 || restarts != 0 {
+		t.Fatalf("shared supervisor got %d updates and %d restarts; want none", posts, restarts)
+	}
+}

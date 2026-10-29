@@ -148,6 +148,7 @@ type JobRunNode {
 enum JobRunNodeKind {
 	JOB
 	SERVICE
+	BACKUP
 }
 type JobRunOperation {
 	id: ID!

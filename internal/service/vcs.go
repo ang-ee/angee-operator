@@ -23,6 +23,19 @@ func (p *Platform) slotDriver(slot vcs.Slot) vcs.Driver {
 	return gitdriver.New(p.gitClient())
 }
 
+// backupLayer returns the planner a source capture hands slot's driver for
+// the version control system colocated over its Git checkout: jj, which plans
+// nothing for a checkout without jj metadata, so the layer is found on disk
+// rather than named by the manifest. With slotDriver it is the one place a
+// capture picks its drivers; phase 6 of .agents/plans/jj-native-operator.md
+// picks them here by the slot's mode.
+func (p *Platform) backupLayer(slot vcs.Slot) vcs.BackupLayer {
+	if p.backupLayers != nil {
+		return p.backupLayers(slot)
+	}
+	return jjdriver.New(p.gitClient())
+}
+
 // workspaceSlotDriver returns the driver for the workspace slot checked out at
 // path, with the slot it is to be handed.
 func (p *Platform) workspaceSlotDriver(path string, source manifest.Source, wsSource manifest.WorkspaceSource) (vcs.Driver, vcs.Slot) {

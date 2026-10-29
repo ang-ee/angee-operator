@@ -20,9 +20,12 @@ import (
 // Each entry carries parents, ref names that point at the commit, the
 // author summary, and an RFC3339Nano timestamp.
 //
-// Returns nil with no error when the repository can't be opened (e.g. the
-// source hasn't materialised yet) — the caller is expected to surface the
-// underlying error elsewhere (typically via SourceState.State="missing").
+// Returns nil with no error when there is no repository at repoPath (e.g.
+// the source hasn't materialised yet) or its HEAD has no commit — the caller
+// is expected to surface the underlying error elsewhere (typically via
+// SourceState.State="missing"). A repository go-git refuses to open, such as
+// a cache a jj slot was added to (extensions.relativeWorktrees), is read
+// with the git CLI instead (sourceCommitsCLI).
 func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int) ([]api.CommitRef, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -38,8 +41,15 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		return nil, err
 	}
 	repo, err := gogit.PlainOpen(repoPath)
-	if err != nil {
+	if errors.Is(err, gogit.ErrRepositoryNotExists) {
 		return nil, nil
+	}
+	if err != nil {
+		commits, cliErr := p.sourceCommitsCLI(ctx, repoPath, limit)
+		if cliErr != nil {
+			return nil, fmt.Errorf("%w (go-git: %v)", cliErr, err)
+		}
+		return commits, nil
 	}
 	refIndex, err := buildRefIndex(repo)
 	if err != nil {
@@ -91,6 +101,36 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		if count >= limit {
 			break
 		}
+	}
+	return commits, nil
+}
+
+// sourceCommitsCLI is sourceCommits through the git CLI, for a repository
+// go-git refuses to open: the same commits in the same form, in git log's
+// order. That is the go-git walk's order except among commits with the same
+// committer time, which each orders its own way, so with a limit the last of
+// them in the window can differ too.
+func (p *Platform) sourceCommitsCLI(ctx context.Context, repoPath string, limit int) ([]api.CommitRef, error) {
+	client := p.gitClient()
+	refIndex, err := client.RefTargets(ctx, repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("build ref index for %s: %w", repoPath, err)
+	}
+	log, err := client.Log(ctx, repoPath, limit)
+	if err != nil {
+		return nil, fmt.Errorf("git log on %s: %w", repoPath, err)
+	}
+	// Appended rather than allocated at len(log), as in sourceCommits.
+	var commits []api.CommitRef
+	for _, c := range log {
+		commits = append(commits, api.CommitRef{
+			SHA:     c.Hash,
+			Parents: c.Parents,
+			Refs:    refIndex[c.Hash],
+			Time:    c.Committed.UTC().Format(time.RFC3339Nano),
+			Summary: firstLine(c.Message),
+			Author:  fmt.Sprintf("%s <%s>", c.AuthorName, c.AuthorEmail),
+		})
 	}
 	return commits, nil
 }

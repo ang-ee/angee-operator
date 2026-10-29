@@ -547,6 +547,8 @@ type WorkspaceResolved struct {
 }
 
 type PersistPath struct {
+	// Backup excludes physical database state or other unsafe file-copy resources.
+	Backup  string `yaml:"backup,omitempty" json:"backup,omitempty" validate:"omitempty,oneof=exclude" jsonschema:"enum=exclude"`
 	Subpath string `yaml:"subpath" json:"subpath"`
 	Scope   string `yaml:"scope" json:"scope"`
 }
@@ -697,7 +699,20 @@ func (r *Route) HostName(serviceName, domain string) string {
 	return serviceName
 }
 
+// BackupCapture declares a trusted runtime job that emits a logical capture.
+// The command receives operator-selected paths through ${inputs.backup_output}
+// (stack-relative) and ${inputs.backup_output_absolute} (local host absolute).
+// Output names one regular file under that directory. No commands come from API requests.
+type BackupCapture struct {
+	Group          string   `yaml:"group" json:"group" validate:"oneof=databases service_state" jsonschema:"enum=databases,enum=service_state"`
+	Name           string   `yaml:"name" json:"name" validate:"required"`
+	Output         string   `yaml:"output" json:"output" validate:"required"`
+	ExcludePersist []string `yaml:"exclude_persist,omitempty" json:"exclude_persist,omitempty"`
+}
+
 type Job struct {
+	Capture *BackupCapture `yaml:"capture,omitempty" json:"capture,omitempty"`
+
 	Runtime   Runtime           `yaml:"runtime" json:"runtime" validate:"required,oneof=container local" jsonschema:"required,enum=container,enum=local"`
 	Image     string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Build     any               `yaml:"build,omitempty" json:"build,omitempty"`
@@ -990,9 +1005,34 @@ func (s *Stack) ValidateExtended() error {
 			}
 		}
 	}
-	for name, job := range s.Jobs {
+	captures := map[string]bool{}
+	for name, persist := range s.Persist {
+		if persist.Backup != "" && persist.Backup != "exclude" {
+			return fmt.Errorf("persist %q backup must be exclude or omitted", name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Jobs)) {
+		job := s.Jobs[name]
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
 			return err
+		}
+		if capture := job.Capture; capture != nil {
+			if len(job.RunOn) > 0 {
+				return fmt.Errorf("capture job %q is manual and cannot declare run_on", name)
+			}
+			if !validCaptureName(name) || !validCaptureName(capture.Name) || !validCaptureName(capture.Output) || (capture.Group != "databases" && capture.Group != "service_state") {
+				return fmt.Errorf("invalid capture declaration on job %q", name)
+			}
+			key := capture.Group + ":" + capture.Name
+			if captures[key] {
+				return fmt.Errorf("duplicate backup capture %q", key)
+			}
+			captures[key] = true
+			for _, persist := range capture.ExcludePersist {
+				if _, ok := s.Persist[persist]; !ok {
+					return fmt.Errorf("capture job %q excludes undeclared persist %q", name, persist)
+				}
+			}
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(s.Sources)) {
@@ -1029,6 +1069,9 @@ func (s *Stack) validateDependencyGraph() error {
 		for _, dependency := range dependencies {
 			if _, ok := deps[dependency]; !ok {
 				return fmt.Errorf("%s %q depends on unknown node %q", nodeKind(s, name), name, dependency)
+			}
+			if job, ok := s.Jobs[dependency]; ok && job.Capture != nil {
+				return fmt.Errorf("%s %q cannot depend on manual capture job %q", nodeKind(s, name), name, dependency)
 			}
 		}
 	}
@@ -1192,4 +1235,8 @@ func (s *Stack) initMaps() {
 	if s.PortLeases == nil {
 		s.PortLeases = map[string][]PortLease{}
 	}
+}
+
+func validCaptureName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\:")
 }

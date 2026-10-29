@@ -37,6 +37,9 @@ helper used by adapters or tests and should not be exposed directly.
 | `ServiceStop` | Yes | Yes | Yes | - |
 | `ServiceRestart` | Yes | Yes | Yes | - |
 | `IngressStatus` | No | Yes | Yes | REST `GET /ingress/status`; GraphQL `ingressStatus` route summary. |
+| `BackupPreview` | No | Yes | No | Admin-bearer-only discovery for Django-owned backup plans. |
+| `BackupStart` | No | Yes | No | Admin-bearer-only manual capture; existing job-run receipt owns polling. |
+| `BackupArchive` | No | Yes | No | Streams a completed verified ZIP; cold restore CLI is deferred. |
 | `JobList` | Yes | Yes | Yes | - |
 | `JobRun` | Internal | Internal | Internal | Synchronous compatibility wrapper; CLI and transports start and poll receipts. |
 | `JobRunStart` | Yes | Yes | Yes | Starts an operation; `job run --chained-restart` applies downstream jobs and services after the root succeeds. |

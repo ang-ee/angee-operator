@@ -254,6 +254,100 @@ GET   /services/{name}/logs/stream   live per-service log WebSocket
 GET   /services/{name}/endpoint      service endpoint + log-stream descriptor
 ```
 
+### Manual backups
+
+All `/backups` routes require the configured admin bearer; minted connection
+tokens are denied. Django owns plans, authorization, workflow attempts, and
+completed Backup/File records. The operator captures declared stack resources.
+
+```text
+POST /backups/preview
+POST /backups
+GET  /backups/{id}/archive
+```
+
+Preview/start bodies are decoded strictly, unlike other REST bodies: an unknown
+field (such as a misspelled group) or anything after the one JSON object answers
+`400` with code `INVALID_INPUT` before discovery or capture starts, so a typo
+never silently captures less.
+
+Preview/start requests have `version: 1`, a `selection` object, and start also
+requires `request_id` (1–128 letters/digits/underscores/hyphens). Selection groups
+are `databases`, `service_state`, `workspaces`, `sources`, `storage`; every group
+uses `mode: all|selected|none`, `names`, `exclude`. Sources add
+`policy: bundle|fetch_published`. Source names are `stack:<source>` or
+`workspace:<workspace>/<slot>`; workspaces and their sources are independent.
+Preview reports included/excluded/unsupported resources, estimated source bytes,
+and unknown sizes explicitly. A selected unsupported resource prevents start.
+
+Backup preview uses bounded quick discovery: incomplete resource sizes remain
+`null`, included resources remain visible, and `has_unknown_sizes` is true.
+The total sums only known sizes; capture performs complete validation.
+
+Start returns HTTP 202 with the existing `JobRunOperation` receipt; poll
+`GET /job-runs/{id}` or GraphQL `jobRunOperation(id:)`. Its `root_job` is
+`backup` and its nodes, `capture` and `verify`, have kind `backup` (GraphQL
+`BACKUP`). Like the `/backups` routes, a backup receipt answers only the admin
+bearer: its artifact names every archived path and the digest of the captured
+secrets, so to a minted token both routes answer as for an unknown ID (404,
+`NOT_FOUND`). A backup never becomes `GET /job-runs/latest` (`latestJobRun`),
+which stays the latest job run. Equal IDs and selections are idempotent across restarts;
+changed selections conflict. Interrupted receipts fail rather than restarting
+an unknown partial operation. Only success includes `artifact` with `path`,
+`size_bytes`, `sha256`, `manifest_version: 1`, and immutable `manifest` evidence.
+Publication is under `backups/archives/<id>.zip`; staging, runtime directories,
+and unsafe physical database persists are excluded through containing trees.
+
+An interrupted backup's receipt fails when it is next read once the operator
+has restarted. That read also removes the backup's staging directory
+(`state/backups/<id>`) and any `backups/archives/<id>.zip` it published
+without a completed receipt; files it cannot remove, such as a directory a
+root container capture created, are named in the receipt's `error` for an
+operator to remove. Nothing else deletes archives or receipts yet:
+`backups/archives/*.zip` and `state/job-runs/*.json` stay until the caller
+removes them, so retention is the caller's.
+
+A running backup holds the operator's mutation lease and `run/operator.lock`
+until its receipt is final, so every other stack mutation (job runs, restarts,
+applies, file, secret, source and workspace changes, another backup) answers
+`409` (`CONFLICT`) until it ends. A backup cannot be cancelled through the API.
+`ANGEE_JOB_TIMEOUT` (a Go duration, `30m` by default, `0` for none) bounds the
+whole backup, capture, archive and verification together; a backup that runs
+out of it fails.
+
+A backup receipt's `output` keeps every capture's output, each line labelled
+`<group>/<name> | ` after its capture, as the last whole lines within 1 MiB.
+Capture output and errors lose their terminal control sequences (CSI and OSC,
+such as colours and the window title process-compose sets to the host name).
+Like every job run's receipt output and errors, they are redacted: registered
+secret values are masked. A multi-line secret is masked whole, and each of its
+lines on its own when that line can carry secret material: a line that is not
+PEM armour (`-----BEGIN …-----`, `-----END …-----`) and either holds at least
+16 consecutive base64, base64url or hex characters, as key material does, or
+has a value (the line less a leading `"key":` or `key:`) of at least 8 bytes
+with a character other than a letter, a space, `_`, `-` or `.`, as a password
+does. Its other lines, such as `"enabled": true` or `kind: Config`, are masked
+only as part of the whole value.
+
+A file deleted between its directory's listing and its copy is not part of a
+live capture and is left out, except in repository metadata, where a deletion
+(such as a repack removing the pack it replaced) fails the backup.
+
+Container capture jobs write their output into the backup's staging
+directory, which the operator creates with mode `0700`. On Linux a container
+capture must therefore run as root or as the operator's uid.
+
+A job that declares `capture:` runs only inside a backup, which chooses its
+output directory. `POST /jobs/{name}/run`, `GET /jobs/{name}/run-preview` and
+GraphQL `jobRun` and `jobRunPreview` refuse it, with or without inputs, with code
+`INVALID_INPUT` (`400`) naming the `job`, and a chained restart never runs one
+as a dependent.
+
+The [capture/format contract](../proposals/operator-backup-restore.md) documents
+trusted native job declarations, per-entry verification, structured Git/JJ
+recovery identity, original encryption-key preservation, and the per-database
+consistency boundary. ZIP commands are never executable restore input.
+
 ### Per-service live log socket
 
 `GET /services/{name}/logs/stream` is a WebSocket that streams a single
@@ -386,8 +480,9 @@ counts both under `summary` (`total`, `running`, `completed`, `failed`,
 the operation continues under the operator daemon after the initiating HTTP
 request disconnects. Poll `GET /job-runs/{id}` for its operation status, current
 step, per-node outcomes, terminal root-job output, and error. The `latest` route
-returns the most recently started receipt or JSON `null` when this daemon has not
-started one.
+returns the most recently started job run's receipt, never a backup's, or JSON
+`null` when this daemon has not started one. A backup capture job is refused
+with `INVALID_INPUT` (see [Manual backups](#manual-backups)).
 
 The preview route returns the jobs and services affected by the requested run
 without starting it. With `chained_restart`, a successful root job is followed by
@@ -395,8 +490,11 @@ its downstream jobs and services in dependency order; failed prerequisites block
 their descendants.
 
 Receipts are retained in bounded daemon memory so clients can reconnect and keep
-polling. They are not written to disk: restarting or stopping the operator loses
-the retained receipts, and stopping the daemon cancels an active operation.
+polling. Job-run receipts are not written to disk: restarting or stopping the
+operator loses the retained receipts, and stopping the daemon cancels an active
+operation. Backup receipts are also written under `state/job-runs/`, so
+`GET /job-runs/{id}` keeps answering for them, to the admin bearer only (see
+Manual backups).
 
 Sources:
 
