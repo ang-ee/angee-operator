@@ -63,10 +63,11 @@ const waitDelay = 100 * time.Millisecond
 // repository it loads in the user's config directory.
 //
 // snapshot lets jj snapshot the slot's working copy before the command, as
-// every slot read and mutation must (plan D7, D8). read adds
-// --ignore-working-copy and --at-op, for the reads that follow a snapshot in
-// the same call: they all see the operation the snapshot recorded, whatever
-// agents do in the repository meanwhile.
+// every slot read and mutation must (plan D7, D8). latest adds
+// --ignore-working-copy, to read the repository's latest operation before
+// and after a snapshot. read adds --ignore-working-copy and --at-op, for the reads
+// that follow a snapshot in the same call: they all see that operation,
+// whatever agents do in the repository meanwhile.
 //
 // On a primary, primaryStore adds --ignore-working-copy, so the workspace
 // list and the forget touch no working copy. Only `jj workspace add` runs in
@@ -96,6 +97,16 @@ func (r runner) read(ctx context.Context, slot, op string, args ...string) ([]by
 		return nil, errors.New("a jj read without the operation of its snapshot")
 	}
 	return r.run(ctx, slot, append([]string{"-R", ".", "--ignore-working-copy", "--at-op", op}, args...))
+}
+
+// latest runs a jj command in the slot without snapshotting it, at the
+// repository's latest operation: around a snapshot, to learn which operation
+// it left the repository at.
+func (r runner) latest(ctx context.Context, slot string, args ...string) ([]byte, error) {
+	if slot == "" {
+		return nil, errNoSlot
+	}
+	return r.run(ctx, slot, append([]string{"-R", ".", "--ignore-working-copy"}, args...))
 }
 
 // errNoSlot refuses a slot command with no slot, which would otherwise run jj

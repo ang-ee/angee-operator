@@ -15,8 +15,8 @@ import (
 
 // TestRunnerRunsJJInTheSlot pins how every jj run starts: jj from PATH,
 // --no-pager --color never and snapshot.auto-update-stale (D8), `-R .` in the
-// slot, --ignore-working-copy and the snapshot's operation only for a read
-// after a snapshot, and git's isolated environment plus a no-op editor and
+// slot, --ignore-working-copy for a read after a snapshot, with the
+// snapshot's operation once it is known, and git's isolated environment plus a no-op editor and
 // the operator's JJ_CONFIG, JJ_USER and JJ_EMAIL, with nothing else from the
 // operator's environment and no identity of angee's: jj commits as the
 // operator's JJ_USER and JJ_EMAIL when set, else as their jj config says.
@@ -30,16 +30,20 @@ func TestRunnerRunsJJInTheSlot(t *testing.T) {
 	if _, err := (runner{}).snapshot(ctx, slot, "log", "-r", "@"); err != nil {
 		t.Fatalf("snapshot() error = %v", err)
 	}
+	if _, err := (runner{}).latest(ctx, slot, "op", "log"); err != nil {
+		t.Fatalf("latest() error = %v", err)
+	}
 	if _, err := (runner{}).read(ctx, slot, "0123abcd", "log", "-r", "@"); err != nil {
 		t.Fatalf("read() error = %v", err)
 	}
 	runs := fakeRuns(t, home)
-	if len(runs) != 2 {
-		t.Fatalf("fake jj ran %d times, want 2", len(runs))
+	if len(runs) != 3 {
+		t.Fatalf("fake jj ran %d times, want 3", len(runs))
 	}
 	global := []string{"--no-pager", "--color", "never", "--config", "snapshot.auto-update-stale=true"}
 	wantArgs := [][]string{
 		append(slices.Clone(global), "-R", ".", "log", "-r", "@"),
+		append(slices.Clone(global), "-R", ".", "--ignore-working-copy", "op", "log"),
 		append(slices.Clone(global), "-R", ".", "--ignore-working-copy", "--at-op", "0123abcd", "log", "-r", "@"),
 	}
 	realSlot, err := filepath.EvalSymlinks(slot)
@@ -78,6 +82,7 @@ func TestRunnerRefusesAnEmptySlot(t *testing.T) {
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
 		"snapshot":      func() error { _, err := (runner{}).snapshot(ctx, "", "log"); return err },
+		"latest":        func() error { _, err := (runner{}).latest(ctx, "", "op", "log"); return err },
 		"read":          func() error { _, err := (runner{}).read(ctx, "", "0123abcd", "log"); return err },
 		"read, no op":   func() error { _, err := (runner{}).read(ctx, t.TempDir(), "", "log"); return err },
 		"run":           func() error { _, err := (runner{}).run(ctx, "", []string{"--version"}); return err },

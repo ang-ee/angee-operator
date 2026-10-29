@@ -107,6 +107,15 @@ type Status struct {
 	// conflicted files, sorted.
 	Conflicted    bool
 	ConflictPaths []string
+	// UntrackedPaths lists the new paths jj reports leaving out of the
+	// working-copy commit, relative to the checkout as jj lists them (a
+	// directory ends in "/"): files over its snapshot.max-new-file-size or
+	// outside its snapshot.auto-track, never ignored ones. Only the checkout
+	// holds them, so they make it Dirty, as git's untracked files do. jj
+	// neither records nor reports a nested repository or a new file outside
+	// the checkout's sparse patterns, so those are not here, and do not make
+	// it Dirty.
+	UntrackedPaths []string
 }
 
 // Sync methods for Driver.SyncBase. SyncDefault leaves the choice to the
@@ -321,7 +330,14 @@ func (e *NoPushRemoteError) Error() string { return "no push remote: " + e.Reaso
 // CountError reports that Status decided whether a checkout is pushed but
 // could not count it against its upstream or base, for example because the
 // base branch was deleted. The Status returned with it has a valid Pushed and
-// UnpushedReason; its Ahead and Behind are not set.
+// UnpushedReason; what it could not read is not set.
+//
+// Each driver keeps its verdict this way wherever the verdict needs no base:
+// git for a detached worktree or a clone, jj for a dirty slot or one with an
+// upstream (Err then wraps ErrBaseNotFound). Where only the base measures
+// what the checkout holds (git: a branch with no upstream; jj: a clean slot
+// with no upstream), Status returns the failure itself, with no verdict, and
+// the checkout is not pushed.
 type CountError struct {
 	Err error
 }

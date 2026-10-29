@@ -11,7 +11,9 @@ import (
 // The templates the driver reads jj through. Each renders one JSON object
 // per line and has a decode struct below; testdata holds what the jj in
 // .github/jj-rev prints for each, so a renamed field fails a test rather than
-// reading as empty. None uses the workspace `root` keyword: jj's record of a
+// reading as empty. (Operations are recorded in templates_test.go instead: an
+// operation's id hashes the command lines before it, which hold the test's
+// temporary paths.) None uses the workspace `root` keyword: jj's record of a
 // workspace's path is wrong once the workspace has moved (plan section 2).
 const (
 	// workspacesTemplate is for `jj workspace list`: the name and the
@@ -38,6 +40,10 @@ const (
 
 	// operationTemplate is for `jj op log`: the operation's id.
 	operationTemplate = `id ++ "\n"`
+
+	// operationEntryTemplate is for `jj op log` too: jj's json(self) of an
+	// operation, for statusSnapshot's check of what came after a snapshot.
+	operationEntryTemplate = `json(self) ++ "\n"`
 )
 
 // gitRemote is the pseudo-remote a colocated repository lists its own git
@@ -94,6 +100,14 @@ func (b bookmark) present() bool {
 		}
 	}
 	return false
+}
+
+// operationEntry is jj's json(self) of an operation: its id, the operations
+// it follows, and whether it only recorded a snapshot of a working copy.
+type operationEntry struct {
+	ID         string   `json:"id"`
+	Parents    []string `json:"parents"`
+	IsSnapshot bool     `json:"is_snapshot"`
 }
 
 // workspace is jj's json(self) of a workspace.
