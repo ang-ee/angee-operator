@@ -57,7 +57,7 @@ func (d Driver) EnsurePrimary(ctx context.Context, primary string) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("look for a jj repository in %s: %w", primary, err)
 	}
-	_, err = d.jj.run(ctx, os.TempDir(), []string{"git", "init", "--git-repo", primary, "--", primary})
+	_, err = d.jj.recording(ctx, os.TempDir(), primary, []string{"git", "init", "--git-repo", primary, "--", primary})
 	return err
 }
 

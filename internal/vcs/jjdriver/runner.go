@@ -23,13 +23,12 @@ var jjPassedEnv = []string{"JJ_CONFIG", "JJ_USER", "JJ_EMAIL"}
 // so a command that would open one never waits, and the operator's
 // jjPassedEnv. Mutations still pass -m wherever jj would open an editor.
 // (`--config ui.editor=true` cannot do this: jj reads the value as a
-// boolean.) No identity of angee's is set: the commits jj records are the
-// user's, from JJ_USER and JJ_EMAIL when the operator sets them, else from
-// user.name and user.email in their jj config, which HOME, XDG_CONFIG_HOME
-// and JJ_CONFIG locate, as the git driver's commits are the user's. Unlike
-// the git driver, there is no placeholder for a user with none yet: jj then
-// records an empty identity, which `jj git push` refuses. Phase 8 of the plan
-// adds the fallback before any jj verb pushes.
+// boolean.) The commits jj records are the user's, from JJ_USER and JJ_EMAIL
+// when the operator sets them, else from user.name and user.email in their jj
+// config, which HOME, XDG_CONFIG_HOME and JJ_CONFIG locate, as the git
+// driver's commits are the user's. For a user whose jj has neither, a run
+// that may record commits gets git's identity, else angee's placeholder
+// (identity.go), as the git driver's commits do.
 func jjEnv() []string {
 	env := []string{"JJ_EDITOR=true"}
 	for _, key := range jjPassedEnv {
@@ -75,17 +74,50 @@ const waitDelay = 100 * time.Millisecond
 // it (inPrimary), as any jj command there runs: jj refuses to add a
 // workspace with it, and its import of git's refs is what shows jj the base
 // just fetched into the primary with git (Add).
+//
+// The runs that may record commits, snapshot, inPrimary and recording (a
+// snapshot rewrites the working-copy commit, `jj workspace add` and `jj git
+// init` make one), get identity's JJ_USER and JJ_EMAIL for a user whose jj
+// has none. The reads with --ignore-working-copy record none, and get none.
 type runner struct {
 	bin string
+	// identity, when set, resolves that fallback once per runner; a runner
+	// without one passes the operator's identity on as it is.
+	identity *identity
 }
 
 // snapshot runs a jj command in the slot that snapshots its working copy
 // first.
 func (r runner) snapshot(ctx context.Context, slot string, args ...string) ([]byte, error) {
+	out, _, err := r.snapshotOutputs(ctx, slot, args...)
+	return out, err
+}
+
+// snapshotOutputs is snapshot, returning standard error too, where jj says
+// what a mutation did.
+func (r runner) snapshotOutputs(ctx context.Context, slot string, args ...string) ([]byte, []byte, error) {
 	if slot == "" {
-		return nil, errNoSlot
+		return nil, nil, errNoSlot
 	}
-	return r.run(ctx, slot, append([]string{"-R", "."}, args...))
+	return r.recordingOutputs(ctx, slot, append([]string{"-R", "."}, args...))
+}
+
+// recording runs jj in dir as run does, for a command that may record
+// commits in the repository at repo, with identity's fallback for that
+// repository: `jj git init` runs outside the repository it makes.
+func (r runner) recording(ctx context.Context, dir, repo string, args []string) ([]byte, error) {
+	if dir == "" || repo == "" {
+		return nil, errors.New("jj needs a working directory of its own, not the process's")
+	}
+	out, _, err := r.exec(ctx, dir, args, r.identity.env(ctx, r, repo))
+	return out, err
+}
+
+func (r runner) recordingOutputs(ctx context.Context, dir string, args []string) ([]byte, []byte, error) {
+	if dir == "" {
+		return nil, nil, errors.New("jj needs a working directory of its own, not the process's")
+	}
+	return r.exec(ctx, dir, args, r.identity.env(ctx, r, dir))
 }
 
 // read runs a jj command in the slot without snapshotting it, at operation
@@ -121,7 +153,8 @@ func (r runner) inPrimary(ctx context.Context, primary string, args ...string) (
 	if primary == "" {
 		return nil, errNoPrimary
 	}
-	return r.run(ctx, primary, append([]string{"-R", "."}, args...))
+	out, _, err := r.recordingOutputs(ctx, primary, append([]string{"-R", "."}, args...))
+	return out, err
 }
 
 // store runs a jj command on the repository of the checkout at dir, a
@@ -158,18 +191,26 @@ func (r runner) network(ctx context.Context, operation, slot string, args ...str
 }
 
 // run runs jj with globalArgs and args in dir and returns its standard
-// output. A failure is a *CommandError carrying standard error. Only
-// environment key names are traced, never values.
+// output. A failure is a *CommandError carrying standard error.
 func (r runner) run(ctx context.Context, dir string, args []string) ([]byte, error) {
 	if dir == "" {
 		return nil, errors.New("jj needs a working directory of its own, not the process's")
 	}
+	out, _, err := r.exec(ctx, dir, args, nil)
+	return out, err
+}
+
+// exec runs jj with globalArgs and args in dir, with extraEnv after the
+// environment every run gets, and returns its standard output and standard
+// error. A failure is a *CommandError carrying standard error. Only
+// environment key names are traced, never values.
+func (r runner) exec(ctx context.Context, dir string, args, extraEnv []string) ([]byte, []byte, error) {
 	bin := r.bin
 	if bin == "" {
 		bin = "jj"
 	}
 	argv := append(append([]string(nil), globalArgs...), args...)
-	env := git.IsolatedEnv(jjEnv()...)
+	env := git.IsolatedEnv(append(jjEnv(), extraEnv...)...)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -181,13 +222,13 @@ func (r runner) run(ctx context.Context, dir string, args []string) ([]byte, err
 	err := cmd.Run()
 	trace(logctx.CombinedOutput(stdout.Bytes(), stderr.Bytes()), err)
 	if err != nil {
-		return stdout.Bytes(), &CommandError{
+		return stdout.Bytes(), stderr.Bytes(), &CommandError{
 			Args:   logctx.RedactArgs(argv),
 			Stderr: logctx.RedactText(strings.TrimSpace(stderr.String())),
 			Err:    err,
 		}
 	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 // CommandError is a jj command that failed to start or exited non-zero. Args

@@ -48,9 +48,11 @@ type Driver struct {
 
 var _ vcs.Driver = Driver{}
 
-// New returns a driver that runs jj from PATH, and git through client.
+// New returns a driver that runs jj from PATH, and git through client, for
+// one slot operation: the identity it gives jj commits for a user with none
+// configured (identity) is resolved once for the driver.
 func New(client git.Client) Driver {
-	return Driver{git: client}
+	return Driver{jj: runner{identity: &identity{git: client}}, git: client}
 }
 
 // target is a revision Status counts against: its revset, and the name a
