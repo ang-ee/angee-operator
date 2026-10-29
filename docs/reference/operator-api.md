@@ -92,14 +92,17 @@ their diagnostics, and their words are passed through.
 
 | `cause` | `code` | Meaning |
 |---|---|---|
-| `uncommitted_changes` | `PRECONDITION_FAILED` | A checkout has uncommitted changes; `paths` lists them. |
+| `uncommitted_changes` | `PRECONDITION_FAILED` | A checkout has uncommitted changes; `paths` lists them. For a jj slot's publish, push or merge, the changes in its working-copy commit, and the hint names jj's command that commits them. |
 | `slot_missing` | `PRECONDITION_FAILED` | A declared slot is not on disk; the hint names `angee workspace repair`. |
 | `branch_mismatch` | `PRECONDITION_FAILED` | A slot is not on its workspace branch. |
-| `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push. |
+| `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push: a git slot on a detached HEAD, or a jj slot whose manifest names no branch and whose push names no `ref`. The hint names publish with a branch. |
 | `jj_unavailable` | `PRECONDITION_FAILED` | A workspace with a jj slot needs jj with `workspace add --colocate`, git 2.48 or later, and not Windows, to create one, sync it or rebase it; the hint says what to install. |
-| `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot yet (fetch, pull, push, publish, merge, diff), or `workspace push` over a workspace with a slot whose manifest names mode `jj`; `slot` or `paths` name the jj slots. Use jj in the slot. |
+| `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot: `workspace source pull`, since jj takes in a base by rebasing onto it; the hint names `workspace sync-base` and the slot's own fetch and rebase. `slot` and `paths` name the jj slot. |
 | `shared_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot (sync-base, or the slot's rebase) would rewrite commits another checkout holds: another jj workspace's working-copy commit, or a git worktree's checked-out branch; the message names them, and `paths` the worktrees. Nothing is rebased. |
-| `untracked_paths` | `PRECONDITION_FAILED` | A jj slot holds files jj does not track (the untracked paths of `jj status`), which a sync-base or rebase could keep over the base's own; `paths` lists them. Nothing is fetched or rebased. |
+| `untracked_paths` | `PRECONDITION_FAILED` | A jj slot holds files jj does not track (the untracked paths of `jj status`), which a sync-base or rebase could keep over the base's own, and a publish, push or merge would leave out; `paths` lists them. Nothing is fetched, rebased, pushed or merged. |
+| `conflicted_commits` | `PRECONDITION_FAILED` | A publish or push of a jj slot would send commits with conflicts, which jj will not push; the message names them (and any undescribed ones too). Nothing is pushed or changed. |
+| `undescribed_commits` | `PRECONDITION_FAILED` | A publish or push of a jj slot would send commits with no description, empty or not, which jj will not push; the message names them. Nothing is pushed or changed. |
+| `branch_moved` | `PRECONDITION_FAILED` | A publish or push of a jj slot would move its branch past work the slot does not have: a commit on the remote branch whose change is none of the slot's (a collaborator's, fetched since the slot published), or a bookmark target off the slot's history (a collaborator's new version of one of its commits); the message names them, and the hint names the merge that takes them in. Nothing is pushed or changed. |
 | `immutable_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot would rewrite commits jj holds immutable (a tag's, an untracked remote bookmark's); the message names them. Nothing is rebased. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
@@ -146,7 +149,8 @@ refusal leaves nothing half done. `workspace sync-base` and `workspace push`
 check every slot before touching any: each must be on disk and, as its
 version control needs, on its branch with no uncommitted changes (a git
 worktree), and (for push) have a branch to push. A jj slot's working-copy
-commit rides along with its rebase. `workspace sync-base` also fetches every
+commit rides along with its rebase, while its push needs a working copy with
+nothing uncommitted and commits jj will push. `workspace sync-base` also fetches every
 slot, resolves its base and checks what each rebase would rewrite before
 syncing any.
 
@@ -574,9 +578,8 @@ before it is force-updated by the next publish.
 A jj slot (`mode: jj`, or no mode under `vcs: jj`) is never
 `branch-mismatch`, and its status carries what jj reads beyond git: in
 workspace status `sources[]`, `repair`'s slot status, the topology's
-`links[]` and `workspace git`'s source states. The per-slot verbs, `push`
-and `sync-base` return the same fields, but refuse a jj slot until phase 8 of
-the jj plan runs them there. The state vocabulary is unchanged; `conflicted`
+`links[]` and `workspace git`'s source states, and in what the per-slot
+verbs, `push` and `sync-base` return. The state vocabulary is unchanged; `conflicted`
 is a flag beside it, since jj records a conflict in a commit and goes on, so
 a client that does not know the fields reads the slot as before. For any
 other slot `conflicted` is `false` and the rest are absent (GraphQL: empty,
@@ -639,7 +642,7 @@ The operator exposes three "update" operations, distinguished by scope:
 | Scope | Endpoint | Behaviour |
 | --- | --- | --- |
 | **Whole source** | `POST /sources/{name}/pull` | Fetch and fast-forward the cached top-level source's tracking ref. |
-| **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. |
+| **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. A jj slot is never pulled (`jj_slot_unsupported`): fetch it and rebase it onto its base instead. |
 | **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot that names a mode (worktree or jj) against its declared base ref; by default a worktree is merged and a jj slot rebased. Stays on the workspace branch — this is "stay current with `main`". |
 
 GitOps topology (derived view across sources × workspace slots):
@@ -713,10 +716,14 @@ The convergence endpoints (`merge`, `rebase`, `merge-abort`,
 `rebase-abort`, `rebase-continue`, `publish`) return a `GitOpResult`
 with `{ok, conflicted, conflictFiles, message}`. On conflict the
 worktree is left in the conflicted state; `conflictFiles` lists the
-affected paths. A jj slot never stops mid-operation: `rebase` records a
-conflict in its commits and answers `ok` and `conflicted` together, and
-`merge-abort`, `rebase-abort` and `rebase-continue` answer `400`
+affected paths. A jj slot never stops mid-operation: `rebase` and `merge`
+record a conflict in its commits and answer `ok` and `conflicted` together,
+and `merge-abort`, `rebase-abort` and `rebase-continue` answer `400`
 `INVALID_INPUT`, since there is nothing in progress to abort or continue.
+`pull` of a jj slot answers `400` `INVALID_INPUT`, cause
+`jj_slot_unsupported`: jj takes in a base by rebasing onto it. `fetch` of a
+jj slot of a `kind: local` store answers `400` `INVALID_INPUT`: angee never
+fetches into a user's store.
 
 Workspace preflight:
 
@@ -1071,7 +1078,10 @@ list mirrors unified-diff output: `{oldStart, oldLines, newStart, newLines,
 header, body}` with `body` carrying the raw `+`/`-`/` ` prefixed lines.
 When `ref` is empty the diff is "working tree vs HEAD" (uncommitted
 changes); when set, it is "HEAD vs ref". Only git sources are
-diffable — local sources fail with code `INVALID_INPUT`.
+diffable — local sources fail with code `INVALID_INPUT`. A jj slot's
+uncommitted changes are its working-copy commit's, and `ref` is in jj's
+spelling (`main@origin` for a remote bookmark, not `origin/main`), diffed
+from the commit under the working copy.
 
 ### Convergence operations
 
@@ -1091,19 +1101,19 @@ Operations:
 
 | Mutation | Behaviour |
 | --- | --- |
-| `workspaceSourceMerge(workspace, slot, ref)` | `git merge --no-ff --no-edit ref`. On conflict the worktree is left conflicted and `conflictFiles` lists the affected paths. |
+| `workspaceSourceMerge(workspace, slot, ref)` | `git merge --no-ff --no-edit ref`. On conflict the worktree is left conflicted and `conflictFiles` lists the affected paths. On a jj slot, whose working copy must hold nothing uncommitted (`uncommitted_changes`, `untracked_paths`), `jj new @- ref -m "Merge ref"` then `jj new`, with `ref` in jj's spelling, so the merge is the commit under a fresh working copy and the next publish sends it; a ref the slot already holds makes no merge, and a conflict is recorded in the merge commit and answered as `ok` and `conflicted`. |
 | `workspaceSourceRebase(workspace, slot, ref)` | `git rebase ref`. Conflict semantics match merge; resolve and call `rebaseContinue`, or call `rebaseAbort`. On a jj slot, `jj rebase -b @ --onto ref` with `ref` in jj's spelling (`main@origin`), after the same check as sync-base that it rewrites no other checkout's commits (`shared_commits`); a conflict is recorded in the commits and answered as `ok` and `conflicted`. |
 | `workspaceSourceMergeAbort(workspace, slot)` | `git merge --abort`. |
 | `workspaceSourceRebaseAbort(workspace, slot)` | `git rebase --abort`. |
 | `workspaceSourceRebaseContinue(workspace, slot)` | `git rebase --continue` with `core.editor=true` so it never opens an editor. |
-| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to the source's `push_default`, else the remote git pushes the branch to, else `origin`, and a remote the slot doesn't have is refused, as is a branch that matches none of that remote's `branches`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). |
+| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to the source's `push_default`, else the remote git pushes the branch to, else `origin`, and a remote the slot doesn't have is refused, as is a branch that matches none of that remote's `branches`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). For a jj slot, `branch` (else the manifest's) is required and the remote is resolved as for git; the slot must hold nothing uncommitted (`uncommitted_changes`, `untracked_paths`), since publish sends the commit under the working copy. The commits since the branch on the remote, else since the base, are sent: none answers `ok` with `nothing to publish`; one the remote lacks that has conflicts or no description is refused (`conflicted_commits`, `undescribed_commits`); a branch a git worktree of the source has checked out, one the remote has that the repository does not track, or one that exists, as a bookmark or on the remote, and is not the slot's (neither its manifest branch nor on its own commits alone), is refused as `INVALID_INPUT` on `branch`; a branch holding commits the slot lacks, a collaborator's on the remote say, is `branch_moved`; a working-copy commit with two parents is `PRECONDITION_FAILED`; otherwise `jj bookmark set <branch> -r @-` and `jj git push --remote <remote> --bookmark <branch>`, which force-updates, with jj's lease, a branch a rebase rewrote. A slot that moved while its publish was checked is a `CONFLICT`, and nothing is pushed. A publish to a remote other than the branch's default push remote records it as the branch's push remote (`branch.<branch>.pushRemote` in the source cache, replacing what it had), as `git push -u` records an upstream, so status and later publishes follow it; a `kind: local` store's git config is never written, and `message` says the remote was not recorded. `workspacePush` leaves a jj slot of a `kind: local` store to its own publish. `message` is jj's account of the push, and any other refusal is `GIT_FAILED`, cause `push_failed`, quoting jj. `workspaceSourcePush` and `workspacePush` publish a jj slot the same way to its default remote, under `ref` when given, else the manifest's branch. |
 
 Conflict files come from `git ls-files -u`, so the list is exact and
 reflects only paths the index reports as conflicted. The
 `message` field carries the combined stdout + stderr from git for
 diagnostic display. On a jj slot, the files are those of the conflicted
-commits the slot holds beyond `ref`, as jj records them, and `message` is
-jj's own account of the rebase.
+commits the slot holds beyond `ref` (for a merge, of the merge commit), as
+jj records them, and `message` is jj's own account of the rebase or merge.
 
 ### Template introspection
 

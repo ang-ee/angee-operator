@@ -65,6 +65,14 @@ linters:
         - G703
         # G306: 0644 on operator-generated docker-compose.yaml is intentional
         - G306
+        # G702: command injection via taint, the taint-analysis form of G204
+        # above. angee runs git (and jj) with argv, never through a shell; the
+        # refs and remotes a request names are validated before use (a remote
+        # must already exist in git config, and a jj publish records a branch
+        # only after jj pushed it, so git took it as a ref name), and
+        # EndOfOptions keeps one from reading as a flag. gosec's taint result
+        # also varies from run to run on the same tree, so it cannot gate CI.
+        - G702
         # G704: SSRF via taint — the operator URL is set by the local user,
         # not flowing from an untrusted network input.
         - G704

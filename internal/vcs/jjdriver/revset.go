@@ -62,6 +62,25 @@ func remoteBookmark(name, remote string) revset {
 	return revset("remote_bookmarks(" + exact(name) + ", remote=" + exact(remote) + ")")
 }
 
+// remoteBookmarksOn is the targets of every bookmark on remote: what the
+// repository knows that remote to hold.
+func remoteBookmarksOn(remote string) revset {
+	return revset("remote_bookmarks(remote=" + exact(remote) + ")")
+}
+
+// otherWorkingCopies is the working-copy commit of every workspace but the
+// one jj runs in: other slots', and the primary's.
+const otherWorkingCopies revset = "working_copies() ~ @"
+
+// union is every commit any of rs holds (r | o | …).
+func union(rs ...revset) revset {
+	parts := make([]string, len(rs))
+	for i, r := range rs {
+		parts[i] = "(" + string(r) + ")"
+	}
+	return revset(strings.Join(parts, " | "))
+}
+
 // workspaceCommit is the working-copy commit of workspace name, from any
 // workspace of the repository ("name"@).
 func workspaceCommit(name string) revset { return revset(quote(name) + "@") }
@@ -78,6 +97,12 @@ func (r revset) and(o revset) revset { return "(" + r + ") & (" + o + ")" }
 
 // descendants is r and every commit descending from it (r::).
 func (r revset) descendants() revset { return "(" + r + ")::" }
+
+// ancestors is r and every commit it descends from (::r).
+func (r revset) ancestors() revset { return "::(" + r + ")" }
+
+// minus is the commits of r that o does not hold (r ~ o).
+func (r revset) minus(o revset) revset { return "(" + r + ") ~ (" + o + ")" }
 
 // single is r when it is exactly one commit, and an error from jj otherwise,
 // so a conflicted bookmark is never taken for its several targets.

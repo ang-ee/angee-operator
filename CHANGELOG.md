@@ -83,6 +83,64 @@ latest tag.
     `rebase-continue` on a jj slot answer `INVALID_INPUT`: a jj slot never
     has a merge or rebase in progress.
 
+- **jj slots publish, push, merge, fetch and diff** (the second half of
+  phase 8 of `.agents/plans/jj-native-operator.md`). A jj slot now does
+  everything a git slot does but `workspace source pull`.
+  - `workspace source publish` publishes a jj slot's commits under a branch
+    (`--branch`, else the slot's manifest `branch`) to `--remote`, else the
+    remote git pushes that branch to from the slot, the order a git slot's
+    publish follows, so the source's `push_default` decides for both. A
+    publish to another remote records it as the branch's push remote
+    (`branch.<branch>.pushRemote` in the source cache), as `git push -u`
+    records an upstream, so status, later publishes and destroy follow it;
+    a `kind: local` store's git config is never written, and the result
+    says the remote was not recorded. It
+    sends the commits since the branch on the remote, else since the base,
+    as `jj bookmark set <branch> -r @-` and `jj git push --remote <remote>
+    --bookmark <branch>`, and returns `ok` with `nothing to publish` when
+    there are none. The manifest's rules for the remote (canonical,
+    `branches`) apply as for git slots.
+  - **A publish after a rebase-based sync force-updates the remote branch,
+    with jj's lease**: `sync-base` rewrote the commits it published, so jj
+    moves the remote branch sideways, and refuses if the remote branch moved
+    since the slot last fetched it.
+  - Publish sends the commit under the working copy, so a slot with changes
+    in its working-copy commit is refused (`uncommitted_changes`, with the
+    `jj commit` that records them), and so is one with untracked paths
+    (`untracked_paths`). A commit the remote lacks that has conflicts or no
+    description, which jj will not push, is refused before anything changes,
+    naming each (`PRECONDITION_FAILED`, cause `conflicted_commits` or
+    `undescribed_commits`). So is a branch that is not the slot's to set
+    (`INVALID_INPUT`): one a git worktree of the source has checked out, and
+    one the remote has that the repository does not track, and one that
+    exists, here or on the remote, and is not the slot's, which publish
+    would move onto the slot's commits. A branch that holds work the slot
+    lacks, such as a collaborator's commit pushed onto it, or their new
+    version of one of the slot's commits, fetched since, is refused naming
+    them (`PRECONDITION_FAILED`, cause `branch_moved`): jj's lease passes
+    once they are fetched, and the push would drop them. Any other refusal of the
+    push quotes jj (`GIT_FAILED`, cause `push_failed`).
+  - `workspace source push` and `workspace push` publish a jj slot to its
+    default remote, under `--ref` when given, else its branch, and leave a
+    slot with nothing to send alone. `workspace push` now reaches the jj
+    slots whose manifest names mode `jj`, checks and plans every slot before
+    it pushes any, and still skips a slot that names no mode, and a jj slot
+    of a `kind: local` store, which its own publish reaches.
+  - `workspace source merge` merges a ref, in jj's spelling, into a jj slot
+    as the commit under a fresh working copy (`jj new @- <ref> -m "Merge
+    <ref>"`, then `jj new`), so the next publish sends it; a ref the slot
+    already holds makes no merge, and a conflict is answered as `ok` and
+    `conflicted`. It refuses what the working copy holds, as publish does,
+    and a described working-copy commit with no changes, which it would
+    leave behind.
+  - `workspace source fetch` and `diff` run on a jj slot; a diff's `--ref` is
+    in jj's spelling (`main@origin`). A jj slot of a `kind: local` store is
+    never fetched into (`INVALID_INPUT`).
+  - `workspace source pull` of a jj slot is refused (`INVALID_INPUT`, cause
+    `jj_slot_unsupported`), with a hint naming `workspace sync-base` and the
+    slot's own fetch and rebase: jj takes in a base by rebasing onto it.
+    That is the cause's only use now.
+
 ### Changed
 
 - **Go API: `api.WorkspaceSourceStatus` and `api.GitOpsLink` are no longer
@@ -114,6 +172,19 @@ latest tag.
   command, ` git: <line>` for git as before. A step that fails with neither
   tool's words, such as resolving a base, now ends with the error itself
   (`resolving the base of source slot "app" failed: <error>.`).
+
+- **`workspace push` checks each git slot's branch and its uncommitted
+  changes together, slot by slot**, as sync-base now does. It checked every
+  slot's branch first before. The slot verbs ask the slot's driver whether
+  they may run, so their refusals word the fix in the slot's own tool; a git
+  slot's codes, causes and messages are unchanged.
+- A jj command that fails outside a verb's own steps, such as a diff onto a
+  ref jj does not know, is `GIT_FAILED` quoting jj, as a git command's
+  failure is; it was `INTERNAL`.
+- A failure to plan a publish or a push, or to create a publish's branch,
+  names the step (`planning the publish of source slot "app" failed. git:
+  ...`, `creating branch "x" in source slot "app" failed. git: ...`) where it
+  named the git command before.
 
 ## v0.24.0 — 2026-10-29
 

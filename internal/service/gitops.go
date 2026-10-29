@@ -1,7 +1,9 @@
 package service
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
 // gitOpsTopologyCommitsMax caps the per-source commit window the topology
@@ -179,10 +182,18 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
+	if source.Kind != "git" && wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+		// A local store is the user's: angee never fetches into it, as
+		// sync-base does not.
+		return api.WorkspaceSourceStatus{}, &InvalidInputError{Field: "slot", Reason: fmt.Sprintf("source slot %q is a jj slot of local store %q, which angee never fetches into; rebase the slot onto its base as the store has it, with `angee workspace source rebase %s %s %s`", slot, wsSource.Source, workspaceName, slot, cmp.Or(workspaceSourceBaseRef(source, wsSource), "<base>"))}
+	}
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
+	if err := p.requireJJSlot(ctx, target); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
 	step := gitStep{action: "fetching", object: fmt.Sprintf("source %q", wsSource.Source), remote: driver.FetchURL(ctx, target), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
 	if err := driver.Fetch(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
@@ -201,14 +212,15 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	if source.Kind != "git" {
+	if source.Kind != "git" && wsSource.Mode != manifest.WorkspaceSourceModeJJ {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
-	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
-		return api.WorkspaceSourceStatus{}, err
-	}
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
-	if err := requireCleanSlot(ctx, driver, target, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
+	if err := requireSlotReady(ctx, driver, target, vcs.VerbPull, workspaceName, slot, wsSource.Source); err != nil {
+		if target.Mode == vcs.ModeJJ && errors.Is(err, vcs.ErrUnsupported) {
+			named := stack.Workspaces[workspaceName].Sources[slot].Mode != ""
+			return api.WorkspaceSourceStatus{}, jjSlotNotPulled(err, workspaceName, slot, wsSource.Source, source, target, named)
+		}
 		return api.WorkspaceSourceStatus{}, err
 	}
 	step := gitStep{action: "pulling", object: fmt.Sprintf("source slot %q", slot), remote: driver.FetchURL(ctx, target), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
@@ -229,17 +241,17 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	if source.Kind != "git" {
+	if source.Kind != "git" && wsSource.Mode != manifest.WorkspaceSourceModeJJ {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
-	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
-		return api.WorkspaceSourceStatus{}, err
-	}
 	driver, target := p.workspaceSlotDriver(path, source, wsSource)
-	if err := requireCleanSlot(ctx, driver, target, fmt.Sprintf("source slot %q", slot), slot, wsSource.Source); err != nil {
+	if err := p.requireJJSlot(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
-	plan, err := planWorkspaceGitPush(ctx, driver, target, workspaceName, slot, wsSource, ref)
+	if err := requireSlotReady(ctx, driver, target, vcs.VerbPush, workspaceName, slot, wsSource.Source); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	plan, err := planWorkspaceGitPush(ctx, driver, target, source, workspaceName, slot, wsSource, ref)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
@@ -252,8 +264,8 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 // workspaceSourceTarget resolves the slot verb names, for it to act on: the
 // stack, the slot with its effective mode (withEffectiveMode), its source and
 // its path, which must be materialized. A jj slot, one that names no mode
-// under `vcs: jj` included, is refused for every verb but jjSlotVerbs, until
-// phase 8 of the jj plan implements them (jjSlotNotYet).
+// under `vcs: jj` included, is refused for a verb not in jjSlotVerbs
+// (jjSlotNotYet), so a verb added later never runs on one unawares.
 func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceName, slot string) (*manifest.Stack, manifest.WorkspaceSource, manifest.Source, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
@@ -290,11 +302,12 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceNam
 	return stack, wsSource, source, path, nil
 }
 
-// jjSlotVerbs are the slot verbs that run on a jj slot: rebase, and the three
-// that drive a merge or rebase stopped on conflicts, which the jj driver
-// refuses itself, since a jj slot never has one in progress. Every other verb
-// is refused on a jj slot until the rest of phase 8 of the jj plan builds it.
-var jjSlotVerbs = []string{"rebase", "merge-abort", "rebase-abort", "rebase-continue"}
+// jjSlotVerbs are the slot verbs that reach a jj slot's driver: every one
+// today (phase 8 of the jj plan). The driver refuses the ones that have no
+// meaning there itself: pull (a jj slot takes its base in by a rebase), and
+// the three that drive a merge or rebase stopped on conflicts, which a jj
+// slot never has. A verb not listed is refused on a jj slot (jjSlotNotYet).
+var jjSlotVerbs = []string{"fetch", "pull", "push", "publish", "diff", "merge", "rebase", "merge-abort", "rebase-abort", "rebase-continue"}
 
 // workspaceSlotOperation names a verb on one workspace source slot, such as
 // `Pull for workspace "src" slot "app"`.

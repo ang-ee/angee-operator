@@ -13,6 +13,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
 // WorkspaceRepair brings the source slots of an existing workspace back in
@@ -218,8 +219,8 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false, jj); err != nil {
 		return err
 	}
-	// Every git verb refuses a slot off its branch, so do not leave one behind.
-	return p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, ws)
+	// The verbs refuse a slot off its branch, so do not leave one behind.
+	return p.requireWorkspaceSlotReady(ctx, vcs.VerbRepair, workspaceName, slot, source, ws)
 }
 
 // existingWorkspaceSlotOutcome classifies a slot repair found on disk from its

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -643,18 +644,16 @@ func rebaseRefusal(err error, workspaceName, slot, source string) *OperationErro
 	return refusal
 }
 
-// errJJSlotNotYet is what a verb phase 8 of the jj plan has not implemented
-// on a jj slot wraps. It matches vcs.ErrUnsupported, as a verb a slot's
-// driver does not support does.
+// errJJSlotNotYet is what a slot verb that does not run on a jj slot wraps.
+// It matches vcs.ErrUnsupported, as a verb a slot's driver does not support
+// does.
 var errJJSlotNotYet = fmt.Errorf("not supported on a jj slot yet: %w", vcs.ErrUnsupported)
 
 // jjSlotNotYet refuses verb on the jj slots of workspace named in slots, with
-// their paths, before any of them is touched. Phase 8 of the jj plan
-// replaces these refusals verb by verb. Like a verb a slot's driver does not
-// support, it is the caller's input at fault (INVALID_INPUT); its cause tells
-// a client that the slot is a jj slot. Every verb on a slot asks this before
-// it runs anything, so a jj slot never gets a git command, and an aggregate
-// verb never acts on some slots and skips its jj slots.
+// their paths, before any of them is touched: a slot verb not in jjSlotVerbs,
+// which phase 8 of the jj plan has not run on a jj slot. Like a verb a slot's
+// driver does not support, it is the caller's input at fault
+// (INVALID_INPUT); its cause tells a client that the slot is a jj slot.
 func jjSlotNotYet(verb, workspace string, slots, paths []string) *OperationError {
 	hint := "Run jj in the slot instead."
 	quoted := make([]string, len(slots))
@@ -680,29 +679,49 @@ func jjSlotNotYet(verb, workspace string, slots, paths []string) *OperationError
 	return opErr
 }
 
-// refuseJJSlots refuses verb, an aggregate over every slot of workspace, when
-// any of the slots it walks is a jj slot: such a verb would otherwise skip
-// it, or run git in it. An aggregate walks only the slots whose manifest
-// names a mode (owner, 2026-10-29, plan Q7), so a slot that names none, a jj
-// slot under `vcs: jj` such as a work-state `.work`, is skipped by it, not
-// refused.
-func (p *Platform) refuseJJSlots(verb, workspaceName string, workspace manifest.Workspace) error {
-	var slots, paths []string
-	for _, slot := range sortedKeys(workspace.Sources) {
-		wsSource := workspace.Sources[slot]
-		if wsSource.Mode != manifest.WorkspaceSourceModeJJ {
-			continue
-		}
-		_, path, _ := p.workspaceSourcePath(workspaceName, slot, wsSource)
-		slots = append(slots, slot)
-		if path != "" {
-			paths = append(paths, path)
-		}
+// jjSlotNotPulled is the refusal of a pull of jj slot target, which its
+// driver answers with vcs.ErrUnsupported (err): jj has no pull, and takes a
+// base in by rebasing the slot onto it. INVALID_INPUT, cause
+// jj_slot_unsupported. The hint names what does it: sync-base, for a slot
+// whose manifest names its mode (named), since sync-base walks only those
+// (plan Q7), and for any slot its own rebase onto its base, after a fetch for
+// a git source (a `kind: local` store is never fetched).
+func jjSlotNotPulled(err error, workspaceName, slot, sourceName string, source manifest.Source, target vcs.Slot, named bool) *OperationError {
+	base := target.BaseRef
+	if base == "" {
+		base = "<base>"
+	} else if source.Kind == "git" {
+		base += "@" + cmp.Or(target.BaseRemote, "origin")
 	}
-	if len(slots) == 0 {
+	rebase := fmt.Sprintf("`angee workspace source rebase %s %s %s`", workspaceName, slot, base)
+	if source.Kind == "git" {
+		rebase += fmt.Sprintf(" after `angee workspace source fetch %s %s`", workspaceName, slot)
+	}
+	hint := fmt.Sprintf("Rebase it onto its base with %s; sync-base skips a slot whose manifest names no mode.", rebase)
+	if named {
+		hint = fmt.Sprintf("Sync it with `angee workspace sync-base %s`, which syncs every slot of the workspace with its base, or alone with %s.", workspaceName, rebase)
+	}
+	return &OperationError{
+		Code:      CodeInvalidInput,
+		Cause:     CauseJJSlotUnsupported,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    sourceName,
+		Paths:     []string{target.Path},
+		Hint:      hint,
+		Summary:   fmt.Sprintf("source slot %q is a jj slot, which is never pulled: jj takes in its base by rebasing the slot onto it. %s", slot, hint),
+		Err:       err,
+	}
+}
+
+// requireJJSlot refuses a verb that runs jj on target, a jj slot, on a
+// machine that cannot run jj slots (requireJJSlots), rather than fail when
+// jj does; any other slot passes.
+func (p *Platform) requireJJSlot(ctx context.Context, target vcs.Slot) error {
+	if target.Mode != vcs.ModeJJ {
 		return nil
 	}
-	return jjSlotNotYet(verb, workspaceName, slots, paths)
+	return p.requireJJSlots(ctx)
 }
 
 // maxNestedShown caps how many nested repositories a destroy refusal names.

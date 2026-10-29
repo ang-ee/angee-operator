@@ -42,9 +42,12 @@ holds a nested repository, and files outside sparse patterns are
 unsupported. Q7 is answered (2026-10-29): the verbs that walk a whole
 workspace act only on slots whose manifest names a mode. Phase 8's first
 half (sync-base and rebase on jj slots, the identity fallback, and the
-preconditions sync-base needs answered per driver) is in review in the PR
-that adds "As built: sync-base and rebase" to phase 8; publish, push and
-merge are the second half.
+preconditions sync-base needs answered per driver) is merged as #143
+(`8ba74d9`). Its second half (publish, push, merge, fetch and diff on jj
+slots, and every slot verb's preconditions answered per driver) is in review
+in the PR that adds "As built: publish, push and merge" to phase 8; with it a
+jj slot does everything a git slot does but migrate (phase 9), and is never
+pulled.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -168,7 +171,7 @@ entry; and a pass of the `go-code-reviewer` agent.
 5  jj driver package + doctor probe + CI            (after 4; merged in #126 and #131)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5; merged in #140)
 7  status fields and topology                       (after 6; merged in #142)
-8  sync-base, publish, push, merge on jj slots      (after 7; needs 2; sync-base and rebase in review)
+8  sync-base, publish, push, merge on jj slots      (after 7; needs 2; sync-base and rebase merged in #143, the rest in review)
 9  ws source migrate                                (after 8)
 10 op-heads watch: dropped, slot state is read on demand (Q6)
 11 templates, docs, live check                      (after 8, 9)
@@ -2305,6 +2308,228 @@ steps 0, 1, 2, the rebase half of 5, 6, and the part of 7 sync-base needs.
     them, and a pushed one force-updates, with a lease, on its next publish;
     D12 says so, and so do the docs and the changelog.
 
+**As built: publish, push and merge (2026-10-29).** The second of the two
+PRs: steps 3, 4, the merge half of 5, and the rest of 7. A jj slot now does
+everything a git slot does but migrate, and is never pulled.
+
+- **Step 3, publish** (`jjdriver/publish.go`). `PlanPublish` changes nothing:
+  the branch X is the intent's (the service fills in the slot's manifest
+  branch), else `vcs.ErrNoBranch`; R is the intent's remote, else
+  `pushRemote`, git's push remote for X in the slot's colocated config
+  (`git.Client.PushRemoteFor`, Q8), which must exist (`remoteURL`: git's
+  config, the slot's when colocated, else that of the repository `jj git
+  root` names, so the name matches exactly); a slot that is not colocated has
+  no config of its own to name a push remote, so it needs a named one
+  (`*vcs.NoPushRemoteError`). X must be the slot's to set
+  (`*vcs.BranchTakenError`, `INVALID_INPUT` on `branch`): not checked out by
+  another git worktree of the primary (`checkedOut`, through #143's
+  `primaryWorktrees`, the primary's own `main` included), since the bookmark
+  moves the branch and leaves that worktree detached (D12); and, when R has
+  X, tracked there (`tracked`: jj sets `tracking_target` only then), since
+  an untracked X@R is someone else's and jj refuses to push over it, after
+  `jj bookmark set` had already made the local bookmark (found in review).
+  `pendingPush` snapshots, then reads at that operation `X@R..@-` when the
+  remote bookmark exists, else `B..@-` (B as Status resolves it). None is a
+  `*vcs.NothingToPublishError` (`ok`, "nothing to publish: <why>"), whatever
+  `Explicit` says. `unpushable` then reads the
+  range less `::remote_bookmarks(remote=R)` (what R already holds, such as
+  the base's own commits after a rebase, which jj does not check either) and
+  refuses conflicted or undescribed commits as a `*vcs.UnpushableCommitsError`
+  (D6). The plan pins `Commit`, the full id of `@-`, and `Create` says
+  whether bookmark X is new. `PreparePublish` re-reads `@-` and refuses one
+  that moved since the plan (`vcs.ErrCheckoutMoved`, a `CONFLICT` to retry),
+  then `jj bookmark set -r
+  'commit_id("<id>")' -- '"X"'` (jj parses a bookmark name as a revset
+  symbol, so it is quoted, and `--` keeps a leading `-` from being a flag).
+  `Publish` is `jj git push --remote=exact:"R" --bookmark=exact:"X"` (both
+  are glob patterns to jj 0.45; a bare `--remote='*'` pushed to every remote,
+  found in review) through
+  `networkOutputs` (ANGEE_GIT_TIMEOUT), its standard error, redacted, the
+  result's message. jj tracks a bookmark it pushed new, and moves one a
+  rebase rewrote sideways, force-pushing with its lease (probed: "move
+  sideways", and "unexpectedly moved on the remote … stale info" when the
+  remote branch moved). Any other refusal is jj's `*CommandError`, which the
+  service reports through `gitFailure` as `GIT_FAILED`, cause `push_failed`,
+  ` jj: <line>`. `PushURL` is `pushRemote`'s URL.
+- **Step 4, the other verbs.** `PlanPush(ref, branch)` is `PlanPublish` under
+  ref, else branch, to the default remote, returned as `PushPlan.Publish`
+  (`Track` stays empty);
+  nothing to send is `Skip` with `Reason`; no branch with commits beyond the
+  base is `vcs.ErrDetachedWithWork` (the service's `detached_head` refusal,
+  worded for jj), none is a skip. `Push` is `PreparePublish` and `Publish` of
+  that plan. The service's `planWorkspaceGitPush` holds a plan that
+  publishes to `publishRulesRefusal` (canonical remote, `branches`), the
+  check publish makes, factored out of it, and words a push plan's failures
+  (`pushPlanRefusal`: detached, no or unknown push remote, a missing base,
+  unpushable commits, else the tool's failure). `Pull` and `Ready(pull)`
+  wrap `vcs.ErrUnsupported` ("never pulled"), and the service words it as
+  `INVALID_INPUT`, cause `jj_slot_unsupported` (`jjSlotNotPulled`), naming
+  `workspace sync-base` for a slot whose manifest names its mode and the
+  slot's own fetch and rebase onto its base for any (Q7). Fetch needed no
+  driver change; a jj slot of a `kind: local` store is refused it
+  (`INVALID_INPUT`), as sync-base never fetches one. `Diff` takes a caller's
+  ref through `refRevision(…).single()`. A jj command's failure that reaches
+  `classifyOperationError` without a step (a diff's, a `Ready` read's) is
+  `GIT_FAILED` quoting jj, as a git command's is; it was `INTERNAL` (review).
+- **Step 5, merge** (`jjdriver/merge.go`). Ready first (below); then Merge
+  snapshots again, refuses changes made since (in Ready's words, through
+  `readinessRefusal` after the run) and merges onto the commit it found
+  under the working copy, by id. A ref already in `::@-` makes no merge ("Nothing to merge", as git's `--no-ff` records
+  nothing for an ancestor; probed: `jj new @- <ancestor>` makes an empty
+  merge commit). Otherwise `jj new 'exactly(@-, 1)' 'exactly(<ref>, 1)' -m
+  "Merge <ref>"`, then `jj new`; the merge commit's conflicts are read after
+  (D5), and jj's warnings come back as a `*vcs.Warning` beside the OK result,
+  as #143's rebase does. A failure of the second `jj new` is a warning too,
+  saying a publish leaves the merge out until `jj new` runs.
+- **Step 7, readiness.** `vcs.Driver.Ready` answers every verb with
+  preconditions: `VerbPull`, `VerbPush`, `VerbPublish`, `VerbMerge`,
+  `VerbDestroy` and `VerbRepair` join sync-base and rebase. git: sync-base,
+  pull and push need the branch (when the slot must be on one) and a clean
+  tree; destroy and repair the branch; rebase, publish and merge nothing. jj:
+  sync-base and rebase refuse untracked paths (#143); publish, push and merge
+  refuse changes in the working-copy commit (`*vcs.UncommittedError` with
+  `Fix`, jj's `jj -R <slot> commit -m <message>`, which the hint quotes),
+  else untracked paths (`*vcs.UntrackedPathsError`, worded "<verb> leaves out,
+  since no commit holds them"), else a working-copy commit with parents other
+  than one (`*vcs.NotReadyError{Reason, Fix}`, a new generic precondition,
+  `PRECONDITION_FAILED` naming the fix); destroy and repair nothing, running
+  nothing.
+  The service's `ensureWorkspaceGitSourceOnExpectedBranch(es)` are gone:
+  pull, push, `workspace push`, destroy and repair ask `Ready`
+  (`requireSlotReady`, `requireWorkspaceSlotReady`). git's codes, causes,
+  hints and messages are unchanged: `TestGitSlotVerbsKeepTheirRefusals`
+  passes on main's code as on this one, and the characterization tests that
+  pin git's command lines pass unchanged. `requireCleanSlot` stays for the
+  source cache's push. `jjdriver.DirtyPaths` is the working-copy commit's
+  changed files (`changedFilesTemplate`, recorded in
+  `testdata/changed.ndjson`) then `UntrackedPaths`. `BranchMismatch` left
+  `vcs.Driver`: nothing calls it through the interface now (the git driver
+  keeps it for `Ready` and Status).
+- **Refusals lifted.** `jjSlotVerbs` lists every slot verb, so
+  `jjSlotNotYet` refuses only a verb added later and not listed;
+  `refuseJJSlots` is gone, and `workspace push` selects `worktree`, `clone`
+  and `jj` slots by recorded mode (Q7), checking jj (`requireJJSlots`) when
+  it has one, then each slot's readiness and plan before it pushes any. The
+  slot verbs that run jj check it first (`requireJJSlot`).
+- **Bookmarks a rebase moved** (owner, 2026-10-29): allowed, as jj does;
+  nothing refuses them, and their next publish force-updates with the lease.
+- **Departures.** Undescribed commits are refused empty or not: jj refuses
+  an empty undescribed commit too (probed), where step 3 said "non-empty".
+  Untracked paths refuse publish, push and merge as well as a non-empty
+  `@`, as asked for this PR. `Explicit` and `Unmanaged` change
+  nothing on a jj slot. `PushPlan` gained `Reason` and `Publish`, and
+  `PublishPlan` `Commit`. A failure to plan a push or publish, or to create
+  or set its branch, now names the step (`planning the publish of …
+  failed. git: …`) instead of the git command.
+- **Known limit.** Check, then act: an agent's commit between
+  `PlanPublish` and `PreparePublish` is refused, but one between the
+  bookmark and the push rides along unchecked, and jj's own check refuses
+  what it must; after the push, X@R is read back, and one that is not the
+  plan's commit is a warning on the OK result.
+- **Review record (`go-code-reviewer`, 2026-10-29).** No blockers; six
+  should-fixes, all taken: an untracked remote branch failing the push after
+  the bookmark was set; a git worktree's checked-out branch moved by the
+  bookmark; jj failures outside a step classified `INTERNAL`; fetch of a
+  local store's jj slot an untyped error; `--remote` passed as a glob; and
+  the URL parsed from `jj git remote list` (a push URL's credentials kept,
+  quoted names never matched), now read from git's config of `jj git root`.
+  Nits taken: merge pinning `@-` and re-checking the working copy; a failed
+  second `jj new` as a warning; the moved slot a `CONFLICT`; the two-parent
+  working copy a precondition in `Ready`; `BranchMismatch` off the interface
+  and `Track` unset for jj. Not taken: removing `jjdriver.DirtyPaths`, which
+  the interface still requires and this PR's brief asks to include
+  untracked paths.
+- **Second review (an independent `go-code-reviewer` pass on #144,
+  2026-10-29).** One blocker, confirmed with jj 0.45.1 and fixed:
+  - *Publish dropped a collaborator's commits from the remote.* The slot
+    publishes C1, sync-base rebases it to C1', a collaborator pushes C2 on
+    C1, and a fetch leaves bookmark X conflicted between C1' and C2; `jj
+    bookmark set` resolves it as a forward move, and the lease passes since
+    C2 was fetched, so C2 was lost. `ownBranch` now refuses, as a
+    `*vcs.BranchMovedError` (`PRECONDITION_FAILED`, cause `branch_moved`,
+    the hint naming `workspace source merge … X@R`), any commit of
+    `@-..X@R`, or of `@-..X`, whose change none of `B..@-` has: an old
+    version of the slot's own commit shares its change and passes, a
+    collaborator's is a change of its own. That covers the conflicted
+    bookmark (its targets are X's) and a remote that moved ahead with no
+    local conflict. A test runs the exact order, then the merge remedy.
+  - Taken: a caller-named branch that exists and is not the slot's (not its
+    manifest branch, nor only on `B..@-` under no other workspace's working
+    copy) is refused, wrapping `vcs.ErrBranchExists`, so `--branch develop`
+    no longer moves `develop` (`INVALID_INPUT` on `branch`); `workspace
+    push` leaves a `kind: local` store's jj slot to its own publish (the
+    owner's call, as main left non-`kind: git` slots out of the aggregate,
+    and angee writes nothing to a user's store unasked; sync-base still
+    rebases one, `workspaceGitSlots`' `localStores`); a failure to plan or
+    prepare a push or publish is `gitFailure` only for a tool's failure
+    (`toolFailure`), else the annotation classifies it, so a deadline stays
+    `TIMEOUT` and anything else `INTERNAL`, as on main; the two-parent fix
+    is `jj -R <slot> new`; a merge over a described empty working copy is
+    refused (`*vcs.NotReadyError`, fix `jj new`), not handled, since jj
+    keeps a described commit and the merge would leave it behind for the
+    destroy guard to count; X@R is read back after the push, a mismatch a
+    warning. Error-contract rows over REST and GraphQL for
+    `conflicted_commits`, `undescribed_commits`, `branch_moved`, branch
+    exists and the moved slot's `CONFLICT` (a jj on PATH that commits in the
+    slot before publish's second snapshot), and repair in
+    `TestGitSlotVerbsKeepTheirRefusals`, which still passes on main's code.
+  - The owner's Q8 answer is built with it (above): `PublishPlan.RecordRemote`,
+    `git.Client.SetBranchPushRemote`.
+  - *Third pass (2026-10-29), three gaps, all confirmed with probes and
+    fixed.* A jj collaborator who squashes a fix into the published commit
+    keeps its change, so C1x passed the change rule while bookmark X was
+    conflicted between C1' and C1x, and the push dropped C1x: the change
+    rule now applies to X@R alone (which may hold the old versions a rebase
+    leaves), and bookmark X must be on the slot's history (`X ~ ::@-`
+    empty), its stray targets reported as X@R's when they are the remote's,
+    so the merge hint names one commit; the merge remedy passes, both sides
+    being ancestors of the merge, and a test runs the order then the merge,
+    resolved, published with C1x in it. A tracked X@R with no bookmark X
+    escaped the existing-branch check: it now runs for either, and `B..X@R`
+    must be non-empty and only the slot's changes. The recorded push remote
+    is the cache's to replace and never a local store's (Q8 above). Six more
+    mutants caught. A bookmark on an old version of the slot's own commit is
+    now refused by the plan, where jj refused it at `bookmark set` before.
+  - Eighteen more mutants caught: `ownBranch` skipped, its change match, its
+    base rule, the existing-branch check and its working-copy rule, the
+    record and the default-remote test, the read-back, the described empty
+    working copy in `Ready` and in Merge, `localStores` both ways,
+    `toolFailure` for publish and push, the `branch_moved` and jj
+    branch-exists wordings, and a warned publish and push taken as done.
+- **Tests.** Real jj: the first publish creating the branch, then nothing to
+  publish; no commits and no branch; conflicted and undescribed commits
+  refused with nothing set or pushed; publish after a sync-base rebase moving
+  the branch sideways, over an undescribed base commit the remote holds; the
+  lease refusing a moved remote branch; the remote by push default, named,
+  unknown both ways, none; a slot that moved between plan and prepare;
+  push as publish under ref or branch, then skipped; `Ready` and
+  `DirtyPaths` with untracked and changed files, and a working copy with two
+  parents; merge (shape, nothing to merge, git spelling refused), a
+  conflicting merge, merge then publish, a change made after `Ready`; Diff
+  onto `main@origin` against `main`; a branch not the slot's (untracked on
+  the remote, a worktree's, the primary's own); a bookmark moved sideways
+  left with jj's words; publish from a store without git. The service: `workspace push`
+  pushing only the slot with commits and skipping a slot with no mode under
+  `vcs: jj`, which its own push reaches; structured refusals from push,
+  publish and `workspace push`, nothing pushed; publish, sync-base, publish
+  force-updating; merge then publish; publish, push, `workspace push` and
+  merge refusing changes and untracked files; diff in jj's spelling; pull
+  refused naming sync-base, both hints; an unlisted verb refused; every
+  jj verb's `jj_unavailable`; git's refusals pinned; a push that publishes
+  held to the remote's `branches`, a moved slot and a not-ready one (fake
+  driver); `workspace push` over a git worktree and a jj slot, and publish
+  refused under the worktree's branch; jj's diff error as `GIT_FAILED`; a
+  local store's fetch refused; the operator contract for the pull refusal
+  over REST and GraphQL. Fake jj: the remote and bookmark passed as exact
+  patterns, and a refusal's credentials redacted. Twenty-two mutants caught:
+  the unpushable pre-check, the tracking and worktree checks, the moved
+  check, untracked paths and two parents in `Ready`, untracked paths in
+  `DirtyPaths`, merge's second `jj new` and its re-check, Diff's spelling,
+  jj slots left out of `workspace push`, the publish rules on a push, the
+  tool error's classification, the local store's fetch, destroy's and repair's
+  branch check, the moved slot's wording, the pull hint, and the remote's
+  quoting.
+
 ### Phase 9. `ws source migrate`
 
 New service method `WorkspaceSourceMigrate(workspace, slot, to)` with CLI
@@ -2497,6 +2722,22 @@ Q1 to Q7 and Q10 are answered; Q8 and Q9 are built as recommended.
   the same remote, and the manifest stays the one place that says where.
   Status counts the upstream on that remote, and phase 8 passes it to `jj
   git push --remote`. A jj `git.push` setting is ignored by angee.
+
+  *Answered (owner, 2026-10-29): a publish to another remote is recorded,
+  like `git push -u`.* A jj publish to a remote other than the branch's
+  default push remote writes `branch.<X>.pushRemote = <remote>` in the
+  slot's shared git config, and jj tracks `X@<remote>` (it does so for a
+  bookmark it pushes new; an untracked one there is refused). Status
+  (`PushRemoteFor`), later publishes and the destroy guard then follow that
+  remote. Built in phase 8's second half, for a slot colocated with git; a
+  store jj keeps without git has no config to record it in, so it names its
+  remote on every publish. *Within that rule (coordinator, 2026-10-29):* a
+  `kind: git` cache is angee's, so the record replaces whatever the branch
+  had, as `git push -u` would, and the caller's latest explicit publish
+  wins; a `kind: local` store's git config is the user's and is never
+  written, so the publish warns that the remote was not recorded, and
+  status keeps counting against the default push remote
+  (`PublishPlan.Unmanaged`).
 - **Q9. Where does jj's repository config live? Built as recommended in
   #126 for the operator; the agents' side is open.** jj 0.45 keeps `jj
   config set --repo` values in the user's config directory

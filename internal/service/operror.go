@@ -52,6 +52,9 @@ const (
 	CauseSharedCommits         = "shared_commits"
 	CauseImmutableCommits      = "immutable_commits"
 	CauseUntrackedPaths        = "untracked_paths"
+	CauseConflictedCommits     = "conflicted_commits"
+	CauseUndescribedCommits    = "undescribed_commits"
+	CauseBranchMoved           = "branch_moved"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.
@@ -244,8 +247,11 @@ func classifyOperationError(err error) *OperationError {
 		}
 		return opErr
 	}
+	// A version-control command that failed, git's or a driver's tool's (a
+	// jj command's), quoting the tool.
 	var command *git.CommandError
-	if git.IsTimeout(err) || errors.As(err, &command) {
+	var tool vcs.ToolError
+	if git.IsTimeout(err) || errors.As(err, &command) || errors.As(err, &tool) {
 		var opErr *OperationError
 		errors.As(gitFailure(err, gitStep{}), &opErr)
 		return opErr
@@ -429,19 +435,22 @@ func tailBytes(s string, max int) string {
 }
 
 // requireCleanSlot fails with uncommitted_changes, listing the changed paths,
-// when the checkout target, a workspace slot or a source cache, has
-// uncommitted changes.
+// when the checkout target, a source cache, has uncommitted changes. A
+// workspace slot's verbs ask its driver instead (requireSlotReady), which
+// knows what the verb needs.
 func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, object, slot, source string) error {
 	paths, err := driver.DirtyPaths(ctx, target)
 	if err != nil {
 		return err
 	}
-	return uncommittedChanges(paths, object, slot, source)
+	return uncommittedChanges(paths, "", object, slot, source)
 }
 
 // uncommittedChanges is the uncommitted_changes refusal of object, a
 // workspace slot or a source cache, listing paths; nil when there are none.
-func uncommittedChanges(paths []string, object, slot, source string) error {
+// fix, when set, is the version-control tool's own command that records them
+// (vcs.UncommittedError.Fix).
+func uncommittedChanges(paths []string, fix, object, slot, source string) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -451,6 +460,9 @@ func uncommittedChanges(paths []string, object, slot, source string) error {
 		listed += fmt.Sprintf(" and %d more", more)
 	}
 	hint := "Commit or restore the changes, then retry."
+	if fix != "" {
+		hint = fmt.Sprintf("Commit the working copy first with `%s`, or restore the changes, then retry.", fix)
+	}
 	return &OperationError{
 		Code:    CodePreconditionFailed,
 		Cause:   CauseUncommittedChanges,
@@ -459,6 +471,127 @@ func uncommittedChanges(paths []string, object, slot, source string) error {
 		Paths:   paths[:min(len(paths), maxErrorPaths)],
 		Hint:    hint,
 		Summary: fmt.Sprintf("%s has uncommitted changes in %s. %s", object, listed, hint),
+	}
+}
+
+// unpushableCommits is the refusal of a push or publish of slot that would
+// send commits jj will not push (a *vcs.UnpushableCommitsError, plan D6):
+// conflicted_commits when some hold conflicts, else undescribed_commits. The
+// message names every commit, and nothing is pushed or changed. It is nil for
+// any other error.
+func unpushableCommits(err error, slot, source string) *OperationError {
+	var refused *vcs.UnpushableCommitsError
+	if !errors.As(err, &refused) {
+		return nil
+	}
+	var hints []string
+	cause := CauseUndescribedCommits
+	if len(refused.Conflicted) > 0 {
+		cause = CauseConflictedCommits
+		hints = append(hints, "Resolve the conflicts in the slot with jj")
+	}
+	if len(refused.Undescribed) > 0 {
+		hints = append(hints, "describe each commit with `jj describe -r <commit> -m <message>` in the slot")
+	}
+	hint := strings.Join(hints, ", and ") + ", then retry."
+	hint = strings.ToUpper(hint[:1]) + hint[1:]
+	return &OperationError{
+		Code:    CodePreconditionFailed,
+		Cause:   cause,
+		Slot:    slot,
+		Source:  source,
+		Hint:    hint,
+		Summary: fmt.Sprintf("source slot %q was not pushed: %v. %s", slot, refused, hint),
+		Err:     err,
+	}
+}
+
+// toolFailure is gitFailure for a failure a version-control tool reported (a
+// git or driver tool's command, or a network timeout), and err as it is for
+// anything else, for the operation's annotation to classify: a cancelled
+// context, an OS error or a bug keep the code classifyOperationError gives
+// them, rather than reading as GIT_FAILED.
+func toolFailure(err error, step gitStep) error {
+	var command *git.CommandError
+	var tool vcs.ToolError
+	if git.IsTimeout(err) || errors.As(err, &command) || errors.As(err, &tool) {
+		return gitFailure(err, step)
+	}
+	return err
+}
+
+// branchMoved is the refusal of a publish or push of slot whose branch holds
+// work the slot does not (a *vcs.BranchMovedError): a collaborator's commits
+// on the remote branch, fetched, or on the repository's own. Publishing would
+// drop them from the remote, so the slot must take them in first. Nothing is
+// pushed. It is nil for any other error.
+func branchMoved(err error, workspaceName, slot, source string) *OperationError {
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) {
+		return nil
+	}
+	ref := moved.Branch
+	if moved.Remote != "" {
+		ref += "@" + moved.Remote
+	}
+	hint := fmt.Sprintf("Take them in first with `angee workspace source merge %s %s %s`, then retry.", workspaceName, slot, ref)
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseBranchMoved,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Hint:      hint,
+		Summary:   fmt.Sprintf("source slot %q was not pushed: %v, which pushing would drop. %s", slot, moved, hint),
+		Err:       err,
+	}
+}
+
+// jjBranchExists is the refusal of a publish or push of jj slot slot under a
+// branch that exists and is not the slot's (vcs.ErrBranchExists from its
+// driver): it points at commits the slot does not own, and publishing would
+// move it onto the slot's. own is the slot's manifest branch, which it may
+// always publish under.
+func jjBranchExists(slot, branch, own string) error {
+	remedy := "pass another branch"
+	if own != "" {
+		remedy = fmt.Sprintf("pass another branch, or the slot's own, %q", own)
+	}
+	return &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("branch %q already exists and is not jj slot %q's: it points at commits the slot does not own; %s", branch, slot, remedy)}
+}
+
+// branchTaken is the refusal of a publish or push of slot under a branch that
+// is not the slot's to set (a *vcs.BranchTakenError): a git worktree of the
+// same source has it checked out, or the remote has a branch of that name the
+// repository does not track. It is the caller's choice of branch at fault, as
+// a git publish's existing branch is. It is nil for any other error.
+func branchTaken(err error, slot string) error {
+	var taken *vcs.BranchTakenError
+	if !errors.As(err, &taken) {
+		return nil
+	}
+	remedy := "pass another branch"
+	if taken.Remote != "" {
+		remedy = fmt.Sprintf("pass another branch, or track it with `jj bookmark track %s@%s` and rebase the slot onto it", taken.Branch, taken.Remote)
+	}
+	return &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("source slot %q cannot be published under branch %q: %v; %s", slot, taken.Branch, taken, remedy)}
+}
+
+// checkoutMoved is the refusal of a publish or push of slot whose checkout
+// moved after its push was planned (vcs.ErrCheckoutMoved): nothing was pushed,
+// and the verb run again plans afresh. It is nil for any other error.
+func checkoutMoved(err error, slot, source, verb string) *OperationError {
+	if !errors.Is(err, vcs.ErrCheckoutMoved) {
+		return nil
+	}
+	hint := fmt.Sprintf("Run %s again.", verb)
+	return &OperationError{
+		Code:    CodeConflict,
+		Slot:    slot,
+		Source:  source,
+		Hint:    hint,
+		Summary: fmt.Sprintf("source slot %q changed while its %s was checked, so nothing was pushed: %v. %s", slot, verb, err, hint),
+		Err:     err,
 	}
 }
 

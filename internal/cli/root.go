@@ -1287,8 +1287,11 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 	var ref string
 	cmd := &cobra.Command{
 		Use:   "push <name>",
-		Short: "Push workspace git sources",
-		Args:  cobra.ExactArgs(1),
+		Short: "Push workspace sources",
+		Long: "Push each slot whose manifest names a mode (worktree, clone or jj); a slot that names no mode, and a jj slot of a local store, is skipped. " +
+			"A git slot pushes its branch; a jj slot is published under --ref, else its manifest branch, to the remote git pushes that branch to. " +
+			"Every slot is checked before any is pushed, and a slot with nothing of its own is left alone.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -1313,7 +1316,7 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&ref, "ref", "", "ref to push")
+	cmd.Flags().StringVar(&ref, "ref", "", "ref to push (for a jj slot, the branch to publish under)")
 	return cmd
 }
 

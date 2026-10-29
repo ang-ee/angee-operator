@@ -141,6 +141,24 @@ const (
 	VerbSyncBase Verb = "sync-base"
 	// VerbRebase is a slot's rebase onto a ref a caller names.
 	VerbRebase Verb = "rebase"
+	// VerbPull is pull: bringing the commits of the checkout's upstream into
+	// it.
+	VerbPull Verb = "pull"
+	// VerbPush is push, of one slot or of every slot of a workspace: sending
+	// the checkout's commits to its remote.
+	VerbPush Verb = "push"
+	// VerbPublish is publish: sending the checkout's commits to a remote under
+	// a branch, which it creates where it does not exist.
+	VerbPublish Verb = "publish"
+	// VerbMerge is merge: recording a merge of a ref into the checkout.
+	VerbMerge Verb = "merge"
+	// VerbDestroy is destroying the workspace that holds the checkout. What
+	// the checkout holds that nothing else does is the destroy guard's to
+	// read, from Status; Ready answers what else must hold.
+	VerbDestroy Verb = "destroy"
+	// VerbRepair is repair's check of a checkout it has just made: that the
+	// verbs after it can run there.
+	VerbRepair Verb = "repair"
 )
 
 // BranchMismatchError is returned by Driver.Ready when the checkout is not on
@@ -154,14 +172,28 @@ type BranchMismatchError struct {
 func (e *BranchMismatchError) Error() string { return "not on its branch: " + e.Reason }
 
 // UncommittedError is returned by Driver.Ready when the verb needs a checkout
-// with no uncommitted changes and it has some, which Paths lists.
+// with no uncommitted changes and it has some, which Paths lists. Fix is the
+// version-control tool's own command that records them, for a message, when
+// it has one that does.
 type UncommittedError struct {
 	Paths []string
+	Fix   string
 }
 
 func (e *UncommittedError) Error() string {
 	return "uncommitted changes in " + strings.Join(e.Paths, ", ")
 }
+
+// NotReadyError is returned by Driver.Ready when the checkout cannot take the
+// verb for a reason of its version control's own, which Reason says, such as
+// a jj working-copy commit with two parents, which leaves no one commit to
+// publish. Fix, when set, is the tool's own command that changes that.
+type NotReadyError struct {
+	Reason string
+	Fix    string
+}
+
+func (e *NotReadyError) Error() string { return e.Reason }
 
 // UntrackedPathsError is returned by Driver.Ready when the verb would move
 // the checkout under files only it holds and its version control does not
@@ -231,6 +263,79 @@ func (e *ImmutableCommitsError) Error() string {
 	return "the rebase would rewrite commits jj holds immutable: " + strings.Join(e.Commits, ", ")
 }
 
+// UnpushableCommitsError is returned by Driver.PlanPublish, and by
+// Driver.PlanPush where a push publishes, when commits it would send to the
+// remote are ones the version control system refuses to push (plan D6): for
+// jj, a commit with conflicts (Conflicted) or with no description
+// (Undescribed), each listed by short commit id. Nothing is pushed or
+// changed.
+type UnpushableCommitsError struct {
+	Conflicted  []string
+	Undescribed []string
+}
+
+func (e *UnpushableCommitsError) Error() string {
+	var reasons []string
+	if len(e.Conflicted) > 0 {
+		reasons = append(reasons, "conflicts in "+strings.Join(e.Conflicted, ", "))
+	}
+	if len(e.Undescribed) > 0 {
+		reasons = append(reasons, "no description on "+strings.Join(e.Undescribed, ", "))
+	}
+	return "commits jj will not push: " + strings.Join(reasons, "; ")
+}
+
+// BranchTakenError is returned by Driver.PlanPublish, and by Driver.PlanPush
+// where a push publishes, when the branch to publish under is not the
+// checkout's to set: a git worktree of the same primary has it checked out
+// (Worktree), which moving it would leave on no branch, or the remote already
+// has a branch of that name that the repository does not track (Remote), so
+// jj would not push over it. Nothing is changed.
+type BranchTakenError struct {
+	Branch   string
+	Worktree string
+	Remote   string
+}
+
+func (e *BranchTakenError) Error() string {
+	if e.Worktree != "" {
+		return fmt.Sprintf("branch %q is checked out by the git worktree at %s", e.Branch, e.Worktree)
+	}
+	return fmt.Sprintf("remote %q already has a branch %q that this repository does not track", e.Remote, e.Branch)
+}
+
+// BranchMovedError is returned by Driver.PlanPublish, and by Driver.PlanPush
+// where a push publishes, when the branch holds work the checkout does not:
+// commits that are not versions of the checkout's own, on the remote
+// (Remote set) or on the repository's own branch (Remote empty), as a
+// collaborator's push leaves it once fetched. Publishing would move the
+// branch past them and drop them from the remote. Commits lists them by
+// short id. Nothing is changed.
+type BranchMovedError struct {
+	Branch  string
+	Remote  string
+	Commits []string
+}
+
+func (e *BranchMovedError) Error() string {
+	where := fmt.Sprintf("branch %q", e.Branch)
+	if e.Remote != "" {
+		where = fmt.Sprintf("branch %q on %s", e.Branch, e.Remote)
+	}
+	return where + " holds commits the slot does not: " + strings.Join(e.Commits, ", ")
+}
+
+// NothingToPublishError is ErrNothingToPublish with the driver's account of
+// what the checkout's commits were measured against, for a driver that says
+// more than "no commits beyond the base".
+type NothingToPublishError struct {
+	Reason string
+}
+
+func (e *NothingToPublishError) Error() string { return "nothing to publish: " + e.Reason }
+
+func (e *NothingToPublishError) Unwrap() error { return ErrNothingToPublish }
+
 // ToolError is a failed version-control command as a driver returns it, so a
 // message can quote the tool's own words without knowing which tool ran.
 type ToolError interface {
@@ -253,8 +358,16 @@ type PushPlan struct {
 	// branch has nothing it pushes to yet.
 	Track string
 	// Skip reports that the checkout has nothing of its own to push: no
-	// upstream, and no commits beyond its base.
-	Skip bool
+	// upstream, and no commits beyond its base. Reason, when set, is the
+	// driver's own account of it.
+	Skip   bool
+	Reason string
+	// Publish, when set, is the publish the push carries out, for a driver
+	// whose push is a publish (jj): Push makes the plan's branch where the
+	// checkout stands and pushes it, as PreparePublish and Publish do. The
+	// service checks it against the manifest's rules for its remote, as it
+	// checks a publish.
+	Publish *PublishPlan
 }
 
 // PublishIntent is what a caller asked publish for.
@@ -286,6 +399,21 @@ type PublishPlan struct {
 	// Create reports that Branch does not exist yet and PreparePublish creates
 	// it where the checkout stands.
 	Create bool
+	// Commit, when set, is the commit PlanPublish checked and the branch is
+	// to publish (jj: the slot's working-copy commit's parent). PreparePublish
+	// refuses when the checkout no longer stands there, so what is pushed is
+	// what was checked. Empty for git, which pushes the branch as it stands.
+	Commit string
+	// RecordRemote reports that Remote is not the one the checkout pushes
+	// Branch to by default, so Publish records it as the branch's push
+	// remote, as git's push --set-upstream records an upstream: the
+	// checkout's status, and later pushes, then follow it. Only a driver
+	// whose push remote is otherwise git's default (jj) sets it.
+	RecordRemote bool
+	// Unmanaged carries PublishIntent.Unmanaged: the checkout is of a store
+	// the operator does not manage, a user's, whose git config Publish never
+	// writes, so a RecordRemote plan warns that it did not record the remote.
+	Unmanaged bool
 }
 
 var (
@@ -308,6 +436,11 @@ var (
 	// ErrNameTaken is wrapped by Driver.Add when Slot.Primary already has a
 	// checkout under Slot.Name, which the slot would collide with.
 	ErrNameTaken = errors.New("name already taken in the primary")
+	// ErrCheckoutMoved is wrapped by Driver.PreparePublish, and by
+	// Driver.Push where a push publishes, when the checkout moved after its
+	// plan was made, so the plan no longer says what would be pushed. Nothing
+	// is changed; a new plan reads the checkout afresh.
+	ErrCheckoutMoved = errors.New("the checkout moved since its push was planned")
 	// ErrUnsupported is wrapped by a driver method that has no meaning for its
 	// kind of slot, such as aborting a merge in a version control system that
 	// never stops mid-merge. The service reports it as invalid input.
@@ -363,16 +496,16 @@ type Driver interface {
 	Diff(ctx context.Context, s Slot, ref string) ([]api.DiffFile, error)
 
 	// Ready reports whether verb may run on the checkout as it stands: nil,
-	// or why not, as a *BranchMismatchError, an *UncommittedError or an
-	// *UntrackedPathsError, for the service to word. What a verb needs is the
-	// driver's to say: a git sync-base needs the checkout on Slot.Branch and
-	// clean, while a jj slot's working-copy commit rides along with its
-	// rebase, but not files jj does not track. A verb the driver has no
-	// preconditions for is an error wrapping ErrUnsupported.
+	// or why not, as a *BranchMismatchError, an *UncommittedError, an
+	// *UntrackedPathsError or a *NotReadyError, for the service to word. What a verb needs is the
+	// driver's to say: a git sync-base, pull or push needs the checkout on
+	// Slot.Branch and clean, while a jj slot's working-copy commit rides
+	// along with its rebase, but not files jj does not track, and a jj
+	// publish, push or merge acts on the commits under the working copy, so
+	// it needs the working copy clean and nothing untracked. A verb the
+	// driver does not run, or does not know, is an error wrapping
+	// ErrUnsupported.
 	Ready(ctx context.Context, s Slot, verb Verb) error
-	// BranchMismatch says how the checkout differs from Slot.Branch, or
-	// returns "" when it is on it or Slot.Branch is empty.
-	BranchMismatch(ctx context.Context, s Slot) (string, error)
 	// DirtyPaths lists the checkout's uncommitted changes.
 	DirtyPaths(ctx context.Context, s Slot) ([]string, error)
 	// FetchURL is the URL of the remote a fetch or pull names in a message,
@@ -394,7 +527,10 @@ type Driver interface {
 	// it is when the caller named one, else the checkout's branch to what it
 	// tracks, or, untracked, branch (the manifest's branch for the slot) to
 	// track. A checkout with nothing of its own is skipped; one on no branch
-	// with commits of its own is refused with ErrDetachedWithWork.
+	// with commits of its own is refused with ErrDetachedWithWork. A driver
+	// whose push is a publish (jj) plans one to the remote the checkout
+	// pushes to, under ref, else branch, and returns it as the plan's
+	// Publish, refusing as PlanPublish refuses.
 	PlanPush(ctx context.Context, s Slot, ref, branch string) (PushPlan, error)
 	// Push carries out a plan PlanPush returned.
 	Push(ctx context.Context, s Slot, plan PushPlan) error
@@ -443,12 +579,16 @@ type Driver interface {
 	// anything: the remote (the intent's, else the one the checkout pushes
 	// to), the branch to publish (the intent's, else the checkout's) and
 	// whether it must be created. It refuses a remote the checkout does not
-	// have with *UnknownRemoteError, and otherwise with ErrNothingToPublish,
+	// have with *UnknownRemoteError, commits the remote would be sent that
+	// the version control system will not push with *UnpushableCommitsError,
+	// and otherwise with ErrNothingToPublish (or a *NothingToPublishError),
 	// ErrNoBranch or ErrBranchExists.
 	PlanPublish(ctx context.Context, s Slot, intent PublishIntent) (PublishPlan, error)
 	// PreparePublish gets the checkout ready for a plan PlanPublish returned:
 	// it creates the plan's branch where the checkout stands when the plan
-	// says so. Its errors are the checkout's, not the remote's.
+	// says so, or, for a plan with a Commit, sets the branch there, refusing
+	// a checkout that no longer stands on it. Its errors are the checkout's,
+	// not the remote's.
 	PreparePublish(ctx context.Context, s Slot, plan PublishPlan) error
 	// Publish pushes the plan's branch to its remote under the same name and
 	// tracks it there.

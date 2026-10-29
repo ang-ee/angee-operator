@@ -146,8 +146,8 @@ func TestSyncBaseErrorContract(t *testing.T) {
 }
 
 // A jj slot's refusals report the same code, cause and context on GraphQL
-// and REST: workspace push over a workspace with a jj slot is not supported
-// yet, and sync-base by merge cannot sync one (plan D11).
+// and REST: a jj slot is never pulled, and sync-base by merge cannot sync one
+// (plan D11).
 func TestJJSlotRefusalErrorContract(t *testing.T) {
 	for _, tc := range []struct {
 		name, query, path, body string
@@ -155,10 +155,11 @@ func TestJJSlotRefusalErrorContract(t *testing.T) {
 		wantPrefix              string
 	}{
 		{
-			name: "workspace push", query: `mutation { workspacePush(name: "feature-a") { name } }`, path: "/workspaces/feature-a/push", body: `{}`,
-			wantExt: map[string]any{"code": "INVALID_INPUT", "cause": "jj_slot_unsupported", "operation": "workspace.push",
-				"workspace": "feature-a", "slot": "work", "hint": "Run jj in the slot instead."},
-			wantPrefix: `Push workspace "feature-a": workspace push is not supported on jj slot "work" yet.`,
+			name: "source pull", query: `mutation { workspaceSourcePull(workspace: "feature-a", slot: "work") { slot } }`, path: "/workspaces/feature-a/sources/work/pull", body: `{}`,
+			wantExt: map[string]any{"code": "INVALID_INPUT", "cause": "jj_slot_unsupported", "operation": "workspace.source-pull",
+				"workspace": "feature-a", "slot": "work", "source": "app",
+				"hint": "Sync it with `angee workspace sync-base feature-a`, which syncs every slot of the workspace with its base, or alone with `angee workspace source rebase feature-a work main@origin` after `angee workspace source fetch feature-a work`."},
+			wantPrefix: `Pull for workspace "feature-a" slot "work": source slot "work" is a jj slot, which is never pulled: jj takes in its base by rebasing the slot onto it.`,
 		},
 		{
 			name: "sync-base by merge", query: `mutation { workspaceSyncBase(name: "feature-a", method: "merge") { name } }`, path: "/workspaces/feature-a/sync-base", body: `{"method":"merge"}`,

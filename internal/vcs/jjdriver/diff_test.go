@@ -2,6 +2,7 @@ package jjdriver
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -58,5 +59,37 @@ func TestDiffOfAMergeWorkingCopy(t *testing.T) {
 	uncommitted, err := driver().Diff(ctx, f.slotAt(""), "")
 	if err != nil || len(uncommitted) != 0 {
 		t.Fatalf("Diff() of a clean merge = %#v, %v; want nothing", uncommitted, err)
+	}
+}
+
+// A ref a caller names is in jj's spelling: `main@origin` is the remote
+// bookmark, which has moved past the local main here, so the two diffs
+// differ, and git's `origin/main` names nothing.
+func TestDiffOntoARemoteBookmark(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	f.commit(f.slot, "f.txt", "one\nslot\n", "slot change")
+	f.advanceBase("h.txt", "upstream\n")
+
+	paths := func(ref string) []string {
+		t.Helper()
+		files, err := driver().Diff(ctx, f.slotAt(""), ref)
+		if err != nil {
+			t.Fatalf("Diff(%s) error = %v", ref, err)
+		}
+		var names []string
+		for _, file := range files {
+			names = append(names, file.NewPath)
+		}
+		return names
+	}
+	if got := paths("main@origin"); !slices.Equal(got, []string{"f.txt", "h.txt"}) {
+		t.Errorf("Diff(main@origin) paths = %q, want the slot's f.txt and the moved base's h.txt", got)
+	}
+	if got := paths("main"); !slices.Equal(got, []string{"f.txt"}) {
+		t.Errorf("Diff(main) paths = %q, want f.txt alone", got)
+	}
+	if _, err := driver().Diff(ctx, f.slotAt(""), "origin/main"); err == nil {
+		t.Error("Diff(origin/main) error = nil, want git's spelling to name nothing")
 	}
 }

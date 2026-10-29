@@ -1115,6 +1115,16 @@ func (c Client) SetPushDefault(ctx context.Context, dir, remote string) error {
 	return nil
 }
 
+// SetBranchPushRemote sets branch.<branch>.pushRemote, the remote a push of
+// branch goes to before remote.pushDefault (PushRemoteFor's first answer).
+func (c Client) SetBranchPushRemote(ctx context.Context, dir, branch, remote string) error {
+	key := "branch." + branch + ".pushRemote"
+	if _, err := c.Run(ctx, dir, "config", EndOfOptions, key, remote); err != nil {
+		return fmt.Errorf("set %s: %w", key, err)
+	}
+	return nil
+}
+
 // EnsureRemoteURL makes rawURL the URL remote fetches from in the repository
 // at dir, adding the remote when it has no URL. It returns remote's URL before
 // the call (empty when it had none) and whether it changed anything. A remote
