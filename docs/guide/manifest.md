@@ -743,3 +743,9 @@ ${name}
 Supported filters include `slug`, `lower`, `upper`, `local_part`,
 `truncate(n)`, `default(value)`, `required(message)`, `b64encode`, and
 `replace(old,new)`.
+
+A missing job input is optional only with an explicit leading default, such as
+`${inputs.action | default('run')}` or `${inputs.value | default('')}`. Present
+empty strings keep the filter's existing fallback behavior; strings such as
+`false` and `0` remain values. Missing inputs without a leading default, secrets,
+and other namespaces still fail instead of silently supplying a value.

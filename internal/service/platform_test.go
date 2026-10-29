@@ -947,3 +947,28 @@ func TestPlatformInteractiveOptionConfiguresGit(t *testing.T) {
 		t.Fatal("interactive platform git client is non-interactive")
 	}
 }
+
+func TestCompileOptionalJobInputs(t *testing.T) {
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "optional-inputs",
+		Jobs: map[string]manifest.Job{"work": {
+			Runtime: manifest.RuntimeLocal,
+			Command: []string{"tool", "${inputs.action | default('run')}"},
+			Env:     map[string]string{"VALUE": "${inputs.value | default('')}"},
+		}},
+	}
+	ordinary, err := Compile(stack, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ordinary.ProcessCompose.Processes["work"]; got.Command != "tool run" || !reflect.DeepEqual(got.Environment, []string{"VALUE="}) {
+		t.Fatalf("ordinary command = %#v", got)
+	}
+	explicit, err := compile(stack, t.TempDir(), nil, map[string]map[string]string{"work": {"action": "false", "value": "chosen"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := explicit.ProcessCompose.Processes["work"]; got.Command != "tool false" || !reflect.DeepEqual(got.Environment, []string{"VALUE=chosen"}) {
+		t.Fatalf("explicit command = %#v", got)
+	}
+}

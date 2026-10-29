@@ -8,6 +8,9 @@ latest tag.
 
 ### Added
 
+- Explicit leading `default(...)` filters now allow absent job inputs, without
+  changing empty-string semantics or weakening required inputs and secrets.
+
 - Jobs can declare `holds: [service, ...]` to stop services before any selected
   job runs. A chained run reapplies held and dependent services once after all
   selected jobs succeed; a plain run leaves held services stopped. Operation
