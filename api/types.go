@@ -717,5 +717,9 @@ type SourceState struct {
 	Behind         int         `json:"behind,omitempty"`
 	Pushed         bool        `json:"pushed"`
 	UnpushedReason string      `json:"unpushed_reason,omitempty"`
-	Error          string      `json:"error,omitempty"`
+	// Conflicted reports a conflict recorded in the slot's own commits, as
+	// a jj slot's sync-base leaves one; ConflictPaths lists its files.
+	Conflicted    bool     `json:"conflicted,omitempty"`
+	ConflictPaths []string `json:"conflict_paths,omitempty"`
+	Error         string   `json:"error,omitempty"`
 }
