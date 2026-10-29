@@ -33,21 +33,6 @@ func (Driver) DirtyPaths(context.Context, vcs.Slot) ([]string, error) {
 	return nil, notYet("the uncommitted-changes check")
 }
 
-// Exists is not implemented yet: phase 5 step 6 adds the jj slot lifecycle.
-func (Driver) Exists(context.Context, vcs.Slot) (bool, error) {
-	return false, notYet("the registration check")
-}
-
-// Add is not implemented yet: phase 5 step 6 adds the jj slot lifecycle.
-func (Driver) Add(context.Context, vcs.Slot, vcs.Dest, func(context.Context, string) error) error {
-	return notYet("creating the slot")
-}
-
-// Remove is not implemented yet: phase 5 step 6 adds the jj slot lifecycle.
-func (Driver) Remove(context.Context, vcs.Slot, vcs.Dest) error {
-	return notYet("removing the slot")
-}
-
 // FetchURL names no remote yet.
 func (Driver) FetchURL(context.Context, vcs.Slot) string { return "" }
 

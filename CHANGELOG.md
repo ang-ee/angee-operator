@@ -69,6 +69,12 @@ latest tag.
   not empty and undescribed. Branch and HEAD reflogs still count, so history
   jj rewrote within git's reflog expiry is still refused there; use the
   `bundle` policy for those sources.
+- **The jj driver makes and removes a slot** (phase 5 step 6 of
+  `.agents/plans/jj-native-operator.md`). It colocates a source's cache with
+  jj, creates a jj workspace of it in place, refusing a taken name or an
+  occupied path and rolling back a failed create, and forgets and removes
+  one. Like the rest of the driver, it is not reachable from a manifest until
+  phase 6.
 
 ### Changed
 
@@ -81,6 +87,41 @@ latest tag.
   character other than a letter, a space, `_`, `-` or `.`. Its other lines,
   such as `"enabled": true` or `kind: Config`, are common text, masked only as
   part of the whole value.
+
+### Fixed
+
+- **Workspace merges and rebases commit as you, not as
+  `angee <angee@example.invalid>`.** `ws source merge` set angee's
+  placeholder as the merge commit's author and committer, and `rebase` and
+  `rebase --continue` as the committer of every replayed commit, even when
+  git had your identity configured.
+  - They now commit with the identity git resolves for the slot, as
+    `sync-base` does: repository, global and system config, `author.*` and
+    `committer.*`, `EMAIL` for an email no config gives, and the operator's
+    own `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_CONFIG_GLOBAL`,
+    `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM` and the `user`, `author` and
+    `committer` entries of `GIT_CONFIG_COUNT` (its other entries, which can
+    carry tokens, stay out), so a container can name its identity in its
+    environment. The identity resolved is passed to the operation, so it
+    commits as exactly that. A rebase still keeps each replayed commit's
+    author.
+  - Only a role git reports no identity for, as for an operator in a
+    container whose user never set one, falls back to the placeholder;
+    `user.useConfigOnly` keeps git from guessing one from the host name. An
+    identity git refuses, such as a configured name of only `<>`, fails the
+    operation with git's message instead of being replaced.
+  - Publish's push and the aborts set no identity, since they commit nothing.
+  - The jj driver no longer sets `JJ_USER` and `JJ_EMAIL` to angee's: it
+    passes the operator's own `JJ_USER`, `JJ_EMAIL` and `JJ_CONFIG` through,
+    so jj records your identity from those or your jj config. It has no
+    placeholder yet for a user with no jj identity; no stack can select the
+    jj driver, and the fallback comes before any jj verb pushes.
+
+### Security
+
+- **Built with Go 1.26.10.** Release binaries and images were built with Go
+  1.26.9, whose `crypto/x509` has a vulnerability fixed in 1.26.10
+  (GO-2026-6809). govulncheck reports none on this release.
 
 ## v0.22.0 — 2026-10-13
 

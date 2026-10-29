@@ -37,6 +37,13 @@ func (d *recordingDest) Lstat() (fs.FileInfo, bool, error) {
 	return info, err == nil, err
 }
 
+func (d *recordingDest) IsEmptyDirectory() (bool, error) {
+	entries, err := os.ReadDir(d.path)
+	return err == nil && len(entries) == 0, err
+}
+
+func (d *recordingDest) MkdirAll(mode fs.FileMode) error { return os.MkdirAll(d.path, mode) }
+
 func (d *recordingDest) ReplaceFrom(_ context.Context, stage string) error {
 	return os.CopyFS(d.path, os.DirFS(stage))
 }

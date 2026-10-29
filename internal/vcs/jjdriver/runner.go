@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -14,12 +15,30 @@ import (
 	"github.com/ang-ee/angee-operator/internal/logctx"
 )
 
-// jjEnv is what every jj run gets on top of git.IsolatedEnv: angee's
-// identity, for the commits and operations jj records, and a no-op editor,
-// so a command that would open one never waits. Mutations still pass -m
-// wherever jj would open an editor. (`--config ui.editor=true` cannot do
-// this: jj reads the value as a boolean.)
-var jjEnv = []string{"JJ_USER=angee", "JJ_EMAIL=angee@example.invalid", "JJ_EDITOR=true"}
+// jjPassedEnv are the variables of the operator's environment every jj run
+// gets: where its config is, and the identity jj takes over that config.
+var jjPassedEnv = []string{"JJ_CONFIG", "JJ_USER", "JJ_EMAIL"}
+
+// jjEnv is what every jj run gets on top of git.IsolatedEnv: a no-op editor,
+// so a command that would open one never waits, and the operator's
+// jjPassedEnv. Mutations still pass -m wherever jj would open an editor.
+// (`--config ui.editor=true` cannot do this: jj reads the value as a
+// boolean.) No identity of angee's is set: the commits jj records are the
+// user's, from JJ_USER and JJ_EMAIL when the operator sets them, else from
+// user.name and user.email in their jj config, which HOME, XDG_CONFIG_HOME
+// and JJ_CONFIG locate, as the git driver's commits are the user's. Unlike
+// the git driver, there is no placeholder for a user with none yet: jj then
+// records an empty identity, which `jj git push` refuses. Phase 8 of the plan
+// adds the fallback before any jj verb pushes.
+func jjEnv() []string {
+	env := []string{"JJ_EDITOR=true"}
+	for _, key := range jjPassedEnv {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
 
 // globalArgs start every jj invocation. snapshot.auto-update-stale lets a
 // slot whose working copy another workspace rewrote update itself instead of
@@ -38,17 +57,22 @@ const waitDelay = 100 * time.Millisecond
 // jj never runs in the process's working directory: a slot command runs with
 // the slot as working directory and `-R .`, so jj loads the slot's own
 // workspace (`@` is its working-copy commit, and no workspace name is needed)
-// and never a repository it would find above the slot, and the probe runs in
-// the system temporary directory, outside any repository, since jj records
-// every repository it loads in the user's config directory.
+// and never a repository it would find above the slot. A command on a primary
+// runs the same way in the primary. The probe and `jj git init` run in the
+// system temporary directory, outside any repository, since jj records every
+// repository it loads in the user's config directory.
 //
 // snapshot lets jj snapshot the slot's working copy before the command, as
 // every slot read and mutation must (plan D7, D8). read adds
 // --ignore-working-copy and --at-op, for the reads that follow a snapshot in
 // the same call: they all see the operation the snapshot recorded, whatever
-// agents do in the repository meanwhile. A primary is only ever named with
-// `-R` together with --ignore-working-copy, since otherwise jj would snapshot
-// the primary's working copy instead; nothing in this package needs that yet.
+// agents do in the repository meanwhile.
+//
+// On a primary, primaryStore adds --ignore-working-copy, so the workspace
+// list and the forget touch no working copy. Only `jj workspace add` runs in
+// the primary without it (inPrimary), as any jj command there runs: jj
+// refuses to add a workspace with it, and its import of git's refs is what
+// shows jj the base just fetched into the primary with git (Add).
 type runner struct {
 	bin string
 }
@@ -78,6 +102,29 @@ func (r runner) read(ctx context.Context, slot, op string, args ...string) ([]by
 // in the process's working directory.
 var errNoSlot = errors.New("a jj slot command needs the slot's path")
 
+// inPrimary runs a jj command in the primary as any jj command there runs:
+// jj snapshots the primary's working copy and, colocated, imports what git
+// changed in it first.
+func (r runner) inPrimary(ctx context.Context, primary string, args ...string) ([]byte, error) {
+	if primary == "" {
+		return nil, errNoPrimary
+	}
+	return r.run(ctx, primary, append([]string{"-R", "."}, args...))
+}
+
+// primaryStore runs a jj command on the primary's repository without loading
+// any working copy.
+func (r runner) primaryStore(ctx context.Context, primary string, args ...string) ([]byte, error) {
+	if primary == "" {
+		return nil, errNoPrimary
+	}
+	return r.run(ctx, primary, append([]string{"-R", ".", "--ignore-working-copy"}, args...))
+}
+
+// errNoPrimary refuses a command on a primary with no primary, which would
+// otherwise run jj in the process's working directory.
+var errNoPrimary = errors.New("a jj command on a primary needs the primary's path")
+
 // network runs a jj command in the slot that reaches a remote (`jj git
 // fetch`, `jj git push`), snapshotting first, under ANGEE_GIT_TIMEOUT like
 // every git network operation. operation names it in a timeout error.
@@ -103,7 +150,7 @@ func (r runner) run(ctx context.Context, dir string, args []string) ([]byte, err
 		bin = "jj"
 	}
 	argv := append(append([]string(nil), globalArgs...), args...)
-	env := git.IsolatedEnv(jjEnv...)
+	env := git.IsolatedEnv(jjEnv()...)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
 	cmd.Env = env

@@ -6,17 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/git"
 )
 
-// TestNothingReachesTheDevelopersConfig runs the probe and the integration
-// helpers from inside a jj repository, as `go test` runs in a jj checkout,
-// with a HOME and XDG_CONFIG_HOME standing for the developer's, and finds
-// nothing written there. jj records every repository it loads in the user's
-// config directory, even for `jj --version`, so the probe runs outside any
-// repository and the fixtures run under a HOME of their own.
+// TestNothingReachesTheDevelopersConfig runs the probe, the integration
+// helpers and the slot lifecycle from inside a jj repository, as `go test`
+// runs in a jj checkout, with a HOME and XDG_CONFIG_HOME standing for the
+// developer's, and finds nothing written there. jj records every repository
+// it loads in the user's config directory, even for `jj --version`, so the
+// probe and `jj git init` run outside any repository and the fixtures run
+// under a HOME of their own. Nor does any jj the driver runs load the
+// repository the test runs in.
 func TestNothingReachesTheDevelopersConfig(t *testing.T) {
 	isolate(t)
 	requireJJ(t)
@@ -47,9 +50,31 @@ func TestNothingReachesTheDevelopersConfig(t *testing.T) {
 	if _, err := driver().Diff(context.Background(), f.slotAt(""), ""); err != nil {
 		t.Fatalf("Diff() error = %v", err)
 	}
+	lifecycle := newFixture(t, primaryOnly)
+	ctx := context.Background()
+	if err := driver().EnsurePrimary(ctx, lifecycle.primary); err != nil {
+		t.Fatalf("EnsurePrimary() error = %v", err)
+	}
+	s := lifecycle.slotSpec("workspaces/ws/src", "stack--ws", "")
+	if err := lifecycle.add(s); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if ok, err := driver().Exists(ctx, s); !ok || err != nil {
+		t.Fatalf("Exists() = %v, %v; want true", ok, err)
+	}
+	if err := driver().Remove(ctx, s, lifecycle.dest(s)); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	id, err := os.ReadFile(filepath.Join(repo, ".jj", "repo", "config-id"))
+	if err != nil {
+		t.Fatalf("ReadFile(config-id) error = %v", err)
+	}
+	if record := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "jj", "repos", strings.TrimSpace(string(id))); exists(t, record) {
+		t.Errorf("jj loaded the repository the test runs in: %s exists", record)
+	}
 
 	var written []string
-	err := filepath.WalkDir(developer, func(path string, _ fs.DirEntry, err error) error {
+	err = filepath.WalkDir(developer, func(path string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

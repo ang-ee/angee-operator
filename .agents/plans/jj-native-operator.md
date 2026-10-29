@@ -20,9 +20,12 @@ and phase 2 step 5 (publish's default remote, the `branches` allow-list and
 a remote the slot doesn't have) as #122 (`a242891`), which completes phase
 2. 4d and step 5 land in the release after v0.21.3. Phase 5 steps 1-5, 7
 and 8 (the `jjdriver` package, the doctor probe and the jj CI job) are
-merged as #126 (`6315a53`). 4c (the slot lifecycle behind the driver, and
-the primary lock of D9) is in review in the PR that updates this paragraph,
-and completes phase 4; phase 5 step 6 (the jj slot lifecycle) follows it.
+merged as #126 (`6315a53`), and 4c (the slot lifecycle behind the driver,
+and the primary lock of D9) as #125 (`39cbd1f`), which completes phase 4.
+Phase 5 step 6 (the jj slot lifecycle) is in review in the PR that updates
+this paragraph, and completes phase 5. Phase 6 (`mode: jj` lifecycle and
+status) is next, and must settle Q10 before the destroy guard reads a jj
+slot's `Pushed`.
 Q1 (jj slots are created in place), Q2 (2026-10-09:
 `<stack>--<workspace>`, a clash is refused), Q6 (2026-10-10: slot state is
 read on demand, so every read snapshots and there is no interval, which
@@ -31,8 +34,7 @@ runs only on request, and CI pins jj in `.github/jj-rev`) are answered.
 Q8 (a jj slot pushes to git's push remote) and Q9 (the runner passes
 `snapshot.auto-update-stale` on every call) are built as recommended in
 #126, pending the owner's confirmation. Q7 (`workspace push` and clone
-slots with no mode) and Q10 (files jj will not snapshot) are open; phase 6
-must settle Q10. Phase 6 waits on phase 5 step 6.
+slots with no mode) and Q10 (files jj will not snapshot) are open.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -104,7 +106,7 @@ workspaces. Scripts are not checked in; phase 5 turns them into tests.
 | After a rewrite from the primary, `jj status` in the slot exits 1 "working copy is stale" unless `snapshot.auto-update-stale` is set, in which case the slot updates itself. | D8. |
 | Rewriting an immutable commit (trunk, an untracked remote bookmark) exits 1 with a hint. | A sync-base or rebase can fail for a reason that is not a conflict; return jj's message as the error. |
 | A file created in the slot is invisible to `--ignore-working-copy` reads (`empty=true`) until a snapshotting command runs. | D7. |
-| `JJ_USER`, `JJ_EMAIL`, `JJ_EDITOR` are honoured. `--config ui.editor=true` is rejected (the value parses as a boolean). | The runner sets identity and a no-op editor through the environment. |
+| `JJ_USER`, `JJ_EMAIL`, `JJ_EDITOR` are honoured. `--config ui.editor=true` is rejected (the value parses as a boolean). | The runner sets a no-op editor through the environment. It no longer sets an identity (commit-identity fix, 2026-10-28): jj commits as the user, from their jj config. |
 | `jj new "N"@- <ref> -m "Merge <ref>"` leaves the merge as `@`; a following `jj new` leaves it as `@-` under a fresh empty `@`. | Merge is two commands, so publish (which pushes `@-`) includes the merge. |
 | `working_copies()` and the `working_copies` keyword exist; `"stack--a"@` parses. | D12 and D13 are implementable as written. |
 | `git worktree remove` silently deletes ignored files and refuses when untracked, non-ignored files exist. | The migrate verb must carry untracked and ignored content across (phase 9). |
@@ -152,8 +154,8 @@ entry; and a pass of the `go-code-reviewer` agent.
 0  landed
 1  mode validation + branchless worktree slots      (git only, can start now)
 2  remotes with roles                               (git only; merged)
-4a..4d  vcs.Driver seam, git driver only            (after 1; 4a, 4b, 4d merged, 4c in review)
-5  jj driver package + doctor probe + CI            (after 4; all but step 6 merged in #126)
+4a..4d  vcs.Driver seam, git driver only            (after 1; merged, 4c in #125)
+5  jj driver package + doctor probe + CI            (after 4; steps 1-5, 7, 8 merged in #126, step 6 in review)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5)
 7  status fields and topology                       (after 6)
 8  sync-base, publish, push, merge on jj slots      (after 7; needs 2)
@@ -927,6 +929,9 @@ lifecycle interface and primary lock.
     operator runs, whatever the repository's per-user config says (Q9).
   - Environment: `git.IsolatedEnv`, which `git.Client.RunIsolated` now
     builds through too, plus `JJ_USER`, `JJ_EMAIL` and `JJ_EDITOR=true`.
+    *Changed 2026-10-28 (commit-identity fix):* `JJ_USER` and `JJ_EMAIL`
+    are gone and `JJ_CONFIG` is passed through, so jj commits as the user;
+    the git ops likewise commit with the identity git resolves.
   - jj never runs in the process's working directory. `run` refuses an
     empty directory, and `snapshot` and `read` refuse an empty slot.
     - A slot command runs in the slot with `-R .`. jj then loads the slot's
@@ -1094,6 +1099,225 @@ lifecycle interface and primary lock.
     - an upstream always on origin, or on jj's `git.push`;
     - reads not pinned to the snapshot.
 
+**As built in phase 5 step 6 (2026-10-12).** `EnsurePrimary`, `Exists`,
+`Add` and `Remove` are in `jjdriver/lifecycle.go`. Nothing selects the
+driver yet; phase 6 wires it.
+
+- **Where `EnsurePrimary` lives.** It is a method of `jjdriver.Driver`, not
+  of `vcs.Driver`. A git primary needs nothing, so the git driver would only
+  fake it (D2's argument). And the service must call it before `Exists`
+  reads the primary's workspaces, so it cannot be a step of `Add`. Phase 6
+  calls it under the primary lock, after materializing the cache.
+- **`EnsurePrimary`** runs `jj git init --git-repo <primary> <primary>`
+  when the primary has no `.jj`, and runs nothing when it has one. (`jj git
+  init` on a repository that has one fails.)
+  - That is step 6's `--colocate` with one difference, found while probing.
+    It makes the same colocated repository: the same `.jj` files, and `jj
+    git colocation status` says colocated. But jj refuses a directory that
+    is not a git repository, where `--colocate` creates a new, empty one in
+    a missing or emptied cache. The two flags cannot be combined.
+  - jj runs in the system temporary directory, with the primary as its
+    destination. Run inside the primary, it also loads any jj repository
+    above it, and records that one in the user's config directory (probed).
+- **Q9: the operator needs nothing else.** `EnsurePrimary` writes no
+  repository config. The runner passes `snapshot.auto-update-stale` on
+  every command, and `jj config set --repo` would write to the user's
+  config directory, outside the repository. jj's init records a `trunk()`
+  alias there by itself; nothing in the driver reads `trunk()`. The agents'
+  side of Q9 stays open: a host operator writing the setting would have
+  covered agents running as the same user, and this rules that out.
+- **`vcs.Slot.Name`** carries the jj workspace name. The service computes
+  it in phase 6 (Q2) and never stores it. Only the jj lifecycle reads it,
+  since slot reads and verbs run in the slot. `Primary` is reused for the
+  jj primary. `Mode` stays git's; phase 6 adds `jj` when `slotDriver`
+  chooses by mode.
+- **`vcs.Dest`** gains `IsEmptyDirectory` and `MkdirAll`, which
+  `copierx.GuardedPath` already had. `vcs.ErrNameTaken` marks a collision.
+- **`Exists`** runs `jj workspace list -T json(self)` with `-R .
+  --ignore-working-copy` in the primary, as slot commands run in the slot,
+  and matches by name. It never reads `root`.
+- **`Add`** creates the slot in place (D4). Every write goes through
+  `dest`:
+  1. it refuses a non-nil `configure`, a missing name or primary, a
+     relative path and an empty base ref;
+  2. the destination must be absent or an empty real directory;
+  3. the primary must have no workspace of that name, else
+     `vcs.ErrNameTaken` naming it (D13);
+  4. `dest.MkdirAll`, then `dest.VerifyPathIdentity` (before);
+  5. `jj workspace add --colocate --name=<N> -r <start> -- <path>`;
+  6. `dest.VerifyPathIdentity` (after).
+
+  Any error from step 4 on rolls back through `Remove`.
+  - The start is one revset that jj resolves:
+    `coalesce(bookmarks(exact:"X"), remote_bookmarks(exact:"B",
+    remote=exact:"R"), bookmarks(exact:"B"))`. That is the local bookmark
+    of the slot's branch, else the base by Status's rule
+    (`baseCandidates`, now shared by both). A branch that only a remote has
+    does not count, as for a git worktree slot. No bookmark is created.
+  - `jj workspace add` is the one command that runs in the primary without
+    `--ignore-working-copy`. jj refuses it with that flag, after creating
+    the workspace (exit 1). And the snapshot's git import is what shows jj
+    the base the service has just fetched into the cache with git. A test
+    moves the base with git and checks that the slot starts on the new
+    commit.
+  - **D13's check is load-bearing, not just a clearer message.** jj
+    refuses a taken name itself, before writing anything. But the rollback
+    forgets N, so without the operator's check a collision would forget the
+    other slot's workspace and delete its `.git` (the mutant shows it). One
+    window remains: a process that does not take the lock, such as a human
+    running `jj workspace add`, could take the name between the check and
+    the add.
+  - The destination check comes first for the same reason. jj refuses a
+    non-empty directory, but the rollback would then delete what was in
+    it.
+  - With a swapped parent, jj writes the checkout where the symlink leads,
+    and records that path. The after-check catches it. The rollback forgets
+    the workspace and removes the directory `Add` made, through the guard.
+    `Add` itself removes nothing through the swapped path, which is what the
+    guard prevents, but the forget does, as jj: it deletes the `.git` jj
+    wrote at the recorded path and runs its own `git worktree prune`
+    (probed; it also pruned an unrelated missing worktree). The rest of what
+    jj wrote there stays, and the test pins both.
+  - Parents that `MkdirAll` created stay after a failure, as they do after
+    the git driver's late failures.
+- **`configure` is refused on a jj slot**, with `vcs.ErrUnsupported`. A
+  colocated slot shares its primary's git config (it is a linked worktree)
+  and jj repository, so it has nothing of its own to configure: its remotes
+  are the primary's, reconciled on the cache. And running `configure` after
+  jj has written the slot would break `vcs.Driver`'s promise that nothing at
+  the path is unconfigured. Phase 6 passes nil, as for worktrees.
+- **`Remove`** runs `jj workspace forget -- <N>` on the primary with
+  `--ignore-working-copy`, then `dest.RemoveAll`, then `git worktree prune`
+  through `git.Client`.
+  - Forgetting an unknown name changes nothing, so `Remove` can run twice.
+  - Each step runs even when an earlier one failed, and the errors are
+    joined.
+  - The forget drops the git registration (and the slot's `.git`) while the
+    directory exists. The prune drops it when the directory was already
+    gone.
+- **The primary lock** stays the service's. The docs of `vcs.Driver` and
+  `jjdriver` say which calls need it:
+  - `EnsurePrimary`, since it creates `.jj` the way a clone creates the
+    cache;
+  - `Add` and `Remove`: workspace add and forget, then the prune.
+
+  `removeWorkspaceSlot` already takes the lock for any slot with a
+  `Primary`, so jj rollback and destroy take it once phase 6 hands it jj
+  slots. They are not yet fully covered: when the lock times out,
+  `removeWorkspaceSlot` falls back to `dest.RemoveAll()` and relies on the
+  next `git worktree prune` to drop the registration, but nothing forgets a
+  jj workspace, so its name stays taken and recreating the workspace fails
+  with `vcs.ErrNameTaken` until someone runs `jj workspace forget`. Phase 6
+  must forget the name on that path too (or retry under the lock). The
+  create path needs a jj branch beside `addWorktreeSlot`. No service code
+  changed.
+- **A failed `Add` removes an empty directory that was already at the slot
+  path.** `dest.MkdirAll` keeps it, and the rollback's `Remove` deletes it.
+  The git driver builds the checkout elsewhere and installs it at the end,
+  so its failed `Add` leaves the directory. Phase 6 either recreates the
+  directory after the rollback or treats this as the jj lifecycle's
+  contract and says so where the service calls `Add`.
+- **Status** of a slot that `Add` made works unchanged (a test).
+- **Probe findings** (jj `0.45.1-f8f808f`):
+  - `jj workspace add --ignore-working-copy` creates the workspace and its
+    git worktree, then exits 1.
+  - `jj workspace add` with a taken name, or into a non-empty directory,
+    refuses before writing anything.
+  - Until it is forgotten, a failed add's git worktree reads `HEAD 0000…`
+    on `refs/jj/root`.
+  - `jj workspace forget --ignore-working-copy` removes the git worktree
+    registration and the slot's `.git` file while the directory exists,
+    through a swapped parent too. `.jj` and the files stay.
+  - After `git pull` in a jj-colocated cache, a `jj workspace add` there
+    leaves git's HEAD on `main`, and `git pull` still works. So git worktree
+    slots and `source pull` keep working on a cache that also has jj slots.
+- **Tests.** Integration tests run under `isolate`. They skip without jj,
+  and fail with `ANGEE_REQUIRE_JJ=1`.
+  - `EnsurePrimary` colocates and leaves git on `main`. A second call with
+    no jj on PATH succeeds and records nothing. A plain directory and a
+    missing one are refused, and get neither `.jj` nor `.git`.
+  - `Add` makes a colocated slot: `git rev-parse` works, and HEAD is
+    detached at the base just fetched with git. No branch or bookmark is
+    created, and git and jj both list the slot.
+  - `Add` lands on an existing local bookmark, and Status reads that slot
+    as on its branch. A branch that only the remote has starts at the base.
+  - Status of a slot `Add` made: clean and pushed, then dirty.
+  - A taken name gives `vcs.ErrNameTaken` naming it, with no directory, no
+    operation, and the other slot intact.
+  - A non-empty directory and a file are refused and left untouched, with
+    no operation. An empty directory is taken.
+  - A base that resolves to nothing (jj creates the workspace, then exits
+    1) leaves no workspace, no directory and no registration.
+  - A parent swapped for a symlink after the before-check is detected. The
+    workspace is forgotten and unregistered, the guard's directory is
+    removed, and what jj wrote outside is left.
+  - `Remove` leaves no workspace and no registration. Its order is pinned:
+    the primary no longer lists the workspace when the directory is
+    removed, and a recording git shows the prune after the removal.
+  - `Remove` after the directory was deleted forgets and prunes. A second
+    `Remove` changes nothing.
+  - `Exists` before `Add`, after it (also for another name), and after
+    `Remove`.
+  - Hostile names: quotes, `\..@`, a leading `-`, a space, non-ASCII, and
+    an injected revset.
+  - Missing facts and a non-nil `configure` are refused before any command
+    runs. A fake jj and git pin each command, its arguments and its
+    directory.
+  - Through the fake, which can fail chosen commands: a failed forget still
+    lets `Remove` remove the directory and prune, and a failed prune is
+    joined to it; a caller's context cancelled during `Add` still rolls
+    back (forget, remove, prune); and a failed rollback is joined into
+    `Add`'s error.
+  - `TestNothingReachesTheDevelopersConfig` runs the lifecycle too. It now
+    also checks that no jj the driver ran loaded the repository the test
+    runs in.
+- **Mutants caught:**
+  - no rollback;
+  - no name check (the other slot's workspace is forgotten);
+  - the removal before the forget, or the prune before the removal;
+  - no identity check after jj, or none before it;
+  - no destination check (the rollback deletes the directory's contents);
+  - `--colocate` in `EnsurePrimary`;
+  - `jj git init` in the process's directory;
+  - `workspace add` with `--ignore-working-copy`;
+  - `Remove` stopping at a failed forget, or dropping its error;
+  - the rollback on the caller's context, or with its error dropped.
+- **For phase 6:**
+  - Call `EnsurePrimary` only for a `kind: git` cache, never for a `kind:
+    local` store (step 7: the operator never initializes one). Step 7 also
+    needs `Add` without `--colocate` for a store that has no `.git`.
+  - Hold the lock around `Exists`, `Remove` and `Add` together, as
+    `addWorktreeSlot` does, but not through its leftover removal. For git,
+    `Exists` finds a worktree at the slot's own path, a leftover. For jj it
+    finds the name taken, possibly by another live slot, which `Remove`
+    would forget, deleting its `.git`. Step 4's keep-a-registered-slot rule
+    decides before `Add` runs. Map `vcs.ErrNameTaken` to a conflict.
+  - Set `Slot.Name` and `Slot.Primary` in `workspaceLifecycleSlot`, and
+    pass a nil `configure`.
+  - **`Add` changes the shared cache's git format.** `jj workspace add
+    --colocate` runs `git -c worktree.useRelativePaths=true worktree add`,
+    which sets `core.repositoryformatversion=1` and
+    `extensions.relativeworktrees=true` on the cache and writes relative
+    links. That undoes what #130 keeps for git worktree slots (`worktreeAdd`
+    in `internal/git/git.go`). Found by probe (jj 0.45.1, git 2.50.1):
+    - go-git's `PlainOpen` refuses the cache, so `sourceCommits`
+      (`internal/service/commits.go:40`) returns no commits, and no error,
+      for that source in the GitOps topology;
+    - git before 2.48 does not know the extension and may refuse the cache
+      and its git worktree slots, while doctor accepts 2.42.
+
+    So before phase 6 hands jj a cache: require git ≥ 2.48 for jj slots
+    (doctor's floor and the create path); give `sourceCommits` a git CLI
+    fallback, or surface its error; and pin the cache's config after `Add`
+    in a test, with a git worktree slot of the same cache still working.
+  - **Workspace names can collide across stacks.** `<stack>--<workspace>`
+    is ambiguous once a part contains `--`: stack `a--b` with workspace `c`
+    and stack `a` with workspace `b--c` both get `a--b--c` (and `--<slot>`
+    adds more ways). On a shared cache D13 refuses the second with a clash
+    its own manifest does not show, and `Exists` reports the name taken.
+    Refuse `--` in the parts, or pick a form that cannot collide, before
+    names are computed.
+
 ### Phase 6. `mode: jj` lifecycle and status
 
 **Goal:** `ws create`, `ws status` and `ws destroy` work for jj slots,
@@ -1184,6 +1408,15 @@ Tests: JSON shape tests for the new fields; a conflicted slot reports paths;
 
 Replaces the phase 6 refusals verb by verb. May land as two PRs (sync-base
 and rebase; then publish, push and merge).
+
+0. Identity fallback, first. The runner sets no identity, so an operator
+   whose user has no jj `user.name`/`user.email` records commits with an
+   empty author and committer (every snapshot rewrites `@`), and `jj git
+   push` refuses those. The git ops fall back to angee's placeholder per role
+   only when git has none configured; give jj the same rule, probing `jj -R
+   . --ignore-working-copy config get user.name` (and `user.email`) and
+   setting `JJ_USER`/`JJ_EMAIL` only when empty, since those override user
+   and repo config.
 
 1. Rebase scope (D12). Before any rebase on a jj slot, read `(B.."N"@)::`.
    If it contains another workspace's working copy, or a commit that is the
@@ -1417,7 +1650,9 @@ Q1, Q2 and Q6 are answered. The rest can be answered later.
   - the agents' environment sets it in their user config.
 
   Built: the first. The agents' side (an agent's own `jj` in a slot the
-  operator rebased) still needs one of the others.
+  operator rebased) still needs one of the others. *Phase 5 step 6:*
+  `EnsurePrimary` writes no repository setting either, so the runner's flag
+  is the operator's whole answer.
 - **Q10. Files jj will not snapshot. Open (found in the review of #126).**
   jj refuses to snapshot a new file over `snapshot.max-new-file-size`, and
   leaves untracked anything `snapshot.auto-track` excludes. The snapshot

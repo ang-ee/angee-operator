@@ -33,10 +33,10 @@ func requireJJ(t *testing.T) {
 // and, since 0.45, a record and the config of every repository it loads too
 // (under $XDG_CONFIG_HOME/jj/repos), so neither the developer's jj or git
 // config reaches the test, and nothing the test runs writes to the
-// developer's. The driver passes HOME and XDG_CONFIG_HOME on to jj; the
-// test's own jj and git commands also get an identity, an empty JJ_CONFIG and
-// empty global git config, and no system git config. Call it before
-// anything runs jj.
+// developer's. The driver passes HOME, XDG_CONFIG_HOME and JJ_CONFIG on to
+// jj, so it reads the empty JJ_CONFIG too and has no identity; the test's own
+// jj and git commands also get an identity, empty global git config, and no
+// system git config. Call it before anything runs jj.
 func isolate(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
@@ -69,8 +69,11 @@ func isolate(t *testing.T) {
 // jj as the primary, and a secondary jj workspace colocated with git at main
 // on that remote. seed is a plain git clone that moves the remote. The
 // repository does not set snapshot.auto-update-stale: the driver passes it.
+// With primaryOnly, the primary stays a plain git clone with no slot.
 type fixture struct {
-	t       *testing.T
+	t *testing.T
+	// root holds everything below; slots the lifecycle tests make go in it.
+	root    string
 	remote  string
 	seed    string
 	primary string
@@ -89,11 +92,16 @@ type fixtureConfig struct {
 	name          string
 	remoteName    string
 	deterministic bool
+	primaryOnly   bool
 }
 
 // deterministic makes jj's ids repeat from run to run: jj's own test
 // settings, a seed per command, and fixed dates for jj and git.
 func deterministic(c *fixtureConfig) { c.deterministic = true }
+
+// primaryOnly leaves the primary a plain git clone, as a source's cache is
+// before EnsurePrimary, with no jj and no slot.
+func primaryOnly(c *fixtureConfig) { c.primaryOnly = true }
 
 // named names the slot's workspace.
 func named(name string) fixtureOption { return func(c *fixtureConfig) { c.name = name } }
@@ -112,6 +120,7 @@ func newFixture(t *testing.T, options ...fixtureOption) *fixture {
 	root := t.TempDir()
 	f := &fixture{
 		t:          t,
+		root:       root,
 		remote:     filepath.Join(root, "remote.git"),
 		seed:       filepath.Join(root, "seed"),
 		primary:    filepath.Join(root, "primary"),
@@ -140,6 +149,9 @@ func newFixture(t *testing.T, options ...fixtureOption) *fixture {
 	f.git(f.seed, "commit", "-q", "-m", "base")
 	f.git(f.seed, "push", "-q", "origin", "HEAD:main")
 	f.git(root, "clone", "-q", "-o", f.remoteName, f.remote, f.primary)
+	if config.primaryOnly {
+		return f
+	}
 	f.jj(f.primary, "git", "init", "--colocate")
 	f.jj(f.primary, "workspace", "add", "--colocate", "--name", f.name, "-r", f.base().String(), f.slot)
 	return f
