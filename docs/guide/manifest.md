@@ -629,11 +629,15 @@ workspaces:
   which snapshots the working copy first, so an edit no jj command has
   recorded yet counts as uncommitted, and a jj slot is never
   `branch-mismatch`. `workspace sync-base` and `workspace source rebase`
-  rebase a jj slot onto its base, and the other slot verbs do not run on a
-  jj slot yet (see [workspace commands](./commands.md#jj-slots)). The verbs
-  that walk a whole workspace (`sync-base`, `workspace push`) act only on
-  slots that name a mode, so a slot that `vcs: jj` alone makes a jj slot,
-  such as a work-state `.work`, is left to the per-slot verbs.
+  rebase a jj slot onto its base; `workspace source publish`, `push` and
+  `workspace push` publish its commits under the slot's `branch`, to the
+  remote git pushes that branch to (the source's `push_default` decides, as
+  for git slots); `merge`, `fetch` and `diff` run on it too. Only `workspace
+  source pull` is refused: jj takes in a base by rebasing onto it (see
+  [workspace commands](./commands.md#jj-slots)). The verbs that walk a whole
+  workspace (`sync-base`, `workspace push`) act only on slots that name a
+  mode, so a slot that `vcs: jj` alone makes a jj slot, such as a work-state
+  `.work`, is left to the per-slot verbs.
 - **Not supported.** angee never makes a jj slot sparse, so files outside
   sparse patterns are not looked at. jj does not record a repository nested
   in a slot (a `git clone` into it, say), so status reads such a slot clean;

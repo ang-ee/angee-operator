@@ -773,12 +773,56 @@ workspace of its source's cache or local store; see
   files for a recorded conflict. `merge-abort`, `rebase-abort` and
   `rebase-continue` are refused with `INVALID_INPUT`: a jj slot never has a
   merge or rebase in progress.
-- The other slot verbs do not run on a jj slot yet: `workspace source
-  fetch`, `pull`, `push`, `diff`, `merge` and `publish`, and `workspace push`
-  over a workspace with a slot whose manifest names mode `jj`, are refused
-  before they touch any slot, with code `INVALID_INPUT` (HTTP 400) and cause
-  `jj_slot_unsupported`. Use jj in the slot meanwhile. `workspace push`, like
-  sync-base, skips a slot that names no mode.
+- `workspace source publish <workspace> <slot> [--remote name] [--branch
+  name]` publishes a jj slot's commits under a branch: `--branch`, else the
+  slot's manifest `branch` (a jj slot is on no branch, so one of them is
+  needed). The remote is `--remote`, else the one git pushes that branch to
+  from the slot, in the order a git slot's publish follows, and is always
+  named to jj. Publish sends the commit under the working copy, `@-`, so the
+  slot must hold nothing uncommitted: changes in its working-copy commit are
+  refused with `uncommitted_changes` and jj's command that commits them, and
+  untracked paths with `untracked_paths`. The commits it sends are those
+  since the branch on the remote, else since the base; with none, publish
+  answers `ok` with `nothing to publish` and pushes nothing. Of those the
+  remote does not hold yet, one with conflicts or with no description is
+  refused before anything changes, naming each, with code
+  `PRECONDITION_FAILED` and cause `conflicted_commits` or
+  `undescribed_commits`, since jj would refuse to push it. Otherwise publish
+  runs `jj bookmark set <branch> -r @-` and `jj git push --remote <remote>
+  --bookmark <branch>`; the canonical remote and a branch the remote's
+  `branches` refuse are refused first, as for a git slot, and so, with
+  `INVALID_INPUT`, is a branch that is not the slot's to set: one a git
+  worktree of the same source has checked out, which moving it would leave
+  on no branch, and one the remote has that this repository does not track
+  (someone else's), which jj would not push over. A working-copy commit with
+  two parents has no one commit to publish (`PRECONDITION_FAILED`), and a
+  slot that moved while its publish was checked is a `CONFLICT` to retry.
+  Any other refusal (jj's lease, a remote's hook) fails with jj's own words,
+  with cause `push_failed`.
+- A publish of a branch a rebase rewrote, such as after `sync-base`,
+  force-updates the remote branch with jj's lease, which refuses when the
+  remote branch moved since the slot last fetched it.
+- `workspace source push` and `workspace push` publish a jj slot to its
+  default remote, under `--ref` when given, else the slot's branch, and
+  leave alone a slot with nothing to send; one with commits and no branch is
+  refused with cause `detached_head`, pointing at publish. `workspace push`
+  walks the slots whose manifest names a mode (`worktree`, `clone`, `jj`),
+  checks and plans every one before it pushes any, and skips a slot that
+  names none, even a jj slot under `vcs: jj`.
+- `workspace source merge <workspace> <slot> <ref>` merges `ref`, in jj's
+  spelling, into a jj slot: `jj new @- <ref> -m "Merge <ref>"`, then `jj
+  new`, so the merge is the commit under a fresh working copy and the next
+  publish sends it. It refuses what the working copy holds, as publish does,
+  and makes no merge of a ref the slot already holds. A conflict is recorded
+  in the merge commit and answered as `ok` and `conflicted`.
+- `workspace source fetch` fetches every remote into a jj slot's repository
+  (`jj git fetch --all-remotes` in the slot), but never into a `kind: local`
+  store (`INVALID_INPUT`), and `workspace source diff` diffs its
+  working-copy commit, or, with `--ref` in jj's spelling, the commit under
+  it against that ref.
+- `workspace source pull` is refused for a jj slot with `INVALID_INPUT` and
+  cause `jj_slot_unsupported`: jj takes in a base by rebasing onto it, so
+  the hint names `workspace sync-base`, and the slot's own fetch and rebase.
 
 ### Workspace preflight
 
