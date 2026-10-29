@@ -1121,3 +1121,42 @@ func TestWorktrees(t *testing.T) {
 		t.Fatalf("Worktrees() = %#v, want %#v", got, want)
 	}
 }
+
+// ChangedPaths lists changes to tracked files alone, and OtherPaths what git
+// does not track, the tops of untracked directories as one entry each, with
+// or without the ignored ones.
+func TestChangedAndOtherPaths(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q", "--initial-branch=main")
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	runGit(t, repo, "config", "user.name", "test")
+	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(repo, ".gitignore"), "*.log\nnode_modules/\n")
+	mustWriteFile(t, filepath.Join(repo, "src", "a.txt"), "a\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-q", "-m", "base")
+	for name, content := range map[string]string{"src/a.txt": "changed\n", "src/debug.log": "log\n", "notes.txt": "n\n"} {
+		mustWriteFile(t, filepath.Join(repo, name), content)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(repo, "node_modules", "pkg", "i.js"), "x\n")
+	client := New()
+	if got, err := client.ChangedPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"src/a.txt"}) {
+		t.Errorf("ChangedPaths() = %q, %v, want src/a.txt alone", got, err)
+	}
+	if got, err := client.OtherPaths(ctx, repo, true); err != nil || !slices.Equal(got, []string{"node_modules/", "notes.txt", "src/debug.log"}) {
+		t.Errorf("OtherPaths(ignored) = %q, %v", got, err)
+	}
+	if got, err := client.OtherPaths(ctx, repo, false); err != nil || !slices.Equal(got, []string{"notes.txt"}) {
+		t.Errorf("OtherPaths() = %q, %v", got, err)
+	}
+	head, err := client.Commit(ctx, repo, "HEAD")
+	if err != nil || len(head) != 40 {
+		t.Errorf("Commit(HEAD) = %q, %v", head, err)
+	}
+}

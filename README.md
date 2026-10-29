@@ -25,7 +25,7 @@ REST + GraphQL:
 | **Job** | `jobs`, `jobRun`. |
 | **Source** | `sources`, `sourceFetch`, **`sourcePull`** (= update from upstream), `sourcePush`, `sourceDiff`. |
 | **Workspace** (file primitive — never starts services) | `workspaces`, `workspaceCreate`, `workspaceCreatePreflight` (validate without rendering), `workspaceUpdate`, `workspaceStatus`, `workspaceDestroy`, `workspaceGit`, `workspacePush`, **`workspaceSyncBase`** (= multi-slot update against base). |
-| **Workspace source slot** (one git materialization inside a workspace) | `workspaceSourceFetch`, **`workspaceSourcePull`** (= slot-level update), `workspaceSourcePush`, `workspaceSourceMerge`/`Rebase`/`MergeAbort`/`RebaseAbort`/`RebaseContinue`/`Publish`, `workspaceSourceDiff`. |
+| **Workspace source slot** (one git materialization inside a workspace) | `workspaceSourceFetch`, **`workspaceSourcePull`** (= slot-level update), `workspaceSourcePush`, `workspaceSourceMerge`/`Rebase`/`MergeAbort`/`RebaseAbort`/`RebaseContinue`/`Publish`/`Migrate`, `workspaceSourceDiff`. |
 | **GitOps topology** (derived view: sources × slots) | `gitOpsTopology(withCommits: Int)` snapshot; `onGitOpsTopologyChange` live. |
 | **Templates** (discoverable Copier templates) | `templates`, `template(ref)`. |
 | **Secrets** (env-file or OpenBao backend) | `secrets`, `secret(name)`, `secretValue(name)` (privileged value-read), `secretSet`, `secretDelete`. |

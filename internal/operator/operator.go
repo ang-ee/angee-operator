@@ -253,6 +253,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase-abort", s.auth(http.HandlerFunc(s.workspaceSourceRebaseAbort)))
 	mux.Handle("POST /workspaces/{name}/sources/{slot}/rebase-continue", s.auth(http.HandlerFunc(s.workspaceSourceRebaseContinue)))
 	mux.Handle("POST /workspaces/{name}/sources/{slot}/publish", s.auth(http.HandlerFunc(s.workspaceSourcePublish)))
+	mux.Handle("POST /workspaces/{name}/sources/{slot}/migrate", s.auth(http.HandlerFunc(s.workspaceSourceMigrate)))
 	mux.Handle("GET /templates", s.auth(http.HandlerFunc(s.templates)))
 	mux.Handle("GET /templates/{ref...}", s.auth(http.HandlerFunc(s.template)))
 	mux.Handle("POST /tokens/mint", s.auth(http.HandlerFunc(s.mintConnectionToken)))

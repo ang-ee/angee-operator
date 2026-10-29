@@ -638,7 +638,8 @@ workspaces:
   remote git pushes that branch to (the source's `push_default` decides, as
   for git slots, unless a publish to another remote recorded that one for
   the branch, which it does in a source cache and never in a `kind: local`
-  store); `merge`, `fetch` and `diff` run on it too. `workspace push`
+  store); `merge`, `fetch` and `diff` run on it too, and `workspace source
+  migrate` makes a git worktree of it, or of a worktree a jj slot. `workspace push`
   leaves a jj slot of a `kind: local` store to its own publish. Only `workspace
   source pull` is refused: jj takes in a base by rebasing onto it (see
   [workspace commands](./commands.md#jj-slots)). The verbs that walk a whole
@@ -652,7 +653,10 @@ workspaces:
 
 A slot that names no mode keeps the `vcs` create recorded on it, whatever
 the stack's `vcs` says later: a jj slot stays one, read through jj, and its
-destroy forgets its jj workspace; a clone stays a clone. A slot recorded before angee recorded `vcs` on
+destroy forgets its jj workspace; a clone stays a clone. To move an existing
+slot between a git worktree and a jj slot, use
+[`angee workspace source migrate`](./commands.md#migrating-a-slot), which
+records the slot's new `mode`. A slot recorded before angee recorded `vcs` on
 it (a workspace created with v0.25.0 or earlier) follows the stack's `vcs`,
 existing ones included: before changing the stack's `vcs`, give such a slot
 the `vcs` or `mode` it was created with.

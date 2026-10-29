@@ -189,7 +189,7 @@ func TestReadyForEachVerb(t *testing.T) {
 	run(t, dir, "switch", "-q", "-c", "feature")
 	onBranch := vcs.Slot{Path: dir, Branch: "feature"}
 	offBranch := vcs.Slot{Path: dir, Branch: "other"}
-	all := []vcs.Verb{vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush, vcs.VerbDestroy, vcs.VerbRepair, vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge}
+	all := []vcs.Verb{vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush, vcs.VerbDestroy, vcs.VerbRepair, vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge, vcs.VerbMigrate}
 	for _, verb := range all {
 		if err := d.Ready(ctx, onBranch, verb); err != nil {
 			t.Errorf("Ready(%s) of a clean checkout on its branch error = %v", verb, err)
@@ -226,8 +226,18 @@ func TestReadyForEachVerb(t *testing.T) {
 			}
 		}
 	}
-	if err := d.Ready(ctx, onBranch, "migrate"); !errors.Is(err, vcs.ErrUnsupported) {
-		t.Errorf("Ready(migrate) error = %v, want vcs.ErrUnsupported", err)
+	// Migrate carries untracked files across, so only a tracked change
+	// refuses it.
+	tracked := gitOutput(t, dir, "ls-files")
+	if err := os.WriteFile(filepath.Join(dir, strings.Fields(tracked)[0]), []byte("changed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var uncommitted *vcs.UncommittedError
+	if err := d.Ready(ctx, onBranch, vcs.VerbMigrate); !errors.As(err, &uncommitted) || slices.Contains(uncommitted.Paths, "scratch.txt") || len(uncommitted.Paths) != 1 {
+		t.Errorf("Ready(migrate) with a tracked change error = %v, want that change alone", err)
+	}
+	if err := d.Ready(ctx, onBranch, "squash"); !errors.Is(err, vcs.ErrUnsupported) {
+		t.Errorf("Ready(squash) error = %v, want vcs.ErrUnsupported", err)
 	}
 	for method, want := range map[string]string{vcs.SyncDefault: vcs.SyncMerge, vcs.SyncMerge: vcs.SyncMerge, vcs.SyncRebase: vcs.SyncRebase} {
 		if got, err := d.SyncMethod(method); err != nil || got != want {

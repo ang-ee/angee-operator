@@ -40,6 +40,7 @@ type Platform struct {
 	slotDrivers     func(vcs.Slot) vcs.Driver                   // nil selects slotDriver's default
 	backupLayers    func(vcs.Slot) vcs.BackupLayer              // nil selects backupLayer's default
 	jjProbe         func(context.Context) jjdriver.Capabilities // nil probes this machine (jjdriver.Probe)
+	migrateFault    func(step string) error                     // a test's failure after a migrate step; nil fails none
 	jobOutput       *jobOutputSink
 	interactive     bool
 	backupMu        sync.Mutex

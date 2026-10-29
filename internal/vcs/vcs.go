@@ -159,6 +159,11 @@ const (
 	// VerbRepair is repair's check of a checkout it has just made: that the
 	// verbs after it can run there.
 	VerbRepair Verb = "repair"
+	// VerbMigrate is migrate: making the checkout another kind of checkout of
+	// the same primary (a git worktree a jj slot, or back), carrying across
+	// what it does not track. Only what its commits hold is checked out
+	// again, so the work in it must be committed.
+	VerbMigrate Verb = "migrate"
 )
 
 // BranchMismatchError is returned by Driver.Ready when the checkout is not on

@@ -6,6 +6,39 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **`angee workspace source migrate <workspace> <slot> [--to jj|worktree]`
+  moves a slot between a git worktree and a jj slot** of its source's cache
+  (phase 9 of `.agents/plans/jj-native-operator.md`), with REST `POST
+  /workspaces/{name}/sources/{slot}/migrate` (`{"to": ...}`), the GraphQL
+  mutation `workspaceSourceMigrate(workspace, slot, to)` and the remote
+  client. Without `--to` the slot becomes the other of the two.
+  - It keeps the slot's commits and every file it holds that neither
+    tracks, which `git worktree remove` would delete (`node_modules`,
+    `.venv`, `.env`): the slot is renamed aside in its own directory, its
+    git registration repaired to follow it, the new checkout made at its
+    path on the same commit, and the untracked and ignored entries renamed
+    into it, before the manifest records the new `mode` and the old
+    checkout, and only its own git registration, are removed. A jj slot's
+    workspace is forgotten; a worktree's cache is colocated with jj first.
+  - To jj, the worktree must be on its branch with no changes to tracked
+    files, and the jj slot starts on that branch's bookmark, named as
+    `workspace create` names one. Untracked files git did not ignore become
+    changes in the jj slot's working-copy commit, as jj records every file
+    it does not ignore; the result's message lists them.
+  - To a worktree, the jj slot's working copy must hold nothing (no
+    changes, no files jj does not track, `untracked_paths`) over a commit
+    that is not conflicted. Its branch is set on that commit, created or
+    moved forward, but not past commits the slot does not hold
+    (`branch_moved`), and the worktree is cut on it, or detached at the
+    commit for a slot on no branch.
+  - A failure before the manifest is written rolls back in reverse, leaving
+    the slot the checkout it was; a failure in the clean-up after it is a
+    warning in the message, with the command that finishes it. A slot at
+    the workspace's root, or with other slots inside it, and a `kind:
+    local` source's slot, are refused.
+
 ### Fixed
 
 - **Changing a stack's `vcs` no longer changes what its existing slots

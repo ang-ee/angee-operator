@@ -15,7 +15,9 @@ import (
 // uncommitted changes, which a merge or rebase would mix into the base's and
 // a push would leave behind. Destroy, and repair's check of a slot it made,
 // need only the branch: the destroy guard reads what the checkout holds from
-// Status. A slot's own rebase, publish and merge need nothing: git refuses a
+// Status. Migrate needs the branch and no changes to tracked files, since
+// the new checkout is cut from the branch and only what git does not track is
+// carried across. A slot's own rebase, publish and merge need nothing: git refuses a
 // rebase over uncommitted changes, and a merge that would overwrite one,
 // itself, and publish pushes what is committed, creating the branch on a
 // detached HEAD.
@@ -35,6 +37,20 @@ func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 		return nil
 	case vcs.VerbDestroy, vcs.VerbRepair:
 		return d.onBranch(ctx, s)
+	case vcs.VerbMigrate:
+		// The new checkout is cut from the branch, and what git does not track
+		// is carried across, so only changes to tracked files would be lost.
+		if err := d.onBranch(ctx, s); err != nil {
+			return err
+		}
+		paths, err := d.git.ChangedPaths(ctx, s.Path)
+		if err != nil {
+			return err
+		}
+		if len(paths) > 0 {
+			return &vcs.UncommittedError{Paths: paths}
+		}
+		return nil
 	case vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge:
 		return nil
 	}

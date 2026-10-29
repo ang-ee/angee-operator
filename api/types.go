@@ -620,6 +620,13 @@ type WorkspaceSourceGitOpRequest struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// WorkspaceSourceMigrateRequest is the body of `POST
+// /workspaces/{name}/sources/{slot}/migrate`: the mode to move the slot to,
+// "jj" or "worktree"; empty moves it to the other of the two.
+type WorkspaceSourceMigrateRequest struct {
+	To string `json:"to,omitempty"`
+}
+
 // MintConnectionTokenRequest is the body for `POST /tokens/mint`.
 // `Actor` is required and becomes the `sub` claim; `Scope` is the optional
 // capability set carried on the operator-API token; `TTL` is a Go duration

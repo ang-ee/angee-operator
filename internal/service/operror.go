@@ -528,6 +528,12 @@ func toolFailure(err error, step gitStep) error {
 // repository's own, else, when that is conflicted, the stray commits
 // themselves. Nothing is pushed. It is nil for any other error.
 func branchMoved(err error, workspaceName, slot, source string) *OperationError {
+	return branchMovedRefusal(err, workspaceName, slot, source, "pushed", "which pushing would drop")
+}
+
+// branchMovedRefusal is branchMoved for a verb, done, that the moved branch
+// stops, with what the verb would do to the stray commits.
+func branchMovedRefusal(err error, workspaceName, slot, source, done, consequence string) *OperationError {
 	var moved *vcs.BranchMovedError
 	if !errors.As(err, &moved) {
 		return nil
@@ -552,7 +558,7 @@ func branchMoved(err error, workspaceName, slot, source string) *OperationError 
 		Slot:      slot,
 		Source:    source,
 		Hint:      hint,
-		Summary:   fmt.Sprintf("source slot %q was not pushed: %v, which pushing would drop. %s", slot, moved, hint),
+		Summary:   fmt.Sprintf("source slot %q was not %s: %v, %s. %s", slot, done, moved, consequence, hint),
 		Err:       err,
 	}
 }

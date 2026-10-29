@@ -172,7 +172,59 @@ func (e *CommandError) Unwrap() error { return e.Err }
 // DirtyPaths lists the paths `git status` reports as changed, staged or
 // untracked in the checkout at dir, in its order. A rename lists its new path.
 func (c Client) DirtyPaths(ctx context.Context, dir string) ([]string, error) {
-	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	return c.statusPaths(ctx, dir, "--untracked-files=all")
+}
+
+// ChangedPaths lists the paths `git status` reports as changed or staged in
+// the checkout at dir, leaving out untracked and ignored files, in its order.
+// A rename lists its new path.
+func (c Client) ChangedPaths(ctx context.Context, dir string) ([]string, error) {
+	return c.statusPaths(ctx, dir, "--untracked-files=no")
+}
+
+// OtherPaths lists what the checkout at dir holds that git does not track:
+// with ignored, every untracked and ignored entry, else the untracked ones
+// that are not ignored. A directory git tracks nothing in is one entry,
+// ending in "/", as `git ls-files --others --directory` lists it, so the
+// entries are the tops of what git does not track. An empty directory is
+// listed too.
+func (c Client) OtherPaths(ctx context.Context, dir string, ignored bool) ([]string, error) {
+	args := []string{"ls-files", "--others", "--directory", "-z"}
+	if !ignored {
+		args = append(args, "--exclude-standard")
+	}
+	out, err := c.runStdout(ctx, dir, stdoutLimit, args...)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// Commit returns the full id of the commit ref names in the repository at
+// dir.
+func (c Client) Commit(ctx context.Context, dir, ref string) (string, error) {
+	return c.runText(ctx, dir, "rev-parse", "--verify", EndOfOptions, ref+"^{commit}")
+}
+
+// WorktreeRepair points repoDir's registrations of the worktrees at paths,
+// moved there, back at them, and their .git files at repoDir (`git worktree
+// repair`), so git does not take them for worktrees whose checkout is gone.
+// relative says how the links are written: relative, as jj writes a jj
+// slot's, or absolute, as the git driver writes a worktree slot's
+// (worktreeAdd), so a repaired checkout keeps the links it had.
+func (c Client) WorktreeRepair(ctx context.Context, repoDir string, relative bool, paths ...string) error {
+	_, err := c.Run(ctx, repoDir, append([]string{"-c", fmt.Sprintf("worktree.useRelativePaths=%t", relative), "worktree", "repair", EndOfOptions}, paths...)...)
+	return err
+}
+
+func (c Client) statusPaths(ctx context.Context, dir, untracked string) ([]string, error) {
+	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", untracked)
 	if err != nil {
 		return nil, err
 	}

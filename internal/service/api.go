@@ -158,6 +158,10 @@ type WorkspaceSourceAPI interface {
 	WorkspaceSourceRebaseAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error)
 	WorkspaceSourceRebaseContinue(ctx context.Context, workspace, slot string) (api.GitOpResult, error)
 	WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error)
+	// WorkspaceSourceMigrate moves a slot between a git worktree and a jj
+	// slot of its source's cache; to is "jj" or "worktree", empty for the
+	// other of the two. The result's Source is the slot's status after it.
+	WorkspaceSourceMigrate(ctx context.Context, workspace, slot, to string) (api.GitOpResult, error)
 }
 
 // GitOpsAPI covers the aggregate sources/workspaces topology view.

@@ -284,6 +284,12 @@ type Mutation {
 	workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
 	workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
 	workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
+	"""
+	Move a slot between a git worktree and a jj slot of its source's cache,
+	carrying across what neither tracks. `to` is "jj" or "worktree"; omitted,
+	the other of the two. The result's `source` is the slot after it.
+	"""
+	workspaceSourceMigrate(workspace: String!, slot: String!, to: String): GitOpResult!
 	insert_secrets_one(object: secrets_insert_input!): SecretRef
 	update_secrets_by_pk(pk_columns: secrets_pk_columns_input!, _set: secrets_set_input!): SecretRef
 	delete_secrets_by_pk(id: String!): SecretRef
