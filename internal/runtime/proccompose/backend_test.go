@@ -1329,10 +1329,10 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 		t.Fatalf("args = %v, want %v", runner.args, wantArgs)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "worker", Runtime: "local", State: "restarting", ExitCode: intPointer(1), Restarts: 3, Generation: "3:<nil>:<nil>"},
+		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "worker", Runtime: "local", State: "restarting", ExitCode: intPointer(1), Restarts: 3, Generation: "0:3:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -1684,7 +1684,7 @@ func TestBackendStatusParsesProcessListWithANSIBanner(t *testing.T) {
 		t.Fatalf("Status() error = %v", err)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -1703,7 +1703,7 @@ func TestBackendStatusIncludesNativeGeneration(t *testing.T) {
 	if len(got) != 1 || got[0].ExitCode == nil || *got[0].ExitCode != 0 {
 		t.Fatalf("statuses = %#v, want completed zero-exit process", got)
 	}
-	wantGeneration := "2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
+	wantGeneration := "0:2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
 	if got[0].Generation != wantGeneration {
 		t.Fatalf("generation = %q, want %q", got[0].Generation, wantGeneration)
 	}
@@ -2624,5 +2624,58 @@ func TestStopDoesNotTreatControlPlaneFailureAsAbsence(t *testing.T) {
 	}
 	if len(runner.args) != 0 {
 		t.Fatalf("command after failed state read: %v", runner.args)
+	}
+}
+
+func TestProtectedApplyRefusesNewServiceWithoutProjectReplacement(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"held": {Status: "Completed"}})
+	port := project.serve(t)
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"new": {Command: "new"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (Backend{Runner: project}).Apply(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"new"}, Configuration: document, ProtectStopped: true, DependenciesSatisfied: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot register service") {
+		t.Fatalf("Apply = %v", err)
+	}
+	if writes := project.writes(); len(writes) != 0 {
+		t.Fatalf("unsafe project write: %v", writes)
+	}
+}
+
+func TestApplyOmitsPrerequisitesAlreadySatisfiedByOperation(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Completed"}})
+	port := project.serve(t)
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"web": {Command: "web", DependsOn: map[string]ProcessDependency{"isolated-job": {Condition: "process_completed_successfully"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (Backend{Runner: project}).Apply(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web"}, Configuration: document, DependenciesSatisfied: true}); err != nil {
+		t.Fatal(err)
+	}
+	project.mu.Lock()
+	dependencies := project.processes["web"].config["dependsOn"]
+	project.mu.Unlock()
+	if dependencies != nil {
+		t.Fatalf("native service still waits for isolated prerequisite: %#v", dependencies)
+	}
+}
+
+func TestNativeGenerationChangesOnManualRestartPID(t *testing.T) {
+	runner := &stubListRunner{output: []byte(`[{"name":"job","status":"Completed","pid":100,"exit_code":0}]`)}
+	backend := Backend{Runner: runner}
+	before, err := backend.Status(t.Context(), runtime.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.output = []byte(`[{"name":"job","status":"Completed","pid":101,"exit_code":0}]`)
+	after, err := backend.Status(t.Context(), runtime.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[0].Generation == after[0].Generation {
+		t.Fatal("manual restart reused native generation despite changed PID")
 	}
 }

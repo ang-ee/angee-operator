@@ -13,6 +13,9 @@ latest tag.
   selected jobs succeed; a plain run leaves held services stopped. Operation
   nodes report partial stop failures and held outcomes. Failures and cancellation
   retain holds, including restoring a hold after a failed service recovery.
+  Local held jobs use isolated native execution, with per-node durable status and
+  output for logs and prerequisites; newer native generations take precedence.
+  Unsafe hot registration of recovery services fails without a project rewrite.
 
 - **Status reports a jj slot's conflicts, change id and base, and the
   topology lists a source's jj workspaces** (phase 7 of

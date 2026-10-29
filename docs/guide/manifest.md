@@ -428,6 +428,26 @@ A failed stop prevents all commands and recovery; services that stopped
 successfully remain stopped. Job failure or cancellation also leaves the held
 services stopped. If recovery fails after resuming a held service, the operator
 stops that service again; any failure to restore a hold is reported explicitly.
+Local jobs selected by a held operation run through the native isolated
+foreground lifecycle; adding a job never rewrites the shared process-compose
+project. The existing operation receipt retains each job's bounded, redacted
+output, exit code when available, status and pre-run native generation. Status,
+logs and prerequisite checks use that attempt until a newer native job generation
+exists. Ordinary supervisor-backed runs keep their native behavior.
+
+`job logs` reads isolated output from the durable receipt, including after an
+operator restart. `--follow` waits for the selected attempt's buffered output;
+it closes after that attempt ends. Local full log files remain at their declared
+`run/logs/<name>.log` paths. Failed or interrupted attempts cannot satisfy a
+later job's prerequisites.
+
+Recovery only applies already loaded local services. Adding a new service while
+holds are active fails explicitly: process-compose's whole-project registration
+can relaunch other stopped services. Load declared services through an ordinary
+supervisor restart before retrying the job chain. Any held services already
+resumed before this refusal are stopped again. Ordinary startup still uses the
+native `up` lifecycle.
+
 Operation service nodes report `held stopped`, a failed stop, or a successful
 resume through their existing status and message fields, including partial
 stop outcomes. A successful plain run can therefore contain a successful

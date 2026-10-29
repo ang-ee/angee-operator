@@ -571,6 +571,15 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		Workspaces: map[string]api.WorkspaceRef{},
 	}
 	runtimeStates := p.runtimeServiceStates(ctx, stack)
+	attempts, err := p.latestJobAttempts(ctx)
+	if err != nil {
+		return api.StackStatusResponse{}, err
+	}
+	for name, attempt := range attempts {
+		if job, exists := stack.Jobs[name]; exists && attempt.owns(runtimeStates[name]) {
+			runtimeStates[name] = attempt.runtimeState(name, string(job.Runtime))
+		}
+	}
 	outcomes := stackOutcomes(stack, runtimeStates)
 	for _, name := range sortedKeys(stack.Services) {
 		service := stack.Services[name]
@@ -606,6 +615,9 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 			if startFailed(observed) {
 				state.Reason = couldNotStart
 			}
+		}
+		if attempt, exists := attempts[name]; exists && attempt.owns(observed) && attempt.node.Message != "" {
+			state.Reason = attempt.node.Message
 		}
 		resp.Jobs[name] = state
 		countOutcome(&resp.Summary.Jobs, outcomes[name])

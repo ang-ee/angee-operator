@@ -128,8 +128,7 @@ type ServiceState struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// Job status values. They describe the latest run the runtime backend holds,
-// which lasts as long as its process-compose supervisor or compose container.
+// Job status values describe the latest native run or isolated operation attempt.
 const (
 	// JobNeverRun means the runtime holds no run: the stack is down, or the
 	// job has not run since the runtime came up.
@@ -189,6 +188,13 @@ type JobRunNode struct {
 	Kind    string       `json:"kind"`
 	Status  JobRunStatus `json:"status"`
 	Message string       `json:"message,omitempty"`
+	// Isolated attempts are owned by this receipt, not shared supervisor state.
+	Isolated bool `json:"isolated,omitempty"`
+	// RuntimeGeneration is the native job generation before isolated execution.
+	// A different subsequent native generation takes precedence over this attempt.
+	RuntimeGeneration string `json:"runtime_generation,omitempty"`
+	Output            string `json:"output,omitempty"`
+	ExitCode          *int   `json:"exit_code,omitempty"`
 }
 
 type JobRunOperation struct {

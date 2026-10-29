@@ -14,10 +14,16 @@ import (
 const GracefulWaitDelay = 10 * time.Second
 
 type Target struct {
-	Root     string
-	Services []string
-	Build    bool
-	EnvFile  string
+	// DependenciesSatisfied means the caller has already ordered and checked
+	// the target's prerequisites; applying it must not wait on them again.
+	DependenciesSatisfied bool
+	// ProtectStopped forbids project-wide updates that could relaunch stopped
+	// processes while applying this target.
+	ProtectStopped bool
+	Root           string
+	Services       []string
+	Build          bool
+	EnvFile        string
 	// Attached, when set on a foreground Up, keeps the supervisor in the
 	// foreground streaming logs instead of detaching (`docker compose up`
 	// without `-d`). Used by `angee dev` so container logs interleave with
@@ -134,8 +140,8 @@ type Backend interface {
 	Status(ctx context.Context, req StatusRequest) ([]ServiceStatus, error)
 }
 
-// JobBackend executes a declared one-shot workload as a runtime-managed
-// instance, preserving terminal state for native dependency conditions.
+// JobBackend executes a declared one-shot workload. Shared attempts retain
+// native terminal state; transient attempts return evidence to the caller receipt.
 type JobBackend interface {
 	RunJob(ctx context.Context, target Target, job JobSpec) ([]byte, error)
 }

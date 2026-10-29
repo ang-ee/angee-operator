@@ -903,7 +903,7 @@ func (p *Platform) executeBackup(ctx context.Context, req api.BackupRequest, res
 					return fmt.Errorf("capture prerequisite %q is not ready", dependency)
 				}
 			}
-			out, runErr := p.runJob(ctx, stack, compiled, resource.job)
+			out, runErr := p.runJob(ctx, stack, compiled, resource.job, false)
 			p.updateJobRun(id, func(o *api.JobRunOperation) {
 				o.Output = appendCaptureOutput(o.Output, resource.Group+"/"+resource.Name, out)
 			})

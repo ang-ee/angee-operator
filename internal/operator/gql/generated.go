@@ -172,10 +172,13 @@ type ComplexityRoot struct {
 	}
 
 	JobRunNode struct {
-		Kind    func(childComplexity int) int
-		Message func(childComplexity int) int
-		Name    func(childComplexity int) int
-		Status  func(childComplexity int) int
+		ExitCode func(childComplexity int) int
+		Isolated func(childComplexity int) int
+		Kind     func(childComplexity int) int
+		Message  func(childComplexity int) int
+		Name     func(childComplexity int) int
+		Output   func(childComplexity int) int
+		Status   func(childComplexity int) int
 	}
 
 	JobRunOperation struct {
@@ -1386,6 +1389,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.IngressStatus.Type(childComplexity), true
 
+	case "JobRunNode.exitCode":
+		if e.ComplexityRoot.JobRunNode.ExitCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobRunNode.ExitCode(childComplexity), true
+	case "JobRunNode.isolated":
+		if e.ComplexityRoot.JobRunNode.Isolated == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobRunNode.Isolated(childComplexity), true
 	case "JobRunNode.kind":
 		if e.ComplexityRoot.JobRunNode.Kind == nil {
 			break
@@ -1404,6 +1419,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.JobRunNode.Name(childComplexity), true
+	case "JobRunNode.output":
+		if e.ComplexityRoot.JobRunNode.Output == nil {
+			break
+		}
+
+		return e.ComplexityRoot.JobRunNode.Output(childComplexity), true
 	case "JobRunNode.status":
 		if e.ComplexityRoot.JobRunNode.Status == nil {
 			break
@@ -4189,7 +4210,7 @@ scalar Time
 
 enum JobRunStatus { PENDING RUNNING SUCCEEDED FAILED BLOCKED }
 enum JobRunNodeKind { JOB SERVICE BACKUP }
-type JobRunNode { name: String!, kind: JobRunNodeKind!, status: JobRunStatus!, message: String }
+type JobRunNode { name: String!, kind: JobRunNodeKind!, status: JobRunStatus!, message: String, isolated: Boolean!, output: String, exitCode: Int }
 type JobRunOperation { id: ID!, rootJob: String!, chainedRestart: Boolean!, status: JobRunStatus!, currentStep: String, startedAt: Time!, endedAt: Time, nodes: [JobRunNode!]!, output: String, error: String, errorCode: String, errorCause: String }
 type JobRunPreview { jobs: [String!]!, services: [String!]! }
 
@@ -5690,6 +5711,12 @@ func (ec *executionContext) childFields_JobRunNode(ctx context.Context, field gr
 		return ec.fieldContext_JobRunNode_status(ctx, field)
 	case "message":
 		return ec.fieldContext_JobRunNode_message(ctx, field)
+	case "isolated":
+		return ec.fieldContext_JobRunNode_isolated(ctx, field)
+	case "output":
+		return ec.fieldContext_JobRunNode_output(ctx, field)
+	case "exitCode":
+		return ec.fieldContext_JobRunNode_exitCode(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type JobRunNode", field.Name)
 }
@@ -10846,6 +10873,75 @@ func (ec *executionContext) _JobRunNode_message(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_JobRunNode_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("JobRunNode", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _JobRunNode_isolated(ctx context.Context, field graphql.CollectedField, obj *model.JobRunNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobRunNode_isolated(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Isolated, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_JobRunNode_isolated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobRunNode", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _JobRunNode_output(ctx context.Context, field graphql.CollectedField, obj *model.JobRunNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobRunNode_output(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Output, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_JobRunNode_output(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobRunNode", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _JobRunNode_exitCode(ctx context.Context, field graphql.CollectedField, obj *model.JobRunNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_JobRunNode_exitCode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExitCode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_JobRunNode_exitCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("JobRunNode", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _JobRunOperation_id(ctx context.Context, field graphql.CollectedField, obj *model.JobRunOperation) (ret graphql.Marshaler) {
@@ -26056,6 +26152,15 @@ func (ec *executionContext) _JobRunNode(ctx context.Context, sel ast.SelectionSe
 			}
 		case "message":
 			out.Values[i] = ec._JobRunNode_message(ctx, field, obj)
+		case "isolated":
+			out.Values[i] = ec._JobRunNode_isolated(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "output":
+			out.Values[i] = ec._JobRunNode_output(ctx, field, obj)
+		case "exitCode":
+			out.Values[i] = ec._JobRunNode_exitCode(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

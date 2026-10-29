@@ -454,7 +454,8 @@ angee job logs <name> [--follow] [-n <lines>]
 `unknown`. A skipped job, or one whose command could not start, gets a reason
 column. The runtime keeps a run until the stack goes down (the process-compose
 supervisor exits, or the job's container is removed), so after `angee down`
-every job reads `never-run`. `--json` carries `status`, `exit_code` and
+native supervisor jobs read `never-run`. Isolated held-job attempts retain their
+status in durable operation receipts. `--json` carries `status`, `exit_code` and
 `reason`. `job logs` shows the last 200 lines of a job's last run (or `-n`
 lines) for as long as the runtime keeps it. A local job's output is also
 written to `run/logs/<name>.log`.
@@ -474,6 +475,13 @@ all selected jobs must succeed before the held and dependent services are
 reapplied once. Failure or cancellation leaves successfully held services
 stopped. The operation's service-node messages distinguish a stopped hold,
 a failed stop, and a successful resume.
+
+Isolated local job output is retained on the operation's job node. `job logs`
+reads that bounded redacted output after the runtime attempt exits; `--follow`
+waits for the selected attempt to finish. Later ordinary native generations take
+precedence for status, logs and prerequisite checks. Recovery refuses a newly
+added service if registering it would replace the shared project; already resumed
+held services are stopped again before reporting that failure.
 
 ## Sources
 

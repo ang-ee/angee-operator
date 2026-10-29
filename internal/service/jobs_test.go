@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
@@ -804,5 +805,203 @@ func TestCanceledOrdinaryJobGraphTerminatesPendingNodes(t *testing.T) {
 	}
 	if got, want := backend.recordedCalls(), []string{"job:root"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls = %v, want %v", got, want)
+	}
+}
+
+func TestHeldLocalJobsUseIsolatedExecutionAndDurableReaders(t *testing.T) {
+	backend := holdTestBackend()
+	backend.statuses = append(backend.statuses, runtime.ServiceStatus{Name: "root", State: "completed", ExitCode: exitCode(9), Generation: "old-native-run"})
+	isolated := 0
+	backend.beforeJob = func(_ context.Context, spec runtime.JobSpec) {
+		if !spec.Transient {
+			t.Fatalf("held job %s used the shared supervisor", spec.Name)
+		}
+		isolated++
+	}
+	stack := holdTestStack()
+	p, id := newJobOperationPlatform(t, stack, backend, "root", true)
+	p.executeJobRun(t.Context(), id, func() {})
+	if isolated != 3 {
+		t.Fatalf("isolated jobs = %d, want 3", isolated)
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunSucceeded {
+		t.Fatalf("operation = %#v", op)
+	}
+	for _, node := range op.Nodes {
+		if node.Kind == "job" && (!node.Isolated || node.Output != node.Name+" output" || node.ExitCode == nil || *node.ExitCode != 0) {
+			t.Fatalf("attempt = %#v", node)
+		}
+	}
+	// A fresh Platform reads the same durable owner without an auxiliary index.
+	reloaded, err := NewWithBackends(p.root, backend, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := reloaded.LatestJobRun(t.Context())
+	if err != nil || latest == nil || latest.ID != id {
+		t.Fatalf("latest = %#v, %v", latest, err)
+	}
+	status, err := reloaded.StackStatus(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Jobs["root"]; got.Status != api.JobCompleted || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("durable job status = %#v", got)
+	}
+	compiled, err := Compile(stack, p.root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := reloaded.dependencySatisfied(t.Context(), stack, compiled, "root"); err != nil || !ready {
+		t.Fatalf("durable prerequisite = %v, %v", ready, err)
+	}
+	logs, err := reloaded.StackLogs(t.Context(), []string{"root"}, false, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	for chunk := range logs {
+		output.WriteString(chunk)
+	}
+	if output.String() != "root output" {
+		t.Fatalf("durable logs = %q", output.String())
+	}
+	// A later ordinary native generation takes precedence everywhere.
+	backend.statuses[len(backend.statuses)-1] = runtime.ServiceStatus{Name: "root", State: "completed", ExitCode: exitCode(7), Generation: "new-native-run"}
+	status, err = reloaded.StackStatus(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Jobs["root"]; got.Status != api.JobFailed || got.ExitCode == nil || *got.ExitCode != 7 {
+		t.Fatalf("new native status = %#v", got)
+	}
+	if ready, err := reloaded.dependencySatisfied(t.Context(), stack, compiled, "root"); err != nil || ready {
+		t.Fatalf("new native prerequisite = %v, %v", ready, err)
+	}
+	logs, err = reloaded.StackLogs(t.Context(), []string{"root"}, false, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for chunk := range logs {
+		t.Fatalf("stale isolated output used over native reader: %q", chunk)
+	}
+}
+
+func TestIsolatedFailedAndInterruptedAttemptsDoNotSatisfyPrerequisites(t *testing.T) {
+	for _, interrupted := range []bool{false, true} {
+		t.Run(fmt.Sprint(interrupted), func(t *testing.T) {
+			backend := holdTestBackend()
+			backend.statuses = append(backend.statuses, runtime.ServiceStatus{Name: "root", State: "completed", ExitCode: exitCode(0), Generation: "old"})
+			stack := holdTestStack()
+			p, _ := newJobOperationPlatform(t, stack, backend, "root", false)
+			op := api.JobRunOperation{ID: "attempt", StartedAt: time.Now(), RootJob: "root", Status: api.JobRunFailed, Error: "attempt failed", Nodes: []api.JobRunNode{{Name: "root", Kind: "job", Isolated: true, RuntimeGeneration: "old", Status: api.JobRunFailed, Output: "safe failure output"}}}
+			if interrupted {
+				op.Status = api.JobRunRunning
+				op.Nodes[0].Status = api.JobRunRunning
+			}
+			if err := p.persistJobReceipt(op); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := NewWithBackends(p.root, backend, backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := Compile(stack, p.root, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ready, err := reloaded.dependencySatisfied(t.Context(), stack, compiled, "root"); err != nil || ready {
+				t.Fatalf("failed prerequisite = %v, %v", ready, err)
+			}
+			status, err := reloaded.StackStatus(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Jobs["root"].Status != api.JobFailed {
+				t.Fatalf("job = %#v", status.Jobs["root"])
+			}
+		})
+	}
+}
+
+func TestOrdinaryJobRunRetainsNativeExecutionAfterHeldAttempt(t *testing.T) {
+	backend := holdTestBackend()
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", false)
+	p.executeJobRun(t.Context(), id, func() {})
+	stack := holdTestStack()
+	stack.Jobs["ordinary"] = manifest.Job{Runtime: manifest.RuntimeLocal, Command: []string{"ordinary"}, DependsOn: []string{"root"}}
+	if err := manifest.SaveFile(manifest.Path(p.root), stack); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := jobRunNodes(stack, "ordinary", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := Compile(stack, p.root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.beforeJob = func(_ context.Context, job runtime.JobSpec) {
+		if job.Transient {
+			t.Fatal("ordinary run was changed to isolated")
+		}
+	}
+	p.jobRunsMu.Lock()
+	p.rememberJobRun(api.JobRunOperation{ID: "ordinary", RootJob: "ordinary", Nodes: nodes, Status: api.JobRunPending, StartedAt: time.Now()}, stack, compiled)
+	p.jobRunsMu.Unlock()
+	p.executeJobRun(t.Context(), "ordinary", func() {})
+	op, _ := p.JobRunGet(t.Context(), "ordinary")
+	if op.Status != api.JobRunSucceeded {
+		t.Fatalf("operation = %#v", op)
+	}
+}
+
+func TestIsolatedLogsFollowSelectedAttemptAndHonorTail(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, id := newJobOperationPlatform(t, holdTestStack(), holdTestBackend(), "root", false)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		logs, err := p.StackLogs(ctx, []string{"root"}, true, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		p.updateJobRun(id, func(op *api.JobRunOperation) {
+			for i := range op.Nodes {
+				if op.Nodes[i].Name == "root" {
+					op.Nodes[i].Output = "first\nsecond\nthird\n"
+					op.Nodes[i].Status = api.JobRunSucceeded
+				}
+			}
+		})
+		p.jobRunsMu.Lock()
+		p.jobRuns["later"] = api.JobRunOperation{ID: "later", StartedAt: time.Now().Add(time.Second), Nodes: []api.JobRunNode{{Name: "root", Kind: "job", Isolated: true, Status: api.JobRunSucceeded, Output: "unrelated\n"}}}
+		p.jobRunsMu.Unlock()
+		var output strings.Builder
+		for chunk := range logs {
+			output.WriteString(chunk)
+		}
+		if output.String() != "second\nthird\n" {
+			t.Fatalf("follow = %q", output.String())
+		}
+	})
+}
+
+func TestIsolatedReceiptFailurePreventsCommands(t *testing.T) {
+	backend := holdTestBackend()
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+	if err := os.WriteFile(filepath.Join(p.root, "state"), []byte("cannot contain receipts"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p.executeJobRun(t.Context(), id, func() {})
+	for _, call := range backend.recordedCalls() {
+		if strings.HasPrefix(call, "job:") || strings.HasPrefix(call, "service:") {
+			t.Fatalf("command after persistence failure: %v", backend.recordedCalls())
+		}
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunFailed || !strings.Contains(op.Error, "persist job operation") {
+		t.Fatalf("operation = %#v", op)
 	}
 }
