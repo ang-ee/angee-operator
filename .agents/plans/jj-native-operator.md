@@ -44,10 +44,14 @@ workspace act only on slots whose manifest names a mode. Phase 8's first
 half (sync-base and rebase on jj slots, the identity fallback, and the
 preconditions sync-base needs answered per driver) is merged as #143
 (`8ba74d9`). Its second half (publish, push, merge, fetch and diff on jj
-slots, and every slot verb's preconditions answered per driver) is in review
-in the PR that adds "As built: publish, push and merge" to phase 8; with it a
-jj slot does everything a git slot does but migrate (phase 9), and is never
-pulled.
+slots, and every slot verb's preconditions answered per driver) is merged as
+#144 (`999ff61`), and phases 7 and 8 are released in v0.25.0; a jj slot does
+everything a git slot does but migrate, and is never pulled. Phase 9
+(`workspace source migrate`, which moves a slot between a git worktree and a
+jj slot, keeping what neither tracks) is in review in the PR that adds "As
+built" to phase 9, with the phase 6 gap closed by recording, on a slot that
+names no mode, the vcs it was created with, and #144's merge-hint follow-up.
+That leaves phase 11 (templates, docs, live check), the last.
 
 Operator lanes: the angee-operator primary (`~/Work/sources/angee-operator`)
 was jj-colocated on 2026-10-05 at the owner's request. Each new lane is a jj
@@ -171,8 +175,8 @@ entry; and a pass of the `go-code-reviewer` agent.
 5  jj driver package + doctor probe + CI            (after 4; merged in #126 and #131)
 6  mode: jj lifecycle + status, other verbs refuse  (after 5; merged in #140)
 7  status fields and topology                       (after 6; merged in #142)
-8  sync-base, publish, push, merge on jj slots      (after 7; needs 2; sync-base and rebase merged in #143, the rest in review)
-9  ws source migrate                                (after 8)
+8  sync-base, publish, push, merge on jj slots      (after 7; needs 2; merged in #143 and #144)
+9  ws source migrate                                (after 8; in review)
 10 op-heads watch: dropped, slot state is read on demand (Q6)
 11 templates, docs, live check                      (after 8, 9)
 3  link mode: dropped (Q3)  12 automatic sync: not in this plan (Q4)
@@ -2577,6 +2581,312 @@ is a `CONFLICT` naming them. Nothing is destroyed; only names leak. Migrate
 is where a slot changes how it is checked out, so this phase should either
 refuse a `vcs` change while unmoded slots would change kind, or write each
 existing slot's effective mode into the record when `vcs` changes.
+
+**As built (2026-10-29).** Six commits, after a merge of main for the
+v0.25.0 cut: the merge-hint follow-up from the review of #144, a fix it led
+to (a second remote), the phase 6 gap, the verb, `stack update` taking a
+template's `vcs`, which the gap's fix made safe, and the fixes from the
+`go-code-reviewer` pass; then this record.
+
+- **The verb.** `Platform.WorkspaceSourceMigrate(ctx, workspace, slot, to)`
+  (`service/migrate.go`), with `angee workspace source migrate <ws> <slot>
+  [--to jj|worktree]`, `POST /workspaces/{name}/sources/{slot}/migrate`
+  (`{"to": ...}`, decoded strictly, so a misspelled field is a 400 rather than
+  the default direction), the mutation `workspaceSourceMigrate(workspace,
+  slot, to): GitOpResult!`, `RemoteClient.WorkspaceSourceMigrate` and a row
+  in `docs/reference/surfaces.md`. `to` empty is the other of worktree and
+  jj; a slot already in that mode is left as it is (`ok`, "nothing to
+  migrate"). It returns the existing `GitOpResult`, whose `source` is the
+  slot's status after it and whose `message` says what was carried, which
+  untracked files became jj changes, and any clean-up left undone; no new
+  DTO. It takes the workspace mutation lease and the parent stack
+  transaction, as destroy does, and the cache's lock (D9) around everything
+  that changes a registration, rollback and clean-up included. Every refusal
+  of the plan and of the preconditions comes before anything is touched;
+  one found again after the set-aside (a slot changed meanwhile) rolls back.
+- **Refused by the plan of it** (`planMigration`, `INVALID_INPUT`): a `to`
+  other than `jj` or `worktree`; a slot of a `kind: local` source (its
+  worktree mode is a link, and angee never changes a user's store); a slot
+  whose effective mode is neither (a clone or a link); and, a departure, a
+  slot at the workspace's root (`subpath: .`) or one other slots lie inside
+  (`nestedSlots`): setting it aside would move the workspace's rendered
+  files or the nested slots with it, breaking their registrations.
+- **Worktree to jj, steps 1 to 6.**
+  1. `vcs.VerbMigrate` (new): the git driver's `Ready` needs the branch, when
+     the slot names one, and no changes to tracked files
+     (`git.Client.ChangedPaths`, `status --untracked-files=no`): what git
+     does not track is carried. Refusals in `readinessRefusal`'s words
+     (`branch_mismatch`, `uncommitted_changes`). A slot that names no branch
+     is made at its base by the jj driver, so its HEAD must hold no commits
+     beyond jj's base (`ref@remote`, else the local ref, as
+     `baseCandidates` orders them; git's own start order is the reverse),
+     else `PRECONDITION_FAILED`, cause `detached_head` (a departure: the
+     plan assumed a branch). Then `checkJJPrimary`, and the jj name, which
+     `jjWorkspaceNames` computes over the workspace's sources with this
+     slot as jj (Q2: `--<slot>` when another jj slot of the same cache
+     exists, whose own computed name then drifts, as phase 6 allows for).
+  2. Under the lock: `EnsurePrimary`, `jj git import` (`jjdriver.Import`),
+     and a name already taken is the phase 6 `CONFLICT` (`jjNameTaken`),
+     never reclaimed.
+  3. The slot is set aside in its own parent through its guard
+     (`copierx.GuardedPath.SetAside`, a private `.angee-migrate-<hex>` name,
+     identity checked; the returned `copierx.Aside` checks it again, by the
+     parent's root and the public path, before every use), after the
+     migrate's record is written (below), and the slot's own registration
+     pointed at the aside (`gitdriver.RepointRegistration`, the git driver's
+     `repairRegistration` for one worktree, keeping its link relative, as jj
+     writes a jj slot's, or absolute, as the git driver writes a worktree
+     slot's). Not `git worktree repair`, as the plan said: the review found
+     it rewrites every worktree of the cache (to relative links under
+     `worktree.useRelativePaths`), and fails over any unrelated broken one.
+     **Step 2 is done here, after the rename, not
+     before:** what writes the slot by its path cannot reach the aside, so
+     the tracked-changes check and HEAD are read again there (a change is
+     refused and rolled back; a moved HEAD is a `CONFLICT`), and the
+     entries listed from it: `git ls-files --others --directory -z`
+     (`git.Client.OtherPaths`), and the same with `--exclude-standard` for
+     the message. The entries are the tops of what git does not track,
+     nested ones included (`src/.env`), not only top-level ones.
+  4. `jj.Add` of the slot at its path, as phase 6 does (in place, on the
+     branch's bookmark, else the base). Its `@-` must be the worktree's
+     HEAD (or the base, for a slot on no branch), else the migrate rolls
+     back.
+  5. The entries are renamed into it one by one (`GuardedPath.MoveFromAside`:
+     a rename within the parent's `os.Root`, every directory above the
+     entry checked to be a real one on both sides, never over an entry).
+  6. The manifest records `mode: jj` and drops the slot's `vcs` (step 4
+     below) through the parent stack transaction, which refuses a manifest
+     changed meanwhile.
+
+  **The removal comes after the write, not before** (a departure from step
+  5's order). The aside is read again first (still on its commit, no
+  tracked change, nothing untracked or ignored left), since something whose
+  working directory was in the slot follows it aside (review); otherwise it
+  is kept, and the message says where. It is then removed through its guard
+  (`Aside.RemoveAll`), and its registration alone dropped
+  (`git.Client.DeregisterWorktree`: `git worktree remove --force --force`
+  once nothing is at the path, as the jj driver's `deregister` does), never
+  with `git worktree remove` of a populated directory, which would delete
+  outside the guard, and never with a prune. A failure there is a warning in
+  the message, with the command that finishes it.
+- **Jj to worktree, the mirror.**
+  1. `jjdriver.Ready(VerbMigrate)` is merge's: no changes in `@`
+     (`uncommitted_changes` with jj's commit command), no untracked paths
+     (`untracked_paths`, "migrate leaves out, since no commit holds them"),
+     one parent, and no description on an empty `@` (`describedEmpty`, now
+     naming its verb), which the worktree would leave behind. The slot must
+     be this stack's jj workspace by destroy's rule (`destroyedJJSlot`),
+     else `PRECONDITION_FAILED`.
+  2. Under the lock, `jjdriver.PrepareWorktree`: one snapshot, the same
+     checks again, a conflicted `@-` refused (git would check out jj's
+     conflict files), and for a slot with a branch: not checked out by
+     another git worktree (`checkedOut`; `PRECONDITION_FAILED`, since the
+     branch is the manifest's, not the caller's), and bookmark X on the
+     slot's history: a target off `::@-` is `branch_moved`
+     (`branchMovedRefusal`, the publish refusal with migrate's words, its
+     hint from `mergeableStray`). X is then set on `@-`, created or moved
+     forward (`Handoff{Tip, Branch, Previous, Moved, Resolved}`), which jj
+     exports to git. `RestoreBookmark` undoes it: deleted when it was
+     created (`jj bookmark delete`, which leaves a tracked remote bookmark
+     as a local deletion, as it was), set back with `--allow-backwards`
+     when it was moved, left resolved when it was conflicted between
+     targets all on the slot's history, since jj cannot set a conflict
+     back.
+  3. Set aside and repaired (relative links), then checked again there
+     (`Ready`, and `Tip` against the handoff's), and the entries listed by
+     a walk of the aside through `os.Root`, following no link
+     (`untrackedEntries`): the tops of what `jj file list -r @-`
+     (`TrackedPaths`) does not list, the slot's own `.jj` and `.git` left
+     out. jj refused untracked files already, so these are ignored files,
+     empty directories and nested repositories. Never derived from git's
+     index (section 2).
+  4. The git driver's `Add` of a worktree slot at the path on X (staged and
+     installed, as phase 1 does), or, with no branch, detached at the base
+     and then `git checkout --detach @-` (`CheckoutDetached`), so a jj slot
+     on no branch keeps its own commits as a worktree on no branch holds
+     them (a departure: the plan assumed a branch). HEAD must be `@-`.
+  5. Entries carried, 6. `mode: worktree` written.
+
+  **Then the forget, which cannot come where the plan put it** (found by
+  probe, jj 0.45.1): `jj workspace forget` of a workspace whose recorded
+  path holds a git worktree removes that worktree's registration (and
+  prunes the cache's missing ones), and the recorded path is the slot's,
+  where the new worktree now is. Forgetting before the new worktree is
+  installed works (nothing at the recorded path: jj's record alone
+  changes, probed), but then a rollback must re-add the workspace; `jj op
+  revert` of the forget was probed and restores the name but not jj's path
+  record, which no command rewrites. So the forget is post-commit clean-up
+  (`finishToWorktree`): the change is read from the checkout set aside
+  (`HeldChange`), after the aside is read again as above (still that
+  workspace, `Ready`, its `Tip`, nothing `untrackedEntries` finds; else the
+  aside and the workspace are kept), jj's record must be the slot's path (`Recorded`), the new
+  worktree is set aside for the moment of `ForgetName`, and renamed back
+  (it needs no repair: its registration names the slot's path). Then the
+  old checkout is removed, and its registration dropped, as above. jj
+  abandons the forgotten empty working-copy commit (probed: hidden).
+- **Rollback.** Each step pushes its undo with a line saying what it leaves
+  where (`migration.push`), and `run` undoes them in reverse on a context
+  the request cannot cancel: entries back to the aside, the new checkout
+  removed (jj: `Remove`, which forgets the name with nothing at its
+  recorded path and drops only its registration; git: through the guard,
+  then `deregisterWorktree`), the aside renamed back and repaired, the
+  bookmark restored. **The rollback stops at the first undo that fails**,
+  since the ones after it would delete what it did not put back (removing
+  the new checkout before an entry went back would delete the entry), and
+  fails with its own error (`INTERNAL`, cause `migrate_incomplete`, the
+  aside in `paths`), since the operation's annotation would otherwise
+  report the step's refusal ("left as it was"). A bookmark another
+  workspace moved since is left where it is (`ErrBookmarkMoved`, a
+  warning).
+- **The record of a migrate** (`service/migrate_marker.go`, review): from
+  just before the slot is set aside until it is migrated or rolled back,
+  `run/migrate/<workspace>/<slot>.json` names it. One a killed migrate, or
+  a stopped rollback, leaves makes the slot's status an `error` naming the
+  `.angee-migrate-…` entries beside its path, and the next migrate, repair,
+  destroy (which would purge the aside with the workspace), every slot verb
+  (`workspaceSourceTarget`) and the aggregates (`workspaceGitSlots`) refuse
+  it, `PRECONDITION_FAILED`, cause `migrate_incomplete`, until it is put
+  back and the record deleted.
+- **Review record (`go-code-reviewer`, 2026-10-29).** Three critical, all
+  fixed: a stopped rollback reported as the step's refusal, its aside path
+  dropped (C1, now `migrate_incomplete`); the old checkout removed with what
+  a process inside it wrote after it was listed (C2, now read again and
+  kept); local edits to skip-worktree and assume-unchanged files, which git
+  status does not report, lost (C3, now refused, with git's command that
+  shows them). Warnings taken: `git worktree repair` rewriting other
+  worktrees (W1, `RepointRegistration`); hints that would have run a
+  damaging `jj workspace forget`, a nesting `mv` or a global prune (W2, now
+  the safe sequences); the failed add's global prune (W3); the jj slot
+  accepted on jj's record of its name alone (W4, now `HeldChange` only,
+  `slot_not_held`); submodules, whose repositories the worktree's removal
+  deletes (W5, refused); a killed migrate leaving the slot hidden (W6, the
+  record); the cache colocated before a refusal (W7, the name is checked
+  first when the cache is a jj repository); tests for each (W8).
+  Suggestions taken: the bookmark restore checks it is still where it was
+  set (S1); `deregisterWorktree` moved to `git.Client`, and
+  `WorktreeRemove` puts `--end-of-options` before its path (S3); causes for
+  the two new preconditions (S4); the docs say a hand-edited `vcs` still
+  flips slots created before the record (S5). Not taken: S2's
+  `RENAME_NOREPLACE` (known limit above).
+- **Second review (the same agent, on the fixes).** No critical issue; every
+  fix confirmed. One warning, fixed: a set-aside directory that outlives
+  the record (the new worktree left aside when it could not be moved back
+  after the forget, or an old checkout kept on purpose) was not protected,
+  so `destroy --purge` would delete it. The destroy guard now refuses while
+  any `.angee-migrate-…` entry sits beside a slot (`asidesBeside`), record
+  or not, and a stranded new worktree keeps the record (a fault step,
+  `forgotten`, tests it). Suggestions taken: the skip-worktree fix is two
+  `update-index` calls, since one with both flags clears only the last
+  (probed); `dropRegistrations` no longer falls back to a global prune on
+  any error, it leaves the registration with a warning; the recovery hints
+  name `git -c worktree.useRelativePaths=false … worktree repair`, and the
+  record's refusal includes it (the record keeps the primary); the kept jj
+  checkout's warning names its `git worktree remove`; an error releasing
+  the cache's lock after the manifest is written is a warning, not a
+  failure (`lockReleased`).
+- **Tests** (`service/migrate_test.go`, real jj under `ANGEE_REQUIRE_JJ=1`):
+  both directions on one slot holding a commit, a `.gitignore`, ignored
+  files at its top and below a tracked directory, an empty directory, a
+  nested repository, and, as a worktree, an untracked file and an untracked
+  link (which jj then records): every file survives each way, the commits
+  and branch carry, the message names what became jj changes, no aside, no
+  registration of the old checkout and no jj name are left, and the
+  destroy guard reads the result; an injected failure after each of the
+  four steps, and a manifest changed before the write, in both directions,
+  each leaving the slot intact (files, commit, branch, registrations, jj
+  names, bookmark, status) and a second migrate succeeding; jj's `workspace
+  add` and git's `worktree add` failing for real (a tool on PATH); every
+  refusal (tracked change, off branch, name taken, jj changes, untracked
+  paths, described `@`, conflicted `@-`, bookmark off history, branch
+  checked out elsewhere, a worktree on no branch with work, then at its
+  base, a skip-worktree file with a local edit, a submodule) leaving
+  everything as it was; after the review, a rollback that stops
+  (`migrate_incomplete`, then status, migrate, destroy and repair refusing
+  until the slot is put back by hand, then a migrate), an old checkout
+  written into after its files were carried kept, either way, and another
+  worktree of the cache, with absolute links, and a prunable registration
+  left as they were through a migrate each way and a rollback after jj's
+  and git's add fail; the plan's refusals; an unmoded jj
+  slot (`vcs: jj`) becoming a worktree that names its mode; a jj slot on no
+  branch becoming a detached worktree at its own commit; nothing to do.
+  Operator: the error contract over REST and GraphQL (`untracked_paths`,
+  jj and git `uncommitted_changes`, an unknown `to`, a misspelled body
+  field) and a migrate there and back. Driver: `PrepareWorktree` and
+  `RestoreBookmark` (created, moved, at the tip, no branch, off history,
+  conflicted, resolved), `Tip`, `TrackedPaths`; git's `Ready(migrate)`;
+  `ChangedPaths`, `OtherPaths`, `Commit`; the guard's `SetAside`, moves both
+  ways (a link moved as itself, an existing entry and `..` refused, a link
+  in the way refused), `RestoreAside`, and a swapped aside refused.
+- **Known limits.** Check, then act, as everywhere: a write by a process
+  already inside the slot (its working directory follows the rename) between
+  the aside's last read and its removal is removed with it; the window is
+  one read, and the docs say to stop the slot's services first. Moving an
+  entry checks its target is free, then renames: `os.Root.Rename` cannot
+  refuse to replace (no `RENAME_NOREPLACE`), and follows a link inside the
+  root swapped into a directory above the entry after the check (review,
+  low risk). A migrate killed partway is reported (its record), not undone;
+  the forget's moment, two jj calls, also leaves the new worktree aside.
+  The cache is colocated with jj by a migrate to jj rolled back after the
+  name check, as `EnsurePrimary` is idempotent; a cache with no `.jj` has
+  no name to refuse, so a refusal comes before it.
+- **The git driver's failed worktree add no longer prunes** (review): its
+  clean-up drops the registration of the stage, or of the slot path once
+  repaired, alone (`dropRegistrations`, `git.Client.DeregisterWorktree`,
+  shared with migrate), never pruning: one it cannot drop is left, with a
+  warning, for the next create at that path (second review). This changes
+  every worktree create's failure path, not only migrate's; no
+  characterization test pinned the prune.
+- **The phase 6 gap: recorded, not refused** (owner's suggestion taken).
+  Create records, on each slot that names no mode, the vcs it was cut with
+  (`WorkspaceSource.VCS`, `vcs: git|jj` beside `source:`;
+  `Stack.SlotVCS`), and `EffectiveSourceMode` reads the slot's vcs before
+  the stack's. It is not written into `mode`: Q7 makes the aggregates walk
+  only slots that name a mode, so `mode: jj` on `.work` would put it into
+  `sync-base` and `workspace push`, and a linked local source has no mode
+  to write. A refusal at read time was the alternative; since angee does
+  not own edits to `angee.yaml`, it could only make every existing
+  workspace's status, destroy and verbs fail until each slot was fixed by
+  hand, where the record keeps them working, and the stack's `vcs` stays
+  what the docs say it is, the default for new slots. Validated on load.
+  Repair reads it and writes nothing; migrate writes an explicit `mode` and
+  drops it. **Limit:** a slot recorded before this (v0.24.0 to v0.25.0,
+  only stacks that set `vcs: jj` by hand, since the templates do not render
+  it until phase 11) records none and follows the stack's vcs as before;
+  the docs say to give it its `vcs` or `mode` before changing the stack's.
+  `TestJJSlotThatIsALink` now shows both: a link stays a link after `vcs:
+  jj`, and one with its record removed is the old error.
+- **`stack update --template` takes the template's `vcs`** (found by the
+  angee-django templates lane, ang-ee/angee-django#409, whose README told
+  users to set `vcs` by hand because `mergeStackFromTemplate` kept the
+  manifest's). With the record, a `vcs` change no longer moves existing
+  slots, so `vcs` is now template-origin when the render names one (a
+  template that renders none keeps the manifest's), and when the merge
+  changes it, every existing slot that names no mode and records no vcs is
+  given the old one (`pinSlotVCS`), so the one gap the record leaves, slots
+  recorded before it, closes on the first update that would have hit it.
+  The summary reports `~ vcs`. A hand-set `vcs` is now replaced by the
+  template's answer on the next update, as a hand-edited source is, so
+  #409's README should say to answer the template's `vcs` input instead.
+- **The hint fix (review of #144), its own commit.** `ownBranch`'s refusal
+  of a bookmark off the slot's history now names, in
+  `vcs.BranchMovedError`, what the slot can merge as one commit holding
+  the strays (`mergeableStray`): X@R when R's branch holds them (as
+  before), else X when it is not conflicted, else X on another remote
+  whose branch holds them (sorted, single-target only), else the stray
+  heads by commit id (`BranchMovedError.Heads`, `heads()` in the revset
+  builder). `branchMoved` words each (`TestBranchMovedHintNamesWhatToMerge`).
+  The driver test runs the reported order (publish to origin, sync-base,
+  a collaborator's push, a fetch, publish to a second remote) and the
+  hint's merge, then the publish; another builds a conflicted bookmark no
+  remote holds (two concurrent jj operations) and merges its stray head by
+  id.
+- **Found on the way, its own commit: a branch already on one remote did
+  not publish to another.** jj 0.45 refuses to create a remote bookmark for
+  a bookmark that tracks another remote but not that one ("Refusing to
+  create new remote bookmark X@R"; probed), so the hint's remedy ended in
+  `push_failed` too, after the bookmark was set. `PreparePublish` now tracks
+  X on R when R has no X@R (`trackNew`); an X@R that exists is left alone,
+  since `PlanPublish` refuses an untracked one.
 
 ### Phase 10. Op-heads watch
 
