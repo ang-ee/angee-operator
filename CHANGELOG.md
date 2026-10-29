@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.23.0 — 2026-10-28
+
 ### Added
 
 - Manual backup preview and capture REST APIs, restricted to the operator admin
@@ -119,9 +121,10 @@ latest tag.
 
 ### Security
 
-- **Built with Go 1.26.10.** Release binaries and images were built with Go
-  1.26.9, whose `crypto/x509` has a vulnerability fixed in 1.26.10
-  (GO-2026-6809). govulncheck reports none on this release.
+- **Built with Go 1.26.10.** This release's binaries and images are built
+  with Go 1.26.10. v0.22.0's were built with Go 1.26.9, whose `crypto/x509`
+  has a vulnerability fixed in 1.26.10 (GO-2026-6809). govulncheck reports
+  none on this release.
 
 ## v0.22.0 — 2026-10-13
 
