@@ -6,6 +6,31 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **`angee doctor` says that jj slots need git 2.48.** Adding a jj slot
+  (`jj workspace add --colocate`) links its git worktree with relative paths,
+  so git sets `extensions.relativeWorktrees` and
+  `core.repositoryformatversion = 1` on the source's cache, and git before
+  2.48 refuses that cache and every worktree slot of it. `tool.jj` now warns
+  when jj can create slots but git is older than 2.48. `tool.git` still warns
+  only below 2.42, now naming 2.48, so a stack that does not use jj gets no
+  new warning. Both are warnings, since no stack can declare a jj slot yet.
+
+### Fixed
+
+- **The GitOps topology lists the commits of a cache that go-git cannot
+  open.** `angee gitops topology --with-commits N` (REST `with_commits`,
+  GraphQL `withCommits`) returned no commits, and no error, for a source
+  whose cache has `extensions.relativeWorktrees`, which go-git refuses: a
+  cache a jj slot is added to, or one a worktree slot was added to under
+  `worktree.useRelativePaths` before v0.22.0. Such a cache is now read with
+  the git CLI, which returns the same commits, refs, times and authors as
+  go-git does for any other, though commits with the same committer time
+  may come in another order. A cache whose commits cannot be read is logged
+  as a warning instead of being left out silently. The other git reads of a
+  cache or slot already fell back to the git CLI.
+
 ## v0.23.0 — 2026-10-28
 
 ### Added
