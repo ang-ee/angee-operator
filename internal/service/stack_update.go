@@ -388,8 +388,22 @@ func summarizeRenderedFileChange(renderTarget, stackRoot string, change copierx.
 // `port_leases`) are preserved verbatim from ours. A port's allocated value
 // lives in ours' manifest, so `ports` keep ours' values and only gain new
 // template keys.
+//
+// `vcs` is template-origin too, when the render names one (a template that
+// does not render it keeps ours). It is the default for slots created
+// afterwards: a slot that names no mode keeps the vcs create recorded on it
+// (manifest.WorkspaceSource.VCS), so changing it reads no existing slot as
+// another kind of checkout. A slot recorded before create recorded it follows
+// the stack's vcs, so when the merge changes it, each such slot is given the
+// one it was cut with, ours (pinSlotVCS).
 func mergeStackFromTemplate(ours, theirs *manifest.Stack) *manifest.Stack {
 	merged := *ours
+	if theirs.VCS != "" {
+		merged.VCS = theirs.VCS
+	}
+	if ours.SlotVCS() != merged.SlotVCS() {
+		merged.Workspaces = pinSlotVCS(ours.Workspaces, ours.SlotVCS())
+	}
 	merged.Version = theirs.Version
 	merged.Kind = theirs.Kind
 	merged.Name = theirs.Name
@@ -413,6 +427,29 @@ func mergeStackFromTemplate(ours, theirs *manifest.Stack) *manifest.Stack {
 	merged.Jobs = overlayMap(ours.Jobs, theirs.Jobs)
 	merged.Ports = mergePorts(ours.Ports, theirs.Ports)
 	return &merged
+}
+
+// pinSlotVCS returns workspaces with vcs recorded on every slot that names no
+// mode and records none, as create records it now, copying what it changes.
+func pinSlotVCS(workspaces map[string]manifest.Workspace, vcs string) map[string]manifest.Workspace {
+	if len(workspaces) == 0 {
+		return workspaces
+	}
+	out := make(map[string]manifest.Workspace, len(workspaces))
+	for name, workspace := range workspaces {
+		sources := make(map[string]manifest.WorkspaceSource, len(workspace.Sources))
+		for slot, ws := range workspace.Sources {
+			if ws.Mode == "" && ws.VCS == "" {
+				ws.VCS = vcs
+			}
+			sources[slot] = ws
+		}
+		if workspace.Sources != nil {
+			workspace.Sources = sources
+		}
+		out[name] = workspace
+	}
+	return out
 }
 
 // mergePorts refreshes each template port's fields from theirs while preserving
@@ -456,6 +493,9 @@ func overlayMap[V any](ours, theirs map[string]V) map[string]V {
 // applied (e.g. a preserved port value shows no change).
 func summarizeStackChanges(ours, merged *manifest.Stack) []string {
 	var changes []string
+	if ours.SlotVCS() != merged.SlotVCS() {
+		changes = append(changes, "~ vcs")
+	}
 	reportKeyChanges(&changes, "sources", ours.Sources, merged.Sources)
 	reportKeyChanges(&changes, "workspace_defaults", ours.WorkspaceDefaults, merged.WorkspaceDefaults)
 	reportKeyChanges(&changes, "secrets", ours.Secrets, merged.Secrets)

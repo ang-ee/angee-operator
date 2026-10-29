@@ -57,6 +57,17 @@ latest tag.
   `vcs` and follows the stack's as before; give it one by hand before
   changing the stack's `vcs`. An unknown slot `vcs` is refused when the
   manifest loads.
+- **`angee stack update --template` applies the template's `vcs`.** The
+  merge kept the manifest's `vcs` whatever the template rendered, so a
+  stack template's `vcs` answer never reached an existing stack. It is now
+  template-origin, as sources are, when the render names one; a render that
+  names none keeps the manifest's. Since slots keep the `vcs` they were
+  created with, the change reaches only workspaces created after it: when
+  the update changes `vcs`, it records the old one on each existing slot
+  that names no mode and records none, and reports `~ vcs`. A `vcs` set by
+  hand in `angee.yaml` is replaced by the template's on the next `stack
+  update --template`, as a hand-edited source is; answer the template's
+  input instead.
 
 - **A jj slot's branch publishes to a second remote.** A branch already
   published to one remote (origin) could not be published to another: jj

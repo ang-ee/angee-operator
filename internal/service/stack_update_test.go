@@ -1107,3 +1107,44 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// A render that names a vcs sets the stack's, which decides only for slots
+// created afterwards: an existing slot that names no mode keeps the vcs it
+// records, and one recorded before create recorded it is given the stack's
+// old vcs, so neither is read as another kind of checkout. A slot that names
+// a mode is left alone, and a render that names no vcs keeps ours.
+func TestMergeStackFromTemplateTakesTheTemplatesVCS(t *testing.T) {
+	ours := &manifest.Stack{Version: 1, Kind: "stack", Name: "demo", Workspaces: map[string]manifest.Workspace{
+		"ws": {Template: "t", Sources: map[string]manifest.WorkspaceSource{
+			"old":      {Source: "app"},
+			"recorded": {Source: "app", VCS: manifest.VCSJJ},
+			"tree":     {Source: "app", Mode: manifest.WorkspaceSourceModeWorktree},
+		}},
+	}}
+	merged := mergeStackFromTemplate(ours, &manifest.Stack{Version: 1, Kind: "stack", Name: "demo", VCS: manifest.VCSJJ})
+	if merged.VCS != manifest.VCSJJ {
+		t.Fatalf("merged vcs = %q, want the template's jj", merged.VCS)
+	}
+	want := map[string]manifest.WorkspaceSource{
+		"old":      {Source: "app", VCS: manifest.VCSGit},
+		"recorded": {Source: "app", VCS: manifest.VCSJJ},
+		"tree":     {Source: "app", Mode: manifest.WorkspaceSourceModeWorktree},
+	}
+	if got := merged.Workspaces["ws"].Sources; !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged slots = %+v, want %+v", got, want)
+	}
+	for slot, ws := range want {
+		if got, before := merged.EffectiveSourceMode(merged.Workspaces["ws"].Sources[slot]), ours.EffectiveSourceMode(ours.Workspaces["ws"].Sources[slot]); got != before {
+			t.Errorf("slot %s (%+v) reads as %q after the merge, was %q", slot, ws, got, before)
+		}
+	}
+	if ours.Workspaces["ws"].Sources["old"].VCS != "" {
+		t.Fatal("merge mutated ours.Workspaces")
+	}
+	if changes := summarizeStackChanges(ours, merged); !reflect.DeepEqual(changes, []string{"~ vcs"}) {
+		t.Fatalf("changes = %v, want the vcs change alone", changes)
+	}
+	if kept := mergeStackFromTemplate(merged, &manifest.Stack{Version: 1, Kind: "stack", Name: "demo"}); kept.VCS != manifest.VCSJJ || !reflect.DeepEqual(kept.Workspaces, merged.Workspaces) {
+		t.Fatalf("a render with no vcs = %q, %+v, want ours kept", kept.VCS, kept.Workspaces)
+	}
+}

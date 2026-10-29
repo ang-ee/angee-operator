@@ -204,7 +204,11 @@ including files such as `AGENTS.md`, then structurally merges `angee.yaml` and
 regenerates runtime files. User-added manifest keys and operator-managed state
 (`operator`, `workspaces`, `port_leases`, and allocated port values) survive.
 A source declared by hand survives, while a source the template also renders
-takes the template's definition, replacing local edits to it.
+takes the template's definition, replacing local edits to it. So does `vcs`,
+when the template renders one: it is the default for slots created after it,
+since every existing slot that names no mode keeps the `vcs` it was created
+with, and one recorded before angee recorded that is given the stack's old
+`vcs` by the update, which reports `~ vcs`.
 Rendered files are tracked: unchanged template files update or delete
 automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
