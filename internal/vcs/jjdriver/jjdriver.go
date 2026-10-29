@@ -1,9 +1,10 @@
 // Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces of
 // a source's primary, colocated with git when the primary is. It makes and
-// removes a slot (lifecycle.go) and reads its status and diff; every other
-// verb waits for phase 8 of .agents/plans/jj-native-operator.md and reports
-// vcs.ErrUnsupported. The service selects it for a slot whose mode is jj, and
-// refuses those verbs on a jj slot itself before it asks the driver. Source
+// removes a slot (lifecycle.go), reads its status and diff, and fetches,
+// syncs and rebases it (rebase.go); the push, publish, pull and merge verbs
+// wait for the rest of phase 8 of .agents/plans/jj-native-operator.md and
+// report vcs.ErrUnsupported. The service selects it for a slot whose mode is
+// jj, and refuses those verbs on a jj slot itself before it asks the driver. Source
 // captures also use it as the vcs.BackupLayer over a Git checkout, which
 // plans nothing unless colocated JJ metadata is present.
 //
@@ -46,9 +47,11 @@ type Driver struct {
 
 var _ vcs.Driver = Driver{}
 
-// New returns a driver that runs jj from PATH, and git through client.
+// New returns a driver that runs jj from PATH, and git through client, for
+// one slot operation: the identity it gives jj commits for a user with none
+// configured (identity) is resolved once for the driver.
 func New(client git.Client) Driver {
-	return Driver{git: client}
+	return Driver{jj: runner{identity: &identity{git: client}}, git: client}
 }
 
 // target is a revision Status counts against: its revset, and the name a

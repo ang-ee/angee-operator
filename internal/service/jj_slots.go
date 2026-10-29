@@ -616,6 +616,33 @@ func (p *Platform) destroyedJJSlot(ctx context.Context, jj jjLifecycle, stack *m
 // rollbackForgetTimeout bounds removeJJSlotUnlocked's jj calls.
 const rollbackForgetTimeout = 30 * time.Second
 
+// rebaseRefusal is the refusal of a rebase of slot that would rewrite what
+// is not the slot's to rewrite, as its driver's scope check reports it: another
+// checkout's work (shared_commits, a *vcs.SharedCommitsError, plan D12), or
+// commits jj holds immutable (immutable_commits). Nothing is rebased. It is
+// nil for any other error.
+func rebaseRefusal(err error, workspaceName, slot, source string) *OperationError {
+	var shared *vcs.SharedCommitsError
+	var frozen *vcs.ImmutableCommitsError
+	refusal := &OperationError{Code: CodePreconditionFailed, Workspace: workspaceName, Slot: slot, Source: source, Err: err}
+	switch {
+	case errors.As(err, &shared):
+		for _, branch := range shared.Branches {
+			refusal.Paths = append(refusal.Paths, branch.Path)
+		}
+		refusal.Cause = CauseSharedCommits
+		refusal.Hint = "Move the other checkouts' work off the slot's commits first (a jj workspace whose checkout is gone can be forgotten with `jj workspace forget <name>`), or rebase the slot with jj yourself if rewriting theirs is what you mean."
+		refusal.Summary = fmt.Sprintf("source slot %q was not rebased: %v. %s", slot, shared, refusal.Hint)
+	case errors.As(err, &frozen):
+		refusal.Cause = CauseImmutableCommits
+		refusal.Hint = "Rebase the slot with jj yourself, deciding what becomes of those commits, or drop what makes them immutable (a tag, an untracked remote bookmark)."
+		refusal.Summary = fmt.Sprintf("source slot %q was not rebased: %v. %s", slot, frozen, refusal.Hint)
+	default:
+		return nil
+	}
+	return refusal
+}
+
 // errJJSlotNotYet is what a verb phase 8 of the jj plan has not implemented
 // on a jj slot wraps. It matches vcs.ErrUnsupported, as a verb a slot's
 // driver does not support does.
@@ -654,13 +681,16 @@ func jjSlotNotYet(verb, workspace string, slots, paths []string) *OperationError
 }
 
 // refuseJJSlots refuses verb, an aggregate over every slot of workspace, when
-// any of its slots is a jj slot: such a verb would otherwise skip it, or run
-// git in it.
-func (p *Platform) refuseJJSlots(verb, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
+// any of the slots it walks is a jj slot: such a verb would otherwise skip
+// it, or run git in it. An aggregate walks only the slots whose manifest
+// names a mode (owner, 2026-10-29, plan Q7), so a slot that names none, a jj
+// slot under `vcs: jj` such as a work-state `.work`, is skipped by it, not
+// refused.
+func (p *Platform) refuseJJSlots(verb, workspaceName string, workspace manifest.Workspace) error {
 	var slots, paths []string
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
-		if stack.EffectiveSourceMode(wsSource) != manifest.WorkspaceSourceModeJJ {
+		if wsSource.Mode != manifest.WorkspaceSourceModeJJ {
 			continue
 		}
 		_, path, _ := p.workspaceSourcePath(workspaceName, slot, wsSource)

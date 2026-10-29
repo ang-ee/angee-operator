@@ -14,6 +14,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
 // git's own words are quoted, not interpreted: its first fatal: or error:
@@ -37,6 +38,27 @@ func TestGitErrorLineQuotesGit(t *testing.T) {
 				t.Fatalf("gitErrorLine() = %q, want %q", line, tc.wantLine)
 			}
 		})
+	}
+}
+
+// A jj command that failed is quoted in jj's own words, named as jj's: its
+// first "Error:" line in the message, its whole output in Detail, in a
+// repair's reason too.
+func TestFailureQuotesTheToolThatFailed(t *testing.T) {
+	stderr := "Error: Commit 0123abcd is immutable\nHint: Could not modify commit: wkkqrvnl 0123abcd main@origin | up\nHint: Immutable commits are used to protect shared history."
+	err := gitFailure(&jjdriver.CommandError{Args: []string{"rebase"}, Stderr: stderr, Err: errors.New("exit status 1")},
+		gitStep{action: "rebasing onto main@origin", object: `source slot "app"`, slot: "app"})
+	operation{name: "workspace.sync-base", title: `Sync base for workspace "a"`}.annotate(&err)
+	opErr := AsOperationError(err)
+	if opErr.Code != CodeGitFailed || opErr.Tool != "jj" || opErr.Detail != stderr {
+		t.Fatalf("gitFailure() = %+v, want GIT_FAILED quoting jj with its output", opErr)
+	}
+	want := `Sync base for workspace "a": rebasing onto main@origin source slot "app" failed. jj: Error: Commit 0123abcd is immutable`
+	if err.Error() != want {
+		t.Fatalf("message = %q, want %q", err.Error(), want)
+	}
+	if got, want := repairReason(err), `rebasing onto main@origin source slot "app" failed. jj: Error: Commit 0123abcd is immutable`; got != want {
+		t.Fatalf("repairReason() = %q, want %q", got, want)
 	}
 }
 
@@ -259,7 +281,7 @@ func TestWorkspaceSyncBasePassesGitsWordsThrough(t *testing.T) {
 	if opErr == nil || opErr.Code != CodeGitFailed || opErr.Cause != CauseFetchFailed || opErr.Remote != "git@github-deploy:org/app.git" || opErr.Hint != "" {
 		t.Fatalf("WorkspaceSyncBase() error = %+v, want fetch_failed naming the SSH remote", opErr)
 	}
-	if want := `Sync base for workspace "feature-a": fetching source "app" (git@github-deploy:org/app.git) failed. git: `; !strings.HasPrefix(err.Error(), want) || !strings.Contains(opErr.GitLine, "ssh") {
+	if want := `Sync base for workspace "feature-a": fetching source "app" (git@github-deploy:org/app.git) failed. git: `; !strings.HasPrefix(err.Error(), want) || !strings.Contains(opErr.ToolLine, "ssh") {
 		t.Fatalf("message = %q, want it to start %q", err.Error(), want)
 	}
 }
@@ -274,7 +296,7 @@ func TestWorkspaceSyncBaseReportsUnreachableRemote(t *testing.T) {
 	_, err := fixture.platform.WorkspaceSyncBase(context.Background(), "feature-a", "merge")
 	opErr := AsOperationError(err)
 	if opErr == nil || opErr.Code != CodeGitFailed || opErr.Cause != CauseFetchFailed || opErr.Slot != "app" || opErr.Source != "app" ||
-		opErr.Remote != "https://nonexistent.invalid/app.git" || !strings.Contains(opErr.GitLine, "nonexistent.invalid") || opErr.Detail == "" {
+		opErr.Remote != "https://nonexistent.invalid/app.git" || !strings.Contains(opErr.ToolLine, "nonexistent.invalid") || opErr.Detail == "" {
 		t.Fatalf("WorkspaceSyncBase() error = %+v, want fetch_failed with git's line", opErr)
 	}
 	if want := `Sync base for workspace "feature-a": fetching source "app" (https://nonexistent.invalid/app.git) failed. git: fatal: unable to access`; !strings.HasPrefix(err.Error(), want) {

@@ -3,7 +3,10 @@ package gitdriver
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -170,6 +173,44 @@ func TestSyncBaseByDefaultMerges(t *testing.T) {
 	}
 	if gitOutput(t, dir, "rev-parse", "HEAD^1") != mine {
 		t.Fatal("SyncBase(SyncDefault) rewrote the branch's own commit, want it merged onto")
+	}
+}
+
+// A git sync-base needs the checkout on the branch it must be on, with no
+// uncommitted changes: Ready refuses a checkout on another branch with git's
+// own fix, and one with changes listing them, and has no preconditions for a
+// verb it does not know. The default sync method is a merge.
+func TestReadyForSyncBase(t *testing.T) {
+	ctx := context.Background()
+	d := New(git.New())
+	dir, _ := clone(t)
+	run(t, dir, "switch", "-q", "-c", "feature")
+	s := vcs.Slot{Path: dir, Branch: "feature"}
+	if err := d.Ready(ctx, s, vcs.VerbSyncBase); err != nil {
+		t.Fatalf("Ready() of a clean checkout on its branch error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var uncommitted *vcs.UncommittedError
+	if err := d.Ready(ctx, s, vcs.VerbSyncBase); !errors.As(err, &uncommitted) || !slices.Equal(uncommitted.Paths, []string{"scratch.txt"}) {
+		t.Fatalf("Ready() of a dirty checkout error = %v, want its uncommitted paths", err)
+	}
+	s.Branch = "other"
+	var mismatch *vcs.BranchMismatchError
+	if err := d.Ready(ctx, s, vcs.VerbSyncBase); !errors.As(err, &mismatch) || mismatch.Fix != "git -C "+dir+" switch other" || !strings.Contains(mismatch.Reason, `"feature"`) {
+		t.Fatalf("Ready() off its branch error = %v, want a branch mismatch with git's fix", err)
+	}
+	if err := d.Ready(ctx, s, "publish"); !errors.Is(err, vcs.ErrUnsupported) {
+		t.Fatalf("Ready(publish) error = %v, want vcs.ErrUnsupported", err)
+	}
+	for method, want := range map[string]string{vcs.SyncDefault: vcs.SyncMerge, vcs.SyncMerge: vcs.SyncMerge, vcs.SyncRebase: vcs.SyncRebase} {
+		if got, err := d.SyncMethod(method); err != nil || got != want {
+			t.Errorf("SyncMethod(%q) = %q, %v, want %q", method, got, err, want)
+		}
+	}
+	if _, err := d.SyncMethod("squash"); !errors.Is(err, vcs.ErrUnsupported) {
+		t.Errorf("SyncMethod(squash) error = %v, want vcs.ErrUnsupported", err)
 	}
 }
 

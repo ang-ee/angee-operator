@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
 )
@@ -131,6 +132,117 @@ const (
 	SyncRebase  = "rebase"
 )
 
+// Verb names a verb whose preconditions Driver.Ready answers.
+type Verb string
+
+// The verbs Driver.Ready answers.
+const (
+	// VerbSyncBase is sync-base: bringing the slot's base into it.
+	VerbSyncBase Verb = "sync-base"
+	// VerbRebase is a slot's rebase onto a ref a caller names.
+	VerbRebase Verb = "rebase"
+)
+
+// BranchMismatchError is returned by Driver.Ready when the checkout is not on
+// Slot.Branch, which the verb needs. Reason says how it differs; Fix is the
+// version-control tool's own command that puts it back, for a message.
+type BranchMismatchError struct {
+	Reason string
+	Fix    string
+}
+
+func (e *BranchMismatchError) Error() string { return "not on its branch: " + e.Reason }
+
+// UncommittedError is returned by Driver.Ready when the verb needs a checkout
+// with no uncommitted changes and it has some, which Paths lists.
+type UncommittedError struct {
+	Paths []string
+}
+
+func (e *UncommittedError) Error() string {
+	return "uncommitted changes in " + strings.Join(e.Paths, ", ")
+}
+
+// UntrackedPathsError is returned by Driver.Ready when the verb would move
+// the checkout under files only it holds and its version control does not
+// track (for jj, the paths `jj status` lists as untracked: over
+// snapshot.max-new-file-size, or outside snapshot.auto-track). A rebase
+// whose new base adds such a path keeps the local file, and the next
+// snapshot records it as a change that undoes the base's. Paths lists them.
+type UntrackedPathsError struct {
+	Paths []string
+}
+
+func (e *UntrackedPathsError) Error() string {
+	return "untracked paths only the checkout holds: " + NamePaths(e.Paths, 10)
+}
+
+// Warning is what a version-control tool warned of while it made an
+// operation, in its own words: jj's "1 of those updates were skipped", say,
+// when the working copy held a file (an ignored one) where the new commit
+// has one, which the next snapshot then records as a change. A driver
+// returns it beside an OK result.
+type Warning struct {
+	Text string
+}
+
+func (e *Warning) Error() string { return e.Text }
+
+// CheckedOutBranch is a branch a git worktree of a primary has checked out,
+// and where.
+type CheckedOutBranch struct {
+	Branch string
+	Path   string
+}
+
+// SharedCommitsError is returned by Driver.CheckRebase, and by a rebase that
+// checks it, when the commits rebasing the checkout would rewrite are not the
+// checkout's alone (plan D12): jj rewrites the descendants of what it moves,
+// so another checkout's work built on them would be rewritten too. Workspaces
+// names the jj workspaces whose working-copy commit is among them, and
+// Branches the git worktree branches that point at one, which jj would move
+// under their worktrees.
+type SharedCommitsError struct {
+	Workspaces []string
+	Branches   []CheckedOutBranch
+}
+
+func (e *SharedCommitsError) Error() string {
+	var held []string
+	for _, name := range e.Workspaces {
+		held = append(held, fmt.Sprintf("jj workspace %q", name))
+	}
+	for _, branch := range e.Branches {
+		held = append(held, fmt.Sprintf("branch %q checked out at %s", branch.Branch, branch.Path))
+	}
+	return "the rebase would rewrite commits that other checkouts hold: " + strings.Join(held, ", ")
+}
+
+// ImmutableCommitsError is returned by Driver.CheckRebase, and by a rebase
+// that checks it, when the commits the rebase would rewrite include ones the
+// version control system refuses to rewrite: for jj, the ancestors of its
+// immutable_heads() (trunk(), a tag, an untracked remote bookmark). Commits
+// lists them by short id.
+type ImmutableCommitsError struct {
+	Commits []string
+}
+
+func (e *ImmutableCommitsError) Error() string {
+	return "the rebase would rewrite commits jj holds immutable: " + strings.Join(e.Commits, ", ")
+}
+
+// ToolError is a failed version-control command as a driver returns it, so a
+// message can quote the tool's own words without knowing which tool ran.
+type ToolError interface {
+	error
+	// Tool names the tool that failed, such as "jj".
+	Tool() string
+	// Line is the tool's own line naming the failure.
+	Line() string
+	// Output is everything the tool said, redacted.
+	Output() string
+}
+
 // PushPlan is what pushing a slot will do, decided by Driver.PlanPush before
 // anything is pushed, so a push of several slots can refuse before any of
 // them is pushed.
@@ -250,6 +362,14 @@ type Driver interface {
 	// the committed range from the checkout to ref.
 	Diff(ctx context.Context, s Slot, ref string) ([]api.DiffFile, error)
 
+	// Ready reports whether verb may run on the checkout as it stands: nil,
+	// or why not, as a *BranchMismatchError, an *UncommittedError or an
+	// *UntrackedPathsError, for the service to word. What a verb needs is the
+	// driver's to say: a git sync-base needs the checkout on Slot.Branch and
+	// clean, while a jj slot's working-copy commit rides along with its
+	// rebase, but not files jj does not track. A verb the driver has no
+	// preconditions for is an error wrapping ErrUnsupported.
+	Ready(ctx context.Context, s Slot, verb Verb) error
 	// BranchMismatch says how the checkout differs from Slot.Branch, or
 	// returns "" when it is on it or Slot.Branch is empty.
 	BranchMismatch(ctx context.Context, s Slot) (string, error)
@@ -278,15 +398,37 @@ type Driver interface {
 	PlanPush(ctx context.Context, s Slot, ref, branch string) (PushPlan, error)
 	// Push carries out a plan PlanPush returned.
 	Push(ctx context.Context, s Slot, plan PushPlan) error
+	// SyncMethod resolves a sync-base method for the driver's checkouts:
+	// SyncDefault to its own natural sync (git: SyncMerge), and SyncMerge or
+	// SyncRebase to itself. A method the driver cannot sync by is an error
+	// wrapping ErrUnsupported. It runs nothing, so a caller can resolve every
+	// slot's method before any slot is touched.
+	SyncMethod(method string) (string, error)
 	// SyncBase brings onto, a ref ResolveBase returned, into the checkout's
 	// branch by method (SyncMerge, SyncRebase, or SyncDefault for the
-	// driver's own choice). A conflict is a result, not an error.
+	// driver's own choice). A conflict is a result, not an error, as for
+	// Rebase.
 	SyncBase(ctx context.Context, s Slot, onto, method string) (api.GitOpResult, error)
+	// CheckRebase reports whether rebasing the checkout onto onto, a ref
+	// ResolveBase returned or one a caller named, would rewrite only what is
+	// the checkout's own and may be rewritten: nil, a *SharedCommitsError
+	// naming the other checkouts that hold some of it, or an
+	// *ImmutableCommitsError naming what the version control system will not
+	// rewrite. The rebases check it themselves too;
+	// a caller rebasing several slots asks each first, so a refusal leaves
+	// none rebased. A git rebase rewrites only the checkout's own branch,
+	// which no other worktree can have checked out, so the git driver
+	// answers nil.
+	CheckRebase(ctx context.Context, s Slot, onto string) error
 	// Merge merges ref into the checkout's branch, always recording a merge.
 	// A conflict is a result, not an error.
 	Merge(ctx context.Context, s Slot, ref string) (api.GitOpResult, error)
 	// Rebase rebases the checkout's branch onto ref. A conflict is a result,
-	// not an error.
+	// not an error: OK and Conflicted when the version control system
+	// records it in the commits and goes on (jj), Conflicted alone when the
+	// checkout stopped mid-rebase (git). An error with OK set means the
+	// rebase was made, with something its caller must hear: a *Warning the
+	// tool printed, or a failure to read what the rebase left.
 	Rebase(ctx context.Context, s Slot, ref string) (api.GitOpResult, error)
 	// MergeAbort, RebaseAbort and RebaseContinue drive a checkout that Merge
 	// or Rebase left stopped on conflicts. MergeAbort and RebaseAbort return

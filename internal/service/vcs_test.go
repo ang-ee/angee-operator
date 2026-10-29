@@ -80,6 +80,23 @@ func (f *fakeDriver) Diff(_ context.Context, s vcs.Slot, _ string) ([]api.DiffFi
 	return f.diff, f.err
 }
 
+func (f *fakeDriver) Ready(_ context.Context, s vcs.Slot, verb vcs.Verb) error {
+	f.call("Ready", s, string(verb))
+	return f.fail["Ready"]
+}
+
+// SyncMethod merges by default, as the git driver does, or fails with
+// fail["SyncMethod"]. It is not recorded: it is handed no slot.
+func (f *fakeDriver) SyncMethod(method string) (string, error) {
+	if err := f.fail["SyncMethod"]; err != nil {
+		return "", err
+	}
+	if method == vcs.SyncDefault {
+		return vcs.SyncMerge, nil
+	}
+	return method, nil
+}
+
 func (f *fakeDriver) BranchMismatch(_ context.Context, s vcs.Slot) (string, error) {
 	f.call("BranchMismatch", s)
 	return "", nil
@@ -146,9 +163,14 @@ func (f *fakeDriver) Push(_ context.Context, s vcs.Slot, plan vcs.PushPlan) erro
 func (f *fakeDriver) SyncBase(_ context.Context, s vcs.Slot, onto, method string) (api.GitOpResult, error) {
 	f.call("SyncBase", s, onto, method)
 	if f.syncResult != nil {
-		return *f.syncResult, nil
+		return *f.syncResult, f.fail["SyncBase"]
 	}
-	return f.result("SyncBase"), nil
+	return f.result("SyncBase"), f.fail["SyncBase"]
+}
+
+func (f *fakeDriver) CheckRebase(_ context.Context, s vcs.Slot, onto string) error {
+	f.call("CheckRebase", s, onto)
+	return f.fail["CheckRebase"]
 }
 
 func (f *fakeDriver) Merge(_ context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
@@ -158,7 +180,7 @@ func (f *fakeDriver) Merge(_ context.Context, s vcs.Slot, ref string) (api.GitOp
 
 func (f *fakeDriver) Rebase(_ context.Context, s vcs.Slot, ref string) (api.GitOpResult, error) {
 	f.call("Rebase", s, ref)
-	return f.result("Rebase"), nil
+	return f.result("Rebase"), f.fail["Rebase"]
 }
 
 func (f *fakeDriver) MergeAbort(_ context.Context, s vcs.Slot) (api.GitOpResult, error) {
@@ -346,15 +368,15 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "sync-base by default", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,)"}},
+		}, want: []string{"Ready(sync-base)", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
 		{name: "sync-base by merge", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "merge")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
+		}, want: []string{"Ready(sync-base)", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
 		{name: "sync-base by rebase", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "rebase")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,rebase)"}},
+		}, want: []string{"Ready(sync-base)", "FetchURL", "Fetch", "ResolveBase", "CheckRebase(fake/main)", "SyncBase(fake/main,rebase)"}},
 		{name: "merge", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourceMerge(ctx, ws, "app", "main")
 			return result.Message, err
@@ -362,7 +384,7 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "rebase", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourceRebase(ctx, ws, "app", "main")
 			return result.Message, err
-		}, want: []string{"Rebase(main)"}, wantMsg: "fake Rebase"},
+		}, want: []string{"Ready(rebase)", "Rebase(main)"}, wantMsg: "fake Rebase"},
 		{name: "merge abort", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourceMergeAbort(ctx, ws, "app")
 			return result.Message, err
@@ -498,7 +520,7 @@ func TestWorkspaceSyncBaseReportsTheDriversConflict(t *testing.T) {
 	_, err := platform.WorkspaceSyncBase(context.Background(), workspaceName, "merge")
 	opErr := AsOperationError(err)
 	if opErr == nil || opErr.Code != CodeGitFailed || opErr.Cause != CauseMergeConflict || !slices.Equal(opErr.Paths, []string{"fake.txt"}) ||
-		opErr.Slot != "app" || opErr.Source != "app" || opErr.Detail != "CONFLICT (content): fake.txt" || opErr.GitLine != "" {
+		opErr.Slot != "app" || opErr.Source != "app" || opErr.Detail != "CONFLICT (content): fake.txt" || opErr.ToolLine != "" {
 		t.Fatalf("WorkspaceSyncBase() error = %+v, want merge_conflict on the driver's files", opErr)
 	}
 	if want := `Sync base for workspace "feature-a": merging fake/main into source slot "app" stopped on conflicts in fake.txt. Resolve the conflicts`; !strings.HasPrefix(err.Error(), want) {
@@ -519,7 +541,7 @@ func TestWorkspaceSyncBaseReportsTheDriversBaseFailures(t *testing.T) {
 		{"missing base", fmt.Errorf("base ref %q was not found after fetch: %w", "main", vcs.ErrBaseNotFound), CodePreconditionFailed,
 			`Sync base for workspace "feature-a": source slot "app": base ref "main" was not found after fetch: base not found. Check the base ref "main" of source slot "app".`},
 		{"other failure", errors.New("cannot read the remotes"), CodeGitFailed,
-			`Sync base for workspace "feature-a": resolving the base of source slot "app" failed.`},
+			`Sync base for workspace "feature-a": resolving the base of source slot "app" failed: cannot read the remotes.`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			platform, workspaceName, _, _ := setupGitWorkspace(t)
@@ -552,6 +574,7 @@ func TestUnsupportedSlotVerbsAreInvalidInput(t *testing.T) {
 	}{
 		{"verb", "MergeAbort", func(p *Platform, ws string) error { _, err := p.WorkspaceSourceMergeAbort(ctx, ws, "app"); return err }},
 		{"precondition", "DirtyPaths", func(p *Platform, ws string) error { _, err := p.WorkspaceSourcePull(ctx, ws, "app"); return err }},
+		{"readiness", "Ready", func(p *Platform, ws string) error { _, err := p.WorkspaceSyncBase(ctx, ws, ""); return err }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			platform, workspaceName, _, _ := setupGitWorkspace(t)
@@ -569,5 +592,121 @@ func TestUnsupportedSlotVerbsAreInvalidInput(t *testing.T) {
 				t.Fatalf("error = %v, want it to still match vcs.ErrUnsupported and the driver's error", err)
 			}
 		})
+	}
+}
+
+// sync-base asks each slot's driver whether it may sync (vcs.Driver.Ready)
+// and words its answer: a branch mismatch names the fix the driver gives, and
+// uncommitted changes list their paths. Either refuses before any slot is
+// fetched.
+func TestWorkspaceSyncBaseWordsTheDriversReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		ready     error
+		cause     string
+		wantStart string
+		wantHint  string
+		wantPaths []string
+	}{
+		{"branch mismatch", &vcs.BranchMismatchError{Reason: `on "other", expected "feature-a"`, Fix: "fake switch feature-a"}, CauseBranchMismatch,
+			`Sync base for workspace "feature-a": workspace "feature-a" source "app" has branch mismatch: on "other", expected "feature-a" at `,
+			"Switch it back with `fake switch feature-a`, then retry.", nil},
+		{"uncommitted changes", &vcs.UncommittedError{Paths: []string{"a.txt", "b.txt"}}, CauseUncommittedChanges,
+			`Sync base for workspace "feature-a": source slot "app" has uncommitted changes in a.txt, b.txt.`,
+			"Commit or restore the changes, then retry.", []string{"a.txt", "b.txt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			platform, workspaceName, _, _ := setupGitWorkspace(t)
+			fake := &fakeDriver{fail: map[string]error{"Ready": tc.ready}}
+			platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+			t.Setenv("PATH", t.TempDir())
+
+			_, err := platform.WorkspaceSyncBase(context.Background(), workspaceName, "")
+			opErr := AsOperationError(err)
+			if opErr == nil || opErr.Code != CodePreconditionFailed || opErr.Cause != tc.cause || opErr.Slot != "app" || opErr.Hint != tc.wantHint ||
+				!strings.HasPrefix(err.Error(), tc.wantStart) || (tc.wantPaths != nil && !slices.Equal(opErr.Paths, tc.wantPaths)) {
+				t.Fatalf("WorkspaceSyncBase() error = %v (%+v), want %s starting %q with hint %q", err, opErr, tc.cause, tc.wantStart, tc.wantHint)
+			}
+			for _, call := range fake.calls {
+				if call.method != "Ready" {
+					t.Fatalf("driver called %s after the slot was refused", call.method)
+				}
+			}
+		})
+	}
+}
+
+// A sync or rebase its driver made, but whose result it could not read after
+// (OK with an error), is not reported as a failure of the sync: sync-base
+// gives the slot's state with what failed, and the slot's rebase says it was
+// reading what the rebase left that failed.
+func TestASyncThatWasMadeIsNotReportedAsFailed(t *testing.T) {
+	ctx := context.Background()
+	unread := errors.New("jj rebased it, but reading the conflicts it left failed: busy")
+	platform, workspaceName, _, _ := setupGitWorkspace(t)
+	fake := &fakeDriver{status: vcs.Status{CurrentRef: workspaceName, Pushed: true}, fail: map[string]error{"SyncBase": unread, "Rebase": unread}}
+	platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	t.Setenv("PATH", t.TempDir())
+
+	states, err := platform.WorkspaceSyncBase(ctx, workspaceName, "rebase")
+	if err != nil || len(states) != 1 || !strings.Contains(states[0].Error, "synced, but reading what rebasing onto fake/main left failed: "+unread.Error()) {
+		t.Fatalf("WorkspaceSyncBase() = %+v, %v, want the slot's state saying what failed", states, err)
+	}
+	_, err = platform.WorkspaceSourceRebase(ctx, workspaceName, "app", "main")
+	if want := `Rebase for workspace "feature-a" slot "app": reading what rebasing onto main left in source slot "app" failed: `; err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("WorkspaceSourceRebase() error = %v, want it to start %q", err, want)
+	}
+}
+
+// A sync or rebase its driver made with a warning (*vcs.Warning) is not a
+// failure: sync-base puts the warning on the slot's state, and the slot's
+// rebase returns its result, whose message carries it.
+func TestASyncThatWarnsIsNotAFailure(t *testing.T) {
+	ctx := context.Background()
+	warned := &vcs.Warning{Text: "Warning: 1 of those updates were skipped"}
+	platform, workspaceName, _, _ := setupGitWorkspace(t)
+	fake := &fakeDriver{status: vcs.Status{CurrentRef: workspaceName, Pushed: true}, fail: map[string]error{"SyncBase": warned, "Rebase": warned}}
+	platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	t.Setenv("PATH", t.TempDir())
+
+	states, err := platform.WorkspaceSyncBase(ctx, workspaceName, "rebase")
+	if err != nil || len(states) != 1 || states[0].Error != "synced, but jj warned while rebasing onto fake/main: "+warned.Text {
+		t.Fatalf("WorkspaceSyncBase() = %+v, %v, want the warning on the slot's state", states, err)
+	}
+	if result, err := platform.WorkspaceSourceRebase(ctx, workspaceName, "app", "main"); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceRebase() = %+v, %v, want its OK result", result, err)
+	}
+}
+
+// A slot whose sync fails once earlier slots are synced names them, since
+// they stay synced: in the message, before nothing else, and in the detail.
+func TestAFailedSyncNamesTheSlotsSyncedBeforeIt(t *testing.T) {
+	err := afterSynced(syncConflict(api.GitOpResult{Conflicted: true, ConflictFiles: []string{"f.txt"}}, gitStep{action: "merging origin/main into", object: `source slot "tree"`, slot: "tree"}), []string{"a", "b"})
+	opErr := AsOperationError(err)
+	if opErr == nil || opErr.Cause != CauseMergeConflict || !strings.HasSuffix(opErr.Summary, `source slots "a", "b" synced before it, and stay synced.`) ||
+		!strings.HasPrefix(opErr.Detail, `source slots "a", "b" synced before it`) {
+		t.Fatalf("afterSynced() = %+v, want the conflict naming a and b as synced", opErr)
+	}
+	if plain := syncConflict(api.GitOpResult{Conflicted: true, ConflictFiles: []string{"f.txt"}}, gitStep{slot: "tree"}); afterSynced(plain, nil) != plain {
+		t.Error("afterSynced() with nothing synced changed the error")
+	}
+}
+
+// A rebase refused for what it would rewrite names it: the other checkouts,
+// with the git worktrees in paths, or the immutable commits.
+func TestRebaseRefusalWording(t *testing.T) {
+	shared := rebaseRefusal(&vcs.SharedCommitsError{Workspaces: []string{"dev--b"}, Branches: []vcs.CheckedOutBranch{{Branch: "topic", Path: "/tree"}}}, "ws", "a", "app")
+	if shared == nil || shared.Code != CodePreconditionFailed || shared.Cause != CauseSharedCommits || !slices.Equal(shared.Paths, []string{"/tree"}) ||
+		!strings.Contains(shared.Summary, `source slot "a" was not rebased: the rebase would rewrite commits that other checkouts hold: jj workspace "dev--b", branch "topic" checked out at /tree.`) ||
+		!strings.Contains(shared.Hint, "jj workspace forget") {
+		t.Errorf("shared commits refusal = %+v", shared)
+	}
+	frozen := rebaseRefusal(&vcs.ImmutableCommitsError{Commits: []string{"0123456789ab"}}, "ws", "a", "app")
+	if frozen == nil || frozen.Code != CodePreconditionFailed || frozen.Cause != CauseImmutableCommits ||
+		!strings.Contains(frozen.Summary, "jj holds immutable: 0123456789ab") {
+		t.Errorf("immutable commits refusal = %+v", frozen)
+	}
+	if rebaseRefusal(errors.New("other"), "ws", "a", "app") != nil {
+		t.Error("rebaseRefusal() of another error, want nil")
 	}
 }

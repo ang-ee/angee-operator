@@ -585,19 +585,64 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 		return err
 	}
 	if reason != "" {
-		hint := fmt.Sprintf("Switch it back with `git -C %s switch %s`, then retry.", path, wsSource.Branch)
-		return &OperationError{
-			Code:      CodePreconditionFailed,
-			Cause:     CauseBranchMismatch,
-			Workspace: workspaceName,
-			Slot:      slot,
-			Source:    wsSource.Source,
-			Paths:     []string{path},
-			Hint:      hint,
-			Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, reason, path, hint),
-		}
+		// Only a git worktree slot must stay on a branch
+		// (workspaceSourceRequiresBranch). The verbs that still ask here
+		// move to Driver.Ready, which names the fix itself, with the rest of
+		// phase 8 of the jj plan.
+		return branchMismatch(workspaceName, slot, wsSource.Source, path, &vcs.BranchMismatchError{Reason: reason, Fix: fmt.Sprintf("git -C %s switch %s", path, wsSource.Branch)})
 	}
 	return nil
+}
+
+// branchMismatch is the branch_mismatch refusal of a workspace slot at path,
+// with the fix its driver names.
+func branchMismatch(workspaceName, slot, source, path string, mismatch *vcs.BranchMismatchError) error {
+	hint := "Put it back on its branch, then retry."
+	if mismatch.Fix != "" {
+		hint = fmt.Sprintf("Switch it back with `%s`, then retry.", mismatch.Fix)
+	}
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseBranchMismatch,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Paths:     []string{path},
+		Hint:      hint,
+		Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, mismatch.Reason, path, hint),
+	}
+}
+
+// requireSlotReady refuses verb on a workspace slot when its driver says the
+// slot is not ready for it (vcs.Driver.Ready), in the service's words: a
+// branch mismatch with the fix the driver names, uncommitted changes, or
+// untracked paths only the slot holds.
+func requireSlotReady(ctx context.Context, driver vcs.Driver, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) error {
+	err := driver.Ready(ctx, target, verb)
+	var mismatch *vcs.BranchMismatchError
+	var uncommitted *vcs.UncommittedError
+	var untracked *vcs.UntrackedPathsError
+	switch {
+	case errors.As(err, &mismatch):
+		return branchMismatch(workspaceName, slot, source, target.Path, mismatch)
+	case errors.As(err, &uncommitted):
+		return uncommittedChanges(uncommitted.Paths, fmt.Sprintf("source slot %q", slot), slot, source)
+	case errors.As(err, &untracked):
+		hint := "Track them (`jj file track`), move them out of the slot, or ignore them, then retry."
+		return &OperationError{
+			Code:      CodePreconditionFailed,
+			Cause:     CauseUntrackedPaths,
+			Workspace: workspaceName,
+			Slot:      slot,
+			Source:    source,
+			Paths:     untracked.Paths[:min(len(untracked.Paths), maxErrorPaths)],
+			Hint:      hint,
+			Summary: fmt.Sprintf("source slot %q holds files jj does not track, only it has, and a rebase could keep over the base's own: %s. %s",
+				slot, vcs.NamePaths(untracked.Paths, maxMessagePaths), hint),
+			Err: err,
+		}
+	}
+	return err
 }
 
 // workspaceSourceRequiresBranch reports whether a slot must stay on its
@@ -1130,7 +1175,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 	if !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	if err := p.refuseJJSlots("workspace push", name, workspace, stack); err != nil {
+	if err := p.refuseJJSlots("workspace push", name, workspace); err != nil {
 		return nil, err
 	}
 	// Check the slots are materialized first: the branch check reads git in
@@ -1181,9 +1226,14 @@ type workspaceGitSlot struct {
 	wsSource manifest.WorkspaceSource
 }
 
-// workspaceGitSlots returns the workspace's git slots whose mode is one of
-// modes, in slot order. Every one of them must be materialized: the verb fails
-// before touching any slot when one is not.
+// workspaceGitSlots returns the workspace's slots whose manifest names one of
+// modes, in slot order: the slots an aggregate verb walks. A slot that names
+// no mode is never one of them, whatever its effective mode (owner,
+// 2026-10-29, plan Q7), so a work-state `.work` slot, a jj slot under `vcs:
+// jj`, stays out of every aggregate. A slot of a `kind: git` source is a
+// version-controlled checkout, and so is a jj slot of a `kind: local` store.
+// Every one of them must be materialized: the verb fails before touching any
+// slot when one is not.
 func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Workspace, stack *manifest.Stack, modes ...string) ([]workspaceGitSlot, error) {
 	var targets []workspaceGitSlot
 	var paths []workspaceSlotPath
@@ -1193,7 +1243,7 @@ func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Wo
 			continue
 		}
 		source, ok := stack.Sources[wsSource.Source]
-		if !ok || source.Kind != "git" {
+		if !ok || source.Kind != "git" && wsSource.Mode != manifest.WorkspaceSourceModeJJ {
 			continue
 		}
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
@@ -1393,6 +1443,27 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 	}
 }
 
+// WorkspaceSyncBase brings each slot's base into it, through the slot's
+// driver: the slots whose manifest names a mode that syncs (a git worktree,
+// a jj slot); a slot with no mode is skipped, even a jj slot under `vcs: jj`
+// (owner, 2026-10-29, plan Q7). With no method each slot is synced its
+// driver's way, a git worktree by merging and a jj slot by rebasing (plan
+// D11); a method a slot's driver cannot sync by, such as a merge of a jj
+// slot, refuses the whole sync before any slot is read.
+//
+// Every slot is checked, fetched, has its base resolved and, when it is to
+// be rebased, what the rebase would rewrite checked (vcs.Driver.CheckRebase,
+// plan D12) before any is synced, so a refusal those checks make leaves no
+// slot changed. A slot's sync can still fail once earlier ones are synced:
+// its rebase checks again just before it runs, and git or jj can fail it.
+// That error names the slots already synced. A jj slot's conflict is recorded
+// in its commits and reported on its state, read from its status
+// (conflicted, conflict_paths), and the sync goes on to the next slot; a git
+// slot that stops on conflicts ends the sync with merge_conflict, as before.
+// What jj warned of while it synced a slot, and a failure to read what the
+// sync left, are on that slot's state (error), and the sync goes on.
+// A local source's jj store is the user's, so angee never fetches it: such a
+// slot is rebased onto its base as the store has it.
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (states []api.SourceState, err error) {
 	defer operation{name: "workspace.sync-base", title: fmt.Sprintf("Sync base for workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
@@ -1412,25 +1483,35 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if !ok {
 		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", vcs.SyncMerge, vcs.SyncRebase)}
 	}
-	if err := p.refuseJJSlots("sync-base", name, workspace, stack); err != nil {
-		return nil, err
-	}
-	// Check the slots are materialized first: the branch check reads git in
-	// each slot's path and would read an enclosing repository's branch.
-	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree)
+	// Check the slots are materialized first: a driver's checks read each
+	// slot's path, and git would read an enclosing repository there.
+	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeJJ)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
-		return nil, err
-	}
-	// Every slot must be able to sync before any is touched, so a refusal
-	// never leaves the workspace half-synced.
+	// Each slot's driver resolves the method for it, before any slot is read.
 	drivers := make([]vcs.Driver, len(targets))
 	slots := make([]vcs.Slot, len(targets))
+	methods := make([]string, len(targets))
+	jjSlots := false
 	for i, target := range targets {
 		drivers[i], slots[i] = p.workspaceSlotDriver(target.path, target.source, target.wsSource)
-		if err := requireCleanSlot(ctx, drivers[i], slots[i], fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+		if methods[i], err = drivers[i].SyncMethod(method); err != nil {
+			return nil, syncMethodRefused(err, name, target.slot, target.wsSource.Source, method)
+		}
+		jjSlots = jjSlots || slots[i].Mode == vcs.ModeJJ
+	}
+	// A machine that cannot run jj slots says so, rather than fail a fetch.
+	if jjSlots {
+		if err := p.requireJJSlots(ctx); err != nil {
+			return nil, err
+		}
+	}
+	// Every slot must be able to sync before any is touched, so a refusal
+	// never leaves the workspace half-synced. What a slot needs for it is its
+	// driver's to say (vcs.Driver.Ready).
+	for i, target := range targets {
+		if err := requireSlotReady(ctx, drivers[i], slots[i], vcs.VerbSyncBase, name, target.slot, target.wsSource.Source); err != nil {
 			return nil, err
 		}
 		if slots[i].BaseRef == "" {
@@ -1443,13 +1524,15 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 			}
 		}
 	}
-	// Fetch every slot and resolve its base before merging any, so a remote
+	// Fetch every slot and resolve its base before syncing any, so a remote
 	// that fails or lacks the base refuses the sync with no slot changed.
 	syncRefs := make([]string, len(targets))
 	for i, target := range targets {
-		fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: drivers[i].FetchURL(ctx, slots[i]), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
-		if err := drivers[i].Fetch(ctx, slots[i]); err != nil {
-			return nil, gitFailure(err, fetch)
+		if target.source.Kind == "git" {
+			fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: drivers[i].FetchURL(ctx, slots[i]), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
+			if err := drivers[i].Fetch(ctx, slots[i]); err != nil {
+				return nil, gitFailure(err, fetch)
+			}
 		}
 		syncRef, err := drivers[i].ResolveBase(ctx, slots[i])
 		if errors.Is(err, vcs.ErrBaseNotFound) {
@@ -1460,31 +1543,121 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 		}
 		syncRefs[i] = syncRef
 	}
-	states = []api.SourceState{}
+	// Check what each rebase would rewrite before rebasing any (plan D12).
+	steps := make([]gitStep, len(targets))
 	for i, target := range targets {
-		step := gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
-		if method == vcs.SyncRebase {
-			step.action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
+		steps[i] = gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
+		if methods[i] != vcs.SyncRebase {
+			continue
 		}
-		result, err := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], method)
-		if err != nil {
-			return nil, gitFailure(err, step)
+		steps[i].action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
+		if err := drivers[i].CheckRebase(ctx, slots[i], syncRefs[i]); err != nil {
+			return nil, syncFailure(err, steps[i], name)
 		}
-		if result.Conflicted {
-			return nil, syncConflict(result, step)
+	}
+	states = []api.SourceState{}
+	var synced []string
+	for i, target := range targets {
+		result, syncErr := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], methods[i])
+		if syncErr != nil && !result.OK {
+			return nil, afterSynced(syncFailure(syncErr, steps[i], name), synced)
 		}
+		if result.Conflicted && !result.OK {
+			// The slot stopped mid-merge or mid-rebase (git).
+			return nil, afterSynced(syncConflict(result, steps[i]), synced)
+		}
+		synced = append(synced, target.slot)
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {
 			return nil, err
+		}
+		// A conflict recorded in the slot's commits (jj) reaches its state
+		// through its status, as conflicted and conflict_paths. The slot
+		// synced, but what jj warned of, or a failure to read what the sync
+		// left, is on its state, and the sync goes on.
+		var warned *vcs.Warning
+		switch {
+		case syncErr == nil:
+		case errors.As(syncErr, &warned):
+			state.Error = joinNonEmpty(state.Error, fmt.Sprintf("synced, but jj warned while %s: %s", steps[i].action, warned.Text))
+		default:
+			state.Error = joinNonEmpty(state.Error, fmt.Sprintf("synced, but reading what %s left failed: %v", steps[i].action, syncErr))
 		}
 		states = append(states, state)
 	}
 	return states, nil
 }
 
+// joinNonEmpty joins the non-empty of a and b with "; ".
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
+}
+
+// afterSynced makes err, the failure of a slot's sync, name the slots synced
+// before it, which it leaves synced: in the message, before the remedy, and
+// in the detail. err is an *OperationError, as syncFailure and syncConflict
+// return; anything else passes through.
+func afterSynced(err error, synced []string) error {
+	var opErr *OperationError
+	if len(synced) == 0 || !errors.As(err, &opErr) {
+		return err
+	}
+	quoted := make([]string, len(synced))
+	for i, slot := range synced {
+		quoted[i] = fmt.Sprintf("%q", slot)
+	}
+	noun := "source slot"
+	if len(synced) > 1 {
+		noun = "source slots"
+	}
+	note := fmt.Sprintf("%s %s synced before it, and stay synced.", noun, strings.Join(quoted, ", "))
+	if opErr.Summary == "" {
+		opErr.Summary = opErr.Error()
+	}
+	opErr.Summary += " " + note
+	opErr.Detail = joinNonEmpty(note, opErr.Detail)
+	return opErr
+}
+
+// syncFailure is a slot's sync failure in the service's words: a rebase that
+// would rewrite what is not the slot's to rewrite is its refusal
+// (rebaseRefusal), and anything else the failure of step.
+func syncFailure(err error, step gitStep, workspaceName string) error {
+	if refusal := rebaseRefusal(err, workspaceName, step.slot, step.source); refusal != nil {
+		return refusal
+	}
+	return gitFailure(err, step)
+}
+
+// syncMethodRefused is the refusal of a sync-base method a slot's driver
+// cannot sync by (vcs.Driver.SyncMethod), such as a merge of a jj slot (plan
+// D11): rebasing instead of the merge asked for would be worse than
+// refusing, so no slot is touched.
+func syncMethodRefused(err error, workspaceName, slot, source, method string) error {
+	if !errors.Is(err, vcs.ErrUnsupported) {
+		return err
+	}
+	hint := "Sync by rebase, or pass no method: each slot is then synced its own way, a git slot by merging and a jj slot by rebasing."
+	return &OperationError{
+		Code:      CodeInvalidInput,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Hint:      hint,
+		Summary:   fmt.Sprintf("source slot %q cannot be synced by %s (%v). %s", slot, method, err, hint),
+		Err:       err,
+	}
+}
+
 // normalizeWorkspaceSyncBaseMethod reads a requested sync-base method. No
 // method is vcs.SyncDefault, which each slot's driver resolves to its own
-// natural sync (git: a merge).
+// natural sync (vcs.Driver.SyncMethod; git: a merge).
 func normalizeWorkspaceSyncBaseMethod(method string) (string, bool) {
 	switch method = strings.ToLower(strings.TrimSpace(method)); method {
 	case vcs.SyncDefault, vcs.SyncMerge, vcs.SyncRebase:

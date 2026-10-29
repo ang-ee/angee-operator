@@ -49,6 +49,9 @@ const (
 	CauseBackupRequestConflict = "backup_request_conflict"
 	CauseJJSlotUnsupported     = "jj_slot_unsupported"
 	CauseJJUnavailable         = "jj_unavailable"
+	CauseSharedCommits         = "shared_commits"
+	CauseImmutableCommits      = "immutable_commits"
+	CauseUntrackedPaths        = "untracked_paths"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.
@@ -65,7 +68,8 @@ const (
 // code, the cause when known, the operation and the objects it concerns, a
 // remedy, and the failing tool's output. Its message reads
 // "<Operation> for <target>: <what failed>. <remedy>", followed by
-// " git: <line>" when a git command failed.
+// " <tool>: <line>" when a version-control command failed (" git: <line>",
+// " jj: <line>").
 type OperationError struct {
 	Code      string
 	Cause     string
@@ -81,12 +85,14 @@ type OperationError struct {
 	// Detail is the redacted tail of the failing tool's output.
 	Detail string
 	// Title is the operation and its target, e.g. `Sync base for workspace
-	// "src"`; Summary is what failed and the remedy; GitLine is git's line
-	// that names the failure.
-	Title   string
-	Summary string
-	GitLine string
-	Err     error
+	// "src"`; Summary is what failed and the remedy; ToolLine is the failing
+	// tool's own line that names the failure, and Tool names that tool (git
+	// when empty).
+	Title    string
+	Summary  string
+	Tool     string
+	ToolLine string
+	Err      error
 }
 
 func (e *OperationError) Error() string {
@@ -100,10 +106,18 @@ func (e *OperationError) Error() string {
 	if e.Title != "" {
 		message = e.Title + ": " + message
 	}
-	if e.GitLine != "" {
-		message += " git: " + e.GitLine
+	if e.ToolLine != "" {
+		message += " " + e.tool() + ": " + e.ToolLine
 	}
 	return message
+}
+
+// tool names the tool ToolLine quotes.
+func (e *OperationError) tool() string {
+	if e.Tool == "" {
+		return "git"
+	}
+	return e.Tool
 }
 
 func (e *OperationError) Unwrap() error { return e.Err }
@@ -277,11 +291,12 @@ func (s gitStep) describe() string {
 	return text
 }
 
-// gitFailure turns a failed git command into a GIT_FAILED (or TIMEOUT)
-// *OperationError whose message names the action and remote. git's own
-// words follow (gitErrorLine) and its whole output goes to Detail: angee does
-// not interpret them, since git and ssh own their diagnostics. An
-// *OperationError passes through.
+// gitFailure turns a failed version-control command into a GIT_FAILED (or
+// TIMEOUT) *OperationError whose message names the action and remote. The
+// tool's own words follow and its whole output goes to Detail: git's line is
+// gitErrorLine, and a driver's vcs.ToolError (a jj command's) names its tool
+// and line itself. angee does not interpret them, since the tools and ssh own
+// their diagnostics. An *OperationError passes through.
 func gitFailure(err error, step gitStep) error {
 	if err == nil {
 		return nil
@@ -293,6 +308,11 @@ func gitFailure(err error, step gitStep) error {
 		return err
 	}
 	code, cause := CodeGitFailed, step.cause
+	tool, line, detail := "", gitErrorLine(err), gitErrorDetail(err)
+	var toolErr vcs.ToolError
+	if errors.As(err, &toolErr) {
+		tool, line, detail = toolErr.Tool(), toolErr.Line(), tailBytes(strings.TrimSpace(toolErr.Output()), maxErrorDetail)
+	}
 	summary := step.describe()
 	if summary == "" {
 		summary = gitErrorAction(err)
@@ -305,23 +325,30 @@ func gitFailure(err error, step gitStep) error {
 		code = CodeTimeout
 		hint = "Raise ANGEE_GIT_TIMEOUT for slow remotes."
 		summary += fmt.Sprintf(": timed out after %s. %s", timeout.Timeout, hint)
-	case errors.Is(err, exec.ErrNotFound):
+	case errors.Is(err, exec.ErrNotFound) && tool == "":
 		cause = CauseGitUnavailable
 		summary += ": git is not installed."
+	case errors.Is(err, exec.ErrNotFound):
+		code, cause = CodePreconditionFailed, CauseJJUnavailable
+		summary += ": " + tool + " is not installed."
+	case line == "" && tool == "" && !errors.As(err, new(*git.CommandError)):
+		// Neither git's nor a tool's words: the error is all there is.
+		summary += ": " + logctx.RedactText(err.Error()) + "."
 	default:
 		summary += "."
 	}
 	return &OperationError{
-		Code:    code,
-		Cause:   cause,
-		Slot:    step.slot,
-		Source:  step.source,
-		Remote:  logctx.RedactURL(step.remote),
-		Hint:    hint,
-		Detail:  gitErrorDetail(err),
-		Summary: summary,
-		GitLine: gitErrorLine(err),
-		Err:     err,
+		Code:     code,
+		Cause:    cause,
+		Slot:     step.slot,
+		Source:   step.source,
+		Remote:   logctx.RedactURL(step.remote),
+		Hint:     hint,
+		Detail:   detail,
+		Summary:  summary,
+		Tool:     tool,
+		ToolLine: line,
+		Err:      err,
 	}
 }
 
@@ -409,6 +436,12 @@ func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, o
 	if err != nil {
 		return err
 	}
+	return uncommittedChanges(paths, object, slot, source)
+}
+
+// uncommittedChanges is the uncommitted_changes refusal of object, a
+// workspace slot or a source cache, listing paths; nil when there are none.
+func uncommittedChanges(paths []string, object, slot, source string) error {
 	if len(paths) == 0 {
 		return nil
 	}

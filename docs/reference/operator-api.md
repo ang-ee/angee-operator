@@ -74,7 +74,7 @@ Every failed operation is reported in one shape. GraphQL puts it in
 | `INVALID_INPUT` | The request is malformed or names an invalid value, including a template answer copier refuses (a validator, a choice, a missing required input). | `400` |
 | `CONFLICT` | Another mutation is running, or the object already exists. | `409` |
 | `PRECONDITION_FAILED` | The target's state must change first. | `409` |
-| `GIT_FAILED` | A git command failed. | `500` |
+| `GIT_FAILED` | A git or jj command failed. | `500` |
 | `TIMEOUT` | The operation ran out of time (`ANGEE_GIT_TIMEOUT`, `ANGEE_JOB_TIMEOUT`). | `500` |
 | `JOB_FAILED` | A job run failed. | `500` |
 | `INTERNAL` | Anything else. | `500` |
@@ -96,8 +96,11 @@ their diagnostics, and their words are passed through.
 | `slot_missing` | `PRECONDITION_FAILED` | A declared slot is not on disk; the hint names `angee workspace repair`. |
 | `branch_mismatch` | `PRECONDITION_FAILED` | A slot is not on its workspace branch. |
 | `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push. |
-| `jj_unavailable` | `PRECONDITION_FAILED` | A workspace with a jj slot needs jj with `workspace add --colocate`, git 2.48 or later, and not Windows; the hint says what to install. |
-| `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot yet (fetch, pull, push, publish, merge, rebase, the aborts and continue, diff), or `workspace push` or `sync-base` over a workspace that has one; `slot` or `paths` name the jj slots. Use jj in the slot. |
+| `jj_unavailable` | `PRECONDITION_FAILED` | A workspace with a jj slot needs jj with `workspace add --colocate`, git 2.48 or later, and not Windows, to create one, sync it or rebase it; the hint says what to install. |
+| `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot yet (fetch, pull, push, publish, merge, diff), or `workspace push` over a workspace with a slot whose manifest names mode `jj`; `slot` or `paths` name the jj slots. Use jj in the slot. |
+| `shared_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot (sync-base, or the slot's rebase) would rewrite commits another checkout holds: another jj workspace's working-copy commit, or a git worktree's checked-out branch; the message names them, and `paths` the worktrees. Nothing is rebased. |
+| `untracked_paths` | `PRECONDITION_FAILED` | A jj slot holds files jj does not track (the untracked paths of `jj status`), which a sync-base or rebase could keep over the base's own; `paths` lists them. Nothing is fetched or rebased. |
+| `immutable_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot would rewrite commits jj holds immutable (a tag's, an untracked remote bookmark's); the message names them. Nothing is rebased. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
 | `template_too_new` | `PRECONDITION_FAILED` | The template's `_min_copier_version` is newer than the Copier angee implements. |
@@ -108,8 +111,9 @@ their diagnostics, and their words are passed through.
 
 Messages read `<operation> for <target>: <what failed>. <remedy>`. A git
 failure ends with git's own words: its first `fatal:` or `error:` line, with
-the line before it, where git relays what ssh or the remote said. A
-not-found, conflict or invalid-input error keeps its own message. For
+the line before it, where git relays what ssh or the remote said. A jj
+failure ends with ` jj: ` and jj's first `Error:` line, with jj's output in
+`detail`. A not-found, conflict or invalid-input error keeps its own message. For
 example, sync-base on a workspace whose slot has uncommitted changes:
 
 ```json
@@ -139,10 +143,12 @@ Sync base for workspace "src": fetching source "angee-arp" (git@github-arpee:ang
 
 Workspace and source verbs check angee's own state before running git, so a
 refusal leaves nothing half done. `workspace sync-base` and `workspace push`
-check every slot before touching any: each must be on disk and on its
-branch, with no uncommitted changes, and (for push) have a branch to push.
-`workspace sync-base` also fetches every slot and resolves its base before
-merging any.
+check every slot before touching any: each must be on disk and, as its
+version control needs, on its branch with no uncommitted changes (a git
+worktree), and (for push) have a branch to push. A jj slot's working-copy
+commit rides along with its rebase. `workspace sync-base` also fetches every
+slot, resolves its base and checks what each rebase would rewrite before
+syncing any.
 
 A failed job run's receipt (`GET /job-runs/{id}`, GraphQL `jobRun`) carries
 `error_code` (`errorCode`) and `error_cause` (`errorCause`) beside `error`.
@@ -550,7 +556,20 @@ worktrees. Each status source includes the manifest `branch`, actual
 `current_ref`, and `state`; `state: "branch-mismatch"` means the worktree is not
 on its manifest branch, and the workspace top-level state is `discrepancy`.
 `sync-base` updates each workspace branch from its base ref without switching
-branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
+branches; body: `{"method":"merge"}`, `{"method":"rebase"}`, or no method
+(`{}`), which syncs each slot its own way: a git worktree by merging, a jj
+slot by rebasing. It acts on the slots whose manifest names a mode that syncs
+(`worktree`, `jj`) and skips a slot that names none, even a jj slot under
+`vcs: jj`. `merge` is refused with `INVALID_INPUT`, naming the slot, for a
+workspace with a slot whose manifest names mode `jj`, before any slot is
+read. A jj slot's conflict is a
+result, not an error: the slot's entry in the answer carries `conflicted` and
+`conflict_paths` (`conflictPaths` in GraphQL), read from its status, and the
+slots after it are synced too. What jj warned of while it rebased a slot is on that slot's `error`. A
+git slot that stops on conflicts still fails the sync with `merge_conflict`,
+and any failure after other slots synced names them, in the message and
+`detail`. A rebase rewrites the slot's commits, so a slot published
+before it is force-updated by the next publish.
 
 A jj slot (`mode: jj`, or no mode under `vcs: jj`) is never
 `branch-mismatch`, and its status carries what jj reads beyond git: in
@@ -621,7 +640,7 @@ The operator exposes three "update" operations, distinguished by scope:
 | --- | --- | --- |
 | **Whole source** | `POST /sources/{name}/pull` | Fetch and fast-forward the cached top-level source's tracking ref. |
 | **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. |
-| **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch — this is "stay current with `main`". |
+| **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot that names a mode (worktree or jj) against its declared base ref; by default a worktree is merged and a jj slot rebased. Stays on the workspace branch — this is "stay current with `main`". |
 
 GitOps topology (derived view across sources × workspace slots):
 
@@ -694,7 +713,10 @@ The convergence endpoints (`merge`, `rebase`, `merge-abort`,
 `rebase-abort`, `rebase-continue`, `publish`) return a `GitOpResult`
 with `{ok, conflicted, conflictFiles, message}`. On conflict the
 worktree is left in the conflicted state; `conflictFiles` lists the
-affected paths.
+affected paths. A jj slot never stops mid-operation: `rebase` records a
+conflict in its commits and answers `ok` and `conflicted` together, and
+`merge-abort`, `rebase-abort` and `rebase-continue` answer `400`
+`INVALID_INPUT`, since there is nothing in progress to abort or continue.
 
 Workspace preflight:
 
@@ -1070,7 +1092,7 @@ Operations:
 | Mutation | Behaviour |
 | --- | --- |
 | `workspaceSourceMerge(workspace, slot, ref)` | `git merge --no-ff --no-edit ref`. On conflict the worktree is left conflicted and `conflictFiles` lists the affected paths. |
-| `workspaceSourceRebase(workspace, slot, ref)` | `git rebase ref`. Conflict semantics match merge; resolve and call `rebaseContinue`, or call `rebaseAbort`. |
+| `workspaceSourceRebase(workspace, slot, ref)` | `git rebase ref`. Conflict semantics match merge; resolve and call `rebaseContinue`, or call `rebaseAbort`. On a jj slot, `jj rebase -b @ --onto ref` with `ref` in jj's spelling (`main@origin`), after the same check as sync-base that it rewrites no other checkout's commits (`shared_commits`); a conflict is recorded in the commits and answered as `ok` and `conflicted`. |
 | `workspaceSourceMergeAbort(workspace, slot)` | `git merge --abort`. |
 | `workspaceSourceRebaseAbort(workspace, slot)` | `git rebase --abort`. |
 | `workspaceSourceRebaseContinue(workspace, slot)` | `git rebase --continue` with `core.editor=true` so it never opens an editor. |
@@ -1079,7 +1101,9 @@ Operations:
 Conflict files come from `git ls-files -u`, so the list is exact and
 reflects only paths the index reports as conflicted. The
 `message` field carries the combined stdout + stderr from git for
-diagnostic display.
+diagnostic display. On a jj slot, the files are those of the conflicted
+commits the slot holds beyond `ref`, as jj records them, and `message` is
+jj's own account of the rebase.
 
 ### Template introspection
 

@@ -1080,3 +1080,44 @@ func TestReadOnlyQueriesFallbackForRelativeWorktreesExtension(t *testing.T) {
 		t.Fatalf("RefTargets(cache) = %q, %v; want main's commit", targets, err)
 	}
 }
+
+// Worktrees lists every worktree, the main one first, with its HEAD and the
+// branch it has checked out, none when detached, from any of them; a path
+// holding a line break is read whole.
+func TestWorktrees(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "--initial-branch=main", repo)
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "readme\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "-m", "init")
+	head := gitOutput(t, repo, "rev-parse", "HEAD")
+	topic, detached := filepath.Join(base, "topic\nline"), filepath.Join(base, "detached")
+	runGit(t, repo, "worktree", "add", "-b", "feature/x", topic)
+	runGit(t, repo, "worktree", "add", "--detach", detached)
+
+	got, err := New().Worktrees(ctx, detached)
+	if err != nil {
+		t.Fatalf("Worktrees() error = %v", err)
+	}
+	resolve := func(path string) string {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) error = %v", path, err)
+		}
+		return resolved
+	}
+	// git lists the linked worktrees by the names it keeps them under.
+	want := []Worktree{
+		{Path: resolve(repo), Head: head, Branch: "main"},
+		{Path: resolve(detached), Head: head},
+		{Path: resolve(topic), Head: head, Branch: "feature/x"},
+	}
+	for i := range got {
+		got[i].Path = resolve(got[i].Path)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Worktrees() = %#v, want %#v", got, want)
+	}
+}
