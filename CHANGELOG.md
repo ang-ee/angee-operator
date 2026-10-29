@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.24.0 — 2026-10-29
+
 ### Added
 
 - **A workspace slot can be a jj workspace** (phase 6 of
@@ -64,13 +66,11 @@ latest tag.
 - **`workspace destroy`'s refusal says "sources that have not been
   pushed"** rather than "git sources", since it now names jj slots too.
 
-### Changed
-
 - **The jj driver counts files jj will not snapshot as uncommitted, and
   keeps a pushed verdict when a slot's base is gone** (the prerequisites of
   phase 6 step 5 in `.agents/plans/jj-native-operator.md`, settling its
-  Q10). Nothing a user can reach changes: no manifest can select the jj
-  driver until phase 6, whose destroy guard needs both.
+  Q10). Both ship with phase 6, so a jj slot's status and destroy guard
+  have them from the start.
   - A new file over jj's `snapshot.max-new-file-size`, or outside its
     `snapshot.auto-track`, never reaches the slot's working-copy commit, so
     the slot read as clean and pushed while only it held the file. Status
@@ -80,9 +80,10 @@ latest tag.
     records one around it, Status snapshots again, up to three times, then
     fails. A `jj status` report it does not recognize (a heading out of
     place, or a report cut short) fails the read, rather than passing for
-    one with no untracked paths. What jj neither records nor lists, a nested
-    repository or a new file outside the slot's sparse patterns, still reads
-    as clean; the plan leaves that to the owner.
+    one with no untracked paths. What jj neither records nor lists still
+    reads as clean: a nested repository, which destroy refuses instead (see
+    Added), and a new file outside the slot's sparse patterns, which jj
+    slots do not support.
   - With a base that exists nowhere, the jj driver returned no verdict at
     all. Like the git driver, it now keeps the verdict wherever one needs no
     base: a dirty slot is not pushed, and one with an upstream is pushed when
