@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
 )
@@ -131,6 +132,44 @@ const (
 	SyncRebase  = "rebase"
 )
 
+// Verb names a verb whose preconditions Driver.Ready answers.
+type Verb string
+
+// VerbSyncBase is sync-base: bringing the slot's base into it.
+const VerbSyncBase Verb = "sync-base"
+
+// BranchMismatchError is returned by Driver.Ready when the checkout is not on
+// Slot.Branch, which the verb needs. Reason says how it differs; Fix is the
+// version-control tool's own command that puts it back, for a message.
+type BranchMismatchError struct {
+	Reason string
+	Fix    string
+}
+
+func (e *BranchMismatchError) Error() string { return "not on its branch: " + e.Reason }
+
+// UncommittedError is returned by Driver.Ready when the verb needs a checkout
+// with no uncommitted changes and it has some, which Paths lists.
+type UncommittedError struct {
+	Paths []string
+}
+
+func (e *UncommittedError) Error() string {
+	return "uncommitted changes in " + strings.Join(e.Paths, ", ")
+}
+
+// ToolError is a failed version-control command as a driver returns it, so a
+// message can quote the tool's own words without knowing which tool ran.
+type ToolError interface {
+	error
+	// Tool names the tool that failed, such as "jj".
+	Tool() string
+	// Line is the tool's own line naming the failure.
+	Line() string
+	// Output is everything the tool said, redacted.
+	Output() string
+}
+
 // PushPlan is what pushing a slot will do, decided by Driver.PlanPush before
 // anything is pushed, so a push of several slots can refuse before any of
 // them is pushed.
@@ -250,6 +289,13 @@ type Driver interface {
 	// the committed range from the checkout to ref.
 	Diff(ctx context.Context, s Slot, ref string) ([]api.DiffFile, error)
 
+	// Ready reports whether verb may run on the checkout as it stands: nil,
+	// or why not, as a *BranchMismatchError or an *UncommittedError, for the
+	// service to word. What a verb needs is the driver's to say: a git
+	// sync-base needs the checkout on Slot.Branch and clean, while a jj
+	// slot's working-copy commit rides along with its rebase. A verb the
+	// driver has no preconditions for is an error wrapping ErrUnsupported.
+	Ready(ctx context.Context, s Slot, verb Verb) error
 	// BranchMismatch says how the checkout differs from Slot.Branch, or
 	// returns "" when it is on it or Slot.Branch is empty.
 	BranchMismatch(ctx context.Context, s Slot) (string, error)
@@ -278,6 +324,12 @@ type Driver interface {
 	PlanPush(ctx context.Context, s Slot, ref, branch string) (PushPlan, error)
 	// Push carries out a plan PlanPush returned.
 	Push(ctx context.Context, s Slot, plan PushPlan) error
+	// SyncMethod resolves a sync-base method for the driver's checkouts:
+	// SyncDefault to its own natural sync (git: SyncMerge), and SyncMerge or
+	// SyncRebase to itself. A method the driver cannot sync by is an error
+	// wrapping ErrUnsupported. It runs nothing, so a caller can resolve every
+	// slot's method before any slot is touched.
+	SyncMethod(method string) (string, error)
 	// SyncBase brings onto, a ref ResolveBase returned, into the checkout's
 	// branch by method (SyncMerge, SyncRebase, or SyncDefault for the
 	// driver's own choice). A conflict is a result, not an error.

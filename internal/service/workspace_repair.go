@@ -179,8 +179,8 @@ func repairReason(err error) string {
 	var opErr *OperationError
 	if errors.As(err, &opErr) && opErr != nil && opErr.Summary != "" {
 		text = opErr.Summary
-		if opErr.GitLine != "" {
-			text += " git: " + opErr.GitLine
+		if opErr.ToolLine != "" {
+			text += " " + opErr.tool() + ": " + opErr.ToolLine
 		}
 	}
 	return strings.Join(strings.Fields(logctx.RedactText(text)), " ")

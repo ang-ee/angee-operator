@@ -21,6 +21,28 @@ func noOperationInProgress(verb string) error {
 	return fmt.Errorf("%s: a jj slot never has a merge or rebase in progress: %w", verb, vcs.ErrUnsupported)
 }
 
+// Ready lets sync-base run on a jj slot as it stands: the working-copy commit
+// rides along with the rebase, and there is no branch to be on.
+func (Driver) Ready(_ context.Context, _ vcs.Slot, verb vcs.Verb) error {
+	if verb != vcs.VerbSyncBase {
+		return notYet("the preconditions of " + string(verb))
+	}
+	return nil
+}
+
+// SyncMethod syncs a jj slot by rebasing it. A merge is refused: a jj slot
+// is not synced that way (plan D11), and rebasing when a merge was asked for
+// would be worse than refusing.
+func (Driver) SyncMethod(method string) (string, error) {
+	switch method {
+	case vcs.SyncDefault, vcs.SyncRebase:
+		return vcs.SyncRebase, nil
+	case vcs.SyncMerge:
+		return "", fmt.Errorf("a jj slot is synced by rebasing, never by merging: %w", vcs.ErrUnsupported)
+	}
+	return "", fmt.Errorf("unknown sync method %q: %w", method, vcs.ErrUnsupported)
+}
+
 // BranchMismatch is not implemented yet: phase 8 answers the verb
 // preconditions per driver.
 func (Driver) BranchMismatch(context.Context, vcs.Slot) (string, error) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
 // jjPassedEnv are the variables of the operator's environment every jj run
@@ -245,3 +246,27 @@ func (e *CommandError) Error() string {
 }
 
 func (e *CommandError) Unwrap() error { return e.Err }
+
+var _ vcs.ToolError = (*CommandError)(nil)
+
+// Tool is jj.
+func (e *CommandError) Tool() string { return "jj" }
+
+// Line is jj's own account of the failure: its first "Error:" line, else the
+// first line it printed.
+func (e *CommandError) Line() string {
+	first := ""
+	for line := range strings.SplitSeq(e.Stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Error:"):
+			return line
+		case first == "":
+			first = line
+		}
+	}
+	return first
+}
+
+// Output is jj's standard error, redacted.
+func (e *CommandError) Output() string { return e.Stderr }

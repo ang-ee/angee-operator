@@ -10,6 +10,43 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
+// Ready answers sync-base's preconditions: a checkout that must be on a
+// branch is on it, and has no uncommitted changes, which a merge or rebase
+// would mix into the base's.
+func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
+	if verb != vcs.VerbSyncBase {
+		return fmt.Errorf("no preconditions for %s on a git slot: %w", verb, vcs.ErrUnsupported)
+	}
+	if s.Branch != "" {
+		reason, err := d.BranchMismatch(ctx, s)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			return &vcs.BranchMismatchError{Reason: reason, Fix: fmt.Sprintf("git -C %s switch %s", s.Path, s.Branch)}
+		}
+	}
+	paths, err := d.DirtyPaths(ctx, s)
+	if err != nil {
+		return err
+	}
+	if len(paths) > 0 {
+		return &vcs.UncommittedError{Paths: paths}
+	}
+	return nil
+}
+
+// SyncMethod syncs by merging unless rebasing is asked for.
+func (Driver) SyncMethod(method string) (string, error) {
+	switch method {
+	case vcs.SyncDefault, vcs.SyncMerge:
+		return vcs.SyncMerge, nil
+	case vcs.SyncRebase:
+		return vcs.SyncRebase, nil
+	}
+	return "", fmt.Errorf("unknown sync method %q: %w", method, vcs.ErrUnsupported)
+}
+
 // BranchMismatch says how the checkout differs from the branch it must be on.
 func (d Driver) BranchMismatch(ctx context.Context, s vcs.Slot) (string, error) {
 	currentRef, err := d.git.CurrentRef(ctx, s.Path)

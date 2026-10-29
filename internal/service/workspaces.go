@@ -566,19 +566,48 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 		return err
 	}
 	if reason != "" {
-		hint := fmt.Sprintf("Switch it back with `git -C %s switch %s`, then retry.", path, wsSource.Branch)
-		return &OperationError{
-			Code:      CodePreconditionFailed,
-			Cause:     CauseBranchMismatch,
-			Workspace: workspaceName,
-			Slot:      slot,
-			Source:    wsSource.Source,
-			Paths:     []string{path},
-			Hint:      hint,
-			Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, reason, path, hint),
-		}
+		// Only a git worktree slot must stay on a branch
+		// (workspaceSourceRequiresBranch). The verbs that still ask here
+		// move to Driver.Ready, which names the fix itself, with the rest of
+		// phase 8 of the jj plan.
+		return branchMismatch(workspaceName, slot, wsSource.Source, path, &vcs.BranchMismatchError{Reason: reason, Fix: fmt.Sprintf("git -C %s switch %s", path, wsSource.Branch)})
 	}
 	return nil
+}
+
+// branchMismatch is the branch_mismatch refusal of a workspace slot at path,
+// with the fix its driver names.
+func branchMismatch(workspaceName, slot, source, path string, mismatch *vcs.BranchMismatchError) error {
+	hint := "Put it back on its branch, then retry."
+	if mismatch.Fix != "" {
+		hint = fmt.Sprintf("Switch it back with `%s`, then retry.", mismatch.Fix)
+	}
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseBranchMismatch,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Paths:     []string{path},
+		Hint:      hint,
+		Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, mismatch.Reason, path, hint),
+	}
+}
+
+// requireSlotReady refuses verb on a workspace slot when its driver says the
+// slot is not ready for it (vcs.Driver.Ready), in the service's words: a
+// branch mismatch with the fix the driver names, or uncommitted changes.
+func requireSlotReady(ctx context.Context, driver vcs.Driver, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) error {
+	err := driver.Ready(ctx, target, verb)
+	var mismatch *vcs.BranchMismatchError
+	var uncommitted *vcs.UncommittedError
+	switch {
+	case errors.As(err, &mismatch):
+		return branchMismatch(workspaceName, slot, source, target.Path, mismatch)
+	case errors.As(err, &uncommitted):
+		return uncommittedChanges(uncommitted.Paths, fmt.Sprintf("source slot %q", slot), slot, source)
+	}
+	return err
 }
 
 // workspaceSourceRequiresBranch reports whether a slot must stay on its
@@ -1396,22 +1425,28 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if err := p.refuseJJSlots("sync-base", name, workspace, stack); err != nil {
 		return nil, err
 	}
-	// Check the slots are materialized first: the branch check reads git in
-	// each slot's path and would read an enclosing repository's branch.
+	// Check the slots are materialized first: a driver's checks read each
+	// slot's path, and git would read an enclosing repository there.
 	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
-		return nil, err
-	}
-	// Every slot must be able to sync before any is touched, so a refusal
-	// never leaves the workspace half-synced.
+	// Each slot's driver resolves the method for it (git merges by default),
+	// before any slot is read.
 	drivers := make([]vcs.Driver, len(targets))
 	slots := make([]vcs.Slot, len(targets))
+	methods := make([]string, len(targets))
 	for i, target := range targets {
 		drivers[i], slots[i] = p.workspaceSlotDriver(target.path, target.source, target.wsSource)
-		if err := requireCleanSlot(ctx, drivers[i], slots[i], fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+		if methods[i], err = drivers[i].SyncMethod(method); err != nil {
+			return nil, err
+		}
+	}
+	// Every slot must be able to sync before any is touched, so a refusal
+	// never leaves the workspace half-synced. What a slot needs for it is its
+	// driver's to say (vcs.Driver.Ready).
+	for i, target := range targets {
+		if err := requireSlotReady(ctx, drivers[i], slots[i], vcs.VerbSyncBase, name, target.slot, target.wsSource.Source); err != nil {
 			return nil, err
 		}
 		if slots[i].BaseRef == "" {
@@ -1444,10 +1479,10 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	states = []api.SourceState{}
 	for i, target := range targets {
 		step := gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
-		if method == vcs.SyncRebase {
+		if methods[i] == vcs.SyncRebase {
 			step.action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
 		}
-		result, err := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], method)
+		result, err := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], methods[i])
 		if err != nil {
 			return nil, gitFailure(err, step)
 		}
@@ -1465,7 +1500,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 
 // normalizeWorkspaceSyncBaseMethod reads a requested sync-base method. No
 // method is vcs.SyncDefault, which each slot's driver resolves to its own
-// natural sync (git: a merge).
+// natural sync (vcs.Driver.SyncMethod; git: a merge).
 func normalizeWorkspaceSyncBaseMethod(method string) (string, bool) {
 	switch method = strings.ToLower(strings.TrimSpace(method)); method {
 	case vcs.SyncDefault, vcs.SyncMerge, vcs.SyncRebase:

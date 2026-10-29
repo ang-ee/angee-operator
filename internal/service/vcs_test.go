@@ -80,6 +80,23 @@ func (f *fakeDriver) Diff(_ context.Context, s vcs.Slot, _ string) ([]api.DiffFi
 	return f.diff, f.err
 }
 
+func (f *fakeDriver) Ready(_ context.Context, s vcs.Slot, verb vcs.Verb) error {
+	f.call("Ready", s, string(verb))
+	return f.fail["Ready"]
+}
+
+// SyncMethod merges by default, as the git driver does, or fails with
+// fail["SyncMethod"]. It is not recorded: it is handed no slot.
+func (f *fakeDriver) SyncMethod(method string) (string, error) {
+	if err := f.fail["SyncMethod"]; err != nil {
+		return "", err
+	}
+	if method == vcs.SyncDefault {
+		return vcs.SyncMerge, nil
+	}
+	return method, nil
+}
+
 func (f *fakeDriver) BranchMismatch(_ context.Context, s vcs.Slot) (string, error) {
 	f.call("BranchMismatch", s)
 	return "", nil
@@ -346,15 +363,15 @@ func TestWorkspaceSlotVerbsDispatchToTheSlotDriver(t *testing.T) {
 		{name: "sync-base by default", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,)"}},
+		}, want: []string{"Ready(sync-base)", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
 		{name: "sync-base by merge", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "merge")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
+		}, want: []string{"Ready(sync-base)", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,merge)"}},
 		{name: "sync-base by rebase", run: func(p *Platform, ws string) (string, error) {
 			_, err := p.WorkspaceSyncBase(ctx, ws, "rebase")
 			return "", err
-		}, want: []string{"BranchMismatch", "DirtyPaths", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,rebase)"}},
+		}, want: []string{"Ready(sync-base)", "FetchURL", "Fetch", "ResolveBase", "SyncBase(fake/main,rebase)"}},
 		{name: "merge", run: func(p *Platform, ws string) (string, error) {
 			result, err := p.WorkspaceSourceMerge(ctx, ws, "app", "main")
 			return result.Message, err
@@ -498,7 +515,7 @@ func TestWorkspaceSyncBaseReportsTheDriversConflict(t *testing.T) {
 	_, err := platform.WorkspaceSyncBase(context.Background(), workspaceName, "merge")
 	opErr := AsOperationError(err)
 	if opErr == nil || opErr.Code != CodeGitFailed || opErr.Cause != CauseMergeConflict || !slices.Equal(opErr.Paths, []string{"fake.txt"}) ||
-		opErr.Slot != "app" || opErr.Source != "app" || opErr.Detail != "CONFLICT (content): fake.txt" || opErr.GitLine != "" {
+		opErr.Slot != "app" || opErr.Source != "app" || opErr.Detail != "CONFLICT (content): fake.txt" || opErr.ToolLine != "" {
 		t.Fatalf("WorkspaceSyncBase() error = %+v, want merge_conflict on the driver's files", opErr)
 	}
 	if want := `Sync base for workspace "feature-a": merging fake/main into source slot "app" stopped on conflicts in fake.txt. Resolve the conflicts`; !strings.HasPrefix(err.Error(), want) {
@@ -552,6 +569,8 @@ func TestUnsupportedSlotVerbsAreInvalidInput(t *testing.T) {
 	}{
 		{"verb", "MergeAbort", func(p *Platform, ws string) error { _, err := p.WorkspaceSourceMergeAbort(ctx, ws, "app"); return err }},
 		{"precondition", "DirtyPaths", func(p *Platform, ws string) error { _, err := p.WorkspaceSourcePull(ctx, ws, "app"); return err }},
+		{"readiness", "Ready", func(p *Platform, ws string) error { _, err := p.WorkspaceSyncBase(ctx, ws, ""); return err }},
+		{"sync method", "SyncMethod", func(p *Platform, ws string) error { _, err := p.WorkspaceSyncBase(ctx, ws, "merge"); return err }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			platform, workspaceName, _, _ := setupGitWorkspace(t)
@@ -567,6 +586,47 @@ func TestUnsupportedSlotVerbsAreInvalidInput(t *testing.T) {
 			// Reported as invalid input, it is still the driver's refusal.
 			if !errors.Is(err, vcs.ErrUnsupported) || !errors.Is(err, unsupported) {
 				t.Fatalf("error = %v, want it to still match vcs.ErrUnsupported and the driver's error", err)
+			}
+		})
+	}
+}
+
+// sync-base asks each slot's driver whether it may sync (vcs.Driver.Ready)
+// and words its answer: a branch mismatch names the fix the driver gives, and
+// uncommitted changes list their paths. Either refuses before any slot is
+// fetched.
+func TestWorkspaceSyncBaseWordsTheDriversReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		ready     error
+		cause     string
+		wantStart string
+		wantHint  string
+		wantPaths []string
+	}{
+		{"branch mismatch", &vcs.BranchMismatchError{Reason: `on "other", expected "feature-a"`, Fix: "fake switch feature-a"}, CauseBranchMismatch,
+			`Sync base for workspace "feature-a": workspace "feature-a" source "app" has branch mismatch: on "other", expected "feature-a" at `,
+			"Switch it back with `fake switch feature-a`, then retry.", nil},
+		{"uncommitted changes", &vcs.UncommittedError{Paths: []string{"a.txt", "b.txt"}}, CauseUncommittedChanges,
+			`Sync base for workspace "feature-a": source slot "app" has uncommitted changes in a.txt, b.txt.`,
+			"Commit or restore the changes, then retry.", []string{"a.txt", "b.txt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			platform, workspaceName, _, _ := setupGitWorkspace(t)
+			fake := &fakeDriver{fail: map[string]error{"Ready": tc.ready}}
+			platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+			t.Setenv("PATH", t.TempDir())
+
+			_, err := platform.WorkspaceSyncBase(context.Background(), workspaceName, "")
+			opErr := AsOperationError(err)
+			if opErr == nil || opErr.Code != CodePreconditionFailed || opErr.Cause != tc.cause || opErr.Slot != "app" || opErr.Hint != tc.wantHint ||
+				!strings.HasPrefix(err.Error(), tc.wantStart) || (tc.wantPaths != nil && !slices.Equal(opErr.Paths, tc.wantPaths)) {
+				t.Fatalf("WorkspaceSyncBase() error = %v (%+v), want %s starting %q with hint %q", err, opErr, tc.cause, tc.wantStart, tc.wantHint)
+			}
+			for _, call := range fake.calls {
+				if call.method != "Ready" {
+					t.Fatalf("driver called %s after the slot was refused", call.method)
+				}
 			}
 		})
 	}
