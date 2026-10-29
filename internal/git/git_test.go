@@ -3,10 +3,13 @@ package git
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -795,5 +798,218 @@ func TestLinkedWorktree(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Fatalf("LinkedWorktree(%s) = %v, %v, want %v", tc.dir, got, err, tc.want)
 		}
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		line, floor string
+		want        bool
+	}{
+		{"git version 2.48.0", RelativeWorktreesVersion, true},
+		{"git version 2.50.1 (Apple Git-155)", RelativeWorktreesVersion, true},
+		{"git version 2.48.0.windows.1", RelativeWorktreesVersion, true},
+		{"git version 3.0.0", RelativeWorktreesVersion, true},
+		{"git version 2.47.2", RelativeWorktreesVersion, false},
+		{"git version 2.100.0", RelativeWorktreesVersion, true},
+		{"git version 1.99.0", RelativeWorktreesVersion, false},
+		{"git version 2.42.0", "2.42", true},
+		{"git version 2.41.9", "2.42", false},
+		{"", RelativeWorktreesVersion, false},
+		{"git version unknown", RelativeWorktreesVersion, false},
+		{"git version 2.50.1", "", false},
+	} {
+		if got := VersionAtLeast(tc.line, tc.floor); got != tc.want {
+			t.Errorf("VersionAtLeast(%q, %q) = %v, want %v", tc.line, tc.floor, got, tc.want)
+		}
+	}
+}
+
+// commitAt commits what is staged in dir with message, as committed at when.
+func commitAt(t *testing.T, dir, when, message string) {
+	t.Helper()
+	t.Setenv("GIT_AUTHOR_DATE", when)
+	t.Setenv("GIT_COMMITTER_DATE", when)
+	runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", message)
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		t.Fatalf("git %v in %s error = %v", args, dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Log lists HEAD's history newest committer time first, merges with both
+// parents and messages whole, up to its limit; a file named HEAD does not
+// make HEAD ambiguous, and a repository with no commit yet has none, while
+// a HEAD naming a missing commit is an error. The repository's
+// i18n.logOutputEncoding and its replace refs change nothing it reads.
+func TestLog(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	// git does not look for a repository in the ceiling, only below it.
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	mustWriteFile(t, filepath.Join(repo, "HEAD"), "a file named HEAD\n")
+	runGit(t, repo, "add", "HEAD")
+	commitAt(t, repo, "2026-01-01T00:00:00Z", "first\n\nwith a body")
+	runGit(t, repo, "branch", "topic")
+	commitAt(t, repo, "2026-01-03T00:00:00Z", "second, café")
+	runGit(t, repo, "checkout", "-q", "topic")
+	commitAt(t, repo, "2026-01-02T00:00:00Z", "topic")
+	runGit(t, repo, "checkout", "-q", "main")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-01-04T00:00:00Z")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "merge", "-q", "--no-ff", "-m", "merge topic", "topic")
+	id := func(rev string) string { return gitOutput(t, repo, "rev-parse", rev) }
+
+	client := New()
+	commits, err := client.Log(ctx, repo, 10)
+	if err != nil {
+		t.Fatalf("Log() error = %v", err)
+	}
+	var hashes, messages []string
+	for _, c := range commits {
+		hashes = append(hashes, c.Hash)
+		messages = append(messages, c.Message)
+	}
+	if want := []string{id("main"), id("main^1"), id("topic"), id("topic^")}; !slices.Equal(hashes, want) {
+		t.Fatalf("Log() hashes = %q, want merge, second, topic, first: %q", hashes, want)
+	}
+	if want := []string{"merge topic\n", "second, café\n", "topic\n", "first\n\nwith a body\n"}; !slices.Equal(messages, want) {
+		t.Fatalf("Log() messages = %q, want %q", messages, want)
+	}
+	merge, first := commits[0], commits[3]
+	if want := []string{id("main^1"), id("main^2")}; !slices.Equal(merge.Parents, want) {
+		t.Fatalf("merge parents = %q, want %q", merge.Parents, want)
+	}
+	if first.Parents == nil || len(first.Parents) != 0 {
+		t.Fatalf("root commit parents = %#v, want empty", first.Parents)
+	}
+	if want := time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC); !merge.Committed.Equal(want) {
+		t.Fatalf("merge committed at %s, want %s", merge.Committed, want)
+	}
+	if merge.AuthorName != "Test User" || merge.AuthorEmail != "test@example.com" {
+		t.Fatalf("merge author = %q <%q>, want Test User <test@example.com>", merge.AuthorName, merge.AuthorEmail)
+	}
+
+	if limited, err := client.Log(ctx, repo, 2); err != nil || len(limited) != 2 || limited[1].Hash != id("main^1") {
+		t.Fatalf("Log(2) = %+v, %v; want merge and second", limited, err)
+	}
+	if none, err := client.Log(ctx, repo, 0); err != nil || none != nil {
+		t.Fatalf("Log(0) = %+v, %v; want nothing run", none, err)
+	}
+	empty := filepath.Join(base, "empty")
+	runGit(t, "", "init", "-q", empty)
+	if none, err := client.Log(ctx, empty, 10); err != nil || len(none) != 0 {
+		t.Fatalf("Log(empty repository) = %+v, %v; want no commits", none, err)
+	}
+	if _, err := client.Log(ctx, base, 10); err == nil {
+		t.Fatal("Log(not a repository) error = nil")
+	}
+	broken := filepath.Join(base, "broken")
+	runGit(t, "", "init", "-q", "--initial-branch=main", broken)
+	mustWriteFile(t, filepath.Join(broken, ".git", "refs", "heads", "main"), strings.Repeat("0123456789", 4)+"\n")
+	if got, err := client.Log(ctx, broken, 10); err == nil {
+		t.Fatalf("Log(HEAD names a missing commit) = %+v, want an error", got)
+	}
+
+	runGit(t, repo, "config", "i18n.logOutputEncoding", "ISO-8859-1")
+	runGit(t, repo, "replace", id("main^1"), id("topic"))
+	if again, err := client.Log(ctx, repo, 10); err != nil || !reflect.DeepEqual(again, commits) {
+		t.Fatalf("Log() under i18n.logOutputEncoding and a replace ref =\n%+v, %v\nwant\n%+v", again, err, commits)
+	}
+}
+
+// RefTargets keys each ref by what it points at: a commit for branches,
+// remote-tracking branches and lightweight tags, the tag object for an
+// annotated tag. A symbolic ref (origin/HEAD) is left out.
+func TestRefTargets(t *testing.T) {
+	isolateGitConfig(t)
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--bare", "--initial-branch=main", remote)
+	runGit(t, "", "clone", "-q", remote, repo)
+	commitAt(t, repo, "2026-01-01T00:00:00Z", "first")
+	runGit(t, repo, "push", "-q", "origin", "main")
+	runGit(t, repo, "remote", "set-head", "origin", "main")
+	runGit(t, repo, "branch", "other")
+	runGit(t, repo, "tag", "light")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "tag", "-a", "-m", "annotated", "annotated")
+	if got := gitOutput(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD"); got != "refs/remotes/origin/main" {
+		t.Fatalf("origin/HEAD = %q, want a symbolic ref to origin/main", got)
+	}
+
+	targets, err := New().RefTargets(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("RefTargets() error = %v", err)
+	}
+	want := map[string][]string{
+		gitOutput(t, repo, "rev-parse", "main"):      {"refs/heads/main", "refs/heads/other", "refs/remotes/origin/main", "refs/tags/light"},
+		gitOutput(t, repo, "rev-parse", "annotated"): {"refs/tags/annotated"},
+	}
+	if !reflect.DeepEqual(targets, want) {
+		t.Fatalf("RefTargets() = %q, want %q", targets, want)
+	}
+}
+
+// A repository with extensions.relativeWorktrees, which `jj workspace add
+// --colocate` sets on a source's cache, is one go-git refuses to open. The
+// readers that try go-git first answer for the cache and for its worktrees
+// what they answered before the extension was set, through the git CLI, and
+// the CLI-only readers read it too.
+func TestReadOnlyQueriesFallbackForRelativeWorktreesExtension(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	client := New()
+	if version, err := client.Version(ctx); err != nil || !VersionAtLeast(version, RelativeWorktreesVersion) {
+		t.Skipf("git %q (%v) has no relative worktrees", version, err)
+	}
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	cache := filepath.Join(base, "cache")
+	slot := filepath.Join(base, "slot")
+	runGit(t, "", "init", "-q", "--bare", "--initial-branch=main", remote)
+	runGit(t, "", "clone", "-q", remote, cache)
+	commitAt(t, cache, "2026-01-01T00:00:00Z", "first")
+	runGit(t, cache, "push", "-q", "-u", "origin", "main")
+	if err := client.WorktreeAddBranch(ctx, cache, slot, "workspace/slot", "main", false); err != nil {
+		t.Fatalf("WorktreeAddBranch() error = %v", err)
+	}
+
+	read := func(dir string) string {
+		t.Helper()
+		ref, refErr := client.CurrentRef(ctx, dir)
+		branch, onBranch, branchErr := client.CurrentBranch(ctx, dir)
+		upstream, hasUpstream, upstreamErr := client.Upstream(ctx, dir)
+		remotes, remotesErr := client.Remotes(ctx, dir)
+		return fmt.Sprintf("ref=%s,%v branch=%s,%v,%v upstream=%s,%v,%v remotes=%q,%v main=%v origin/main=%v missing=%v",
+			ref, refErr, branch, onBranch, branchErr, upstream, hasUpstream, upstreamErr, remotes, remotesErr,
+			client.RefExists(ctx, dir, "main"), client.RefExists(ctx, dir, "origin/main"), client.RefExists(ctx, dir, "missing"))
+	}
+	before := map[string]string{cache: read(cache), slot: read(slot)}
+
+	runGit(t, cache, "-c", "worktree.useRelativePaths=true", "worktree", "add", "-q", "--detach", filepath.Join(base, "relative"))
+	if got := configValue(t, cache, "extensions.relativeWorktrees"); got != "true" {
+		t.Fatalf("extensions.relativeWorktrees = %q, want true", got)
+	}
+	if got := configValue(t, cache, "core.repositoryformatversion"); got != "1" {
+		t.Fatalf("core.repositoryformatversion = %q, want 1", got)
+	}
+	for dir, want := range before {
+		if got := read(dir); got != want {
+			t.Errorf("after the extension, %s reads\n%s\nwant\n%s", filepath.Base(dir), got, want)
+		}
+	}
+	if commits, err := client.Log(ctx, cache, 10); err != nil || len(commits) != 1 || commits[0].Message != "first\n" {
+		t.Fatalf("Log(cache) = %+v, %v; want the one commit", commits, err)
+	}
+	if targets, err := client.RefTargets(ctx, cache); err != nil || len(targets) != 1 {
+		t.Fatalf("RefTargets(cache) = %q, %v; want main's commit", targets, err)
 	}
 }

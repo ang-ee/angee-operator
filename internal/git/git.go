@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -226,6 +227,22 @@ func (c Client) runText(ctx context.Context, dir string, args ...string) (string
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// runStdout runs git in dir and returns its standard output alone, for a
+// caller that parses it, so a warning git prints is not read as output. A
+// failure carries standard error.
+func (c Client) runStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd, trace := c.command(ctx, dir, nil, args)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	trace(logctx.CombinedOutput(stdout.Bytes(), stderr.Bytes()), err)
+	if err != nil {
+		return nil, commandError(args, stderr.Bytes(), err)
+	}
+	return stdout.Bytes(), nil
 }
 
 // NonInteractiveEnv returns env configured so git and SSH cannot prompt. An
@@ -796,6 +813,91 @@ func (c Client) AheadBehind(ctx context.Context, dir, base string) (ahead int, b
 	return c.aheadBehindCLI(ctx, dir, base)
 }
 
+// LogCommit is a commit as Log lists it.
+type LogCommit struct {
+	Hash        string
+	Parents     []string
+	AuthorName  string
+	AuthorEmail string
+	Committed   time.Time // the committer's time
+	Message     string
+}
+
+// logFormat prints a commit's fields a line each, the message last, since it
+// may span lines. With -z a NUL ends each commit, which no field holds.
+const logFormat = "%H%n%P%n%ct%n%an%n%ae%n%B"
+
+// Log lists up to limit commits reachable from HEAD in the repository at dir,
+// in git log's default order, newest committer time first. A HEAD with no
+// commit yet has none. It runs the git CLI, so it reads a repository go-git
+// refuses to open, such as a cache jj has added a slot to
+// (RelativeWorktreesVersion). Names and messages are UTF-8, converted from
+// the encoding a commit declares, and replace refs are not followed, as
+// go-git follows none.
+func (c Client) Log(ctx context.Context, dir string, limit int) ([]LogCommit, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	// The -- keeps a file named HEAD from making HEAD ambiguous.
+	out, err := c.runStdout(ctx, dir, "--no-replace-objects", "log", "-z", "--no-show-signature", "--encoding=UTF-8",
+		"--max-count="+strconv.Itoa(limit), "--format="+logFormat, "HEAD", "--")
+	if err != nil {
+		// rev-parse exits 1 for a HEAD that names nothing, an unborn branch,
+		// but 0 for one that names a missing object, and 128 outside a
+		// repository: only the first is an empty history.
+		var exitErr *exec.ExitError
+		if _, headErr := c.runStdout(ctx, dir, "rev-parse", "--verify", "--quiet", "HEAD"); errors.As(headErr, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var commits []LogCommit
+	for _, record := range strings.Split(string(out), "\x00") {
+		if record == "" {
+			continue
+		}
+		fields := strings.SplitN(record, "\n", 6)
+		if len(fields) != 6 {
+			return nil, fmt.Errorf("git log in %s: unexpected record %q", dir, record)
+		}
+		seconds, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("git log in %s: committer time %q: %w", dir, fields[2], err)
+		}
+		commits = append(commits, LogCommit{
+			Hash:        fields[0],
+			Parents:     strings.Fields(fields[1]),
+			Committed:   time.Unix(seconds, 0),
+			AuthorName:  fields[3],
+			AuthorEmail: fields[4],
+			Message:     fields[5],
+		})
+	}
+	return commits, nil
+}
+
+// RefTargets maps each object a ref of the repository at dir points at to the
+// full names of those refs, sorted. A symbolic ref (refs/remotes/origin/HEAD)
+// is left out, and an annotated tag is keyed by its tag object, not by the
+// commit it tags. Like Log, it runs the git CLI.
+func (c Client) RefTargets(ctx context.Context, dir string) (map[string][]string, error) {
+	out, err := c.runStdout(ctx, dir, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
+	if err != nil {
+		return nil, err
+	}
+	targets := map[string][]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		// A symbolic ref has a third field, its target's name.
+		if fields := strings.Fields(line); len(fields) == 2 {
+			targets[fields[0]] = append(targets[fields[0]], fields[1])
+		}
+	}
+	for _, names := range targets {
+		slices.Sort(names)
+	}
+	return targets, nil
+}
+
 func (c Client) Config(ctx context.Context, dir, key string) (string, bool, error) {
 	return c.configCLI(ctx, dir, key)
 }
@@ -804,6 +906,44 @@ func (c Client) Config(ctx context.Context, dir, key string) (string, bool, erro
 // "git version 2.50.1 (Apple Git-155)".
 func (c Client) Version(ctx context.Context) (string, error) {
 	return c.runText(ctx, "", "--version")
+}
+
+// RelativeWorktreesVersion is the oldest git that opens a repository with
+// extensions.relativeWorktrees set. `jj workspace add --colocate` sets it on
+// the repository it adds a workspace to, since it adds the workspace's git
+// worktree with relative links, and an older git refuses that repository (a
+// source's cache) and every git worktree slot of it. So jj slots need it.
+const RelativeWorktreesVersion = "2.48"
+
+var versionNumber = regexp.MustCompile(`(\d+)\.(\d+)`)
+
+// VersionAtLeast reports whether versionLine, what `git --version` prints,
+// names git floor or later; floor is "<major>.<minor>", such as
+// RelativeWorktreesVersion. A line or a floor that names no version is not.
+func VersionAtLeast(versionLine, floor string) bool {
+	have, ok := majorMinor(versionLine)
+	if !ok {
+		return false
+	}
+	want, ok := majorMinor(floor)
+	return ok && slices.Compare(have, want) >= 0
+}
+
+// majorMinor reads the first "<major>.<minor>" in s.
+func majorMinor(s string) ([]int, bool) {
+	m := versionNumber.FindStringSubmatch(s)
+	if m == nil {
+		return nil, false
+	}
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return nil, false
+	}
+	minor, err := strconv.Atoi(m[2])
+	if err != nil {
+		return nil, false
+	}
+	return []int{major, minor}, true
 }
 
 func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, error) {
