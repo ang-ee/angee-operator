@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
@@ -199,20 +200,24 @@ func (r *doctorRunner) checkTools(ctx context.Context) {
 	r.checks = append(r.checks, jjDoctorCheck(jjdriver.Probe(ctx)))
 }
 
-// gitBelowJJFloor reports a git older than jj slots need. Only a jj slot
-// needs that git, and no manifest can declare one yet, so it is a warning.
+// gitBelowJJFloor reports a git older than jjdriver.MinGitVersion, naming
+// the git jj slots need, git.RelativeWorktreesVersion. Only a jj slot needs
+// either, and no manifest can declare one yet, so it is a warning. A git
+// between the two is left to tool.jj, which reports it only once jj can
+// create slots, so a stack that does not use jj gets no new warning.
 func gitBelowJJFloor(version string) (string, string) {
 	if jjdriver.GitSupported(version) {
 		return "", ""
 	}
-	return fmt.Sprintf("%s is older than %s, which jj slots need", version, jjdriver.MinGitVersion),
-		"Upgrade git to " + jjdriver.MinGitVersion + " or later before using jj slots."
+	return fmt.Sprintf("%s is older than %s, which jj slots need", version, git.RelativeWorktreesVersion),
+		"Upgrade git to " + git.RelativeWorktreesVersion + " or later before using jj slots."
 }
 
-// jjDoctorCheck reports the jj that jj slots would run, and whether it can
-// create them (`jj workspace add --colocate`). Only a jj slot needs it, and
-// no manifest can declare one yet, so a missing jj or capability is a
-// warning.
+// jjDoctorCheck reports the jj that jj slots would run, whether it can
+// create them (`jj workspace add --colocate`), and whether git can then open
+// their source's cache, which needs git.RelativeWorktreesVersion. Only a jj
+// slot needs any of it, and no manifest can declare one yet, so a shortfall
+// is a warning.
 func jjDoctorCheck(caps jjdriver.Capabilities) doctorCheck {
 	check := doctorCheck{Name: "tool.jj", Status: doctorWarn}
 	switch {
@@ -221,6 +226,14 @@ func jjDoctorCheck(caps jjdriver.Capabilities) doctorCheck {
 		check.Hint = jjdriver.InstallHint + " Only jj slots need it."
 	case caps.OSErr != nil:
 		check.Detail = caps.JJ + ": " + caps.OSErr.Error()
+	case !git.VersionAtLeast(caps.Git, git.RelativeWorktreesVersion):
+		if caps.Git == "" {
+			// tool.git says why git did not answer.
+			check.Detail = fmt.Sprintf("%s (workspace add --colocate), but git reported no version, and jj slots need %s or later", caps.JJ, git.RelativeWorktreesVersion)
+		} else {
+			check.Detail = fmt.Sprintf("%s (workspace add --colocate), but %s is older than %s, which jj slots need", caps.JJ, caps.Git, git.RelativeWorktreesVersion)
+		}
+		check.Hint = "Upgrade git to " + git.RelativeWorktreesVersion + " or later before using jj slots: jj adds their git worktrees with relative links, and older git refuses a repository that uses them."
 	default:
 		check.Status = doctorOK
 		check.Detail = caps.JJ + " (workspace add --colocate)"

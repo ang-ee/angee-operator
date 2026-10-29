@@ -3,6 +3,36 @@
   "$id": "https://docs.angee.ai/angee.schema.json/stack",
   "$ref": "#/$defs/Stack",
   "$defs": {
+    "BackupCapture": {
+      "properties": {
+        "group": {
+          "type": "string",
+          "enum": [
+            "databases",
+            "service_state"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "exclude_persist": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "group",
+        "name",
+        "output"
+      ]
+    },
     "Ingress": {
       "properties": {
         "type": {
@@ -55,6 +85,9 @@
     },
     "Job": {
       "properties": {
+        "capture": {
+          "$ref": "#/$defs/BackupCapture"
+        },
         "runtime": {
           "type": "string",
           "enum": [
@@ -135,6 +168,12 @@
     },
     "PersistPath": {
       "properties": {
+        "backup": {
+          "type": "string",
+          "enum": [
+            "exclude"
+          ]
+        },
         "subpath": {
           "type": "string"
         },

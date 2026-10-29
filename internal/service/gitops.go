@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
@@ -59,8 +60,12 @@ func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits in
 			}
 		}
 		if withCommits > 0 && source.Kind == "git" && state.Exists {
-			if commits, cerr := p.sourceCommits(ctx, state.Path, withCommits); cerr == nil {
+			commits, cerr := p.sourceCommits(ctx, state.Path, withCommits)
+			switch {
+			case cerr == nil:
 				state.Commits = commits
+			case ctx.Err() == nil:
+				logctx.From(ctx).Warn(fmt.Sprintf("read the commits of source %s: %v", name, cerr))
 			}
 		}
 		sources = append(sources, state)

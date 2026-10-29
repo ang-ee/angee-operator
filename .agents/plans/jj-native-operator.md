@@ -1320,6 +1320,60 @@ driver yet; phase 6 wires it.
     (doctor's floor and the create path); give `sourceCommits` a git CLI
     fallback, or surface its error; and pin the cache's config after `Add`
     in a test, with a git worktree slot of the same cache still working.
+
+    **As built (2026-10-28)**, all but the create path's check, which comes
+    with `mode: jj`:
+    - **The floor.** `git.RelativeWorktreesVersion` ("2.48") and
+      `git.VersionAtLeast(versionLine, floor)` are in `internal/git`, for
+      doctor and the create-time check alike. `jjdriver.MinGitVersion` and
+      `GitSupported` stay at 2.42: the probe belongs to the `mode: jj` PR,
+      which can raise its floor with them.
+    - **Doctor.** `tool.jj` warns when jj can create slots but git is older
+      than 2.48 (`jj 0.45.1 (workspace add --colocate), but git version
+      2.47.2 is older than 2.48, which jj slots need`) or reported no
+      version. `tool.git` still warns only below 2.42, now naming 2.48, so a
+      stack that does not use jj gets no new warning. `tool.git` reads
+      `jjdriver.GitSupported` (`gitBelowJJFloor`), so raising the probe's
+      floor would make it warn every stack with git 2.42 to 2.47: whoever
+      raises it keeps `tool.git` on 2.42 or leaves the warning to `tool.jj`.
+    - **`sourceCommits`** falls back to the git CLI when go-git refuses the
+      cache for any reason but `gogit.ErrRepositoryNotExists`, which still
+      returns nothing: git would read the repository above a directory that
+      is not one. The fallback, `sourceCommitsCLI`, reads `git.Client.Log`
+      and `RefTargets` (`git for-each-ref`, symbolic refs left out), both
+      from standard output only. A failed fallback carries go-git's error
+      too, and the topology now logs it as a warning instead of dropping it.
+      - `Log` runs `git --no-replace-objects log -z --no-show-signature
+        --encoding=UTF-8 --max-count=N --format=… HEAD --`, so neither
+        replace refs (go-git follows none) nor `i18n.logOutputEncoding`
+        change what it reads. A HEAD that `rev-parse --verify --quiet`
+        rejects with exit 1 (an unborn branch) is an empty history; a HEAD
+        naming a missing commit is an error. `--ignore-missing` was tried
+        and dropped, since it reads that broken HEAD as no commits.
+      - It returns what the go-git walk returns, which a test compares
+        field by field across a merge, tags, `origin/HEAD` and a non-ASCII
+        author, and another end to end through the topology before and
+        after the extension is set. The one difference is order among
+        commits with the same committer time: git keeps them first in,
+        first out, and go-git's heap in no set order, so with a limit the
+        last of them in the window can differ too.
+    - **The other go-git opens.** `git.Client`'s readers (`RefExists`,
+      `CurrentRef`, `CurrentBranch`, `Upstream`, `Remotes`) already fell
+      back to the CLI on any failure to open. A test pins that they answer
+      the same before and after the extension is set, in the cache and in a
+      worktree slot. No other code opens a cache or a slot with go-git.
+    - **The pin.** `TestAddChangesTheCachesGitFormat` (`jjdriver`): after
+      `Add`, the cache has `core.repositoryformatversion=1` and
+      `extensions.relativeworktrees=true`, and the jj slot's `.git` is
+      relative. Git worktree slots the git driver adds before and after it
+      keep absolute links, read clean on their branch through the git
+      driver's Status, and stay registered when the other is removed and
+      pruned, as does the jj slot. It skips without jj or git 2.48, and
+      fails under `ANGEE_REQUIRE_JJ=1`.
+    - **Finding.** A jj-colocated cache has a `refs/jj/keep/<commit>` ref
+      for each commit jj keeps from git's garbage collection, the base
+      included (probed), and the topology lists them among a commit's refs,
+      through go-git and the CLI alike. Phase 7 decides whether to hide them.
   - **Workspace names can collide across stacks.** `<stack>--<workspace>`
     is ambiguous once a part contains `--`: stack `a--b` with workspace `c`
     and stack `a` with workspace `b--c` both get `a--b--c` (and `--<slot>`
