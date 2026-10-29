@@ -182,13 +182,20 @@ func exited(ctx context.Context, err error) bool {
 // fetch`, `jj git push`), snapshotting first, under ANGEE_GIT_TIMEOUT like
 // every git network operation. operation names it in a timeout error.
 func (r runner) network(ctx context.Context, operation, slot string, args ...string) ([]byte, error) {
-	var out []byte
+	out, _, err := r.networkOutputs(ctx, operation, slot, args...)
+	return out, err
+}
+
+// networkOutputs is network, returning standard error too, where jj says
+// what a push did.
+func (r runner) networkOutputs(ctx context.Context, operation, slot string, args ...string) ([]byte, []byte, error) {
+	var out, stderr []byte
 	err := git.RunNetworkOperation(ctx, operation, slot, func(ctx context.Context) error {
 		var err error
-		out, err = r.snapshot(ctx, slot, args...)
+		out, stderr, err = r.snapshotOutputs(ctx, slot, args...)
 		return err
 	})
-	return out, err
+	return out, stderr, err
 }
 
 // run runs jj with globalArgs and args in dir and returns its standard

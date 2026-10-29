@@ -10,28 +10,48 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-// Ready answers sync-base's preconditions: a checkout that must be on a
-// branch is on it, and has no uncommitted changes, which a merge or rebase
-// would mix into the base's.
+// Ready answers a verb's preconditions. sync-base, pull and push need a
+// checkout that must be on a branch (Slot.Branch) to be on it, and to have no
+// uncommitted changes, which a merge or rebase would mix into the base's and
+// a push would leave behind. Destroy, and repair's check of a slot it made,
+// need only the branch: the destroy guard reads what the checkout holds from
+// Status. Publish and merge need nothing: publish pushes what is committed,
+// creating the branch on a detached HEAD, and git refuses a merge that would
+// overwrite an uncommitted change itself.
 func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
-	if verb != vcs.VerbSyncBase {
-		return fmt.Errorf("no preconditions for %s on a git slot: %w", verb, vcs.ErrUnsupported)
-	}
-	if s.Branch != "" {
-		reason, err := d.BranchMismatch(ctx, s)
+	switch verb {
+	case vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush:
+		if err := d.onBranch(ctx, s); err != nil {
+			return err
+		}
+		paths, err := d.DirtyPaths(ctx, s)
 		if err != nil {
 			return err
 		}
-		if reason != "" {
-			return &vcs.BranchMismatchError{Reason: reason, Fix: fmt.Sprintf("git -C %s switch %s", s.Path, s.Branch)}
+		if len(paths) > 0 {
+			return &vcs.UncommittedError{Paths: paths}
 		}
+		return nil
+	case vcs.VerbDestroy, vcs.VerbRepair:
+		return d.onBranch(ctx, s)
+	case vcs.VerbPublish, vcs.VerbMerge:
+		return nil
 	}
-	paths, err := d.DirtyPaths(ctx, s)
+	return fmt.Errorf("no preconditions for %s on a git slot: %w", verb, vcs.ErrUnsupported)
+}
+
+// onBranch refuses a checkout that is not on Slot.Branch, when it must be on
+// one, with git's own command that puts it back.
+func (d Driver) onBranch(ctx context.Context, s vcs.Slot) error {
+	if s.Branch == "" {
+		return nil
+	}
+	reason, err := d.BranchMismatch(ctx, s)
 	if err != nil {
 		return err
 	}
-	if len(paths) > 0 {
-		return &vcs.UncommittedError{Paths: paths}
+	if reason != "" {
+		return &vcs.BranchMismatchError{Reason: reason, Fix: fmt.Sprintf("git -C %s switch %s", s.Path, s.Branch)}
 	}
 	return nil
 }

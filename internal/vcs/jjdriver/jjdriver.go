@@ -1,12 +1,13 @@
 // Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces of
 // a source's primary, colocated with git when the primary is. It makes and
-// removes a slot (lifecycle.go), reads its status and diff, and fetches,
-// syncs and rebases it (rebase.go); the push, publish, pull and merge verbs
-// wait for the rest of phase 8 of .agents/plans/jj-native-operator.md and
-// report vcs.ErrUnsupported. The service selects it for a slot whose mode is
-// jj, and refuses those verbs on a jj slot itself before it asks the driver. Source
-// captures also use it as the vcs.BackupLayer over a Git checkout, which
-// plans nothing unless colocated JJ metadata is present.
+// removes a slot (lifecycle.go), reads its status and diff, fetches, syncs
+// and rebases it (rebase.go), publishes and pushes it under a bookmark
+// (publish.go) and merges into it (merge.go), as phase 8 of
+// .agents/plans/jj-native-operator.md lays out. A jj slot is never pulled,
+// and never has a merge or rebase in progress to abort or continue: those
+// verbs report vcs.ErrUnsupported. The service selects it for a slot whose
+// mode is jj. Source captures also use it as the vcs.BackupLayer over a Git
+// checkout, which plans nothing unless colocated JJ metadata is present.
 //
 // jj owns the slot: the lifecycle, status, diff and verbs run the jj CLI and
 // interpret what it prints through the templates in templates.go. BackupLayerPlan additionally
@@ -432,9 +433,10 @@ func (d Driver) count(ctx context.Context, dir, op string, r revset) (int, error
 // against its parents) when ref is empty, else the committed range from the
 // slot to ref: the tree of `@`'s first parent against ref's, leaving
 // uncommitted changes out, as the git driver leaves out the working tree.
-// ref is one revision as jj resolves a name (a bookmark, tag, commit or
-// change id), quoted, so a remote bookmark cannot be named through it yet.
-// The slot is snapshotted first either way.
+// ref is jj's spelling of one revision (refRevision): `main@origin` is the
+// remote bookmark, anything else one name as jj resolves it (a bookmark,
+// tag, commit or change id), and it must be exactly one commit. The slot is
+// snapshotted first either way.
 func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFile, error) {
 	op, err := d.snapshot(ctx, s.Path)
 	if err != nil {
@@ -442,7 +444,7 @@ func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFil
 	}
 	args := []string{"diff", "--git"}
 	if ref != "" {
-		args = append(args, "--from", workingCopy.firstParent().String(), "--to", symbol(ref).String())
+		args = append(args, "--from", workingCopy.firstParent().String(), "--to", refRevision(ref).single().String())
 	}
 	out, err := d.jj.read(ctx, s.Path, op, args...)
 	if err != nil {

@@ -51,6 +51,8 @@ const (
 	CauseJJUnavailable         = "jj_unavailable"
 	CauseSharedCommits         = "shared_commits"
 	CauseImmutableCommits      = "immutable_commits"
+	CauseConflictedCommits     = "conflicted_commits"
+	CauseUndescribedCommits    = "undescribed_commits"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.
@@ -428,19 +430,22 @@ func tailBytes(s string, max int) string {
 }
 
 // requireCleanSlot fails with uncommitted_changes, listing the changed paths,
-// when the checkout target, a workspace slot or a source cache, has
-// uncommitted changes.
+// when the checkout target, a source cache, has uncommitted changes. A
+// workspace slot's verbs ask its driver instead (requireSlotReady), which
+// knows what the verb needs.
 func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, object, slot, source string) error {
 	paths, err := driver.DirtyPaths(ctx, target)
 	if err != nil {
 		return err
 	}
-	return uncommittedChanges(paths, object, slot, source)
+	return uncommittedChanges(paths, "", object, slot, source)
 }
 
 // uncommittedChanges is the uncommitted_changes refusal of object, a
 // workspace slot or a source cache, listing paths; nil when there are none.
-func uncommittedChanges(paths []string, object, slot, source string) error {
+// fix, when set, is the version-control tool's own command that records them
+// (vcs.UncommittedError.Fix).
+func uncommittedChanges(paths []string, fix, object, slot, source string) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -450,6 +455,9 @@ func uncommittedChanges(paths []string, object, slot, source string) error {
 		listed += fmt.Sprintf(" and %d more", more)
 	}
 	hint := "Commit or restore the changes, then retry."
+	if fix != "" {
+		hint = fmt.Sprintf("Commit the working copy first with `%s`, or restore the changes, then retry.", fix)
+	}
 	return &OperationError{
 		Code:    CodePreconditionFailed,
 		Cause:   CauseUncommittedChanges,
@@ -458,6 +466,38 @@ func uncommittedChanges(paths []string, object, slot, source string) error {
 		Paths:   paths[:min(len(paths), maxErrorPaths)],
 		Hint:    hint,
 		Summary: fmt.Sprintf("%s has uncommitted changes in %s. %s", object, listed, hint),
+	}
+}
+
+// unpushableCommits is the refusal of a push or publish of slot that would
+// send commits jj will not push (a *vcs.UnpushableCommitsError, plan D6):
+// conflicted_commits when some hold conflicts, else undescribed_commits. The
+// message names every commit, and nothing is pushed or changed. It is nil for
+// any other error.
+func unpushableCommits(err error, slot, source string) *OperationError {
+	var refused *vcs.UnpushableCommitsError
+	if !errors.As(err, &refused) {
+		return nil
+	}
+	var hints []string
+	cause := CauseUndescribedCommits
+	if len(refused.Conflicted) > 0 {
+		cause = CauseConflictedCommits
+		hints = append(hints, "Resolve the conflicts in the slot with jj")
+	}
+	if len(refused.Undescribed) > 0 {
+		hints = append(hints, "describe each commit with `jj describe -r <commit> -m <message>` in the slot")
+	}
+	hint := strings.Join(hints, ", and ") + ", then retry."
+	hint = strings.ToUpper(hint[:1]) + hint[1:]
+	return &OperationError{
+		Code:    CodePreconditionFailed,
+		Cause:   cause,
+		Slot:    slot,
+		Source:  source,
+		Hint:    hint,
+		Summary: fmt.Sprintf("source slot %q was not pushed: %v. %s", slot, refused, hint),
+		Err:     err,
 	}
 }
 

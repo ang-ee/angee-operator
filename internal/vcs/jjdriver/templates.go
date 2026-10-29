@@ -38,6 +38,11 @@ const (
 	// countTemplate renders one byte per commit, for counting a revset.
 	countTemplate = `"."`
 
+	// changedFilesTemplate is for `jj log --no-graph -r @`: the paths the
+	// commit changes against its parents, a rename by its new path, as one
+	// JSON list.
+	changedFilesTemplate = `json(diff.files().map(|f| f.path())) ++ "\n"`
+
 	// operationTemplate is for `jj op log`: the operation's id.
 	operationTemplate = `id ++ "\n"`
 
