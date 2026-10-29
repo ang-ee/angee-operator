@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.25.0 — 2026-10-29
+
 ### Added
 
 - **Status reports a jj slot's conflicts, change id and base, and the
