@@ -40,7 +40,10 @@ func neverPulled() error {
 //     *vcs.UncommittedError with jj's own command that commits them;
 //     without any, untracked paths are a *vcs.UntrackedPathsError; and a
 //     working-copy commit with parents other than one (`jj new A B`) has no
-//     one commit under it, a *vcs.NotReadyError.
+//     one commit under it, a *vcs.NotReadyError. A merge also refuses a
+//     working-copy commit with a description and no changes (describedEmpty):
+//     the merge would leave it behind, off the slot's history, where the
+//     destroy guard counts it.
 //   - destroy, and repair's check of a slot it made: none, and nothing runs.
 //     The destroy guard reads the slot's own work from Status, and a jj slot
 //     keeps no branch checked out.
@@ -67,6 +70,8 @@ func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 			return &vcs.UntrackedPathsError{Paths: w.untracked}
 		case w.parents != 1:
 			return severalParents(s.Path, w.parents, string(verb))
+		case verb == vcs.VerbMerge && w.described:
+			return describedEmpty(s.Path)
 		}
 		return nil
 	case vcs.VerbDestroy, vcs.VerbRepair:
@@ -109,12 +114,26 @@ func (d Driver) DirtyPaths(ctx context.Context, s vcs.Slot) ([]string, error) {
 	return append(w.changed, w.untracked...), nil
 }
 
+// describedEmpty is a *vcs.NotReadyError for a merge into a slot whose
+// working-copy commit has a description and no changes: `jj new` would move
+// off it and leave it behind, since jj keeps a described commit. `jj new`
+// first makes it the commit under the working copy, which the merge then
+// builds on.
+func describedEmpty(dir string) error {
+	return &vcs.NotReadyError{
+		Reason: "its working-copy commit has a description and no changes, which the merge would leave behind off the slot's history",
+		Fix:    fmt.Sprintf("jj -R %s new", dir),
+	}
+}
+
 // uncommittedWork is what a slot's working copy holds, as one snapshot left
 // it: the paths its working-copy commit changes, the untracked paths jj left
-// out of it, and how many parents that commit has.
+// out of it, how many parents that commit has, and whether it has a
+// description.
 type uncommittedWork struct {
 	changed, untracked []string
 	parents            int
+	described          bool
 }
 
 // uncommitted snapshots the slot through `jj status` and reads what its
@@ -132,7 +151,7 @@ func (d Driver) uncommitted(ctx context.Context, dir string) (uncommittedWork, e
 	if err != nil {
 		return uncommittedWork{}, err
 	}
-	return uncommittedWork{changed: changed, untracked: untracked, parents: len(wc.Commit.Parents)}, nil
+	return uncommittedWork{changed: changed, untracked: untracked, parents: len(wc.Commit.Parents), described: wc.Commit.Description != ""}, nil
 }
 
 // changedFiles lists the paths the slot's working-copy commit changes, at

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1195,7 +1196,8 @@ func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.S
 
 // WorkspacePush pushes each slot whose manifest names a mode that pushes (a
 // git worktree or clone, a jj slot); a slot with no mode is skipped, even a
-// jj slot under `vcs: jj` (owner, 2026-10-29, plan Q7). A git slot pushes
+// jj slot under `vcs: jj` (owner, 2026-10-29, plan Q7), and so is a jj slot
+// of a `kind: local` store, the user's, which its own publish reaches. A git slot pushes
 // its branch; a jj slot is published to the remote it pushes to, under ref
 // when one is named, else its manifest branch (vcs.Driver.PlanPush). Every
 // slot must be ready to push (vcs.Driver.Ready) and is planned before any is
@@ -1218,7 +1220,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 	}
 	// Check the slots are materialized first: a driver's checks read each
 	// slot's path, and git would read an enclosing repository there.
-	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeClone, manifest.WorkspaceSourceModeJJ)
+	targets, err := p.workspaceGitSlots(name, workspace, stack, false, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeClone, manifest.WorkspaceSourceModeJJ)
 	if err != nil {
 		return nil, err
 	}
@@ -1276,10 +1278,13 @@ type workspaceGitSlot struct {
 // no mode is never one of them, whatever its effective mode (owner,
 // 2026-10-29, plan Q7), so a work-state `.work` slot, a jj slot under `vcs:
 // jj`, stays out of every aggregate. A slot of a `kind: git` source is a
-// version-controlled checkout, and so is a jj slot of a `kind: local` store.
-// Every one of them must be materialized: the verb fails before touching any
-// slot when one is not.
-func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Workspace, stack *manifest.Stack, modes ...string) ([]workspaceGitSlot, error) {
+// version-controlled checkout, and, with localStores, so is a jj slot of a
+// `kind: local` store, which sync-base rebases onto its base as the store has
+// it; workspace push leaves one alone, since angee writes nothing to a user's
+// store unasked, and the slot's own publish reaches it. Every one of them
+// must be materialized: the verb fails before touching any slot when one is
+// not.
+func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Workspace, stack *manifest.Stack, localStores bool, modes ...string) ([]workspaceGitSlot, error) {
 	var targets []workspaceGitSlot
 	var paths []workspaceSlotPath
 	for _, slot := range sortedKeys(workspace.Sources) {
@@ -1288,7 +1293,7 @@ func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Wo
 			continue
 		}
 		source, ok := stack.Sources[wsSource.Source]
-		if !ok || source.Kind != "git" && wsSource.Mode != manifest.WorkspaceSourceModeJJ {
+		if !ok || source.Kind != "git" && (!localStores || wsSource.Mode != manifest.WorkspaceSourceModeJJ) {
 			continue
 		}
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
@@ -1458,7 +1463,7 @@ func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slo
 	push := workspaceGitPush{driver: driver, target: target, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, ""), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
 	plan, err := driver.PlanPush(ctx, target, ref, wsSource.Branch)
 	if err != nil {
-		return push, pushPlanRefusal(err, target, workspaceName, slot, wsSource)
+		return push, pushPlanRefusal(err, target, workspaceName, slot, ref, wsSource)
 	}
 	push.plan = plan
 	switch {
@@ -1480,7 +1485,7 @@ func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slo
 // branch to push the slot's commits on, commits jj will not push, a base or
 // push remote that does not resolve. Any other failure is the version
 // control tool's.
-func pushPlanRefusal(err error, target vcs.Slot, workspaceName, slot string, wsSource manifest.WorkspaceSource) error {
+func pushPlanRefusal(err error, target vcs.Slot, workspaceName, slot, ref string, wsSource manifest.WorkspaceSource) error {
 	var unknownRemote *vcs.UnknownRemoteError
 	var noPushRemote *vcs.NoPushRemoteError
 	switch {
@@ -1492,6 +1497,9 @@ func pushPlanRefusal(err error, target vcs.Slot, workspaceName, slot string, wsS
 		return &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("source slot %q has no push remote to default to (%s); declare push_default, or publish it to a remote", slot, noPushRemote.Reason)}
 	case errors.Is(err, vcs.ErrBaseNotFound):
 		return baseNotFound(err, slot, wsSource.Source, target.BaseRef)
+	case errors.Is(err, vcs.ErrBranchExists):
+		// Only a push that publishes (a jj slot's) plans a branch to set.
+		return jjBranchExists(slot, cmp.Or(ref, wsSource.Branch), wsSource.Branch)
 	}
 	if refusal := unpushableCommits(err, slot, wsSource.Source); refusal != nil {
 		return refusal
@@ -1499,10 +1507,13 @@ func pushPlanRefusal(err error, target vcs.Slot, workspaceName, slot string, wsS
 	if refusal := branchTaken(err, slot); refusal != nil {
 		return refusal
 	}
+	if refusal := branchMoved(err, workspaceName, slot, wsSource.Source); refusal != nil {
+		return refusal
+	}
 	if refusal := readinessRefusal(err, target, vcs.VerbPush, workspaceName, slot, wsSource.Source); refusal != nil {
 		return refusal
 	}
-	return gitFailure(err, gitStep{action: "planning the push of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
+	return toolFailure(err, gitStep{action: "planning the push of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
 }
 
 // baseNotFound is the refusal of a verb on slot whose base ref resolves
@@ -1521,6 +1532,11 @@ func (push workspaceGitPush) run(ctx context.Context) error {
 	err := push.driver.Push(ctx, push.target, push.plan)
 	if refusal := checkoutMoved(err, push.step.slot, push.step.source, "push"); refusal != nil {
 		return refusal
+	}
+	// A push made, but warned of (a jj slot's publish), is logged and done.
+	if warned := (*vcs.Warning)(nil); errors.As(err, &warned) {
+		logctx.From(ctx).Warn(fmt.Sprintf("source slot %q: %s", push.step.slot, warned.Text))
+		return nil
 	}
 	return gitFailure(err, push.step)
 }
@@ -1588,7 +1604,7 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	}
 	// Check the slots are materialized first: a driver's checks read each
 	// slot's path, and git would read an enclosing repository there.
-	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeJJ)
+	targets, err := p.workspaceGitSlots(name, workspace, stack, true, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeJJ)
 	if err != nil {
 		return nil, err
 	}

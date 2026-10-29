@@ -68,6 +68,19 @@ func remoteBookmarksOn(remote string) revset {
 	return revset("remote_bookmarks(remote=" + exact(remote) + ")")
 }
 
+// otherWorkingCopies is the working-copy commit of every workspace but the
+// one jj runs in: other slots', and the primary's.
+const otherWorkingCopies revset = "working_copies() ~ @"
+
+// union is every commit any of rs holds (r | o | …).
+func union(rs ...revset) revset {
+	parts := make([]string, len(rs))
+	for i, r := range rs {
+		parts[i] = "(" + string(r) + ")"
+	}
+	return revset(strings.Join(parts, " | "))
+}
+
 // workspaceCommit is the working-copy commit of workspace name, from any
 // workspace of the repository ("name"@).
 func workspaceCommit(name string) revset { return revset(quote(name) + "@") }

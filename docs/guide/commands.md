@@ -778,7 +778,10 @@ workspace of its source's cache or local store; see
   slot's manifest `branch` (a jj slot is on no branch, so one of them is
   needed). The remote is `--remote`, else the one git pushes that branch to
   from the slot, in the order a git slot's publish follows, and is always
-  named to jj. Publish sends the commit under the working copy, `@-`, so the
+  named to jj. A publish to a remote other than that default records it as
+  the branch's push remote (`branch.<branch>.pushRemote`), as `git push -u`
+  records an upstream, so the slot's status, and later publishes, follow it.
+  Publish sends the commit under the working copy, `@-`, so the
   slot must hold nothing uncommitted: changes in its working-copy commit are
   refused with `uncommitted_changes` and jj's command that commits them, and
   untracked paths with `untracked_paths`. The commits it sends are those
@@ -794,7 +797,15 @@ workspace of its source's cache or local store; see
   `INVALID_INPUT`, is a branch that is not the slot's to set: one a git
   worktree of the same source has checked out, which moving it would leave
   on no branch, and one the remote has that this repository does not track
-  (someone else's), which jj would not push over. A working-copy commit with
+  (someone else's), which jj would not push over. So is a branch that exists
+  and is not the slot's (one it neither names in the manifest nor holds only
+  its own commits on), such as `--branch develop`, which publish would move
+  onto the slot's commits. A branch that holds commits the slot does not,
+  such as a collaborator's pushed onto it and fetched since, is refused with
+  `PRECONDITION_FAILED` and cause `branch_moved`, naming them: the push
+  would drop them, though jj's lease passes once they are fetched. Merge
+  the remote branch into the slot (`workspace source merge <workspace>
+  <slot> <branch>@<remote>`), then publish. A working-copy commit with
   two parents has no one commit to publish (`PRECONDITION_FAILED`), and a
   slot that moved while its publish was checked is a `CONFLICT` to retry.
   Any other refusal (jj's lease, a remote's hook) fails with jj's own words,
@@ -808,12 +819,15 @@ workspace of its source's cache or local store; see
   refused with cause `detached_head`, pointing at publish. `workspace push`
   walks the slots whose manifest names a mode (`worktree`, `clone`, `jj`),
   checks and plans every one before it pushes any, and skips a slot that
-  names none, even a jj slot under `vcs: jj`.
+  names none, even a jj slot under `vcs: jj`, and a jj slot of a `kind:
+  local` store, the user's, which its own publish reaches.
 - `workspace source merge <workspace> <slot> <ref>` merges `ref`, in jj's
   spelling, into a jj slot: `jj new @- <ref> -m "Merge <ref>"`, then `jj
   new`, so the merge is the commit under a fresh working copy and the next
   publish sends it. It refuses what the working copy holds, as publish does,
-  and makes no merge of a ref the slot already holds. A conflict is recorded
+  and a described working-copy commit with no changes, which the merge would
+  leave behind (`jj new` first makes it the commit the merge builds on). It
+  makes no merge of a ref the slot already holds. A conflict is recorded
   in the merge commit and answered as `ok` and `conflicted`.
 - `workspace source fetch` fetches every remote into a jj slot's repository
   (`jj git fetch --all-remotes` in the slot), but never into a `kind: local`

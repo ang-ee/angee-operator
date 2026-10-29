@@ -1288,7 +1288,7 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 	cmd := &cobra.Command{
 		Use:   "push <name>",
 		Short: "Push workspace sources",
-		Long: "Push each slot whose manifest names a mode (worktree, clone or jj); a slot that names no mode is skipped. " +
+		Long: "Push each slot whose manifest names a mode (worktree, clone or jj); a slot that names no mode, and a jj slot of a local store, is skipped. " +
 			"A git slot pushes its branch; a jj slot is published under --ref, else its manifest branch, to the remote git pushes that branch to. " +
 			"Every slot is checked before any is pushed, and a slot with nothing of its own is left alone.",
 		Args: cobra.ExactArgs(1),

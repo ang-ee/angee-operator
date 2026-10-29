@@ -42,19 +42,29 @@ func (f *jjFixture) jjSlots(names ...string) map[string]string {
 // workspace push publishes each jj slot whose manifest names its mode under
 // its branch to the remote it pushes to, and only the slot with commits:
 // one with none is left alone. A slot that names no mode under `vcs: jj` (a
-// work-state `.work`) is skipped (plan Q7); its own push still reaches it.
+// work-state `.work`) is skipped (plan Q7), and so is a jj slot of a `kind:
+// local` store, the user's; the per-slot verbs still reach both.
 func TestWorkspacePushPublishesTheJJSlotsWithCommits(t *testing.T) {
 	f := newJJFixture(t, manifest.VCSJJ)
 	ctx := context.Background()
+	store, storeRemote := filepath.Join(f.base, "store"), filepath.Join(f.base, "store.git")
+	runGit(t, f.base, "init", "-q", "--bare", "-b", "main", storeRemote)
+	runGit(t, f.base, "init", "-q", "-b", "main", store)
+	runGit(t, store, "remote", "add", "origin", storeRemote)
+	f.jj(store, "git", "init", "--colocate")
+	f.jjCommit(store, "f.txt", "one\n", "base")
+	f.jj(store, "bookmark", "create", "main", "-r", "@-")
 	if err := f.create(f.template("mixed", map[string]string{
-		"a":    f.app("mode: jj\nbranch: ws-a\nref: main\nsubpath: a"),
-		"b":    f.app("mode: jj\nbranch: ws-b\nref: main\nsubpath: b"),
-		"work": f.app("branch: ws-work\nref: main\nsubpath: .work"),
+		"a":     f.app("mode: jj\nbranch: ws-a\nref: main\nsubpath: a"),
+		"b":     f.app("mode: jj\nbranch: ws-b\nref: main\nsubpath: b"),
+		"notes": "source: notes\nkind: local\npath: " + store + "\ndefault_ref: main\nmode: jj\nbranch: ws-notes\nsubpath: notes",
+		"work":  f.app("branch: ws-work\nref: main\nsubpath: .work"),
 	}), "ws", false); err != nil {
 		t.Fatalf("WorkspaceCreate() error = %v", err)
 	}
-	a, work := filepath.Join(f.workspace("ws"), "a"), filepath.Join(f.workspace("ws"), ".work")
+	a, notes, work := filepath.Join(f.workspace("ws"), "a"), filepath.Join(f.workspace("ws"), "notes"), filepath.Join(f.workspace("ws"), ".work")
 	f.jjCommit(a, "a.txt", "a\n", "a's change")
+	f.jjCommit(notes, "n.txt", "notes\n", "the store's slot")
 	f.jjCommit(work, "notes.txt", "notes\n", "notes")
 
 	states, err := f.platform.WorkspacePush(ctx, "ws", "")
@@ -77,6 +87,51 @@ func TestWorkspacePushPublishesTheJJSlotsWithCommits(t *testing.T) {
 	}
 	if got, want := f.remoteBranch("ws-work"), f.revision(work, "@-", "commit_id"); got != want {
 		t.Errorf("the remote has ws-work at %q, want work's commit %s", got, want)
+	}
+	if out := runGitOutput(t, "", "ls-remote", storeRemote, "refs/heads/ws-notes"); out != "" {
+		t.Fatalf("workspace push published the local store's slot: %s", out)
+	}
+	if result, err := f.platform.WorkspaceSourcePublish(ctx, "ws", "notes", "", ""); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourcePublish(notes) = %+v, %v, want the store's slot published by its own verb", result, err)
+	}
+	if sha, _, _ := strings.Cut(strings.TrimSpace(runGitOutput(t, "", "ls-remote", storeRemote, "refs/heads/ws-notes")), "\t"); sha != f.revision(notes, "@-", "commit_id") {
+		t.Errorf("the store's remote has ws-notes at %q, want the slot's commit", sha)
+	}
+}
+
+// Publishing to a remote other than the branch's default records it, as
+// `git push -u` does (owner, 2026-10-29): the slot's status then reads pushed
+// against that remote, and a later publish with no remote goes there.
+func TestPublishToAnotherRemoteIsFollowedAfter(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	slot := f.jjSlots("a")["a"]
+	fork := filepath.Join(f.base, "fork.git")
+	runGit(t, f.base, "init", "-q", "--bare", "-b", "main", fork)
+	runGit(t, f.cache(), "remote", "add", "fork", fork)
+	forkBranch := func() string {
+		sha, _, _ := strings.Cut(strings.TrimSpace(runGitOutput(t, "", "ls-remote", fork, "refs/heads/ws-a")), "\t")
+		return sha
+	}
+	f.jjCommit(slot, "a.txt", "a\n", "a's change")
+	if result, err := f.platform.WorkspaceSourcePublish(ctx, "ws", "a", "fork", ""); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourcePublish(fork) = %+v, %v", result, err)
+	}
+	if got := f.slotStatus("ws", "a"); !got.Pushed || got.Upstream != "ws-a@fork" {
+		t.Fatalf("status after the publish to fork = %+v, want pushed against ws-a@fork", got)
+	}
+	f.jjCommit(slot, "b.txt", "b\n", "more")
+	if result, err := f.platform.WorkspaceSourcePublish(ctx, "ws", "a", "", ""); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourcePublish() = %+v, %v", result, err)
+	}
+	if got, want := forkBranch(), f.revision(slot, "@-", "commit_id"); got != want {
+		t.Fatalf("fork has ws-a at %q, want the later commit %s", got, want)
+	}
+	if got := f.remoteBranch("ws-a"); got != "" {
+		t.Fatalf("origin has ws-a at %s, want the later publish sent to fork", got)
+	}
+	if err := f.platform.WorkspaceDestroy(ctx, "ws", false); err != nil {
+		t.Fatalf("WorkspaceDestroy() error = %v, want the slot pushed to fork let go", err)
 	}
 }
 

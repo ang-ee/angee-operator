@@ -112,3 +112,33 @@ func TestMergeRefusesChangesMadeSinceReady(t *testing.T) {
 		t.Fatalf("a refused merge moved @- from %s to %s", tip, got)
 	}
 }
+
+// A working-copy commit with a description and no changes would be left
+// behind by a merge, off the slot's history: Ready and Merge refuse it,
+// naming `jj new`, which makes it the commit the merge builds on. Publish
+// sends the commit under it, so it needs nothing.
+func TestMergeRefusesADescribedEmptyWorkingCopy(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("")
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	f.advanceBase("h.txt", "upstream\n")
+	f.jj(f.slot, "describe", "-m", "planned")
+	for name, call := range map[string]func() error{
+		"Ready": func() error { return d.Ready(ctx, s, vcs.VerbMerge) },
+		"Merge": func() error { _, err := d.Merge(ctx, s, "main@origin"); return err },
+	} {
+		var notReady *vcs.NotReadyError
+		if err := call(); !errors.As(err, &notReady) || !strings.Contains(notReady.Reason, "description") || notReady.Fix != "jj -R "+f.slot+" new" {
+			t.Errorf("%s() over a described empty working copy error = %v, want it not ready", name, err)
+		}
+	}
+	if err := d.Ready(ctx, s, vcs.VerbPublish); err != nil {
+		t.Errorf("Ready(publish) error = %v, want none", err)
+	}
+	f.jj(f.slot, "new")
+	if result, err := d.Merge(ctx, s, "main@origin"); err != nil || !result.OK {
+		t.Fatalf("Merge() once the description is committed = %+v, %v", result, err)
+	}
+}

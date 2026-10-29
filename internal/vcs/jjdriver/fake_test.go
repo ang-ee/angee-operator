@@ -17,8 +17,9 @@ import (
 // $HOME/sleep exists, fails when $HOME/fail does or when one of its arguments
 // is a line of $HOME/fail-on, prints the version and help text files in
 // $HOME hold, for `git worktree list` $HOME/git-worktree-list when it
-// exists, for `git var` $HOME/git-var, and for `jj config get <key>`
-// $HOME/jj-config-<key>, and exits instead of testing.
+// exists, for `git var` $HOME/git-var, for `jj config get <key>`
+// $HOME/jj-config-<key>, and for `jj op log` and `jj bookmark list`
+// $HOME/jj-op-log and $HOME/jj-bookmark-list, and exits instead of testing.
 func init() {
 	tool := filepath.Base(os.Args[0])
 	if tool != "jj" && tool != "git" {
@@ -55,6 +56,17 @@ func init() {
 		}
 	case tool == "jj" && slices.Contains(os.Args, "config"):
 		key := "jj-config-" + os.Args[len(os.Args)-1]
+		if _, err := os.Stat(filepath.Join(home, key)); err == nil {
+			reply = key
+		}
+	case tool == "jj" && slices.Contains(os.Args, "op") && slices.Contains(os.Args, "log"),
+		tool == "jj" && slices.Contains(os.Args, "bookmark") && slices.Contains(os.Args, "list"):
+		// `jj op log` prints $HOME/jj-op-log and `jj bookmark list`
+		// $HOME/jj-bookmark-list, when they exist.
+		key := "jj-op-log"
+		if slices.Contains(os.Args, "bookmark") {
+			key = "jj-bookmark-list"
+		}
 		if _, err := os.Stat(filepath.Join(home, key)); err == nil {
 			reply = key
 		}

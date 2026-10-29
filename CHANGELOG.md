@@ -89,7 +89,10 @@ latest tag.
   - `workspace source publish` publishes a jj slot's commits under a branch
     (`--branch`, else the slot's manifest `branch`) to `--remote`, else the
     remote git pushes that branch to from the slot, the order a git slot's
-    publish follows, so the source's `push_default` decides for both. It
+    publish follows, so the source's `push_default` decides for both. A
+    publish to another remote records it as the branch's push remote
+    (`branch.<branch>.pushRemote`), as `git push -u` records an upstream, so
+    status, later publishes and destroy follow it. It
     sends the commits since the branch on the remote, else since the base,
     as `jj bookmark set <branch> -r @-` and `jj git push --remote <remote>
     --bookmark <branch>`, and returns `ok` with `nothing to publish` when
@@ -107,18 +110,26 @@ latest tag.
     naming each (`PRECONDITION_FAILED`, cause `conflicted_commits` or
     `undescribed_commits`). So is a branch that is not the slot's to set
     (`INVALID_INPUT`): one a git worktree of the source has checked out, and
-    one the remote has that the repository does not track. Any other refusal
-    of the push quotes jj (`GIT_FAILED`, cause `push_failed`).
+    one the remote has that the repository does not track, and one that
+    exists and is not the slot's, which publish would move onto the slot's
+    commits. A branch that holds commits the slot lacks, such as a
+    collaborator's pushed onto it and fetched since, is refused naming them
+    (`PRECONDITION_FAILED`, cause `branch_moved`): jj's lease passes once
+    they are fetched, and the push would drop them. Any other refusal of the
+    push quotes jj (`GIT_FAILED`, cause `push_failed`).
   - `workspace source push` and `workspace push` publish a jj slot to its
     default remote, under `--ref` when given, else its branch, and leave a
     slot with nothing to send alone. `workspace push` now reaches the jj
     slots whose manifest names mode `jj`, checks and plans every slot before
-    it pushes any, and still skips a slot that names no mode.
+    it pushes any, and still skips a slot that names no mode, and a jj slot
+    of a `kind: local` store, which its own publish reaches.
   - `workspace source merge` merges a ref, in jj's spelling, into a jj slot
     as the commit under a fresh working copy (`jj new @- <ref> -m "Merge
     <ref>"`, then `jj new`), so the next publish sends it; a ref the slot
     already holds makes no merge, and a conflict is answered as `ok` and
-    `conflicted`. It refuses what the working copy holds, as publish does.
+    `conflicted`. It refuses what the working copy holds, as publish does,
+    and a described working-copy commit with no changes, which it would
+    leave behind.
   - `workspace source fetch` and `diff` run on a jj slot; a diff's `--ref` is
     in jj's spelling (`main@origin`). A jj slot of a `kind: local` store is
     never fetched into (`INVALID_INPUT`).

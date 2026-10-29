@@ -35,6 +35,10 @@ const (
 	// alike.
 	bookmarksTemplate = `json(self) ++ "\n"`
 
+	// commitTemplate is for `jj log --no-graph`: jj's json(self) alone, the
+	// ids without what commitsTemplate computes per commit, for a large set.
+	commitTemplate = `json(self) ++ "\n"`
+
 	// countTemplate renders one byte per commit, for counting a revset.
 	countTemplate = `"."`
 

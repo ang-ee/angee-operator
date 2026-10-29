@@ -148,6 +148,8 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		// A detached HEAD has no branch name to fall back on, so the caller
 		// must name the branch.
 		return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: "worktree is in detached HEAD; pass an explicit branch"}
+	case errors.Is(err, vcs.ErrBranchExists) && target.Mode == vcs.ModeJJ:
+		return api.GitOpResult{}, jjBranchExists(slot, intent.Branch, wsSource.Branch)
 	case errors.Is(err, vcs.ErrBranchExists):
 		return api.GitOpResult{}, &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("worktree is in detached HEAD and branch %q already exists; switch to it or pass another branch", intent.Branch)}
 	case errors.Is(err, vcs.ErrBaseNotFound):
@@ -159,10 +161,13 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		if refusal := branchTaken(err, slot); refusal != nil {
 			return api.GitOpResult{}, refusal
 		}
+		if refusal := branchMoved(err, workspace, slot, wsSource.Source); refusal != nil {
+			return api.GitOpResult{}, refusal
+		}
 		if refusal := readinessRefusal(err, target, vcs.VerbPublish, workspace, slot, wsSource.Source); refusal != nil {
 			return api.GitOpResult{}, refusal
 		}
-		return api.GitOpResult{}, gitFailure(err, gitStep{action: "planning the publish of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
+		return api.GitOpResult{}, toolFailure(err, gitStep{action: "planning the publish of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
 	}
 	// The manifest's rules for the target remote are checked before the
 	// driver creates or sets a branch, so a refused publish changes nothing.
@@ -182,10 +187,16 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		if plan.Create {
 			action = fmt.Sprintf("creating branch %q in", plan.Branch)
 		}
-		return api.GitOpResult{}, gitFailure(err, gitStep{action: action, object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
+		return api.GitOpResult{}, toolFailure(err, gitStep{action: action, object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
 	}
 	step := gitStep{action: fmt.Sprintf("pushing branch %q of", plan.Branch), object: fmt.Sprintf("source slot %q", slot), remote: plan.URL, cause: CausePushFailed, slot: slot, source: wsSource.Source}
 	result, err = driver.Publish(ctx, target, plan)
+	// A push made, but warned of (a jj slot's: the remote reads back
+	// elsewhere, or its push remote was not recorded), is the result, whose
+	// message says so.
+	if warned := (*vcs.Warning)(nil); result.OK && errors.As(err, &warned) {
+		return result, nil
+	}
 	return result, gitFailure(err, step)
 }
 

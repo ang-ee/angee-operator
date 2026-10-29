@@ -54,6 +54,7 @@ const (
 	CauseUntrackedPaths        = "untracked_paths"
 	CauseConflictedCommits     = "conflicted_commits"
 	CauseUndescribedCommits    = "undescribed_commits"
+	CauseBranchMoved           = "branch_moved"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.
@@ -503,6 +504,60 @@ func unpushableCommits(err error, slot, source string) *OperationError {
 		Summary: fmt.Sprintf("source slot %q was not pushed: %v. %s", slot, refused, hint),
 		Err:     err,
 	}
+}
+
+// toolFailure is gitFailure for a failure a version-control tool reported (a
+// git or driver tool's command, or a network timeout), and err as it is for
+// anything else, for the operation's annotation to classify: a cancelled
+// context, an OS error or a bug keep the code classifyOperationError gives
+// them, rather than reading as GIT_FAILED.
+func toolFailure(err error, step gitStep) error {
+	var command *git.CommandError
+	var tool vcs.ToolError
+	if git.IsTimeout(err) || errors.As(err, &command) || errors.As(err, &tool) {
+		return gitFailure(err, step)
+	}
+	return err
+}
+
+// branchMoved is the refusal of a publish or push of slot whose branch holds
+// work the slot does not (a *vcs.BranchMovedError): a collaborator's commits
+// on the remote branch, fetched, or on the repository's own. Publishing would
+// drop them from the remote, so the slot must take them in first. Nothing is
+// pushed. It is nil for any other error.
+func branchMoved(err error, workspaceName, slot, source string) *OperationError {
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) {
+		return nil
+	}
+	ref := moved.Branch
+	if moved.Remote != "" {
+		ref += "@" + moved.Remote
+	}
+	hint := fmt.Sprintf("Take them in first with `angee workspace source merge %s %s %s`, then retry.", workspaceName, slot, ref)
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseBranchMoved,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Hint:      hint,
+		Summary:   fmt.Sprintf("source slot %q was not pushed: %v, which pushing would drop. %s", slot, moved, hint),
+		Err:       err,
+	}
+}
+
+// jjBranchExists is the refusal of a publish or push of jj slot slot under a
+// branch that exists and is not the slot's (vcs.ErrBranchExists from its
+// driver): it points at commits the slot does not own, and publishing would
+// move it onto the slot's. own is the slot's manifest branch, which it may
+// always publish under.
+func jjBranchExists(slot, branch, own string) error {
+	remedy := "pass another branch"
+	if own != "" {
+		remedy = fmt.Sprintf("pass another branch, or the slot's own, %q", own)
+	}
+	return &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("branch %q already exists and is not jj slot %q's: it points at commits the slot does not own; %s", branch, slot, remedy)}
 }
 
 // branchTaken is the refusal of a publish or push of slot under a branch that

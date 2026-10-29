@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
@@ -143,6 +144,9 @@ func (f *fakeDriver) Pull(_ context.Context, s vcs.Slot) error {
 // branch to track.
 func (f *fakeDriver) PlanPush(_ context.Context, s vcs.Slot, ref, branch string) (vcs.PushPlan, error) {
 	f.call("PlanPush", s, ref, branch)
+	if err := f.fail["PlanPush"]; err != nil {
+		return vcs.PushPlan{}, err
+	}
 	switch {
 	case f.publishes:
 		branch = cmp.Or(ref, branch)
@@ -160,7 +164,7 @@ func (f *fakeDriver) PlanPush(_ context.Context, s vcs.Slot, ref, branch string)
 func (f *fakeDriver) Push(_ context.Context, s vcs.Slot, plan vcs.PushPlan) error {
 	if plan.Publish != nil {
 		f.call("Push", s, "publish "+plan.Publish.Remote+" "+plan.Publish.Branch)
-		return nil
+		return f.fail["Push"]
 	}
 	if plan.Track != "" {
 		f.call("Push", s, "-u "+plan.Track)
@@ -216,6 +220,9 @@ func (f *fakeDriver) RebaseContinue(_ context.Context, s vcs.Slot) (api.GitOpRes
 // detached.
 func (f *fakeDriver) PlanPublish(_ context.Context, s vcs.Slot, intent vcs.PublishIntent) (vcs.PublishPlan, error) {
 	f.call("PlanPublish", s, intent.Remote, intent.Branch, strconv.FormatBool(intent.Explicit))
+	if err := f.fail["PlanPublish"]; err != nil {
+		return vcs.PublishPlan{}, err
+	}
 	remote := intent.Remote
 	if remote == "" {
 		remote = "origin"
@@ -234,7 +241,7 @@ func (f *fakeDriver) PreparePublish(_ context.Context, s vcs.Slot, plan vcs.Publ
 
 func (f *fakeDriver) Publish(_ context.Context, s vcs.Slot, plan vcs.PublishPlan) (api.GitOpResult, error) {
 	f.call("Publish", s, plan.Remote, plan.Branch)
-	return f.result("Publish"), nil
+	return f.result("Publish"), f.fail["Publish"]
 }
 
 // Slot status, the destroy guard and slot diffs read the slot through its
@@ -800,5 +807,62 @@ func TestPublishWordsAMovedOrUnreadySlot(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A failure to plan or prepare a push or publish is a git failure of that
+// step only when a version-control tool reported it; a deadline stays a
+// TIMEOUT and any other error INTERNAL, as classifyOperationError has them.
+func TestPushAndPublishFailuresKeepTheirCodes(t *testing.T) {
+	ctx := context.Background()
+	command := &git.CommandError{Args: []string{"rev-parse"}, Err: errors.New("exit status 128"), Output: "fatal: bad revision"}
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{command, CodeGitFailed},
+		{context.DeadlineExceeded, CodeTimeout},
+		{errors.New("boom"), CodeInternal},
+	} {
+		for _, method := range []string{"PlanPublish", "PreparePublish", "PlanPush"} {
+			t.Run(method+" "+tc.code, func(t *testing.T) {
+				platform, workspaceName, _, _ := setupGitWorkspace(t)
+				fake := &fakeDriver{fail: map[string]error{method: tc.err}}
+				platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+				t.Setenv("PATH", t.TempDir())
+				var err error
+				if method == "PlanPush" {
+					_, err = platform.WorkspaceSourcePush(ctx, workspaceName, "app", "")
+				} else {
+					_, err = platform.WorkspaceSourcePublish(ctx, workspaceName, "app", "", "")
+				}
+				if opErr := AsOperationError(err); opErr == nil || opErr.Code != tc.code || !errors.Is(err, tc.err) {
+					t.Errorf("%s failing with %v: error = %v (%+v), want %s", method, tc.err, err, opErr, tc.code)
+				}
+			})
+		}
+	}
+}
+
+// A publish its driver made but warned of (a jj slot's: the remote branch
+// read back elsewhere, its push remote not recorded) is the OK result,
+// whose message says so, for a slot's publish and for a push that
+// publishes alike; any other failure of the push is push_failed.
+func TestAPublishMadeButWarnedOfIsAResult(t *testing.T) {
+	ctx := context.Background()
+	warned := &vcs.Warning{Text: "Pushed, but jj reads it elsewhere."}
+	platform, workspaceName, _, _ := setupGitWorkspace(t)
+	fake := &fakeDriver{publishes: true, fail: map[string]error{"Publish": warned, "Push": warned}}
+	platform.slotDrivers = func(vcs.Slot) vcs.Driver { return fake }
+	t.Setenv("PATH", t.TempDir())
+	if result, err := platform.WorkspaceSourcePublish(ctx, workspaceName, "app", "", ""); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourcePublish() = %+v, %v, want the warned publish OK", result, err)
+	}
+	if _, err := platform.WorkspaceSourcePush(ctx, workspaceName, "app", ""); err != nil {
+		t.Fatalf("WorkspaceSourcePush() error = %v, want the warned push done", err)
+	}
+	fake.fail["Push"] = errors.New("refused")
+	if _, err := platform.WorkspaceSourcePush(ctx, workspaceName, "app", ""); AsOperationError(err) == nil || AsOperationError(err).Cause != CausePushFailed {
+		t.Fatalf("WorkspaceSourcePush() of a refused push error = %v, want push_failed", err)
 	}
 }

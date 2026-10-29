@@ -17,9 +17,10 @@ import (
 // a fresh working copy, so a publish after it sends the merge. ref is jj's
 // spelling (refRevision), exactly one commit. The service asks Ready first,
 // which refuses a working copy with changes or untracked paths: the merge
-// would leave them behind on the old one. Merge snapshots again and refuses
-// changes made since, and merges onto the commit that snapshot found under
-// the working copy, by its id.
+// would leave them behind on the old one, as it would a described empty
+// working-copy commit. Merge snapshots again and refuses changes made since,
+// and merges onto the commit that snapshot found under the working copy, by
+// its id.
 //
 // A ref the slot already holds (`@-` or an ancestor of it) makes no merge, as
 // git's merge records nothing then: the result is OK, saying so. jj records a
@@ -49,6 +50,9 @@ func (d Driver) Merge(ctx context.Context, s vcs.Slot, ref string) (api.GitOpRes
 	}
 	if len(wc.Commit.Parents) != 1 {
 		return result, severalParents(s.Path, len(wc.Commit.Parents), "merge into")
+	}
+	if wc.Commit.Description != "" {
+		return result, describedEmpty(s.Path)
 	}
 	head := commitOf(wc.Commit.Parents[0]).single()
 	held, err := d.count(ctx, s.Path, op, other.and(head.ancestors()))

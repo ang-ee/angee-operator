@@ -304,6 +304,27 @@ func (e *BranchTakenError) Error() string {
 	return fmt.Sprintf("remote %q already has a branch %q that this repository does not track", e.Remote, e.Branch)
 }
 
+// BranchMovedError is returned by Driver.PlanPublish, and by Driver.PlanPush
+// where a push publishes, when the branch holds work the checkout does not:
+// commits that are not versions of the checkout's own, on the remote
+// (Remote set) or on the repository's own branch (Remote empty), as a
+// collaborator's push leaves it once fetched. Publishing would move the
+// branch past them and drop them from the remote. Commits lists them by
+// short id. Nothing is changed.
+type BranchMovedError struct {
+	Branch  string
+	Remote  string
+	Commits []string
+}
+
+func (e *BranchMovedError) Error() string {
+	where := fmt.Sprintf("branch %q", e.Branch)
+	if e.Remote != "" {
+		where = fmt.Sprintf("branch %q on %s", e.Branch, e.Remote)
+	}
+	return where + " holds commits the slot does not: " + strings.Join(e.Commits, ", ")
+}
+
 // NothingToPublishError is ErrNothingToPublish with the driver's account of
 // what the checkout's commits were measured against, for a driver that says
 // more than "no commits beyond the base".
@@ -383,6 +404,12 @@ type PublishPlan struct {
 	// refuses when the checkout no longer stands there, so what is pushed is
 	// what was checked. Empty for git, which pushes the branch as it stands.
 	Commit string
+	// RecordRemote reports that Remote is not the one the checkout pushes
+	// Branch to by default, so Publish records it as the branch's push
+	// remote, as git's push --set-upstream records an upstream: the
+	// checkout's status, and later pushes, then follow it. Only a driver
+	// whose push remote is otherwise git's default (jj) sets it.
+	RecordRemote bool
 }
 
 var (

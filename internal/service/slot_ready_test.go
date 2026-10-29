@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -17,7 +19,7 @@ import (
 // messages are what they were before the move.
 func TestGitSlotVerbsKeepTheirRefusals(t *testing.T) {
 	ctx := context.Background()
-	platform, workspaceName, slotPath, _ := setupGitWorkspace(t)
+	platform, workspaceName, slotPath, cache := setupGitWorkspace(t)
 	runGit(t, slotPath, "switch", "-q", "-c", "codex/feature-a")
 
 	fix := fmt.Sprintf("git -C %s switch %s", slotPath, workspaceName)
@@ -41,6 +43,7 @@ func TestGitSlotVerbsKeepTheirRefusals(t *testing.T) {
 	}
 
 	runGit(t, slotPath, "switch", "-q", workspaceName)
+	defer func() { pinRepairRefusal(t, platform, workspaceName, slotPath, cache, fix, hint) }()
 	mustWriteFile(t, filepath.Join(slotPath, "scratch.txt"), "wip\n")
 	const uncommitted = `source slot "app" has uncommitted changes in scratch.txt. Commit or restore the changes, then retry.`
 	for _, tc := range []struct {
@@ -57,5 +60,28 @@ func TestGitSlotVerbsKeepTheirRefusals(t *testing.T) {
 			opErr.Hint != "Commit or restore the changes, then retry." || !slices.Equal(opErr.Paths, []string{"scratch.txt"}) || err.Error() != tc.title+uncommitted {
 			t.Errorf("%s with a change: error = %q (%+v), want uncommitted_changes %q", tc.verb, err, opErr, tc.title+uncommitted)
 		}
+	}
+}
+
+// pinRepairRefusal has repair cut the slot at slotPath again, off its branch
+// (a post-checkout hook switches it), and pins repair's refusal: the branch
+// mismatch, worded as the other verbs word it, with git's fix.
+func pinRepairRefusal(t *testing.T, platform *Platform, workspaceName, slotPath, cache, fix, hint string) {
+	t.Helper()
+	if t.Failed() {
+		return
+	}
+	runGit(t, cache, "worktree", "remove", "--force", slotPath)
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	mustMkdirAll(t, hooks)
+	mustWriteFile(t, filepath.Join(hooks, "post-checkout"), "#!/bin/sh\n[ \"$(git rev-parse --abbrev-ref HEAD)\" = hijacked ] || git switch -q -c hijacked\n")
+	if err := os.Chmod(filepath.Join(hooks, "post-checkout"), 0o755); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	runGit(t, cache, "config", "core.hooksPath", hooks)
+	_, err := platform.WorkspaceRepair(context.Background(), workspaceName)
+	want := fmt.Sprintf(`workspace "feature-a" source "app" has branch mismatch: current branch/ref "hijacked", expected workspace branch "feature-a" at %s. %s`, slotPath, hint)
+	if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), fix) {
+		t.Errorf("repair off its branch: error = %q, want it to hold %q", err, want)
 	}
 }

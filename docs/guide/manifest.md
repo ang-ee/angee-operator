@@ -632,7 +632,9 @@ workspaces:
   rebase a jj slot onto its base; `workspace source publish`, `push` and
   `workspace push` publish its commits under the slot's `branch`, to the
   remote git pushes that branch to (the source's `push_default` decides, as
-  for git slots); `merge`, `fetch` and `diff` run on it too. Only `workspace
+  for git slots, unless a publish to another remote recorded that one for
+  the branch); `merge`, `fetch` and `diff` run on it too. `workspace push`
+  leaves a jj slot of a `kind: local` store to its own publish. Only `workspace
   source pull` is refused: jj takes in a base by rebasing onto it (see
   [workspace commands](./commands.md#jj-slots)). The verbs that walk a whole
   workspace (`sync-base`, `workspace push`) act only on slots that name a

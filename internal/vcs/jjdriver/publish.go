@@ -101,6 +101,7 @@ type pending struct {
 	upstream bool
 	// local reports that the repository has the branch as a local bookmark.
 	local   bool
+	marks   []bookmark
 	commits []commitEntry
 }
 
@@ -135,6 +136,7 @@ func (d Driver) pendingPush(ctx context.Context, s vcs.Slot, remote, branch stri
 	if err != nil {
 		return pending{}, err
 	}
+	p.marks = marks
 	p.local = branch != "" && hasBookmark(marks, branch, "")
 	if branch != "" && remote != "" && remote != gitRemote && hasBookmark(marks, branch, remote) {
 		// A remote branch the repository does not track is someone else's
@@ -163,13 +165,97 @@ func tracked(marks []bookmark, name, remote string) bool {
 }
 
 // severalParents is a *vcs.NotReadyError for a slot whose working-copy commit
-// has parents other than one (`jj new A B` makes two), so no one commit under
-// it is the slot's to verb.
+// has parents other than one (`jj new A B` makes two, as does a merge whose
+// fresh working copy could not be started), so no one commit under it is the
+// slot's to verb. `jj new` starts a working copy on it, which puts one commit
+// under the working copy.
 func severalParents(dir string, parents int, verb string) error {
 	return &vcs.NotReadyError{
 		Reason: fmt.Sprintf("its working-copy commit has %d parents, so no one commit under it is the slot's to %s", parents, verb),
-		Fix:    fmt.Sprintf("jj -R %s new <commit>", dir),
+		Fix:    fmt.Sprintf("jj -R %s new", dir),
 	}
+}
+
+// ownBranch refuses a branch that holds what is not the slot's to publish
+// over, read at p's snapshot:
+//   - an existing bookmark X, unless it is the slot's manifest branch
+//     (Slot.Branch) or points only at the slot's own commits (`B..@-`, under
+//     no other workspace's working copy), so a branch the caller names, such
+//     as `develop`, is never moved onto the slot's commits; that wraps
+//     vcs.ErrBranchExists, as git's publish refuses a branch that exists;
+//   - commits on X@R, or on bookmark X, that are not versions of the slot's
+//     own: those of `@-..X@R` (and `@-..X`) whose change none of `B..@-` has
+//     (of `(X@R | X)..@-` when the base does not resolve). A sync-base
+//     rebase leaves X@R on the old versions
+//     of the slot's commits, which share their changes with the new ones; a
+//     collaborator's commit on X@R, once fetched, is a change of its own, and
+//     leaves X conflicted between it and the slot's. Publishing would drop it
+//     from the remote, jj's lease passing since it was fetched; that is a
+//     *vcs.BranchMovedError naming them.
+func (d Driver) ownBranch(ctx context.Context, s vcs.Slot, p pending, remote, branch string) error {
+	head := workingCopy.parents()
+	base, baseErr := resolveBase(p.marks, s.BaseRef, s.BaseRemote)
+	if p.local && branch != s.Branch {
+		stray := 1
+		if baseErr == nil {
+			own := base.revset.to(head).minus(otherWorkingCopies.ancestors())
+			var err error
+			if stray, err = d.count(ctx, s.Path, p.op, localBookmark(branch).minus(own)); err != nil {
+				return err
+			}
+		}
+		if stray > 0 {
+			return fmt.Errorf("bookmark %q points at commits that are not the slot's own: %w", branch, vcs.ErrBranchExists)
+		}
+	}
+	var heads []revset
+	if p.upstream {
+		heads = append(heads, remoteBookmark(branch, remote))
+	}
+	if p.local {
+		heads = append(heads, localBookmark(branch))
+	}
+	if len(heads) == 0 {
+		return nil
+	}
+	slots := union(heads...).to(head)
+	if baseErr == nil {
+		slots = base.revset.to(head)
+	}
+	ours, err := d.changes(ctx, s.Path, p.op, slots)
+	if err != nil {
+		return err
+	}
+	owners := []string{remote, ""}
+	if !p.upstream {
+		owners = owners[1:]
+	}
+	for i, branchHead := range heads {
+		theirs, err := d.changes(ctx, s.Path, p.op, head.to(branchHead))
+		if err != nil {
+			return err
+		}
+		var foreign []string
+		for _, c := range theirs {
+			if !slices.ContainsFunc(ours, func(o commit) bool { return o.ChangeID == c.ChangeID }) {
+				foreign = append(foreign, shortID(c.CommitID))
+			}
+		}
+		if len(foreign) > 0 {
+			return &vcs.BranchMovedError{Branch: branch, Remote: owners[i], Commits: foreign}
+		}
+	}
+	return nil
+}
+
+// changes lists the commits of r at operation op by their ids alone, for a
+// set too large to read through commitsTemplate cheaply.
+func (d Driver) changes(ctx context.Context, dir, op string, r revset) ([]commit, error) {
+	out, err := d.jj.read(ctx, dir, op, "log", "--no-graph", "-r", r.String(), "-T", commitTemplate)
+	if err != nil {
+		return nil, err
+	}
+	return decodeLines[commit](out)
 }
 
 // checkedOut refuses branch when a git worktree of the slot's primary other
@@ -225,11 +311,18 @@ func (d Driver) unpushable(ctx context.Context, s vcs.Slot, p pending, remote st
 //     there; else a *vcs.BranchTakenError;
 //   - the commits to send (pendingPush): none is a
 //     *vcs.NothingToPublishError, and nothing is pushed;
-//   - of those, the ones R does not hold yet must be ones jj will push
-//     (unpushable).
+//   - X must hold nothing that is not the slot's (ownBranch): an existing
+//     bookmark the caller names that is not the slot's wraps
+//     vcs.ErrBranchExists, and work on X@R or X the slot lacks is a
+//     *vcs.BranchMovedError;
+//   - of the commits to send, the ones R does not hold yet must be ones jj
+//     will push (unpushable).
 //
 // The plan's Commit is `@-` as PlanPublish read it, for PreparePublish to
 // set X on, and Create reports that the repository has no bookmark X yet.
+// RecordRemote is set when the caller names a remote other than the one git
+// pushes X to by default, in a slot colocated with git, so Publish records it
+// as X's push remote.
 // The intent's Explicit and Unmanaged change nothing: a jj slot's commits
 // are always counted, and a `kind: local` store's slot is published as any
 // other, under a bookmark.
@@ -258,10 +351,38 @@ func (d Driver) PlanPublish(ctx context.Context, s vcs.Slot, intent vcs.PublishI
 	if len(p.commits) == 0 {
 		return vcs.PublishPlan{}, &vcs.NothingToPublishError{Reason: p.nothing()}
 	}
+	if err := d.ownBranch(ctx, s, p, remote, intent.Branch); err != nil {
+		return vcs.PublishPlan{}, err
+	}
 	if err := d.unpushable(ctx, s, p, remote); err != nil {
 		return vcs.PublishPlan{}, err
 	}
-	return vcs.PublishPlan{Remote: remote, URL: url, Branch: intent.Branch, Create: !p.local, Commit: p.tip}, nil
+	plan := vcs.PublishPlan{Remote: remote, URL: url, Branch: intent.Branch, Create: !p.local, Commit: p.tip}
+	if intent.Remote != "" {
+		if plan.RecordRemote, err = d.otherRemote(ctx, s.Path, intent.Branch, remote); err != nil {
+			return vcs.PublishPlan{}, err
+		}
+	}
+	return plan, nil
+}
+
+// otherRemote reports whether remote is not the one git pushes branch to by
+// default from the slot (PushRemoteFor; none counts as other), for a slot
+// colocated with git, whose config Publish can record it in. A slot that is
+// not colocated has no config of its own, and is never told to record one.
+func (d Driver) otherRemote(ctx context.Context, dir, branch, remote string) (bool, error) {
+	if ok, err := colocated(dir); err != nil || !ok {
+		return false, err
+	}
+	def, err := d.git.PushRemoteFor(ctx, dir, branch)
+	var none *git.NoPushRemoteError
+	switch {
+	case errors.As(err, &none):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("resolve the push remote of %q in %s: %w", branch, dir, err)
+	}
+	return def != remote, nil
 }
 
 // PreparePublish sets the plan's branch on the plan's Commit: `jj bookmark
@@ -305,6 +426,12 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 // account of the push is the result's message, URL-redacted. Any refusal
 // (the lease, a remote's hook, a commit the pre-check could not foresee: plan
 // D6) is jj's *CommandError, whose standard error is redacted the same way.
+//
+// Once pushed, a plan that says so records the remote as the branch's push
+// remote (`branch.<X>.pushRemote` in the slot's shared git config), as `git
+// push --set-upstream` records an upstream, so Status and later pushes
+// follow it. Then X@R is read back: one that is not the plan's commit, or a
+// record that failed, is a *vcs.Warning beside the OK result.
 func (d Driver) Publish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) (api.GitOpResult, error) {
 	result := api.GitOpResult{ConflictFiles: []string{}}
 	operation := fmt.Sprintf("jj git push --remote %s --bookmark %s", plan.Remote, plan.Branch)
@@ -315,7 +442,53 @@ func (d Driver) Publish(ctx context.Context, s vcs.Slot, plan vcs.PublishPlan) (
 		return result, err
 	}
 	result.OK = true
+	var warned []string
+	if plan.RecordRemote {
+		if err := d.git.SetBranchPushRemote(ctx, s.Path, plan.Branch, plan.Remote); err != nil {
+			warned = append(warned, fmt.Sprintf("Pushed, but recording %s as the push remote of %s failed, so status counts it against the default remote: %v", plan.Remote, plan.Branch, err))
+		}
+	}
+	if plan.Commit != "" {
+		if where, err := d.pushedAt(ctx, s.Path, plan); err != nil {
+			warned = append(warned, fmt.Sprintf("Pushed, but reading %s@%s after the push failed: %v", plan.Branch, plan.Remote, err))
+		} else if !slices.Equal(where, []string{plan.Commit}) {
+			warned = append(warned, fmt.Sprintf("Pushed, but jj reads %s@%s at %s, not at %s, the commit the publish checked.", plan.Branch, plan.Remote, strings.Join(shortIDs(where), ", "), shortID(plan.Commit)))
+		}
+	}
+	if len(warned) > 0 {
+		text := logctx.RedactText(strings.Join(warned, " "))
+		result.Message = strings.TrimSpace(result.Message + "\n" + text)
+		return result, &vcs.Warning{Text: text}
+	}
 	return result, nil
+}
+
+// pushedAt reads where the repository has the plan's branch on its remote,
+// at the latest operation.
+func (d Driver) pushedAt(ctx context.Context, dir string, plan vcs.PublishPlan) ([]string, error) {
+	op, err := d.latestOperation(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	marks, err := d.bookmarks(ctx, dir, op.ID, plan.Branch)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range marks {
+		if m.Name == plan.Branch && m.Remote == plan.Remote {
+			return m.Target, nil
+		}
+	}
+	return nil, nil
+}
+
+// shortIDs cuts each of ids to the length jj shows.
+func shortIDs(ids []string) []string {
+	short := make([]string, len(ids))
+	for i, id := range ids {
+		short[i] = shortID(id)
+	}
+	return short
 }
 
 // PlanPush plans a push of the slot as a publish to the remote it pushes to
