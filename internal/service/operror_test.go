@@ -14,6 +14,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
@@ -388,5 +389,37 @@ func pathWithoutSSH(t *testing.T) {
 	t.Setenv("GIT_SSH_COMMAND", "")
 	if err := os.Unsetenv("GIT_SSH_COMMAND"); err != nil {
 		t.Fatalf("Unsetenv(GIT_SSH_COMMAND) error = %v", err)
+	}
+}
+
+// A branch_moved refusal's hint names a ref the slot can merge that is one
+// commit holding the stray commits: the remote branch that holds them, which
+// may be another remote than the publish's (review of #144), the slot's own
+// branch when no remote's does, and, when that branch is conflicted and
+// names no one commit, the stray heads by commit id.
+func TestBranchMovedHintNamesWhatToMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		moved vcs.BranchMovedError
+		hint  string
+	}{
+		{"a remote", vcs.BranchMovedError{Branch: "feature", Remote: "origin", Commits: []string{"aaa"}},
+			"Take them in first with `angee workspace source merge ws work feature@origin`, then retry."},
+		{"the branch", vcs.BranchMovedError{Branch: "feature", Commits: []string{"aaa"}},
+			"Take them in first with `angee workspace source merge ws work feature`, then retry."},
+		{"one head", vcs.BranchMovedError{Branch: "feature", Commits: []string{"aaa", "bbb"}, Heads: []string{"bbb"}},
+			"Take them in first with `angee workspace source merge ws work bbb`, then retry."},
+		{"several heads", vcs.BranchMovedError{Branch: "feature", Commits: []string{"aaa", "bbb"}, Heads: []string{"aaa", "bbb"}},
+			"Take them in first by merging each of aaa, bbb with `angee workspace source merge ws work <commit>`, then retry."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refusal := branchMoved(&tc.moved, "ws", "work", "app")
+			if refusal == nil || refusal.Cause != CauseBranchMoved || refusal.Hint != tc.hint {
+				t.Fatalf("branchMoved(%+v) = %+v, want cause %s and hint %q", tc.moved, refusal, CauseBranchMoved, tc.hint)
+			}
+			if !strings.Contains(refusal.Summary, tc.hint) {
+				t.Fatalf("summary %q does not end with the hint", refusal.Summary)
+			}
+		})
 	}
 }

@@ -523,8 +523,10 @@ func toolFailure(err error, step gitStep) error {
 // branchMoved is the refusal of a publish or push of slot whose branch holds
 // work the slot does not (a *vcs.BranchMovedError): a collaborator's commits
 // on the remote branch, fetched, or on the repository's own. Publishing would
-// drop them from the remote, so the slot must take them in first. Nothing is
-// pushed. It is nil for any other error.
+// drop them from the remote, so the slot must take them in first: the hint
+// names what to merge, the remote branch that holds them, else the
+// repository's own, else, when that is conflicted, the stray commits
+// themselves. Nothing is pushed. It is nil for any other error.
 func branchMoved(err error, workspaceName, slot, source string) *OperationError {
 	var moved *vcs.BranchMovedError
 	if !errors.As(err, &moved) {
@@ -535,6 +537,14 @@ func branchMoved(err error, workspaceName, slot, source string) *OperationError 
 		ref += "@" + moved.Remote
 	}
 	hint := fmt.Sprintf("Take them in first with `angee workspace source merge %s %s %s`, then retry.", workspaceName, slot, ref)
+	switch {
+	case moved.Remote != "":
+	case len(moved.Heads) == 1:
+		// The branch is conflicted, so its name is no one commit to merge.
+		hint = fmt.Sprintf("Take them in first with `angee workspace source merge %s %s %s`, then retry.", workspaceName, slot, moved.Heads[0])
+	case len(moved.Heads) > 1:
+		hint = fmt.Sprintf("Take them in first by merging each of %s with `angee workspace source merge %s %s <commit>`, then retry.", strings.Join(moved.Heads, ", "), workspaceName, slot)
+	}
 	return &OperationError{
 		Code:      CodePreconditionFailed,
 		Cause:     CauseBranchMoved,

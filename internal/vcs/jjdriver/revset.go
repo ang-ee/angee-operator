@@ -104,6 +104,9 @@ func (r revset) ancestors() revset { return "::(" + r + ")" }
 // minus is the commits of r that o does not hold (r ~ o).
 func (r revset) minus(o revset) revset { return "(" + r + ") ~ (" + o + ")" }
 
+// heads is the commits of r that no other commit of r descends from.
+func (r revset) heads() revset { return "heads(" + r + ")" }
+
 // single is r when it is exactly one commit, and an error from jj otherwise,
 // so a conflicted bookmark is never taken for its several targets.
 func (r revset) single() revset { return "exactly(" + r + ", 1)" }

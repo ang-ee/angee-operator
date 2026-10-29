@@ -195,9 +195,11 @@ func severalParents(dir string, parents int, verb string) error {
 //     slot's own change, fetched beside the rebased one, which leaves X
 //     conflicted between them, or another workspace's. Setting X would drop
 //     it, jj's lease passing since it was fetched; that is a
-//     *vcs.BranchMovedError too, of X@R when the targets are the remote's,
-//     so the merge its hint names is of one commit. After a merge of X@R,
-//     both targets are in the slot's history, and the publish goes on.
+//     *vcs.BranchMovedError too, naming what the slot can merge to take the
+//     targets in as one commit (mergeableStray): X@R when they are R's, X
+//     when it is not conflicted, X on another remote that holds them, else
+//     the stray heads. After a merge of it, both targets are in the slot's
+//     history, and the publish goes on.
 func (d Driver) ownBranch(ctx context.Context, s vcs.Slot, p pending, remote, branch string) error {
 	if !p.local && !p.upstream {
 		return nil
@@ -270,18 +272,63 @@ func (d Driver) ownBranch(ctx context.Context, s vcs.Slot, p pending, remote, br
 		}
 		if len(stray) > 0 {
 			moved := &vcs.BranchMovedError{Branch: branch, Commits: shortIDs(commitIDs(stray))}
-			if p.upstream {
-				remotes, err := d.count(ctx, s.Path, p.op, off.and(remoteHead.ancestors()))
-				if err != nil {
-					return err
-				}
-				if remotes == len(stray) {
-					moved.Remote = remote
-				}
+			if err := d.mergeableStray(ctx, s.Path, p, off, remote, len(stray), moved); err != nil {
+				return err
 			}
 			return moved
 		}
 	}
+	return nil
+}
+
+// mergeableStray names, in moved, what the slot can merge to take in the
+// stray commits of bookmark X (off, `X ~ ::@-`, holding strays of them), so
+// the refusal's hint names a ref that is one commit holding them all:
+//   - X@R, the remote the publish goes to, when its branch holds them all;
+//   - else X itself, when it is not conflicted (Remote stays empty);
+//   - else X on another remote whose branch holds them all, as when the slot
+//     publishes to a second remote and X moved on the first: X is then
+//     conflicted between the slot's version and the collaborator's, and
+//     names no one commit to merge (jj: "Name 'X' is conflicted");
+//   - else the stray commits no other stray descends from (Heads), by
+//     commit id, each of which the slot merges in turn.
+func (d Driver) mergeableStray(ctx context.Context, dir string, p pending, off revset, remote string, strays int, moved *vcs.BranchMovedError) error {
+	holds := func(r string) (bool, error) {
+		held, err := d.count(ctx, dir, p.op, off.and(remoteBookmark(moved.Branch, r).ancestors()))
+		return held == strays, err
+	}
+	if p.upstream {
+		if ok, err := holds(remote); err != nil || ok {
+			if ok {
+				moved.Remote = remote
+			}
+			return err
+		}
+	}
+	var others []string
+	for _, m := range p.marks {
+		switch {
+		case m.Name != moved.Branch || !m.present():
+		case m.Remote == "" && len(m.Target) == 1:
+			return nil
+		case m.Remote != "" && m.Remote != remote && m.Remote != gitRemote && len(m.Target) == 1 && !slices.Contains(others, m.Remote):
+			others = append(others, m.Remote)
+		}
+	}
+	slices.Sort(others)
+	for _, other := range others {
+		if ok, err := holds(other); err != nil || ok {
+			if ok {
+				moved.Remote = other
+			}
+			return err
+		}
+	}
+	heads, err := d.changes(ctx, dir, p.op, off.heads())
+	if err != nil {
+		return err
+	}
+	moved.Heads = shortIDs(commitIDs(heads))
 	return nil
 }
 

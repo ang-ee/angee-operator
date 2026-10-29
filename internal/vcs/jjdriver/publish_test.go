@@ -877,3 +877,74 @@ func TestPublishLeavesALocalStoresConfigAlone(t *testing.T) {
 		t.Fatalf("branch.feature.pushRemote = %q, want the store's config left alone", got)
 	}
 }
+
+// A publish to a second remote, refused because the branch moved on the
+// first (the slot published to origin, sync-base rebased it, and a
+// collaborator pushed onto the old version), names origin as the remote that
+// holds the stray commit: bookmark feature is conflicted between the slot's
+// version and the collaborator's, so `merge feature` would name no one
+// commit (review of #144). Merging feature@origin takes it in, and the
+// publish to the second remote is planned.
+func TestPublishToAnotherRemoteNamesTheRemoteTheBranchMovedOn(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	fork := filepath.Join(f.root, "fork.git")
+	f.git(f.root, "init", "-q", "--bare", "-b", "main", fork)
+	f.git(f.primary, "remote", "add", "fork", fork)
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	f.publish(s, vcs.PublishIntent{Branch: "feature"})
+	f.pushBase("h.txt", "upstream\n")
+	if err := d.Fetch(ctx, s); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if result, err := d.SyncBase(ctx, s, "main@origin", vcs.SyncDefault); err != nil || !result.OK {
+		t.Fatalf("SyncBase() = %+v, %v", result, err)
+	}
+	c2 := f.collaborate("feature", "c2.txt", "theirs\n")
+	if err := d.Fetch(ctx, s); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+
+	_, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Remote: "fork", Branch: "feature"})
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) || moved.Remote != "origin" || len(moved.Heads) != 0 || !slices.Equal(moved.Commits, []string{shortID(c2)}) {
+		t.Fatalf("PlanPublish(fork) after a collaborator's push to origin error = %+v, want feature@origin named as holding %s", moved, shortID(c2))
+	}
+	if result, err := d.Merge(ctx, s, "feature@origin"); err != nil || !result.OK || result.Conflicted {
+		t.Fatalf("Merge(feature@origin), the hint's remedy, = %+v, %v, want the collaborator's work merged", result, err)
+	}
+	if _, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Remote: "fork", Branch: "feature"}); err != nil {
+		t.Fatalf("PlanPublish(fork) after the merge error = %v", err)
+	}
+}
+
+// A conflicted bookmark whose stray target no remote holds (the bookmark
+// moved by two concurrent jj operations) names the stray head by commit id,
+// which the slot can merge, since the bookmark's name is no one commit.
+func TestPublishNamesTheStrayHeadOfAConflictedBookmark(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	f.jj(f.primary, "new", f.base().String(), "-m", "elsewhere")
+	elsewhere := f.commitID(f.primary, workingCopy)
+	f.jj(f.primary, "new")
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	f.jj(f.slot, "bookmark", "create", "feature", "-r", "@-")
+	created := strings.TrimSpace(f.jj(f.slot, "--ignore-working-copy", "op", "log", "--no-graph", "-n", "1", "-T", "id"))
+	f.commit(f.slot, "h.txt", "more\n", "more")
+	f.jj(f.slot, "bookmark", "set", "feature", "-r", "@-")
+	f.jj(f.slot, "--at-op", created, "bookmark", "set", "feature", "--allow-backwards", "-r", commitOf(elsewhere).String())
+
+	_, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Branch: "feature"})
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) || moved.Remote != "" || !slices.Equal(moved.Heads, []string{shortID(elsewhere)}) || !slices.Equal(moved.Commits, []string{shortID(elsewhere)}) {
+		t.Fatalf("PlanPublish() over a conflicted bookmark error = %+v, want the stray head %s named", moved, shortID(elsewhere))
+	}
+	if result, err := d.Merge(ctx, s, moved.Heads[0]); err != nil || !result.OK {
+		t.Fatalf("Merge(%s), the hint's remedy, = %+v, %v", moved.Heads[0], result, err)
+	}
+	f.publish(s, vcs.PublishIntent{Branch: "feature"})
+}
