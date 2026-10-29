@@ -1,0 +1,15 @@
+Working copy changes:
+A small.txt
+Untracked paths:
+? big.bin
+? local/
+Working copy  (@) : kkmpptxz 814d0732 (conflict) (no description set)
+Parent commit (@-): uuqppmxq a720be81 feature* | (conflict) slot change
+Warning: There are unresolved conflicts at these paths:
+f.txt    2-sided conflict
+Hint: To resolve the conflicts, start by creating a commit on top of
+the conflicted commit:
+  jj new uuqppmxq
+Then use `jj resolve`, or edit the conflict markers in the file directly.
+Once the conflicts are resolved, you can inspect the result with `jj diff`.
+Then run `jj squash` to move the resolution into the conflicted commit.
