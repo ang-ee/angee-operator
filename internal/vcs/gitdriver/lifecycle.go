@@ -53,7 +53,8 @@ func (d Driver) Remove(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 // dest, and points the cache's registration at the slot path. Until that
 // repair, git takes the registration for one whose checkout is gone, so the
 // caller holds the cache's lock throughout. On failure the installed
-// checkout and the stage are removed and the registration pruned.
+// checkout and the stage are removed, and the registration with them
+// (dropRegistrations).
 func (d Driver) addWorktree(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure func(context.Context, string) error) error {
 	stageRoot, err := os.MkdirTemp("", "angee-worktree-stage-*")
 	if err != nil {
@@ -67,9 +68,9 @@ func (d Driver) addWorktree(ctx context.Context, s vcs.Slot, dest vcs.Dest, conf
 			return
 		}
 		_ = os.RemoveAll(stage)
-		// A fresh context, so the prune runs even when ctx is what failed.
+		// A fresh context, so the clean-up runs even when ctx is what failed.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		_ = d.git.WorktreePrune(cleanupCtx, s.Primary)
+		d.dropRegistrations(cleanupCtx, s.Primary, stage, s.Path)
 		cancel()
 	}()
 	useExisting := s.Branch != "" && d.git.RefExists(ctx, s.Primary, "refs/heads/"+s.Branch)
@@ -121,6 +122,40 @@ func (d Driver) addWorktree(ctx context.Context, s vcs.Slot, dest vcs.Dest, conf
 	return nil
 }
 
+// dropRegistrations drops the cache's registrations of a failed add's
+// worktree, at the stage or, once repaired, at the slot path, whichever is
+// left with nothing at it (git.Client.DeregisterWorktree), so other
+// checkouts' registrations are left alone: a prune would drop every one
+// whose checkout this process cannot see, such as other stacks' slots out of
+// a container's sight. One it cannot drop is left, with a warning: a stage's
+// is prunable and harmless, and one at the slot path is dropped by the next
+// create there, which finds it registered (addWorktreeSlot).
+func (d Driver) dropRegistrations(ctx context.Context, primary string, paths ...string) {
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil {
+			continue
+		}
+		if err := d.git.DeregisterWorktree(ctx, primary, path); err != nil {
+			logctx.From(ctx).Warn(fmt.Sprintf("left the registration of %s in %s: %v", path, primary, err))
+		}
+	}
+}
+
+// RepointRegistration points the cache's registration of the git worktree
+// checked out at checkout, the one its .git file names, at path, where the
+// checkout is now: `git worktree repair <path>` for that worktree alone. git's
+// repair rewrites the links of every worktree of the repository (to relative
+// ones, under worktree.useRelativePaths) and fails over any unrelated broken
+// one, which another stack's slot can be. The link keeps its form: relative
+// to the registration when it was relative (as jj writes a jj slot's), else
+// absolute (as the git driver writes a worktree slot's). The checkout's own
+// .git is left as it is: a rename within one parent keeps a relative link
+// working, and an absolute one names the registration, which does not move.
+// The caller holds the cache's lock (plan D9).
+func RepointRegistration(checkout, path, cachePath string) error {
+	return repairRegistration(checkout, path, cachePath)
+}
+
 // finishWorktree checks that the slot path still leads to what dest
 // installed, repairs the registration, and drops the stage.
 func finishWorktree(s vcs.Slot, dest vcs.Dest, stage string) error {
@@ -139,7 +174,8 @@ func finishWorktree(s vcs.Slot, dest vcs.Dest, stage string) error {
 // repairRegistration points the cache's administrative entry for the
 // worktree staged at stage at its installed path, dest. The entry is the one
 // stage's .git names, and it must lie inside the cache's worktree
-// administration directory.
+// administration directory. An entry whose link is relative keeps a
+// relative one (RepointRegistration).
 func repairRegistration(stage, dest, cachePath string) error {
 	pointer, err := os.ReadFile(filepath.Join(stage, ".git"))
 	if err != nil {
@@ -174,7 +210,13 @@ func repairRegistration(stage, dest, cachePath string) error {
 		return fmt.Errorf("open worktree administration link: %w", err)
 	}
 	defer func() { _ = control.Close() }()
-	return control.WriteFile([]byte(filepath.Join(dest, ".git")+"\n"), 0o644)
+	link := filepath.Join(dest, ".git")
+	if current, _, exists, err := control.ReadRegularFile(); err == nil && exists && !filepath.IsAbs(strings.TrimSpace(string(current))) {
+		if link, err = filepath.Rel(adminPath, filepath.Join(vcs.CanonicalPath(dest), ".git")); err != nil {
+			return err
+		}
+	}
+	return control.WriteFile([]byte(link+"\n"), 0o644)
 }
 
 // strictlyInside reports whether child lies below parent, not at it.

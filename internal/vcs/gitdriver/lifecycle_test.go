@@ -130,3 +130,58 @@ func TestLifecycleModes(t *testing.T) {
 		t.Fatalf("Exists(clone) = %v, %v, want false", exists, err)
 	}
 }
+
+// RepointRegistration points one worktree's registration at where it was
+// moved, keeping its link's form, relative or absolute, and touches no other
+// worktree's.
+func TestRepointRegistrationKeepsTheLinksForm(t *testing.T) {
+	ctx := context.Background()
+	client := git.New()
+	version, err := client.Version(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []bool{false, true} {
+		if relative && !git.VersionAtLeast(version, git.RelativeWorktreesVersion) {
+			continue
+		}
+		primary, _ := clone(t)
+		base := t.TempDir()
+		slot, other := filepath.Join(base, "slot"), filepath.Join(base, "other")
+		for _, path := range []string{slot, other} {
+			run(t, primary, "-c", fmt.Sprintf("worktree.useRelativePaths=%t", relative), "worktree", "add", "-q", "--detach", path)
+		}
+		otherLink, err := os.ReadFile(filepath.Join(other, ".git"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		moved := filepath.Join(base, ".slot-aside")
+		if err := os.Rename(slot, moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := RepointRegistration(moved, moved, primary); err != nil {
+			t.Fatalf("RepointRegistration(relative %t) error = %v", relative, err)
+		}
+		if ok, err := client.WorktreeRegistered(ctx, primary, moved); err != nil || !ok {
+			t.Fatalf("worktree at %s registered = %v, %v, want it", moved, ok, err)
+		}
+		list := gitOutput(t, primary, "worktree", "list", "--porcelain")
+		if strings.Contains(list, "prunable") {
+			t.Errorf("relative %t: a registration is prunable:\n%s", relative, list)
+		}
+		admin := strings.TrimSpace(strings.TrimPrefix(gitOutput(t, moved, "rev-parse", "--git-dir"), "gitdir: "))
+		link, err := os.ReadFile(filepath.Join(admin, "gitdir"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filepath.IsAbs(strings.TrimSpace(string(link))) == relative {
+			t.Errorf("relative %t: the registration's link is %q", relative, link)
+		}
+		if got, err := os.ReadFile(filepath.Join(other, ".git")); err != nil || string(got) != string(otherLink) {
+			t.Errorf("relative %t: the other worktree's .git = %q, want %q", relative, got, otherLink)
+		}
+		if out := gitOutput(t, moved, "status", "--short"); out != "" {
+			t.Errorf("relative %t: git status in the moved worktree = %q", relative, out)
+		}
+	}
+}

@@ -150,3 +150,27 @@ func TestPrepareWorktreeRefusesAWorkingCopyThatHoldsSomething(t *testing.T) {
 		t.Fatalf("a refused PrepareWorktree set bookmark feature at %s", got)
 	}
 }
+
+// A bookmark another workspace moved after PrepareWorktree set it is left
+// where that workspace put it, wrapping ErrBookmarkMoved.
+func TestRestoreBookmarkLeavesABookmarkMovedSince(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	s.Primary = f.primary
+	f.commit(f.slot, "g.txt", "mine\n", "first")
+	h, err := d.PrepareWorktree(ctx, s)
+	if err != nil || !h.Moved {
+		t.Fatalf("PrepareWorktree() = %+v, %v", h, err)
+	}
+	f.jj(f.primary, "new", f.base().String(), "-m", "elsewhere")
+	f.jj(f.primary, "bookmark", "set", "feature", "--allow-backwards", "-r", "@")
+	moved := f.commitID(f.primary, localBookmark("feature"))
+	if err := d.RestoreBookmark(ctx, s, h); !errors.Is(err, ErrBookmarkMoved) {
+		t.Fatalf("RestoreBookmark() of a bookmark moved since error = %v, want ErrBookmarkMoved", err)
+	}
+	if got := f.commitID(f.primary, localBookmark("feature")); got != moved {
+		t.Fatalf("bookmark feature at %s, want it left at %s", got, moved)
+	}
+}

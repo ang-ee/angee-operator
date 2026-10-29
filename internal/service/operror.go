@@ -55,6 +55,16 @@ const (
 	CauseConflictedCommits     = "conflicted_commits"
 	CauseUndescribedCommits    = "undescribed_commits"
 	CauseBranchMoved           = "branch_moved"
+	// CauseBranchCheckedOut: the branch a slot is to be checked out on is
+	// checked out by another git worktree of its source, and git checks a
+	// branch out in one worktree only.
+	CauseBranchCheckedOut = "branch_checked_out"
+	// CauseSlotNotHeld: the checkout at a jj slot's path is not the jj
+	// workspace this stack made there.
+	CauseSlotNotHeld = "slot_not_held"
+	// CauseMigrateIncomplete: a migrate of the slot did not finish, so its
+	// checkout may be set aside under a private name.
+	CauseMigrateIncomplete = "migrate_incomplete"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.

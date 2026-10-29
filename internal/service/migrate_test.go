@@ -462,6 +462,18 @@ func TestMigrateRefusesASlotThatIsNotReady(t *testing.T) {
 			prepare: func(f *migrateFixture) { mustWriteFile(f.t, filepath.Join(f.slot, "g.txt"), "changed\n") }},
 		{name: "off its branch", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseBranchMismatch, says: "branch mismatch",
 			prepare: func(f *migrateFixture) { runGit(f.t, f.slot, "switch", "-q", "-c", "other") }},
+		{name: "skip-worktree file", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, says: "files git is told not to look at (skip-worktree or assume-unchanged), whose local versions would be checked out again as committed: g.txt",
+			prepare: func(f *migrateFixture) {
+				runGit(f.t, f.slot, "update-index", "--skip-worktree", "g.txt")
+				mustWriteFile(f.t, filepath.Join(f.slot, "g.txt"), "local override\n")
+			}},
+		{name: "submodule", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, says: "it has submodules",
+			prepare: func(f *migrateFixture) {
+				base := strings.TrimSpace(runGitOutput(f.t, f.cache(), "rev-parse", "origin/main"))
+				runGit(f.t, f.slot, "clone", "-q", f.remote, "vendor/lib")
+				runGit(f.t, f.slot, "update-index", "--add", "--cacheinfo", "160000,"+base+",vendor/lib")
+				runGit(f.t, f.slot, "commit", "-q", "-m", "a submodule")
+			}},
 		{name: "name taken", mode: manifest.WorkspaceSourceModeWorktree, code: CodeConflict, says: `jj workspace "dev--ws" of`,
 			prepare: func(f *migrateFixture) {
 				f.jj(f.cache(), "git", "init", "--git-repo", ".")
@@ -489,7 +501,7 @@ func TestMigrateRefusesASlotThatIsNotReady(t *testing.T) {
 				f.jj(f.cache(), "bookmark", "set", "ws", "--allow-backwards", "-r", "@")
 				f.jj(f.cache(), "new")
 			}},
-		{name: "branch checked out elsewhere", mode: manifest.WorkspaceSourceModeJJ, code: CodePreconditionFailed, says: "git checks a branch out in one worktree only",
+		{name: "branch checked out elsewhere", mode: manifest.WorkspaceSourceModeJJ, code: CodePreconditionFailed, cause: CauseBranchCheckedOut, says: "git checks a branch out in one worktree only",
 			prepare: func(f *migrateFixture) {
 				f.jj(f.slot, "bookmark", "set", "ws", "-r", "@-")
 				runGit(f.t, f.cache(), "worktree", "add", "-q", filepath.Join(f.base, "other"), "ws")
@@ -658,4 +670,209 @@ func TestMigrateRollsBackAToolThatFails(t *testing.T) {
 			f.intact(tc.mode, files, commit, names)
 		})
 	}
+}
+
+// A rollback that stops is reported as such, not as the step's failure: the
+// error is INTERNAL, cause migrate_incomplete, and names where the slot's
+// checkout is. Its record stays, so status, repair, destroy and the next
+// migrate of the slot refuse with the same cause until the slot is put back
+// and the record deleted.
+func TestMigrateReportsARollbackThatStops(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	ctx := context.Background()
+	f.platform.migrateFault = func(at string) error {
+		if at != migrateStepAside {
+			return nil
+		}
+		// Something makes the slot's path again, which the rollback cannot
+		// rename the checkout back over.
+		mustMkdirAll(t, filepath.Join(f.slot, "intruder"))
+		return uncommittedChanges([]string{"g.txt"}, "", `source slot "app"`, "app", "app")
+	}
+	_, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", "")
+	opErr := AsOperationError(err)
+	if opErr == nil || opErr.Code != CodeInternal || opErr.Cause != CauseMigrateIncomplete || len(opErr.Paths) != 2 || !strings.HasPrefix(filepath.Base(opErr.Paths[1]), asidePrefix) ||
+		!strings.Contains(err.Error(), "rolling it back stopped") || !strings.Contains(err.Error(), opErr.Paths[1]) {
+		t.Fatalf("WorkspaceSourceMigrate() error = %v (%+v), want a stopped rollback naming the aside", err, opErr)
+	}
+	aside := opErr.Paths[1]
+	if !pathExists(t, filepath.Join(aside, ".env")) {
+		t.Fatalf("the checkout set aside at %s lost its files", aside)
+	}
+	f.platform.migrateFault = nil
+	if got := f.slotStatus("ws", "app"); got.State != "error" || !strings.Contains(got.Error, "did not finish") || !strings.Contains(got.Error, aside) {
+		t.Errorf("status = %+v, want the unfinished migrate named", got)
+	}
+	if _, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", ""); AsOperationError(err) == nil || AsOperationError(err).Cause != CauseMigrateIncomplete {
+		t.Errorf("WorkspaceSourceMigrate() again error = %v, want migrate_incomplete", err)
+	}
+	if err := f.platform.WorkspaceDestroy(ctx, "ws", true); err == nil || !strings.Contains(err.Error(), "did not finish") {
+		t.Errorf("WorkspaceDestroy() error = %v, want it refused", err)
+	}
+	if _, err := f.platform.WorkspaceSourceFetch(ctx, "ws", "app"); AsOperationError(err) == nil || AsOperationError(err).Cause != CauseMigrateIncomplete {
+		t.Errorf("WorkspaceSourceFetch() error = %v, want migrate_incomplete", err)
+	}
+	if _, err := f.platform.WorkspaceSyncBase(ctx, "ws", ""); AsOperationError(err) == nil || AsOperationError(err).Cause != CauseMigrateIncomplete {
+		t.Errorf("WorkspaceSyncBase() error = %v, want migrate_incomplete", err)
+	}
+	if !pathExists(t, aside) {
+		t.Fatalf("a refused destroy removed the checkout set aside")
+	}
+	result, _ := f.platform.WorkspaceRepair(ctx, "ws")
+	if len(result.Slots) != 1 || result.Slots[0].Action != "failed" || !strings.Contains(result.Slots[0].Reason, "did not finish") {
+		t.Errorf("WorkspaceRepair() = %+v, want the slot refused", result)
+	}
+
+	// Put back by hand, as the hint says, the slot migrates.
+	if err := os.RemoveAll(f.slot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(aside, f.slot); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, f.cache(), "worktree", "repair", f.slot)
+	if err := os.Remove(f.platform.migrateMarkerPath("ws", "app")); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", ""); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceMigrate() once put back = %+v, %v", result, err)
+	}
+}
+
+// asideOf is the one directory a migrate set aside in workspace ws.
+func (f *migrateFixture) asideOf() string {
+	f.t.Helper()
+	matches, err := filepath.Glob(filepath.Join(f.workspace("ws"), asidePrefix+"*"))
+	if err != nil || len(matches) != 1 {
+		f.t.Fatalf("set-aside directories = %q, %v, want one", matches, err)
+	}
+	return matches[0]
+}
+
+// What is written into the old checkout after its files were carried across,
+// as by a process whose working directory was in it, keeps the old checkout:
+// the migrate succeeds, and warns, with its path, instead of deleting it; a
+// jj slot's workspace is kept with it.
+func TestMigrateKeepsAnOldCheckoutWrittenMeanwhile(t *testing.T) {
+	for _, mode := range []string{manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeJJ} {
+		t.Run(mode, func(t *testing.T) {
+			f := newMigrateFixture(t, mode)
+			var aside string
+			f.platform.migrateFault = func(at string) error {
+				if at == migrateStepSave {
+					aside = f.asideOf()
+					mustWriteFile(t, filepath.Join(aside, "late.log"), "written late\n")
+				}
+				return nil
+			}
+			result, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", "")
+			if err != nil || !result.OK || !strings.Contains(result.Message, "Warning: the old") || !strings.Contains(result.Message, "was kept at "+aside) || !strings.Contains(result.Message, "late.log") {
+				t.Fatalf("WorkspaceSourceMigrate() = %+v, %v, want it migrated, warning that the old checkout was kept", result, err)
+			}
+			if data, err := os.ReadFile(filepath.Join(aside, "late.log")); err != nil || string(data) != "written late\n" {
+				t.Fatalf("the late file = %q, %v, want it kept", data, err)
+			}
+			if mode == manifest.WorkspaceSourceModeJJ && !slices.Contains(f.jjNames(), "dev--ws") {
+				t.Errorf("jj workspaces = %q, want dev--ws kept with its checkout", f.jjNames())
+			}
+			if pathExists(t, f.platform.migrateMarkerPath("ws", "app")) {
+				t.Errorf("the migrate's record was left after it finished")
+			}
+			// The checkout kept is in the workspace: destroy refuses to purge it.
+			if err := f.platform.WorkspaceDestroy(context.Background(), "ws", true); err == nil || !strings.Contains(err.Error(), aside) {
+				t.Errorf("WorkspaceDestroy() error = %v, want it refused, naming %s", err, aside)
+			}
+			if !pathExists(t, filepath.Join(aside, "late.log")) {
+				t.Errorf("a refused destroy removed the checkout kept")
+			}
+		})
+	}
+}
+
+// A new worktree that cannot be moved back after the jj workspace is
+// forgotten (something made the slot's path meanwhile) keeps the migrate's
+// record: the slot's status names where the worktree is, and destroy
+// refuses, rather than purging it with the workspace.
+func TestMigrateKeepsItsRecordWhenTheNewWorktreeIsLeftAside(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeJJ)
+	ctx := context.Background()
+	f.platform.migrateFault = func(at string) error {
+		if at == migrateStepForgotten {
+			mustMkdirAll(t, filepath.Join(f.slot, "intruder"))
+		}
+		return nil
+	}
+	result, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", "")
+	if err != nil || !strings.Contains(result.Message, "the new worktree was left at") || !strings.Contains(result.Message, "record") {
+		t.Fatalf("WorkspaceSourceMigrate() = %+v, %v, want it migrated, warning that the new worktree was left aside", result, err)
+	}
+	aside := f.asideOf()
+	if !pathExists(t, filepath.Join(aside, ".env")) {
+		t.Fatalf("the new worktree left at %s lost its carried files", aside)
+	}
+	if !pathExists(t, f.platform.migrateMarkerPath("ws", "app")) {
+		t.Fatalf("the migrate's record was removed though the new worktree is left aside")
+	}
+	f.platform.migrateFault = nil
+	if got := f.slotStatus("ws", "app"); got.State != "error" || !strings.Contains(got.Error, aside) || !strings.Contains(got.Error, "worktree.useRelativePaths=false") {
+		t.Errorf("status = %+v, want the unfinished migrate and where the worktree is named, with the repair command", got)
+	}
+	if err := f.platform.WorkspaceDestroy(ctx, "ws", true); err == nil || !strings.Contains(err.Error(), aside) {
+		t.Errorf("WorkspaceDestroy() error = %v, want it refused, naming %s", err, aside)
+	}
+	if !pathExists(t, aside) {
+		t.Fatalf("a refused destroy removed the worktree left aside")
+	}
+}
+
+// Other worktrees of the cache are left as they are by a migrate, either way
+// and when it rolls back: their links keep their form, and a registration
+// whose checkout is gone is not pruned.
+func TestMigrateLeavesOtherWorktreesAlone(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	ctx := context.Background()
+	other, gone := filepath.Join(f.base, "other"), filepath.Join(f.base, "gone")
+	runGit(t, f.cache(), "-c", "worktree.useRelativePaths=false", "worktree", "add", "-q", "--detach", other, "main")
+	runGit(t, f.cache(), "worktree", "add", "-q", "--detach", gone, "main")
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	link := func() string {
+		data, err := os.ReadFile(filepath.Join(other, ".git"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	before := link()
+	check := func(when string) {
+		t.Helper()
+		if got := link(); got != before {
+			t.Errorf("%s: the other worktree's .git = %q, want %q", when, got, before)
+		}
+		if regs := strings.Join(f.registrations(f.cache()), "\n"); !strings.Contains(regs, "worktree "+canonical(t, f.base)+"/gone") && !strings.Contains(regs, gone) {
+			t.Errorf("%s: the gone worktree's registration was pruned: %s", when, regs)
+		}
+	}
+	failTool(t, "jj", "workspace", "add")
+	if _, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", ""); err == nil {
+		t.Fatalf("WorkspaceSourceMigrate() with jj failing succeeded")
+	}
+	check("after a rollback")
+	t.Setenv("PATH", strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[1])
+	if _, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ); err != nil {
+		t.Fatalf("WorkspaceSourceMigrate(jj) error = %v", err)
+	}
+	check("after a migrate to jj")
+	f.jj(f.slot, "commit", "-m", "notes")
+	failTool(t, "git", "worktree", "add")
+	if _, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", ""); err == nil {
+		t.Fatalf("WorkspaceSourceMigrate() with git's worktree add failing succeeded")
+	}
+	check("after a git rollback")
+	t.Setenv("PATH", strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[1])
+	if _, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeWorktree); err != nil {
+		t.Fatalf("WorkspaceSourceMigrate(worktree) error = %v", err)
+	}
+	check("after a migrate to a worktree")
 }

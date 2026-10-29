@@ -741,13 +741,19 @@ ready answers `409` `PRECONDITION_FAILED` with the cause of the matching
 verb's refusal: `branch_mismatch` or `uncommitted_changes` (changes to
 tracked files) for a worktree, `detached_head` for one on no branch with
 commits beyond its base; `uncommitted_changes`, `untracked_paths` or
-`branch_moved` for a jj slot, and no cause for a jj slot whose working-copy
-commit is described, has two parents or sits on a conflicted commit, or
-whose branch another git worktree has checked out. A jj name the cache has
-for another checkout is `409` `CONFLICT`, and so is a slot whose commit
-changed while it was migrated. A failure partway rolls the slot back; the
-error says what could not be put back, and where it is, if the rollback
-itself failed.
+`branch_moved` for a jj slot, `branch_checked_out` for one whose branch
+another git worktree has checked out, `slot_not_held` for a checkout that
+is not the jj workspace this stack made, and no cause for a worktree with
+skip-worktree or assume-unchanged files or submodules, or a jj slot whose
+working-copy commit is described, has two parents or sits on a conflicted
+commit. A jj name the cache has for another checkout is `409` `CONFLICT`,
+and so is a slot whose commit changed while it was migrated. A failure
+partway rolls the slot back; a rollback that stops is `500` `INTERNAL`,
+cause `migrate_incomplete`, with the slot's path and where its checkout was
+set aside in `paths`. Until such a slot is put back and its record under
+`run/migrate/` deleted, its status is an `error`, and `migrate`, `repair`,
+`destroy` and the verbs that check each slot refuse it with `409`
+`PRECONDITION_FAILED`, cause `migrate_incomplete`.
 
 Workspace preflight:
 

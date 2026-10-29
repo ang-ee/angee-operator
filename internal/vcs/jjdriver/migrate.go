@@ -2,7 +2,9 @@ package jjdriver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
@@ -169,18 +171,37 @@ func (d Driver) PrepareWorktree(ctx context.Context, s vcs.Slot) (Handoff, error
 	return h, nil
 }
 
+// ErrBookmarkMoved is wrapped by RestoreBookmark for a bookmark that is no
+// longer where PrepareWorktree set it, which it leaves alone.
+var ErrBookmarkMoved = errors.New("the bookmark moved since the migrate set it")
+
 // RestoreBookmark puts back the bookmark PrepareWorktree created or moved,
 // for a migrate that rolls back: deleted when the repository had none
 // (`jj bookmark delete`, which leaves a remote bookmark it tracks as it was
 // before, a local deletion), else set back where it was, backwards; one that
-// was conflicted stays resolved (Handoff.Resolved). It runs in the slot's
-// primary, touching no working copy.
+// was conflicted stays resolved (Handoff.Resolved). One no longer at the
+// handoff's Tip, which another workspace moved meanwhile, is left as it is,
+// wrapping ErrBookmarkMoved. It runs in the slot's primary, touching no
+// working copy.
 func (d Driver) RestoreBookmark(ctx context.Context, s vcs.Slot, h Handoff) error {
 	if !h.Moved || h.Branch == "" || h.Resolved {
 		return nil
 	}
 	if s.Primary == "" {
 		return errNoPrimary
+	}
+	// Another workspace of the primary may have moved it since, without the
+	// primary's lock: that move is left as it is.
+	out, err := d.jj.store(ctx, s.Primary, "bookmark", "list", "-T", bookmarksTemplate, exact(h.Branch))
+	if err != nil {
+		return fmt.Errorf("read bookmark %q in %s: %w", h.Branch, s.Primary, err)
+	}
+	marks, err := decodeLines[bookmark](out)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(marks, func(m bookmark) bool { return m.Remote == "" && slices.Equal(m.Target, []string{h.Tip}) }) {
+		return fmt.Errorf("bookmark %q of %s is no longer at %s, where the migrate set it, so it is left where it is: %w", h.Branch, s.Primary, shortID(h.Tip), ErrBookmarkMoved)
 	}
 	args := []string{"bookmark", "delete", "--", exact(h.Branch)}
 	if h.Previous != "" {

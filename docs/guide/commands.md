@@ -873,37 +873,54 @@ already in the mode asked for is left as it is. It answers a
 slot's status after it.
 
 1. The slot is checked: a worktree must be on its branch with no changes to
-   tracked files (`branch_mismatch`, `uncommitted_changes`); one that names
-   no branch must hold no commits beyond its base (`detached_head`), since a
-   jj slot on no branch starts at the base. A jj slot must hold nothing in
-   its working copy: no changes (`uncommitted_changes`), no files jj does
-   not track (`untracked_paths`), no description on an empty working-copy
-   commit, and no conflicted commit under it.
+   tracked files (`branch_mismatch`, `uncommitted_changes`), including files
+   git is told not to look at (skip-worktree, assume-unchanged), and no
+   submodules; one that names no branch must hold no commits beyond its
+   base (`detached_head`), since a jj slot on no branch starts at the base.
+   A jj slot must hold nothing in its working copy: no changes
+   (`uncommitted_changes`), no files jj does not track (`untracked_paths`),
+   no description on an empty working-copy commit, and no conflicted commit
+   under it.
 2. For a jj slot, the slot's `branch` is set on the commit under its working
    copy: created there, or moved forward, but never past commits the slot
    does not hold (`branch_moved`, with the merge that takes them in), and
-   never while another git worktree has it checked out.
-3. The slot is renamed aside in its own directory (`.angee-migrate-…`),
-   which keeps its `.git` and `.jj` links working, and its git registration
-   repaired to follow it. It is checked again there, and its untracked and
-   ignored entries recorded.
+   never while another git worktree has it checked out
+   (`branch_checked_out`). The slot must be the jj workspace this stack made
+   at its path (`slot_not_held`).
+3. The migrate is recorded under `run/migrate/`, and the slot renamed aside
+   in its own directory (`.angee-migrate-…`), which keeps its `.git` and
+   `.jj` links working, and its git registration alone pointed at it (no
+   other worktree of the cache is touched). It is checked again there, and
+   its untracked and ignored entries recorded.
 4. The new checkout is made at the slot's path, of the same commit: a jj
    workspace named as `workspace create` names one (the source's cache is
    colocated with jj first), on the slot's branch; or a git worktree on that
    branch, or detached at the commit for a slot on no branch.
 5. The recorded entries are renamed into it, and the manifest records the
    new mode.
-6. The old checkout is removed, and only its own git registration dropped;
-   a jj slot's workspace is forgotten.
+6. The old checkout is read again, and removed, and only its own git
+   registration dropped; a jj slot's workspace is forgotten. One that holds
+   anything written into it since its files were carried across (by a
+   shell or a server whose working directory was in it) is kept instead,
+   with its jj workspace, and the message says where and what to do;
+   `workspace destroy` refuses while it is there, as it refuses while
+   anything a migrate set aside (`.angee-migrate-…`) sits beside a slot.
 
 Untracked files that git did not ignore become changes in the jj slot's
 working-copy commit, since jj records every file it does not ignore; the
 message lists them. A failure before the manifest is written rolls back
 what was done, in reverse, so the slot is the checkout it was, with its
-files and branch. One after it leaves the slot migrated, and the message
-warns of what was not cleaned up, with the command that does it. A slot that
-named no mode names one afterwards, so `sync-base` and `workspace push` walk
-it too.
+files and branch. A rollback that cannot finish stops (since what comes
+after would delete what it could not put back) and fails with `INTERNAL`,
+cause `migrate_incomplete`, naming where the slot's checkout is. A migrate
+that stops that way, or is killed, leaves its record: until the slot is put
+back and the record deleted, `workspace status` reports the slot as an
+error, and `repair`, `destroy`, every slot verb, `sync-base` and
+`workspace push` refuse it with cause `migrate_incomplete`, naming what was
+set aside. A failure after the manifest is written leaves the slot
+migrated, and the message warns of what was not cleaned up, with the
+command that does it. A slot that named no mode names one afterwards, so
+`sync-base` and `workspace push` walk it too.
 
 `migrate` refuses a slot at the workspace's root, or one other slots lie
 inside, since setting it aside would move them, and a slot of a `kind:

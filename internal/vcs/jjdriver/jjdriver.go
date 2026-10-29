@@ -2,9 +2,10 @@
 // a source's primary, colocated with git when the primary is. It makes and
 // removes a slot (lifecycle.go), reads its status and diff, fetches, syncs
 // and rebases it (rebase.go), publishes and pushes it under a bookmark
-// (publish.go) and merges into it (merge.go), as phase 8 of
-// .agents/plans/jj-native-operator.md lays out. A jj slot is never pulled,
-// and never has a merge or rebase in progress to abort or continue: those
+// (publish.go), merges into it (merge.go) and readies it, or its primary,
+// for a migrate between a git worktree and a jj slot (migrate.go), as phases
+// 8 and 9 of .agents/plans/jj-native-operator.md lay out. A jj slot is never
+// pulled, and never has a merge or rebase in progress to abort or continue: those
 // verbs report vcs.ErrUnsupported. The service selects it for a slot whose
 // mode is jj. Source captures also use it as the vcs.BackupLayer over a Git
 // checkout, which plans nothing unless colocated JJ metadata is present.

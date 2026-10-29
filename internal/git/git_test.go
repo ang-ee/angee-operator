@@ -1160,3 +1160,62 @@ func TestChangedAndOtherPaths(t *testing.T) {
 		t.Errorf("Commit(HEAD) = %q, %v", head, err)
 	}
 }
+
+// HiddenPaths lists the skip-worktree and assume-unchanged files on disk,
+// Submodules the gitlinks, and DeregisterWorktree drops one missing
+// worktree's registration and no other, refusing one still on disk.
+func TestHiddenPathsSubmodulesAndDeregister(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	runGit(t, repo, "config", "user.name", "test")
+	for _, name := range []string{"a", "b", "c", "gone"} {
+		mustWriteFile(t, filepath.Join(repo, name), name+"\n")
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-q", "-m", "base")
+	runGit(t, repo, "update-index", "--skip-worktree", "a", "gone")
+	runGit(t, repo, "update-index", "--assume-unchanged", "b")
+	if err := os.Remove(filepath.Join(repo, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	client := New()
+	if got, err := client.HiddenPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("HiddenPaths() = %q, %v, want a and b, not the absent gone", got, err)
+	}
+	head, err := client.Commit(ctx, repo, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+head+",vendor/lib")
+	if got, err := client.Submodules(ctx, repo); err != nil || !slices.Equal(got, []string{"vendor/lib"}) {
+		t.Errorf("Submodules() = %q, %v", got, err)
+	}
+
+	kept, dropped := filepath.Join(base, "kept"), filepath.Join(base, "dropped")
+	runGit(t, repo, "worktree", "add", "-q", "--detach", kept)
+	runGit(t, repo, "worktree", "add", "-q", "--detach", dropped)
+	if err := client.DeregisterWorktree(ctx, repo, dropped); err == nil {
+		t.Fatalf("DeregisterWorktree() of a worktree on disk succeeded")
+	}
+	if err := os.RemoveAll(dropped); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeregisterWorktree(ctx, repo, dropped); err != nil {
+		t.Fatalf("DeregisterWorktree() error = %v", err)
+	}
+	if ok, _ := client.WorktreeRegistered(ctx, repo, dropped); ok {
+		t.Errorf("the dropped worktree is still registered")
+	}
+	if ok, _ := client.WorktreeRegistered(ctx, repo, kept); !ok {
+		t.Errorf("the other missing worktree's registration was dropped too")
+	}
+	if err := client.DeregisterWorktree(ctx, repo, filepath.Join(base, "never")); err != nil {
+		t.Errorf("DeregisterWorktree() of nothing registered error = %v", err)
+	}
+}

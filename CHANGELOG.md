@@ -17,7 +17,7 @@ latest tag.
   - It keeps the slot's commits and every file it holds that neither
     tracks, which `git worktree remove` would delete (`node_modules`,
     `.venv`, `.env`): the slot is renamed aside in its own directory, its
-    git registration repaired to follow it, the new checkout made at its
+    git registration pointed at it, the new checkout made at its
     path on the same commit, and the untracked and ignored entries renamed
     into it, before the manifest records the new `mode` and the old
     checkout, and only its own git registration, are removed. A jj slot's
@@ -35,12 +35,37 @@ latest tag.
     commit for a slot on no branch.
   - A failure before the manifest is written rolls back in reverse, leaving
     the slot the checkout it was; a failure in the clean-up after it is a
-    warning in the message, with the command that finishes it. A slot at
-    the workspace's root, or with other slots inside it, and a `kind:
-    local` source's slot, are refused.
+    warning in the message, with the command that finishes it. An old
+    checkout that holds anything written into it after its files were
+    carried across (a shell or server whose working directory was in it
+    follows it aside) is kept, not removed, and the message says where;
+    `workspace destroy` refuses while anything a migrate set aside sits
+    beside a slot.
+  - A rollback that cannot finish stops, so it deletes nothing it could not
+    put back, and fails with `INTERNAL`, cause `migrate_incomplete`, naming
+    where the slot's checkout is. A migrate keeps a record under
+    `run/migrate/` while the slot may be set aside; one left by a migrate
+    that stopped or was killed makes the slot's status an error and its
+    `repair`, `destroy` and slot verbs refuse it (`migrate_incomplete`)
+    until the slot is put back and the record deleted.
+  - Refused: a worktree with skip-worktree or assume-unchanged files, whose
+    local versions git does not report, or with submodules; a branch
+    another worktree has checked out (`branch_checked_out`); a checkout
+    that is not the jj workspace this stack made (`slot_not_held`); a slot
+    at the workspace's root, or with other slots inside it; and a `kind:
+    local` source's slot. The slot's git registration alone is pointed at
+    where it moves, never other worktrees' (`git worktree repair` would
+    rewrite them all).
 
 ### Fixed
 
+- **A failed git worktree create no longer prunes the source cache.** When
+  a worktree slot's checkout failed after git had added it, the clean-up
+  ran `git worktree prune`, dropping every registration of the cache whose
+  checkout this process cannot see, such as other stacks' slots out of a
+  container's sight. It now drops only that worktree's own registration,
+  as jj slots' removal does; one it cannot drop is left, with a warning,
+  for the next create at that path to drop.
 - **Changing a stack's `vcs` no longer changes what its existing slots
   are.** A slot that names no `mode` followed the stack's `vcs`, existing
   ones too, so switching a stack from `vcs: jj` to `git` read its jj slots

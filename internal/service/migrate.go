@@ -17,6 +17,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
 	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 )
 
@@ -47,6 +48,10 @@ const (
 	// migrateStepSave: every entry is carried across, and the manifest is
 	// written next.
 	migrateStepSave = "save"
+	// migrateStepForgotten: after the manifest is written, the jj workspace
+	// is forgotten, and the new worktree, set aside for it, is moved back
+	// next. A failure here is a warning, as all clean-up is.
+	migrateStepForgotten = "forgotten"
 )
 
 // migrateRollbackTimeout bounds a migrate's rollback and its clean-up, which
@@ -120,6 +125,9 @@ func (p *Platform) WorkspaceSourceMigrate(ctx context.Context, workspaceName, sl
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
+	if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, m.path); unfinished {
+		return api.GitOpResult{}, p.migrateIncomplete(workspaceName, slot, m.sourceName, m.path, reason)
+	}
 	if m.from == m.to {
 		status := p.workspaceSourceStatus(ctx, workspaceName, slot, m.wsSource, stack)
 		return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: fmt.Sprintf("source slot %q is a %s already; nothing to migrate", slot, modeNoun(m.to)), Source: &status}, nil
@@ -149,6 +157,11 @@ func (p *Platform) WorkspaceSourceMigrate(ctx context.Context, workspaceName, sl
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
+	if m.stranded {
+		message += fmt.Sprintf("\nWarning: the migrate's record %s is kept, so status and the verbs report the slot until its checkout is moved back and the record deleted.", p.migrateMarkerPath(workspaceName, slot))
+	} else if err := m.endMarker(); err != nil {
+		message += "\nWarning: " + err.Error()
+	}
 	status := p.workspaceSourceStatus(ctx, workspaceName, slot, stack.Workspaces[workspaceName].Sources[slot], stack)
 	return api.GitOpResult{OK: true, ConflictFiles: []string{}, Message: message, Source: &status}, nil
 }
@@ -173,6 +186,15 @@ type migration struct {
 	jjName              string
 	// forgotten reports that the jj workspace the slot was is forgotten.
 	forgotten bool
+	// head is the commit the old checkout is on, and tracked, for a jj slot,
+	// what that commit tracks: the clean-up checks the checkout set aside
+	// still holds nothing else before it removes it.
+	head    string
+	tracked []string
+	// marked reports that the migrate's record is written (beginMarker);
+	// saved, that the manifest records the new mode; stranded, that the new
+	// checkout was left set aside (forgetBeside), so the record stays.
+	marked, saved, stranded bool
 }
 
 // migrationUndo is one thing a migrate did, and how to undo it; what says
@@ -285,18 +307,23 @@ func (p *Platform) migrateToJJ(ctx context.Context, m *migration) (string, error
 	if !ok {
 		return "", fmt.Errorf("the driver of jj slot %s cannot migrate it", m.path)
 	}
+	m.head = head
 	err = withPrimaryLock(ctx, m.primary, func() error {
+		// A cache that is no jj repository yet has no name to be taken, so it
+		// is colocated with jj only once nothing refuses the migrate.
+		if _, err := os.Lstat(filepath.Join(m.primary, ".jj")); err == nil {
+			if err := refuseTakenJJName(ctx, jj, jjSlot); err != nil {
+				return err
+			}
+		}
 		if err := jj.EnsurePrimary(ctx, m.primary); err != nil {
 			return err
 		}
 		if err := jj.Import(ctx, m.primary); err != nil {
 			return err
 		}
-		if taken, err := jj.Exists(ctx, jjSlot); err != nil {
+		if err := refuseTakenJJName(ctx, jj, jjSlot); err != nil {
 			return err
-		} else if taken {
-			elsewhere, _ := jj.Elsewhere(ctx, jjSlot)
-			return jjNameTaken(jjSlot, elsewhere)
 		}
 		if err := m.run(ctx, func() error { return m.toJJ(ctx, client, jj, jjSlot, head, start) }); err != nil {
 			return err
@@ -304,7 +331,7 @@ func (p *Platform) migrateToJJ(ctx context.Context, m *migration) (string, error
 		m.finishToJJ(ctx, client)
 		return nil
 	})
-	if err != nil {
+	if err := m.lockReleased(ctx, err); err != nil {
 		return "", err
 	}
 	message := fmt.Sprintf("Migrated source slot %q to a jj slot: jj workspace %q of %s at %s", m.slot, jjSlot.Name, m.primary, m.path)
@@ -313,6 +340,17 @@ func (p *Platform) migrateToJJ(ctx context.Context, m *migration) (string, error
 	}
 	message += "."
 	return m.describe(message), nil
+}
+
+// refuseTakenJJName refuses a jj name the primary already has, for another
+// checkout: the phase 6 CONFLICT (jjNameTaken). A migrate never reclaims one.
+func refuseTakenJJName(ctx context.Context, jj jjMigrator, jjSlot vcs.Slot) error {
+	taken, err := jj.Exists(ctx, jjSlot)
+	if err != nil || !taken {
+		return err
+	}
+	elsewhere, _ := jj.Elsewhere(ctx, jjSlot)
+	return jjNameTaken(jjSlot, elsewhere)
 }
 
 // jjStartCommit is the commit a jj slot on no branch starts on, its base as
@@ -356,7 +394,7 @@ func (m *migration) jjStartCommit(ctx context.Context, client git.Client, s vcs.
 // toJJ is migrateToJJ's work under the lock, each step recorded for the
 // rollback.
 func (m *migration) toJJ(ctx context.Context, client git.Client, jj jjMigrator, jjSlot vcs.Slot, head, start string) error {
-	if err := m.setAside(ctx, client, false); err != nil {
+	if err := m.setAside(ctx, client); err != nil {
 		return err
 	}
 	if err := m.step(migrateStepAside); err != nil {
@@ -411,10 +449,41 @@ func (m *migration) toJJ(ctx context.Context, client git.Client, jj jjMigrator, 
 // finishToJJ removes the worktree set aside, once the manifest records the
 // jj slot: through its guard, then its git registration alone. A failure is
 // a warning, since the slot is migrated.
+//
+// Something that had the slot open when it was set aside (a shell, an
+// editor, a server whose working directory was in it) follows it into the
+// aside, so the aside is read again first: it must be on the same commit,
+// with no change to a tracked file and nothing git does not track left in
+// it, else it is kept, and the warning says what to do with it.
 func (m *migration) finishToJJ(ctx context.Context, client git.Client) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), migrateRollbackTimeout)
 	defer cancel()
-	m.removeAside(ctx, client)
+	var held []string
+	err := m.aside.Verify()
+	if err == nil {
+		held, err = client.ChangedPaths(ctx, m.aside.Path())
+	}
+	if err == nil {
+		var others []string
+		if others, err = client.OtherPaths(ctx, m.aside.Path(), true); err == nil {
+			held = append(held, others...)
+		}
+	}
+	if err == nil {
+		var now string
+		if now, err = client.Commit(ctx, m.aside.Path(), "HEAD"); err == nil && now != m.head {
+			err = fmt.Errorf("it moved from %s to %s", shortCommit(m.head), shortCommit(now))
+		}
+	}
+	if err == nil && len(held) == 0 {
+		m.removeAside(ctx, client)
+		return
+	}
+	reason := fmt.Sprintf("it holds what was written into it after its files were carried across: %s", vcs.NamePaths(held, maxMessagePaths))
+	if err != nil {
+		reason = fmt.Sprintf("reading it again found %v", err)
+	}
+	m.warn(ctx, fmt.Sprintf("the old worktree was kept at %s, since %s; take what you need from it, then remove it with `git -C %s worktree remove --force --force %s`", m.aside.Path(), reason, shellQuote(m.primary), shellQuote(m.aside.Path())))
 }
 
 // migrateToWorktree makes the jj slot m a git worktree of its cache (plan
@@ -430,11 +499,12 @@ func (p *Platform) migrateToWorktree(ctx context.Context, m *migration) (string,
 	if err := requireSlotReady(ctx, jj, jjSlot, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); err != nil {
 		return "", err
 	}
-	named, held := p.destroyedJJSlot(ctx, jj, m.stack, m.workspaceName, m.slot, jjSlot)
+	named, held := p.heldJJSlot(ctx, jj, m.stack, m.workspaceName, m.slot, jjSlot)
 	if !held {
 		hint := "Make it the checkout of its jj workspace again, or move it aside and run `angee workspace repair` to make the slot afresh."
 		return "", &OperationError{
 			Code:    CodePreconditionFailed,
+			Cause:   CauseSlotNotHeld,
 			Slot:    m.slot,
 			Source:  m.sourceName,
 			Paths:   []string{m.path},
@@ -461,7 +531,7 @@ func (p *Platform) migrateToWorktree(ctx context.Context, m *migration) (string,
 		m.finishToWorktree(ctx, client, jj, named)
 		return nil
 	})
-	if err != nil {
+	if err := m.lockReleased(ctx, err); err != nil {
 		return "", err
 	}
 	message := fmt.Sprintf("Migrated source slot %q to a git worktree of %s at %s", m.slot, m.primary, m.path)
@@ -478,6 +548,23 @@ func (p *Platform) migrateToWorktree(ctx context.Context, m *migration) (string,
 	}
 	message += "."
 	return m.describe(message), nil
+}
+
+// heldJJSlot names the jj workspace whose checkout is at slot.Path, of the
+// two names this stack could have given the slot (destroyedJJSlot's), by
+// HeldChange alone: jj run there loads that workspace, whose working copy is
+// the primary's. Unlike destroy, a migrate removes the checkout it reads, so
+// a name jj only records at the path does not do.
+func (p *Platform) heldJJSlot(ctx context.Context, jj jjMigrator, stack *manifest.Stack, workspaceName, slotName string, slot vcs.Slot) (vcs.Slot, bool) {
+	base := stack.Name + "--" + workspaceName
+	for _, name := range []string{base, base + "--" + slotName} {
+		candidate := slot
+		candidate.Name = name
+		if change, err := jj.HeldChange(ctx, candidate, slot.Path); err == nil && change != "" {
+			return candidate, true
+		}
+	}
+	return slot, false
 }
 
 // prepareWorktree readies the jj slot to become a worktree
@@ -497,6 +584,7 @@ func (m *migration) prepareWorktree(ctx context.Context, jj jjMigrator, named vc
 			hint := "Switch that worktree to another branch, or give the slot another branch in angee.yaml, then retry."
 			return handoff, &OperationError{
 				Code:    CodePreconditionFailed,
+				Cause:   CauseBranchCheckedOut,
 				Slot:    m.slot,
 				Source:  m.sourceName,
 				Paths:   []string{taken.Worktree},
@@ -509,7 +597,12 @@ func (m *migration) prepareWorktree(ctx context.Context, jj jjMigrator, named vc
 	}
 	if handoff.Moved {
 		m.push(fmt.Sprintf("bookmark %q, now at %s", handoff.Branch, shortCommit(handoff.Tip)), func(ctx context.Context) error {
-			return jj.RestoreBookmark(ctx, named, handoff)
+			err := jj.RestoreBookmark(ctx, named, handoff)
+			if errors.Is(err, jjdriver.ErrBookmarkMoved) {
+				logctx.From(ctx).Warn(err.Error())
+				return nil
+			}
+			return err
 		})
 	}
 	return handoff, nil
@@ -518,7 +611,7 @@ func (m *migration) prepareWorktree(ctx context.Context, jj jjMigrator, named vc
 // toWorktree is migrateToWorktree's work under the lock once the bookmark is
 // set, each step recorded for the rollback.
 func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigrator, gitDriver vcs.Driver, named, gitSlot vcs.Slot, handoff jjdriver.Handoff) error {
-	if err := m.setAside(ctx, client, true); err != nil {
+	if err := m.setAside(ctx, client); err != nil {
 		return err
 	}
 	if err := m.step(migrateStepAside); err != nil {
@@ -543,6 +636,7 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	if err != nil {
 		return err
 	}
+	m.head, m.tracked = handoff.Tip, tracked
 	if err := m.aside.Verify(); err != nil {
 		return err
 	}
@@ -557,7 +651,7 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 		if err := m.dest.RemoveAll(); err != nil {
 			return err
 		}
-		return deregisterWorktree(ctx, client, m.primary, m.path)
+		return client.DeregisterWorktree(ctx, m.primary, m.path)
 	})
 	if err := m.step(migrateStepAdded); err != nil {
 		return err
@@ -584,53 +678,101 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 // checkout, set aside, once the manifest records the worktree. A failure is
 // a warning, since the slot is migrated.
 //
+// Something that had the slot open when it was set aside follows it into
+// the aside, so the aside is read again first, as finishToJJ does: still the
+// jj workspace (HeldChange), on the same commit, with nothing in its working
+// copy (Ready) and nothing jj does not track left in it. Else the aside and
+// the jj workspace are both kept, and the warning says what to do.
+//
 // jj forgets a workspace without touching git only while nothing is at the
 // path it recorded for it (jjdriver.Driver.ForgetName); with something
 // there, `jj workspace forget` removes the git worktree there, which is now
-// the slot's new one. So the name is forgotten while the new worktree is set
-// aside for a moment, and only when jj recorded the workspace at the slot's
-// path; the change it is forgotten by is read from the checkout set aside
-// first (HeldChange), so a workspace of that name another added meanwhile
-// is left alone.
+// the slot's new one, and prunes the cache's missing ones. So the name is
+// forgotten while the new worktree is set aside for a moment, and only when
+// jj recorded the workspace at the slot's path, by the change read from the
+// checkout set aside, so a workspace of that name another added meanwhile is
+// left alone.
 func (m *migration) finishToWorktree(ctx context.Context, client git.Client, jj jjMigrator, named vcs.Slot) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), migrateRollbackTimeout)
 	defer cancel()
-	forget := fmt.Sprintf("forget it with `jj -R %s workspace forget %s`", shellQuote(m.primary), shellQuote(named.Name))
 	held := named
 	held.Path = m.aside.Path()
-	change, err := jj.HeldChange(ctx, held, held.Path)
-	switch {
-	case err != nil:
-		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten: reading the checkout set aside at %s failed (%v); %s", named.Name, held.Path, err, forget))
-	case change == "":
-		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten: the checkout set aside at %s is no longer it; %s if nothing uses it", named.Name, held.Path, forget))
-	default:
-		m.forgetBeside(ctx, jj, named, change, forget)
+	var change string
+	var left []string
+	err := m.aside.Verify()
+	if err == nil {
+		change, err = jj.HeldChange(ctx, held, held.Path)
 	}
+	if err == nil && change == "" {
+		err = fmt.Errorf("it is no longer jj workspace %q", named.Name)
+	}
+	if err == nil {
+		err = jj.Ready(ctx, held, vcs.VerbMigrate)
+	}
+	if err == nil {
+		var tip string
+		if tip, err = jj.Tip(ctx, held.Path); err == nil && tip != m.head {
+			err = fmt.Errorf("it moved from %s to %s", shortCommit(m.head), shortCommit(tip))
+		}
+	}
+	if err == nil {
+		left, err = untrackedEntries(held.Path, m.tracked)
+	}
+	if err != nil || len(left) > 0 {
+		reason := fmt.Sprintf("it holds what was written into it after its files were carried across: %s", vcs.NamePaths(left, maxMessagePaths))
+		if err != nil {
+			reason = fmt.Sprintf("reading it again found %v", err)
+		}
+		m.warn(ctx, fmt.Sprintf("the old jj slot was kept at %s, and jj workspace %q with it, since %s. Take what you need from it, then remove it with `git -C %s worktree remove --force --force %s`, and %s", held.Path, named.Name, reason, shellQuote(m.primary), shellQuote(held.Path), m.forgetHint(named.Name)))
+		return
+	}
+	m.forgetBeside(ctx, jj, named, change)
 	m.removeAside(ctx, client)
+}
+
+// forgetHint says how to forget jj workspace name safely by hand while the
+// new worktree is at the slot's path, where jj recorded the workspace: jj's
+// forget would remove the git worktree it finds there.
+func (m *migration) forgetHint(name string) string {
+	return fmt.Sprintf("forget the workspace with nothing at %[1]s: `mv %[1]s %[1]s.away && jj -R %[2]s workspace forget %[3]s && mv %[1]s.away %[1]s`", shellQuote(m.path), shellQuote(m.primary), shellQuote(name))
 }
 
 // forgetBeside forgets jj workspace named, whose working copy is change,
 // with the new worktree at its path set aside for the forget.
-func (m *migration) forgetBeside(ctx context.Context, jj jjMigrator, named vcs.Slot, change, forget string) {
+func (m *migration) forgetBeside(ctx context.Context, jj jjMigrator, named vcs.Slot, change string) {
 	recorded, _, err := jj.Recorded(ctx, named)
 	if err != nil || vcs.CanonicalPath(recorded) != vcs.CanonicalPath(m.path) {
-		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten: jj records it at %q, not at the slot's path (%v); %s if nothing uses it", named.Name, recorded, err, forget))
+		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten: jj records it at %q, not at the slot's path (%v); if nothing uses it, forget it with `jj -R %s workspace forget %s` once nothing is at %q", named.Name, recorded, err, shellQuote(m.primary), shellQuote(named.Name), recorded))
 		return
 	}
 	moved, err := m.dest.SetAside(asidePrefix, m.path)
 	if err != nil {
-		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten: setting the new worktree aside for it failed (%v); %s", named.Name, err, forget))
+		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten: setting the new worktree aside for it failed (%v); %s", named.Name, err, m.forgetHint(named.Name)))
 		return
 	}
 	if err := jj.ForgetName(ctx, named, change); err != nil {
-		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten (%v); %s", named.Name, err, forget))
+		m.warn(ctx, fmt.Sprintf("jj workspace %q was not forgotten (%v); %s", named.Name, err, m.forgetHint(named.Name)))
 	} else {
 		m.forgotten = true
 	}
-	if err := m.dest.RestoreAside(moved); err != nil {
-		m.warn(ctx, fmt.Sprintf("the new worktree was left at %s, not moved back to %s (%v): move it back with `mv %s %s`", moved.Path(), m.path, err, shellQuote(moved.Path()), shellQuote(m.path)))
+	if err := m.step(migrateStepForgotten); err != nil {
+		m.warn(ctx, err.Error())
 	}
+	if err := m.dest.RestoreAside(moved); err != nil {
+		m.stranded = true
+		m.warn(ctx, fmt.Sprintf("the new worktree was left at %s, not moved back to %s (%v): once nothing is at %s, move it back with `mv %s %s`", moved.Path(), m.path, err, m.path, shellQuote(moved.Path()), shellQuote(m.path)))
+	}
+}
+
+// lockReleased is err, what the cache's lock returned around the migrate,
+// unless the manifest records the migrate already: then only releasing the
+// lock failed, which is a warning, since the slot is migrated.
+func (m *migration) lockReleased(ctx context.Context, err error) error {
+	if err == nil || !m.saved {
+		return err
+	}
+	m.warn(ctx, fmt.Sprintf("releasing the lock of %s failed after the migrate: %v", m.primary, err))
+	return nil
 }
 
 // run runs work, rolling back what it did when it fails.
@@ -648,6 +790,12 @@ func (m *migration) run(ctx context.Context, work func() error) error {
 // that fails, since each one before it relies on it (a new checkout removed
 // before every entry carried into it is back would delete the rest), and
 // says what is left where.
+//
+// A rollback that stops is its own error, INTERNAL, cause
+// migrate_incomplete, naming the slot and where its checkout is: the
+// operation's annotation would otherwise report the cause's own words, such
+// as a refusal saying the slot was left as it was. The migrate's marker stays
+// (beginMarker), so status, repair, destroy and the next migrate say so too.
 func (m *migration) rollback(ctx context.Context, cause error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), migrateRollbackTimeout)
 	defer cancel()
@@ -657,10 +805,27 @@ func (m *migration) rollback(ctx context.Context, cause error) error {
 			for _, undo := range m.undo[:i+1] {
 				left = append(left, undo.what)
 			}
-			return errors.Join(cause, fmt.Errorf("the migrate could not be rolled back, so these are left as they are: %s: %w", strings.Join(left, "; "), err))
+			paths := []string{m.path}
+			if m.aside != nil {
+				paths = append(paths, m.aside.Path())
+			}
+			hint := fmt.Sprintf("Put the slot's checkout back at %s by hand, then delete %s.", m.path, m.p.migrateMarkerPath(m.workspaceName, m.slot))
+			return &OperationError{
+				Code:    CodeInternal,
+				Cause:   CauseMigrateIncomplete,
+				Slot:    m.slot,
+				Source:  m.sourceName,
+				Paths:   paths,
+				Hint:    hint,
+				Summary: fmt.Sprintf("source slot %q was not migrated (%v), and rolling it back stopped (%v), so these are left as they are: %s. %s", m.slot, cause, err, strings.Join(left, "; "), hint),
+				Err:     errors.Join(cause, err),
+			}
 		}
 	}
 	m.undo = nil
+	if err := m.endMarker(); err != nil {
+		logctx.From(ctx).Warn(err.Error())
+	}
 	return cause
 }
 
@@ -677,26 +842,56 @@ func (m *migration) step(step string) error {
 	return m.p.migrateFault(step)
 }
 
-// setAside renames the slot aside in its parent and repairs its git
-// registration to follow it, writing the links relative for a jj slot, as
-// jj made them, and absolute for a worktree, as the git driver made them.
-// The rollback renames it back and repairs the registration there.
-func (m *migration) setAside(ctx context.Context, client git.Client, relative bool) error {
+// setAside renames the slot aside in its parent and points its git
+// registration at it (gitdriver.RepointRegistration, which touches no other
+// worktree's, where `git worktree repair` rewrites every worktree of the
+// cache and fails over any unrelated broken one), so git does not take it
+// for one whose checkout is gone. It writes the migrate's marker first
+// (beginMarker), so a migrate that dies with the slot set aside is reported,
+// not lost. The rollback renames it back and points the registration back.
+func (m *migration) setAside(ctx context.Context, client git.Client) error {
+	if err := m.beginMarker(); err != nil {
+		return err
+	}
 	aside, err := m.dest.SetAside(asidePrefix, m.path)
 	if err != nil {
 		return err
 	}
 	m.aside = aside
-	m.push(fmt.Sprintf("the slot's checkout, set aside at %s (move it back to %s and run `git -C %s worktree repair %s`)", aside.Path(), m.path, shellQuote(m.primary), shellQuote(m.path)), func(ctx context.Context) error {
+	m.push(fmt.Sprintf("the slot's checkout, set aside at %s (move it back to %s, then point its registration back with `%s`)", aside.Path(), m.path, repairCommand(m.primary, m.path)), func(ctx context.Context) error {
 		if err := m.dest.RestoreAside(aside); err != nil {
 			return err
 		}
-		return client.WorktreeRepair(ctx, m.primary, relative, m.path)
+		return repointRegistration(ctx, client, m.primary, m.path)
 	})
 	if err := aside.Verify(); err != nil {
 		return err
 	}
-	return client.WorktreeRepair(ctx, m.primary, relative, aside.Path())
+	return repointRegistration(ctx, client, m.primary, aside.Path())
+}
+
+// repairCommand is git's command that points primary's registration of the
+// worktree moved back to path at it, for a hint: with absolute links, which
+// git's repair would otherwise write relative for every worktree of the
+// cache under a user's worktree.useRelativePaths.
+func repairCommand(primary, path string) string {
+	return fmt.Sprintf("git -c worktree.useRelativePaths=false -C %s worktree repair %s", shellQuote(primary), shellQuote(path))
+}
+
+// repointRegistration points primary's registration of the worktree now at
+// path at it, and checks git lists it there.
+func repointRegistration(ctx context.Context, client git.Client, primary, path string) error {
+	if err := gitdriver.RepointRegistration(path, path, primary); err != nil {
+		return err
+	}
+	registered, err := client.WorktreeRegistered(ctx, primary, path)
+	if err != nil {
+		return err
+	}
+	if !registered {
+		return fmt.Errorf("%s does not register the worktree at %s once pointed at it", primary, path)
+	}
+	return nil
 }
 
 // carry renames each recorded entry of the checkout set aside into the new
@@ -736,19 +931,24 @@ func (m *migration) save() error {
 	sources[m.slot] = recorded
 	workspace.Sources = sources
 	m.stack.Workspaces[m.workspaceName] = workspace
-	return m.tx.Save(m.stack)
+	if err := m.tx.Save(m.stack); err != nil {
+		return err
+	}
+	m.saved = true
+	return nil
 }
 
 // removeAside removes the checkout set aside, through its guard, then drops
-// its git registration alone (deregisterWorktree), as a jj slot's removal
-// does, never pruning the cache's others. A failure is a warning.
+// its git registration alone (git.Client.DeregisterWorktree), as a jj slot's
+// removal does, never pruning the cache's others. A failure is a warning.
 func (m *migration) removeAside(ctx context.Context, client git.Client) {
+	remove := fmt.Sprintf("`git -C %s worktree remove --force --force %s`", shellQuote(m.primary), shellQuote(m.aside.Path()))
 	if err := m.aside.RemoveAll(); err != nil {
-		m.warn(ctx, fmt.Sprintf("the old checkout was left at %s (%v); remove it, then run `git -C %s worktree prune`", m.aside.Path(), err, shellQuote(m.primary)))
+		m.warn(ctx, fmt.Sprintf("the old checkout was left at %s (%v); once nothing there is needed, %s removes it and its registration", m.aside.Path(), err, remove))
 		return
 	}
-	if err := deregisterWorktree(ctx, client, m.primary, m.aside.Path()); err != nil {
-		m.warn(ctx, fmt.Sprintf("the old checkout's git registration was left in %s (%v); `git -C %s worktree prune` drops it", m.primary, err, shellQuote(m.primary)))
+	if err := client.DeregisterWorktree(ctx, m.primary, m.aside.Path()); err != nil {
+		m.warn(ctx, fmt.Sprintf("the old checkout's git registration was left in %s (%v); %s drops it alone", m.primary, err, remove))
 	}
 }
 
@@ -789,23 +989,6 @@ func (m *migration) describe(message string) string {
 		lines = append(lines, "Warning: "+warning)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// deregisterWorktree drops the git worktree registration primary keeps at
-// path, once nothing is there, and no other: `git worktree remove --force
-// --force`, which with nothing at the path removes only git's record of it,
-// as a jj slot's removal does, never pruning what other stacks registered.
-func deregisterWorktree(ctx context.Context, client git.Client, primary, path string) error {
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("deregister the git worktree at %s: it still exists", path)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	registered, err := client.WorktreeRegistered(ctx, primary, path)
-	if err != nil || !registered {
-		return err
-	}
-	return client.WorktreeRemove(ctx, primary, vcs.CanonicalPath(path))
 }
 
 // untrackedEntries lists, relative to the jj slot checked out at dir and

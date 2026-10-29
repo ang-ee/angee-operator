@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -206,21 +207,75 @@ func (c Client) OtherPaths(ctx context.Context, dir string, ignored bool) ([]str
 	return paths, nil
 }
 
+// HiddenPaths lists the tracked files of the checkout at dir that git is told
+// not to look at, and that are on disk: those flagged skip-worktree (`git
+// update-index --skip-worktree`) or assume-unchanged. git status reports no
+// change to them, so a local edit there is invisible to ChangedPaths. A
+// sparse checkout's skip-worktree entries are not on disk, and are left out.
+func (c Client) HiddenPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "-v", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		tag, path, ok := strings.Cut(entry, " ")
+		if !ok || path == "" || tag != "S" && (tag == "" || tag[0] < 'a' || tag[0] > 'z') {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(path))); err == nil {
+			paths = append(paths, path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return paths, nil
+}
+
+// Submodules lists the paths the index of the checkout at dir records as
+// submodules (gitlinks, mode 160000).
+func (c Client) Submodules(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "-s", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(meta, "160000 ") {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// DeregisterWorktree drops repoDir's registration of a worktree at path once
+// nothing is there, and no other: `git worktree remove --force --force`,
+// which with nothing at the path removes only git's record of it (probed on
+// git 2.50), never pruning the registrations of other checkouts this process
+// cannot see. It refuses while anything is at path, which git would delete,
+// and does nothing when repoDir registers nothing there.
+func (c Client) DeregisterWorktree(ctx context.Context, repoDir, path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("deregister the git worktree at %s: it still exists", path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	registered, err := c.WorktreeRegistered(ctx, repoDir, path)
+	if err != nil || !registered {
+		return err
+	}
+	canonical, err := canonicalWorktreePath(path)
+	if err != nil {
+		return err
+	}
+	return c.WorktreeRemove(ctx, repoDir, canonical)
+}
+
 // Commit returns the full id of the commit ref names in the repository at
 // dir.
 func (c Client) Commit(ctx context.Context, dir, ref string) (string, error) {
 	return c.runText(ctx, dir, "rev-parse", "--verify", EndOfOptions, ref+"^{commit}")
-}
-
-// WorktreeRepair points repoDir's registrations of the worktrees at paths,
-// moved there, back at them, and their .git files at repoDir (`git worktree
-// repair`), so git does not take them for worktrees whose checkout is gone.
-// relative says how the links are written: relative, as jj writes a jj
-// slot's, or absolute, as the git driver writes a worktree slot's
-// (worktreeAdd), so a repaired checkout keeps the links it had.
-func (c Client) WorktreeRepair(ctx context.Context, repoDir string, relative bool, paths ...string) error {
-	_, err := c.Run(ctx, repoDir, append([]string{"-c", fmt.Sprintf("worktree.useRelativePaths=%t", relative), "worktree", "repair", EndOfOptions}, paths...)...)
-	return err
 }
 
 func (c Client) statusPaths(ctx context.Context, dir, untracked string) ([]string, error) {
@@ -558,7 +613,7 @@ func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, re
 // recovery in materializeWorkspaceSource still routes through WorktreePrune, the
 // portable recovery for older git that refuses to remove a missing working tree.
 func (c Client) WorktreeRemove(ctx context.Context, repoDir, dest string) error {
-	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", dest)
+	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", EndOfOptions, dest)
 	return err
 }
 

@@ -414,6 +414,13 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.Error = pathErr.Error()
 		return status
 	}
+	// A migrate that did not finish may have the slot's checkout set aside.
+	if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = reason
+		return status
+	}
 	source, ok := stack.Sources[wsSource.Source]
 	if !ok {
 		status.State = "error"
@@ -581,6 +588,11 @@ func (p *Platform) requireWorkspaceSlotReady(ctx context.Context, verb vcs.Verb,
 	if err != nil {
 		return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 	}
+	// A migrate that did not finish may have the slot's checkout set aside,
+	// which no verb reads, and a purge would delete.
+	if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		return p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason)
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -691,6 +703,22 @@ func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
 // (nestedRepositories).
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
 	unpushed := []string{}
+	// What a migrate set aside beside a slot, a checkout it kept or could not
+	// move back, sits in the workspace, which a purge deletes. It is no slot
+	// the manifest records, so no status reads it.
+	setAside := map[string]bool{}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		_, path, err := p.workspaceSourcePath(workspaceName, slot, workspace.Sources[slot])
+		if err != nil {
+			continue
+		}
+		for _, aside := range asidesBeside(path) {
+			if !setAside[aside] {
+				setAside[aside] = true
+				unpushed = append(unpushed, fmt.Sprintf("%s (a checkout a migrate set aside; take what you need from it, then remove it with `git worktree remove --force --force` from its source's cache)", aside))
+			}
+		}
+	}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
 		source, ok := stack.Sources[wsSource.Source]
@@ -704,6 +732,12 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 		if err != nil {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		// Its checkout may be set aside in the workspace, which a purge
+		// would delete with it.
+		if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, reason))
+			continue
 		}
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
@@ -1299,6 +1333,9 @@ func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Wo
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+			return nil, p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason)
 		}
 		target := workspaceGitSlot{workspaceSlotPath: workspaceSlotPath{slot: slot, path: path, source: source, mode: wsSource.Mode}, wsSource: wsSource}
 		targets = append(targets, target)
