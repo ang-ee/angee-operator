@@ -263,6 +263,57 @@ func jobRunNodes(stack *manifest.Stack, root string, chained bool) ([]api.JobRun
 			}
 		}
 	}
+	// Holds do not select more jobs. They add service outcomes to the receipt,
+	// even for a plain run, and service dependents to a chained recovery.
+	held := map[string]bool{}
+	for name := range seen {
+		for _, service := range stack.Jobs[name].Holds {
+			held[service] = true
+		}
+	}
+	for name := range held {
+		seen[name] = true
+	}
+	if chained && len(held) > 0 {
+		changed := true
+		for changed {
+			changed = false
+			for name := range stack.Services {
+				for _, dependency := range stackNodeDependencies(stack, name) {
+					if seen[dependency] && !seen[name] {
+						seen[name], changed = true, true
+					}
+				}
+			}
+		}
+	}
+	if len(held) > 0 {
+		// A service selected for recovery cannot also be a prerequisite of
+		// the jobs that must finish before that recovery. Reject before stops.
+		var check func(string, map[string]bool) error
+		check = func(name string, visited map[string]bool) error {
+			if visited[name] {
+				return nil
+			}
+			visited[name] = true
+			for _, dependency := range stackNodeDependencies(stack, name) {
+				if _, service := stack.Services[dependency]; service && seen[dependency] {
+					return fmt.Errorf("job hold operation requires service %q before its recovery", dependency)
+				}
+				if err := check(dependency, visited); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, name := range sortedKeys(stack.Jobs) {
+			if seen[name] {
+				if err := check(name, map[string]bool{}); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	names := make([]string, 0, len(seen))
 	for n := range seen {
 		names = append(names, n)
@@ -296,7 +347,8 @@ func jobOperationStack(stack *manifest.Stack, root string, chained bool) (*manif
 	for len(queue) > 0 {
 		name := queue[0]
 		queue = queue[1:]
-		for _, dependency := range stackNodeDependencies(stack, name) {
+		dependencies := append(stackNodeDependencies(stack, name), stack.Jobs[name].Holds...)
+		for _, dependency := range dependencies {
 			if included[dependency] {
 				continue
 			}
@@ -439,7 +491,7 @@ func (p *Platform) executeJobRun(ctx context.Context, id string, release func())
 // states as it goes, and returns a non-nil error if the run failed. It never
 // finalizes the operation itself: the caller owns finishJobRun so a timeout can
 // override the outcome with a clear message.
-func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.Stack, compiled *CompiledStack) error {
+func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.Stack, compiled *CompiledStack) (runErr error) {
 	op, _ := p.JobRunGet(ctx, id)
 	done := map[string]bool{}
 	failed := map[string]bool{}
@@ -447,12 +499,110 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 	// other than a failed node, did not run, for the run's error.
 	var failures []string
 	p.updateJobRun(id, func(o *api.JobRunOperation) { o.Status = api.JobRunRunning })
-	remaining := len(op.Nodes)
+	held := map[string]bool{}
+	for _, node := range op.Nodes {
+		if node.Kind == "job" {
+			for _, name := range stack.Jobs[node.Name].Holds {
+				held[name] = true
+			}
+		}
+	}
+	// A recovery can fail after starting a held service. Restore the hold on
+	// every attempted recovery, even when the operation context was canceled.
+	resuming := map[string]bool{}
+	defer func() {
+		if runErr == nil || len(held) == 0 {
+			return
+		}
+		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtime.GracefulWaitDelay)
+		defer cancel()
+		for i, node := range op.Nodes {
+			if !resuming[node.Name] {
+				continue
+			}
+			if err := p.stopJobHeldService(cleanupContext, stack, compiled, node.Name); err != nil {
+				p.setNode(id, i, api.JobRunFailed, "recovery failed; hold stop failed: "+err.Error())
+				runErr = errors.Join(runErr, fmt.Errorf("restore hold on service %q: %w", node.Name, err))
+			} else {
+				p.setNode(id, i, api.JobRunBlocked, "held stopped; service recovery failed")
+			}
+		}
+		latest, _ := p.JobRunGet(cleanupContext, id)
+		for i, node := range latest.Nodes {
+			if node.Status == api.JobRunPending || node.Status == api.JobRunRunning {
+				message := "operation failed"
+				if held[node.Name] {
+					message = "held stopped; operation failed"
+				}
+				p.setNode(id, i, api.JobRunBlocked, message)
+			}
+		}
+	}()
+	// Stop each target separately so a partial failure has an accurate receipt.
+	// A failed stop prevents every command and recovery, while other successful
+	// stops stay in force. The existing mutation lease protects this interval.
+	var stopErrors []error
+	for i, node := range op.Nodes {
+		if !held[node.Name] {
+			continue
+		}
+		if err := p.stopJobHeldService(ctx, stack, compiled, node.Name); err != nil {
+			failed[node.Name] = true
+			p.setNode(id, i, api.JobRunFailed, "hold stop failed: "+err.Error())
+			stopErrors = append(stopErrors, fmt.Errorf("stop held service %q: %w", node.Name, err))
+		} else {
+			p.setNode(id, i, api.JobRunPending, "held stopped")
+			if !op.ChainedRestart {
+				done[node.Name] = true
+				p.setNode(id, i, api.JobRunSucceeded, "held stopped; no chained restart requested")
+			}
+		}
+	}
+	block := func(i int, node api.JobRunNode, reason string) {
+		if held[node.Name] {
+			reason = "held stopped; " + reason
+		}
+		p.setNode(id, i, api.JobRunBlocked, reason)
+	}
+	if err := errors.Join(stopErrors...); err != nil {
+		for i, node := range op.Nodes {
+			if !done[node.Name] && !failed[node.Name] {
+				block(i, node, "hold stop failed")
+			}
+		}
+		return err
+	}
+	remaining := len(op.Nodes) - len(done)
 	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		progressed := false
 		for i, n := range op.Nodes {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if done[n.Name] || failed[n.Name] {
 				continue
+			}
+			if len(held) > 0 && n.Kind == "service" {
+				jobsPending, jobsFailed := false, false
+				for _, job := range op.Nodes {
+					if job.Kind == "job" {
+						jobsPending = jobsPending || (!done[job.Name] && !failed[job.Name])
+						jobsFailed = jobsFailed || failed[job.Name]
+					}
+				}
+				if jobsFailed {
+					block(i, n, "job chain failed")
+					failed[n.Name] = true
+					remaining--
+					progressed = true
+					continue
+				}
+				if jobsPending {
+					continue
+				}
 			}
 			deps := stackNodeDependencies(stack, n.Name)
 			blocked := false
@@ -476,7 +626,7 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 				failed[n.Name] = true
 				remaining--
 				progressed = true
-				p.setNode(id, i, api.JobRunBlocked, blockedMessage)
+				block(i, n, blockedMessage)
 				if blockedMessage != "dependency failed" {
 					failures = append(failures, fmt.Sprintf("%s %q was blocked: %s", n.Kind, n.Name, blockedMessage))
 				}
@@ -492,25 +642,35 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 			if n.Kind == "job" {
 				out, err = p.runJob(ctx, stack, compiled, n.Name)
 			} else {
+				if held[n.Name] {
+					resuming[n.Name] = true
+				}
 				err = p.applyService(ctx, stack, compiled, n.Name)
 			}
 			if err != nil {
 				failed[n.Name] = true
 				p.setNode(id, i, api.JobRunFailed, err.Error())
+				if len(held) > 0 && n.Kind == "service" {
+					return fmt.Errorf("recover service %q: %w", n.Name, err)
+				}
 				if n.Name != op.RootJob {
 					failures = append(failures, fmt.Sprintf("%s %q failed: %s", n.Kind, n.Name, firstLine(err.Error())))
 				}
 			} else {
 				done[n.Name] = true
-				p.setNode(id, i, api.JobRunSucceeded, "")
+				message := ""
+				if held[n.Name] {
+					message = "resumed after job chain"
+				}
+				p.setNode(id, i, api.JobRunSucceeded, message)
 			}
 			if n.Name == op.RootJob {
 				p.updateJobRun(id, func(o *api.JobRunOperation) { o.Output = boundedJobOutput(out) })
 				if err != nil {
 					for pendingIndex, pending := range op.Nodes {
 						if pending.Name != n.Name && !done[pending.Name] && !failed[pending.Name] {
+							block(pendingIndex, pending, "root job failed")
 							failed[pending.Name] = true
-							p.setNode(id, pendingIndex, api.JobRunBlocked, "root job failed")
 						}
 					}
 					return &OperationError{Code: CodeJobFailed, Job: op.RootJob, Summary: err.Error(), Err: err}
@@ -536,6 +696,21 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 		}
 	}
 	return nil
+}
+
+// stopJobHeldService dispatches through the same runtime owners as service
+// actions, using the operation's stack snapshot rather than reloading inputs.
+func (p *Platform) stopJobHeldService(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) error {
+	service := stack.Services[name]
+	backend := p.composeBackend
+	if service.Runtime == manifest.RuntimeLocal {
+		backend = p.procBackend
+	}
+	configuration, err := p.compiledRuntimeConfiguration(compiled, service.Runtime)
+	if err != nil {
+		return err
+	}
+	return backend.Stop(ctx, runtime.Target{Root: p.root, Services: []string{name}, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack), Configuration: configuration})
 }
 
 func (p *Platform) dependencySatisfied(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string) (bool, error) {

@@ -177,10 +177,35 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
+	// An absent supervisor or process is already stopped, including a stack's
+	// first dependency operation before the supervisor has ever started.
+	serving, err := b.supervisorServing(ctx, target)
+	if err != nil || !serving {
+		return err
+	}
+	if err := b.checkSupervisorProject(ctx, target); err != nil {
+		return err
+	}
+	if len(target.Services) > 0 {
+		present := make([]string, 0, len(target.Services))
+		for _, name := range target.Services {
+			state, err := b.processState(ctx, target, name)
+			if err != nil {
+				return err
+			}
+			if state != nil {
+				present = append(present, name)
+			}
+		}
+		if len(present) == 0 {
+			return nil
+		}
+		target.Services = present
+	}
 	args := b.clientArgs(target.ControlPort)
 	args = append(args, "process", "stop")
 	args = append(args, target.Services...)
-	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
+	_, err = b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 

@@ -396,6 +396,43 @@ jobs:
 
 Jobs are run explicitly with `angee job run <name>`.
 
+### Hold services during a job chain
+
+Use `holds` when jobs must modify shared inputs while services are stopped:
+
+```yaml
+jobs:
+  prepare:
+    runtime: local
+    command: ["./prepare"]
+    holds: [web, worker]
+  validate:
+    runtime: local
+    command: ["./validate"]
+    depends_on: [prepare]
+```
+
+Before any selected job command runs, the operator stops the union of those
+jobs' held services, once per service. Each name must identify a declared
+service; duplicate names within a job and holds on manual capture jobs are
+invalid. An absent local supervisor or process is already stopped.
+
+`angee job run prepare` runs only `prepare` and leaves its held services stopped.
+Use `angee job run prepare --chained-restart` to run the downstream jobs and
+then reapply the held and dependent services in dependency order, once each.
+Every selected job must succeed before any selected service is reapplied. A job
+cannot require a service selected for this recovery, directly or transitively:
+that would require starting it before the jobs have finished.
+
+A failed stop prevents all commands and recovery; services that stopped
+successfully remain stopped. Job failure or cancellation also leaves the held
+services stopped. If recovery fails after resuming a held service, the operator
+stops that service again; any failure to restore a hold is reported explicitly.
+Operation service nodes report `held stopped`, a failed stop, or a successful
+resume through their existing status and message fields, including partial
+stop outcomes. A successful plain run can therefore contain a successful
+service node whose outcome is `held stopped`, rather than a restart.
+
 ## Sources
 
 Implemented source kinds:

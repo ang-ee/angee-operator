@@ -19,12 +19,19 @@ import (
 
 type recordingJobBackend struct {
 	stubStatusBackend
-	mu       sync.Mutex
-	calls    []string
-	failJobs map[string]error
+	mu          sync.Mutex
+	calls       []string
+	failJobs    map[string]error
+	failStops   map[string]error
+	failApply   map[string]error
+	beforeJob   func(context.Context, runtime.JobSpec)
+	beforeApply func()
 }
 
-func (b *recordingJobBackend) RunJob(_ context.Context, _ runtime.Target, job runtime.JobSpec) ([]byte, error) {
+func (b *recordingJobBackend) RunJob(ctx context.Context, _ runtime.Target, job runtime.JobSpec) ([]byte, error) {
+	if b.beforeJob != nil {
+		b.beforeJob(ctx, job)
+	}
 	b.mu.Lock()
 	b.calls = append(b.calls, "job:"+job.Name)
 	err := b.failJobs[job.Name]
@@ -33,10 +40,23 @@ func (b *recordingJobBackend) RunJob(_ context.Context, _ runtime.Target, job ru
 }
 
 func (b *recordingJobBackend) Apply(_ context.Context, target runtime.Target) error {
+	if b.beforeApply != nil {
+		b.beforeApply()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls = append(b.calls, "service:"+target.Services[0])
-	return nil
+	return b.failApply[target.Services[0]]
+}
+
+func (b *recordingJobBackend) Stop(ctx context.Context, target runtime.Target) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls = append(b.calls, "stop:"+target.Services[0])
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return b.failStops[target.Services[0]]
 }
 
 func (b *recordingJobBackend) recordedCalls() []string {
@@ -535,5 +555,225 @@ func TestCompileIncludesCaptureJobOnlyForItsBackup(t *testing.T) {
 	}
 	if _, ok := captured.Compose.Services["export"]; ok {
 		t.Fatal("compileCapture emitted a capture job other than the one it runs")
+	}
+}
+
+// The independent tail forces a barrier: the alphabetically earlier service
+// must not resume after its own prerequisite while another selected job waits.
+func holdTestStack() *manifest.Stack {
+	return &manifest.Stack{
+		Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "holds",
+		Jobs: map[string]manifest.Job{
+			"root":   {Runtime: manifest.RuntimeLocal, Command: []string{"root"}, Holds: []string{"a-web"}},
+			"middle": {Runtime: manifest.RuntimeLocal, Command: []string{"middle"}, DependsOn: []string{"root"}, Holds: []string{"a-web", "b-worker"}},
+			"z-tail": {Runtime: manifest.RuntimeLocal, Command: []string{"tail"}, DependsOn: []string{"middle"}},
+		},
+		Services: map[string]manifest.Service{
+			"a-web":       {Runtime: manifest.RuntimeLocal, Command: []string{"web"}, DependsOn: []string{"root"}},
+			"b-worker":    {Runtime: manifest.RuntimeContainer, Image: "worker"},
+			"c-dependent": {Runtime: manifest.RuntimeLocal, Command: []string{"dependent"}, DependsOn: []string{"a-web"}},
+		},
+	}
+}
+
+func holdTestBackend() *recordingJobBackend {
+	return &recordingJobBackend{stubStatusBackend: stubStatusBackend{statuses: []runtime.ServiceStatus{
+		{Name: "a-web", State: "running"}, {Name: "b-worker", State: "running"}, {Name: "c-dependent", State: "running"},
+	}}}
+}
+
+func TestJobHoldsStopUnionBeforeCommandsAndResumeOnceAfterAllJobs(t *testing.T) {
+	backend := holdTestBackend()
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+	p.executeJobRun(t.Context(), id, func() {})
+	want := []string{"stop:a-web", "stop:b-worker", "job:root", "job:middle", "job:z-tail", "service:a-web", "service:b-worker", "service:c-dependent"}
+	if got := backend.recordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunSucceeded {
+		t.Fatalf("operation = %#v", op)
+	}
+	for _, node := range op.Nodes {
+		if node.Name == "a-web" && node.Message != "resumed after job chain" {
+			t.Fatalf("held outcome = %#v", node)
+		}
+	}
+}
+
+func TestJobHoldsPlainRunLeavesOnlyRequestedJobServicesStopped(t *testing.T) {
+	backend := holdTestBackend()
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", false)
+	p.executeJobRun(t.Context(), id, func() {})
+	if got, want := backend.recordedCalls(), []string{"stop:a-web", "job:root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunSucceeded || len(op.Nodes) != 2 || !strings.Contains(op.Nodes[0].Message, "held stopped") {
+		t.Fatalf("operation = %#v", op)
+	}
+}
+
+func TestJobHoldsFailuresKeepSuccessfullyStoppedServicesStopped(t *testing.T) {
+	for _, failJob := range []string{"root", "middle", "z-tail"} {
+		t.Run(failJob, func(t *testing.T) {
+			backend := holdTestBackend()
+			backend.failJobs = map[string]error{failJob: errors.New("job failed")}
+			p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+			p.executeJobRun(t.Context(), id, func() {})
+			op, _ := p.JobRunGet(t.Context(), id)
+			if op.Status != api.JobRunFailed {
+				t.Fatalf("operation = %#v", op)
+			}
+			for _, call := range backend.recordedCalls() {
+				if strings.HasPrefix(call, "service:") {
+					t.Fatalf("recovered on failure: %v", backend.recordedCalls())
+				}
+			}
+			for _, node := range op.Nodes {
+				if node.Name == "a-web" || node.Name == "b-worker" {
+					if node.Status != api.JobRunBlocked || !strings.Contains(node.Message, "held stopped") {
+						t.Fatalf("held outcome = %#v", node)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestJobHoldsPartialStopFailureRecordsEachOutcomeAndRunsNoCommands(t *testing.T) {
+	backend := holdTestBackend()
+	backend.failStops = map[string]error{"a-web": errors.New("stop denied")}
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+	p.executeJobRun(t.Context(), id, func() {})
+	if got, want := backend.recordedCalls(), []string{"stop:a-web", "stop:b-worker"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunFailed || !strings.Contains(op.Error, "stop denied") {
+		t.Fatalf("operation = %#v", op)
+	}
+	for _, node := range op.Nodes {
+		switch node.Name {
+		case "a-web":
+			if node.Status != api.JobRunFailed || !strings.Contains(node.Message, "stop denied") {
+				t.Fatalf("failed stop = %#v", node)
+			}
+		case "b-worker":
+			if node.Status != api.JobRunBlocked || !strings.Contains(node.Message, "held stopped") {
+				t.Fatalf("successful stop = %#v", node)
+			}
+		}
+	}
+}
+
+func TestJobHoldsCancellationPreventsRecovery(t *testing.T) {
+	backend := holdTestBackend()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backend.beforeJob = func(_ context.Context, job runtime.JobSpec) {
+		if job.Name == "middle" {
+			cancel()
+		}
+	}
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+	p.executeJobRun(ctx, id, func() {})
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunFailed {
+		t.Fatalf("operation = %#v", op)
+	}
+	for _, call := range backend.recordedCalls() {
+		if strings.HasPrefix(call, "service:") {
+			t.Fatalf("resumed after cancel: %v", backend.recordedCalls())
+		}
+	}
+	for _, node := range op.Nodes {
+		if node.Status == api.JobRunPending || node.Status == api.JobRunRunning {
+			t.Fatalf("unterminated node = %#v", node)
+		}
+	}
+}
+
+func TestJobHoldsRecoveryFailureRestoresPreviouslyResumedHolds(t *testing.T) {
+	backend := holdTestBackend()
+	backend.failApply = map[string]error{"b-worker": errors.New("apply denied")}
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+	p.executeJobRun(t.Context(), id, func() {})
+	want := []string{"stop:a-web", "stop:b-worker", "job:root", "job:middle", "job:z-tail", "service:a-web", "service:b-worker", "stop:a-web", "stop:b-worker"}
+	if got := backend.recordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunFailed || !strings.Contains(op.Error, "apply denied") {
+		t.Fatalf("operation = %#v", op)
+	}
+}
+
+func TestJobHoldsUseRuntimeOwnerForEachService(t *testing.T) {
+	local, container := holdTestBackend(), holdTestBackend()
+	local.beforeJob = func(_ context.Context, _ runtime.JobSpec) {
+		if got := container.recordedCalls(); len(got) == 0 || got[0] != "stop:b-worker" {
+			t.Fatalf("container not stopped before local job: %v", got)
+		}
+	}
+	p, id := newJobOperationPlatform(t, holdTestStack(), local, "root", true)
+	p.composeBackend = container
+	p.executeJobRun(t.Context(), id, func() {})
+	if got, want := container.recordedCalls(), []string{"stop:b-worker", "service:b-worker"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("container calls = %v, want %v", got, want)
+	}
+}
+
+func TestJobHoldsRejectPrerequisiteRecoveryConflictBeforeStopping(t *testing.T) {
+	for _, indirect := range []bool{false, true} {
+		stack := holdTestStack()
+		root := stack.Jobs["root"]
+		root.DependsOn = []string{"a-web"}
+		service := stack.Services["a-web"]
+		service.DependsOn = nil
+		stack.Services["a-web"] = service
+		if indirect {
+			root.DependsOn = []string{"prerequisite"}
+			stack.Jobs["prerequisite"] = manifest.Job{DependsOn: []string{"a-web"}}
+		}
+		stack.Jobs["root"] = root
+		if _, err := jobRunNodes(stack, "root", true); err == nil || !strings.Contains(err.Error(), "requires service") {
+			t.Fatalf("indirect=%v: error = %v", indirect, err)
+		}
+	}
+}
+
+func TestJobHoldsProjectionRetainsOnlySelectedJobsHoldTargets(t *testing.T) {
+	stack, err := jobOperationStack(holdTestStack(), "root", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stack.Jobs) != 1 || len(stack.Services) != 1 {
+		t.Fatalf("projected jobs/services = %v/%v", stack.Jobs, stack.Services)
+	}
+	if _, ok := stack.Services["a-web"]; !ok {
+		t.Fatal("held target absent from runtime projection")
+	}
+}
+
+func TestJobHoldsCancellationDuringRecoveryRestoresHoldWithLiveContext(t *testing.T) {
+	backend := holdTestBackend()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backend.beforeApply = cancel
+	p, id := newJobOperationPlatform(t, holdTestStack(), backend, "root", true)
+	p.executeJobRun(ctx, id, func() {})
+	want := []string{"stop:a-web", "stop:b-worker", "job:root", "job:middle", "job:z-tail", "service:a-web", "stop:a-web"}
+	if got := backend.recordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunFailed {
+		t.Fatalf("operation = %#v", op)
+	}
+	for _, node := range op.Nodes {
+		if node.Name == "a-web" && (node.Status != api.JobRunBlocked || !strings.Contains(node.Message, "held stopped")) {
+			t.Fatalf("restored hold = %#v", node)
+		}
 	}
 }

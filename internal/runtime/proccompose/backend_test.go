@@ -2570,3 +2570,59 @@ func TestRunJobKeepsTransientJobOutOfTheSharedSupervisor(t *testing.T) {
 		t.Fatalf("shared supervisor got %d updates and %d restarts; want none", posts, restarts)
 	}
 }
+
+func TestStopAbsentSupervisorIsAlreadyStopped(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	port := serverPort(t, server)
+	server.Close()
+	runner := &recordingRunner{}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), ControlPort: port, Services: []string{"web"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("unexpected command: %v", runner.args)
+	}
+}
+
+func TestStopSkipsMissingProcessesButStopsEveryPresentTarget(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", PID: 1}})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if err := backend.Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"missing"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command for absent process: %v", runner.args)
+	}
+	if err := backend.Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"missing", "web"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopDoesNotTreatControlPlaneFailureAsAbsence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/live":
+			_, _ = w.Write([]byte(`{"status":"alive"}`))
+		case "/project/state":
+			http.NotFound(w, r)
+		default:
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	runner := &recordingRunner{}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), ControlPort: serverPort(t, server), Services: []string{"web"}})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("Stop error = %v, want control-plane failure", err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command after failed state read: %v", runner.args)
+	}
+}

@@ -85,6 +85,13 @@
     },
     "Job": {
       "properties": {
+        "holds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "capture": {
           "$ref": "#/$defs/BackupCapture"
         },

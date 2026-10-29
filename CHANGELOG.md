@@ -8,6 +8,12 @@ latest tag.
 
 ### Added
 
+- Jobs can declare `holds: [service, ...]` to stop services before any selected
+  job runs. A chained run reapplies held and dependent services once after all
+  selected jobs succeed; a plain run leaves held services stopped. Operation
+  nodes report partial stop failures and held outcomes. Failures and cancellation
+  retain holds, including restoring a hold after a failed service recovery.
+
 - **Status reports a jj slot's conflicts, change id and base, and the
   topology lists a source's jj workspaces** (phase 7 of
   `.agents/plans/jj-native-operator.md`). jj records a conflict in a commit

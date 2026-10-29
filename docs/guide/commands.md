@@ -467,6 +467,14 @@ file, which holds all of it. Each run appends to the file.
 `--chained-restart` follows a successful run by restarting its downstream jobs
 and services in dependency order; a failed prerequisite blocks its descendants.
 
+For jobs declaring [`holds`](/cli/manifest#hold-services-during-a-job-chain),
+held services stop before any selected job runs. Without `--chained-restart`
+they remain stopped after the requested job, even on success. With the flag,
+all selected jobs must succeed before the held and dependent services are
+reapplied once. Failure or cancellation leaves successfully held services
+stopped. The operation's service-node messages distinguish a stopped hold,
+a failed stop, and a successful resume.
+
 ## Sources
 
 ```sh
