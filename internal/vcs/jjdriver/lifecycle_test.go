@@ -3,6 +3,7 @@ package jjdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -466,14 +467,23 @@ func (d *orderDest) RemoveAll() error {
 	return d.GuardedPath.RemoveAll()
 }
 
-// TestRemove forgets the workspace, then removes the directory, then prunes
-// the primary's git worktrees (plan section 2), leaving no workspace and no
-// registration.
+// TestRemove removes the directory while the primary still lists the
+// workspace, then forgets it, then drops the slot's own git registration
+// with `git worktree remove`, never a prune, leaving no workspace and no
+// registration; and it leaves alone another slot's registration whose
+// checkout is missing, which jj's forget of a workspace whose directory
+// exists, or a prune, would drop.
 func TestRemove(t *testing.T) {
 	f := newPrimary(t)
 	s := f.slotSpec("workspaces/ws/src", "stack--ws", "")
-	if err := f.add(s); err != nil {
-		t.Fatalf("Add() error = %v", err)
+	other := f.slotSpec("workspaces/other/src", "stack--other", "")
+	for _, slot := range []vcs.Slot{s, other} {
+		if err := f.add(slot); err != nil {
+			t.Fatalf("Add(%s) error = %v", slot.Name, err)
+		}
+	}
+	if err := os.RemoveAll(other.Path); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
 	}
 	log := filepath.Join(t.TempDir(), "order.log")
 	dest := &orderDest{GuardedPath: f.dest(s), f: f, name: s.Name, log: log}
@@ -486,8 +496,8 @@ func TestRemove(t *testing.T) {
 	if exists(t, s.Path) {
 		t.Errorf("Remove() left %s", s.Path)
 	}
-	if regs := f.registrations(); len(regs) != 0 {
-		t.Errorf("git worktrees besides the primary = %q, want none", regs)
+	if regs := f.registrations(); len(regs) != 1 || !strings.Contains(regs[0], "prunable") || !strings.Contains(regs[0], "other") {
+		t.Errorf("git worktrees besides the primary = %q, want only the other slot's, still prunable", regs)
 	}
 	recorded, err := os.ReadFile(log)
 	if err != nil {
@@ -495,14 +505,14 @@ func TestRemove(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(recorded)), "\n")
 	removed := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "remove: ") })
-	pruned := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "worktree prune") })
-	if removed < 0 || lines[removed] != "remove: forgotten" || pruned < removed {
-		t.Errorf("Remove() ran %q; want the forget before the removal and the prune after it", lines)
+	deregistered := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "worktree remove --force --force") })
+	if removed < 0 || lines[removed] != "remove: still listed" || deregistered < removed || slices.ContainsFunc(lines, func(l string) bool { return strings.Contains(l, "prune") }) {
+		t.Errorf("Remove() ran %q; want the removal before the forget, the slot's own deregistration after it, and no prune", lines)
 	}
 }
 
 // TestRemoveAfterTheDirectoryIsGone forgets a slot whose directory someone
-// already deleted, and the prune drops the registration the forget could not.
+// already deleted, and drops the registration the forget could not.
 // A second Remove changes nothing.
 func TestRemoveAfterTheDirectoryIsGone(t *testing.T) {
 	f := newPrimary(t)
@@ -636,10 +646,10 @@ func TestLifecycleRefusesMissingFacts(t *testing.T) {
 // lifecycle runs and where: `jj git init` outside any repository; the
 // workspace list and the forget on the primary's repository without a
 // working copy; `jj workspace add` in the primary, with the name, the start
-// revset and the path as single arguments; git's worktree list before the
-// add, which finds no registration at the slot's path to prune; and git's
-// prune after the removal. The primary has a .git, as a source's cache has,
-// so the slot is colocated.
+// revset and the path as single arguments; and git's worktree list before
+// the add and after the forget, which finds no registration at the slot's
+// path to drop. Nothing prunes. The primary has a .git, as a source's cache
+// has, so the slot is colocated.
 func TestLifecycleCommands(t *testing.T) {
 	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n"})
 	ctx := context.Background()
@@ -679,7 +689,7 @@ func TestLifecycleCommands(t *testing.T) {
 		{"git", primary, []string{"worktree", "list", "--porcelain"}},
 		{"jj", primary, jj("-R", ".", "workspace", "add", "--colocate", "--name=stack--ws", "-r", start, "--", s.Path)},
 		{"jj", primary, jj("-R", ".", "--ignore-working-copy", "workspace", "forget", "--", "stack--ws")},
-		{"git", primary, []string{"worktree", "prune"}},
+		{"git", primary, []string{"worktree", "list", "--porcelain"}},
 	}
 	runs := fakeRuns(t, home)
 	if len(runs) != len(want) {
@@ -764,22 +774,22 @@ func failedGit(err error, arg string) bool {
 	return errors.As(err, &command) && slices.Contains(command.Args, arg)
 }
 
-// TestRemoveGoesOnWhenAStepFails: a failed forget still lets Remove remove
-// the directory and prune, and a failed prune after it is reported with it,
-// joined.
+// TestRemoveGoesOnWhenAStepFails: Remove removes the directory, and a failed
+// forget still lets it drop the slot's git registration, whose failure is
+// reported with the forget's, joined.
 func TestRemoveGoesOnWhenAStepFails(t *testing.T) {
-	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "fail-on": "forget\nprune\n"})
 	s, dest := fakeSlot(t, "f.txt")
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "fail-on": "forget\nremove\n", "git-worktree-list": "worktree " + s.Primary + "\n\nworktree " + s.Path + "\nprunable gitdir file points to non-existent location\n"})
 	err := driver().Remove(context.Background(), s, dest)
-	if !failedJJ(err, "forget") || !failedGit(err, "prune") {
-		t.Errorf("Remove() error = %v, want the forget's and the prune's failures joined", err)
+	if !failedJJ(err, "forget") || !failedGit(err, "remove") {
+		t.Errorf("Remove() error = %v, want the forget's and the deregistration's failures joined", err)
 	}
 	if exists(t, s.Path) {
-		t.Errorf("Remove() left %s after the forget failed", s.Path)
+		t.Errorf("Remove() left %s", s.Path)
 	}
 	lines := commandLines(t, home)
-	if forget, prune := lineWith(lines, "workspace forget"), lineWith(lines, "worktree prune"); forget < 0 || prune < forget {
-		t.Errorf("Remove() ran %q; want the forget, then the prune", lines)
+	if forget, remove := lineWith(lines, "workspace forget"), lineWith(lines, "worktree remove --force --force"); forget < 0 || remove < forget || lineWith(lines, "worktree prune") >= 0 {
+		t.Errorf("Remove() ran %q; want the forget, then the slot's own deregistration, and no prune", lines)
 	}
 }
 
@@ -815,8 +825,8 @@ func TestAddRollsBackOnItsOwnContext(t *testing.T) {
 		t.Errorf("Add() error = %v, want the rollback to succeed", err)
 	}
 	lines := commandLines(t, home)
-	if forget, prune := lineWith(lines, "workspace forget"), lastLineWith(lines, "worktree prune"); forget < 0 || prune < forget {
-		t.Errorf("Add() ran %q; want the rollback's forget, then its prune", lines)
+	if forget, list := lineWith(lines, "workspace forget"), lastLineWith(lines, "worktree list"); forget < 0 || list < forget {
+		t.Errorf("Add() ran %q; want the rollback's forget, then its look for the slot's registration", lines)
 	}
 	if exists(t, s.Path) {
 		t.Errorf("Add() left %s", s.Path)
@@ -826,10 +836,11 @@ func TestAddRollsBackOnItsOwnContext(t *testing.T) {
 // TestAddReportsAFailedRollback: a rollback that fails too is reported with
 // the failure it rolled back, joined, and still runs every step.
 func TestAddReportsAFailedRollback(t *testing.T) {
-	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "fail-on": "add\nprune\n"})
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "fail-on": "add\nforget\n"})
 	s, dest := fakeSlot(t)
 	err := driver().Add(context.Background(), s, dest, nil)
-	if !failedJJ(err, "add") || !failedGit(err, "prune") || !strings.Contains(err.Error(), "roll back jj slot "+s.Path) {
+	_, rollback, _ := strings.Cut(fmt.Sprint(err), "roll back jj slot "+s.Path)
+	if !failedJJ(err, "add") || !strings.Contains(rollback, "workspace forget") {
 		t.Errorf("Add() error = %v, want the add's failure joined with the rollback's", err)
 	}
 	if lines := commandLines(t, home); lineWith(lines, "workspace forget") < 0 {

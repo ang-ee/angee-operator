@@ -210,8 +210,8 @@ var (
 // The primary's lock (plan D9) is the caller's. Add and Remove of a slot that
 // has a Primary change what the primary keeps of its checkouts (git: adding a
 // worktree and pruning registrations; jj: adding and forgetting a workspace,
-// then the same prune), so the caller holds the lock around them. Exists,
-// the reads and the verbs take none.
+// and dropping its git worktree registration), so the caller holds the lock
+// around them. Exists, the reads and the verbs take none.
 type Driver interface {
 	// Exists reports whether Slot.Primary lists the slot's checkout: git by
 	// Slot.Path, jj by Slot.Name. A clone is a repository of its own, which
@@ -238,8 +238,8 @@ type Driver interface {
 	// Remove removes the checkout through d and drops whatever Slot.Primary
 	// keeps of it. For a git worktree that is `git worktree prune`, which
 	// drops every registration in the cache whose checkout is missing, not
-	// only this slot's; a jj workspace is forgotten first, then pruned the
-	// same way.
+	// only this slot's; a jj workspace is forgotten once its directory is
+	// gone, and only its own git registration dropped.
 	Remove(ctx context.Context, s Slot, d Dest) error
 
 	// Status reads the checkout. On error, the returned Status holds what was

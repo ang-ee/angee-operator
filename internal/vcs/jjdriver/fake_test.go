@@ -16,7 +16,8 @@ import (
 // Run that way, it records its run in $HOME/fake-runs.jsonl, sleeps when
 // $HOME/sleep exists, fails when $HOME/fail does or when one of its arguments
 // is a line of $HOME/fail-on, prints the version and help text files in
-// $HOME hold, and exits instead of testing.
+// $HOME hold, and for `git worktree list` $HOME/git-worktree-list when it
+// exists, and exits instead of testing.
 func init() {
 	tool := filepath.Base(os.Args[0])
 	if tool != "jj" && tool != "git" {
@@ -42,6 +43,11 @@ func init() {
 		reply = tool + "-version"
 	case slices.Contains(os.Args, "--help"):
 		reply = tool + "-help"
+	case tool == "git" && slices.Contains(os.Args, "worktree") && slices.Contains(os.Args, "list"):
+		// The worktrees $HOME/git-worktree-list lists, none without it.
+		if _, err := os.Stat(filepath.Join(home, "git-worktree-list")); err == nil {
+			reply = "git-worktree-list"
+		}
 	}
 	if reply != "" {
 		out, err := os.ReadFile(filepath.Join(home, reply))

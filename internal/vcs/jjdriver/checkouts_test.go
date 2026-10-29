@@ -323,3 +323,51 @@ func TestAddLeavesOtherStaleRegistrations(t *testing.T) {
 		t.Errorf("git worktrees = %q, want a's, still prunable, and b's", regs)
 	}
 }
+
+// TestHeldChangeFollowsNoLink: a link to a slot's checkout is not that
+// checkout, so a destroy never forgets a workspace through one.
+func TestHeldChangeFollowsNoLink(t *testing.T) {
+	f := newPrimary(t)
+	ctx := context.Background()
+	s := f.slotSpec("workspaces/a/src", "stack--a", "")
+	if err := f.add(s); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	link := filepath.Join(f.root, "link")
+	if err := os.Symlink(s.Path, link); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if change, err := driver().HeldChange(ctx, s, s.Path); change == "" || err != nil {
+		t.Fatalf("HeldChange(the checkout) = %q, %v; want its change", change, err)
+	}
+	if change, err := driver().HeldChange(ctx, s, link); change != "" || err != nil {
+		t.Errorf("HeldChange(a link to it) = %q, %v; want none", change, err)
+	}
+}
+
+// TestRecorded reads the path jj recorded for a workspace, also once nothing
+// is at it, from jj's own error.
+func TestRecorded(t *testing.T) {
+	f := newPrimary(t)
+	ctx := context.Background()
+	s := f.slotSpec("workspaces/a/src", "stack--a", "")
+	if err := f.add(s); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if path, resolved, err := driver().Recorded(ctx, s); err != nil || !resolved || !samePath(path, s.Path) {
+		t.Errorf("Recorded() = %q, %v, %v; want %s, resolved", path, resolved, err, s.Path)
+	}
+	if err := os.RemoveAll(s.Path); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	if path, resolved, err := driver().Recorded(ctx, s); err != nil || resolved || !samePath(path, s.Path) {
+		t.Errorf("Recorded() once gone = %q, %v, %v; want %s, not resolved", path, resolved, err, s.Path)
+	}
+	free := f.slotSpec("workspaces/b/src", "stack--free", "")
+	if path, resolved, err := driver().Recorded(ctx, free); path != "" || resolved || err != nil {
+		t.Errorf("Recorded(a free name) = %q, %v, %v; want none", path, resolved, err)
+	}
+	if got, err := driver().Elsewhere(ctx, s); got != "" || err != nil {
+		t.Errorf("Elsewhere() of a name recorded at the slot's own missing path = %q, %v; want none", got, err)
+	}
+}

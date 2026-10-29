@@ -17,7 +17,7 @@
 //
 // The primary's lock (plan D9) is the caller's: EnsurePrimary (which creates
 // the primary's .jj), Add and Remove (which add and forget a workspace, and
-// prune the primary's git worktree registrations) run under it. jj merges
+// drop its git worktree registration) run under it. jj merges
 // concurrent operations on its own, so nothing else needs it: Exists, Holds,
 // Elsewhere, ForgetName (of a slot whose directory is gone), Status, Diff and
 // the slot verbs take none.

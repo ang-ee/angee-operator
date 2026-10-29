@@ -100,7 +100,8 @@ func (d Driver) Holds(ctx context.Context, s vcs.Slot, dir string) (bool, error)
 
 // HeldChange returns the change id of the working-copy commit of the
 // primary's workspace Slot.Name when dir is that workspace's checkout, and
-// "" when it is not: jj, run in dir, must load a workspace whose working-copy
+// "" when it is not: dir must be a real directory, never a link to one, and
+// jj, run in it, must load a workspace whose working-copy
 // commit is that workspace's, by name and by change id (a snapshot keeps the
 // change id, and another repository's ids never match). It touches no
 // working copy and reads no path jj recorded. A directory with no .jj, or one
@@ -117,10 +118,17 @@ func (d Driver) HeldChange(ctx context.Context, s vcs.Slot, dir string) (string,
 	if dir == "" {
 		return "", errNoSlot
 	}
-	if _, err := os.Lstat(filepath.Join(dir, ".jj")); errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	} else if err != nil {
-		return "", err
+	for _, path := range []string{dir, filepath.Join(dir, ".jj")} {
+		info, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() {
+			return "", nil
+		}
 	}
 	out, err := d.jj.store(ctx, dir, "log", "--no-graph", "-r", workingCopy.String(), "-T", commitsTemplate)
 	if exited(ctx, err) {
@@ -143,61 +151,80 @@ func (d Driver) HeldChange(ctx context.Context, s vcs.Slot, dir string) (string,
 	return named.Target.ChangeID, nil
 }
 
-// ErrRootUnresolved is wrapped by Elsewhere when jj cannot resolve the path
-// it recorded for the workspace: nothing is at it, as far as this process can
-// see. That is a checkout that is gone, or one this process cannot see, such
-// as another stack's from inside a container that does not mount it.
-var ErrRootUnresolved = errors.New("jj cannot resolve the path it recorded for the workspace")
+// ErrRootUnresolved is wrapped by Elsewhere when nothing is at the path jj
+// recorded for the workspace, as far as this process can see, and that path
+// is not the slot's: a checkout that is gone, or one this process cannot see,
+// such as another stack's from inside a container that does not mount it.
+var ErrRootUnresolved = errors.New("nothing is at the path jj recorded for the workspace")
 
-// Elsewhere returns where the primary's workspace Slot.Name is checked out,
-// when jj's record of its path (`jj workspace root --name`) leads to an
-// entry other than Slot.Path; else "". It fails closed: whatever is at that
-// other path counts, whether or not this process can confirm it is the
-// workspace's checkout, since forgetting the name would delete that
-// checkout's .git. A record jj cannot resolve is an error wrapping
-// ErrRootUnresolved, for the caller to decide; any other failure of jj is
-// returned as it is. jj's record goes stale once a workspace moves (plan
-// section 2), so this is the one call that reads it, and only to refuse.
-func (d Driver) Elsewhere(ctx context.Context, s vcs.Slot) (string, error) {
+// cannotResolve starts jj's error for a workspace whose recorded path does
+// not resolve; the path follows it, up to the end of the line.
+const cannotResolve = "Error: Cannot resolve absolute workspace path: "
+
+// Recorded returns the path jj recorded for the primary's workspace
+// Slot.Name, and whether something is at it (`jj workspace root --name`
+// resolves only an existing path). For a path that does not resolve it is
+// the path jj names in its error, cleaned. The path is "" when the primary
+// has no such workspace. jj's record goes stale once a workspace moves (plan
+// section 2), so the service reads it only to refuse forgetting a name, or
+// to recognise a slot's own name at the slot's path.
+func (d Driver) Recorded(ctx context.Context, s vcs.Slot) (string, bool, error) {
 	if err := lifecycleFacts(s); err != nil {
-		return "", err
+		return "", false, err
 	}
 	out, err := d.jj.store(ctx, s.Primary, "workspace", "root", "--name="+s.Name)
 	var command *CommandError
 	switch {
 	case err == nil:
 	case exited(ctx, err) && errors.As(err, &command) && strings.HasPrefix(command.Stderr, "Error: No such workspace"):
-		return "", nil
-	case exited(ctx, err) && errors.As(err, &command) && strings.HasPrefix(command.Stderr, "Error: Cannot resolve"):
-		return "", fmt.Errorf("jj workspace %q of %s: %w: %s", s.Name, s.Primary, ErrRootUnresolved, command.Stderr)
+		return "", false, nil
+	case exited(ctx, err) && errors.As(err, &command) && strings.HasPrefix(command.Stderr, cannotResolve):
+		recorded, _, _ := strings.Cut(strings.TrimPrefix(command.Stderr, cannotResolve), "\n")
+		if recorded = strings.TrimSpace(recorded); recorded == "" {
+			return "", false, fmt.Errorf("jj workspace %q of %s: %w: %s", s.Name, s.Primary, ErrRootUnresolved, command.Stderr)
+		}
+		return filepath.Clean(recorded), false, nil
 	default:
-		return "", err
+		return "", false, err
 	}
 	root := strings.TrimSpace(string(out))
 	if root == "" {
-		return "", fmt.Errorf("jj workspace %q of %s: %w", s.Name, s.Primary, ErrRootUnresolved)
+		return "", false, fmt.Errorf("jj workspace %q of %s: jj printed no path: %w", s.Name, s.Primary, ErrRootUnresolved)
 	}
-	if samePath(root, s.Path) {
+	return root, true, nil
+}
+
+// Elsewhere returns where the primary's workspace Slot.Name is checked out,
+// when jj's record of its path (Recorded) leads to an entry other than
+// Slot.Path; else "": the name is free, or recorded at Slot.Path, so nothing
+// else can be checked out under it. It fails closed: whatever is at that
+// other path counts, whether or not this process can confirm it is the
+// workspace's checkout, since forgetting the name would delete that
+// checkout's .git. A record of another path with nothing at it is an error
+// wrapping ErrRootUnresolved, for the caller to decide; any other failure of
+// jj is returned as it is.
+func (d Driver) Elsewhere(ctx context.Context, s vcs.Slot) (string, error) {
+	recorded, resolved, err := d.Recorded(ctx, s)
+	switch {
+	case err != nil:
+		return "", err
+	case recorded == "" || samePath(recorded, s.Path):
 		return "", nil
+	case !resolved:
+		return "", fmt.Errorf("jj workspace %q of %s, recorded at %s: %w", s.Name, s.Primary, recorded, ErrRootUnresolved)
 	}
-	if _, err := os.Lstat(root); errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("jj workspace %q of %s, recorded at %s: %w", s.Name, s.Primary, root, ErrRootUnresolved)
+	if _, err := os.Lstat(recorded); errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("jj workspace %q of %s, recorded at %s: %w", s.Name, s.Primary, recorded, ErrRootUnresolved)
 	} else if err != nil {
 		return "", err
 	}
-	return root, nil
+	return recorded, nil
 }
 
-// samePath reports whether a and b name the same path, once symbolic links
-// in either are resolved; a path that does not resolve is compared as it is.
+// samePath reports whether a and b name the same path, once the symbolic
+// links of the part of each that exists are resolved (vcs.CanonicalPath).
 func samePath(a, b string) bool {
-	resolve := func(path string) string {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
-			return resolved
-		}
-		return filepath.Clean(path)
-	}
-	return resolve(a) == resolve(b)
+	return vcs.CanonicalPath(a) == vcs.CanonicalPath(b)
 }
 
 // Add makes the slot in place (plan D4): jj writes a secondary workspace of
@@ -225,9 +252,9 @@ func samePath(a, b string) bool {
 //     `git worktree prune`. The rest of what jj wrote there stays.
 //
 // On a mismatch, or any error once the directory is made, Add rolls back as
-// Remove does: forget, remove through dest, prune. jj can create the
-// workspace and still exit 1 (a revision that resolves to nothing), so every
-// error rolls back.
+// Remove does: remove through dest, forget, drop the slot's own git
+// registration. jj can create the workspace and still exit 1 (a revision
+// that resolves to nothing), so every error rolls back.
 //
 // configure must be nil. A jj slot has no configuration of its own: a linked
 // git worktree shares its primary's git config, and the slot shares the
@@ -246,8 +273,8 @@ func samePath(a, b string) bool {
 // The slot is colocated with git (`--colocate`) when the primary is: when it
 // has a .git, as a source's cache always has. A local store jj keeps without
 // git's working tree (`jj git init` without colocation) gets a slot without
-// one too (plan phase 6 step 7). A colocated primary that still registers a
-// git worktree at Slot.Path is pruned first (pruneStaleRegistration).
+// one too (plan phase 6 step 7). A git worktree a colocated primary still
+// registers at Slot.Path is dropped first (dropStaleRegistration).
 func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure func(context.Context, string) error) error {
 	if configure != nil {
 		return fmt.Errorf("configuring a jj slot, which shares its primary's git and jj configuration: %w", vcs.ErrUnsupported)
@@ -276,7 +303,7 @@ func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure fu
 		return fmt.Errorf("jj workspace %q already exists in %s: %w", s.Name, s.Primary, vcs.ErrNameTaken)
 	}
 	if colocated {
-		if err := d.pruneStaleRegistration(ctx, s); err != nil {
+		if err := d.dropStaleRegistration(ctx, s, dest); err != nil {
 			return err
 		}
 	}
@@ -294,20 +321,49 @@ func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure fu
 	return nil
 }
 
-// pruneStaleRegistration drops the git worktree registration git still keeps
+// dropStaleRegistration drops the git worktree registration git still keeps
 // at Slot.Path when the slot's checkout is gone, as a slot removed without
 // the primary's lock leaves it: git refuses to add a worktree there (probed:
-// "is a missing but already registered worktree"). Only then does it prune,
-// since a prune drops every registration whose checkout this process cannot
-// see, such as other stacks' slots invisible from a container. The caller
-// holds the primary's lock, and has checked that Slot.Path holds nothing or
-// an empty directory.
-func (d Driver) pruneStaleRegistration(ctx context.Context, s vcs.Slot) error {
+// "is a missing but already registered worktree"). The caller holds the
+// primary's lock, and has checked that Slot.Path holds nothing or an empty
+// directory; an empty one goes first, through dest, since git deregisters a
+// worktree by its path only once nothing is there (deregister), and Add makes
+// the directory again.
+func (d Driver) dropStaleRegistration(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 	registered, err := d.git.WorktreeRegistered(ctx, s.Primary, s.Path)
 	if err != nil || !registered {
 		return err
 	}
-	return d.git.WorktreePrune(ctx, s.Primary)
+	if err := dest.RemoveAll(); err != nil {
+		return err
+	}
+	return d.deregister(ctx, s)
+}
+
+// deregister drops the git worktree registration the primary keeps at
+// Slot.Path, and no other: `git worktree remove --force --force <path>`,
+// which with nothing at the path removes only git's record of it (probed on
+// git 2.50; git has removed a missing worktree this way since long before
+// the 2.48 a jj slot needs). A prune would drop every registration whose
+// checkout this process cannot see, such as other stacks' slots out of a
+// container's sight. It refuses while anything is at the path, which git
+// would delete outside the slot's guard. A primary that is not colocated, or
+// that registers nothing at the path, has nothing to drop.
+func (d Driver) deregister(ctx context.Context, s vcs.Slot) error {
+	colocated, err := colocated(s.Primary)
+	if err != nil || !colocated {
+		return err
+	}
+	registered, err := d.git.WorktreeRegistered(ctx, s.Primary, s.Path)
+	if err != nil || !registered {
+		return err
+	}
+	if _, err := os.Lstat(s.Path); err == nil {
+		return fmt.Errorf("deregister jj slot %s from %s: it still exists", s.Path, s.Primary)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return d.git.WorktreeRemove(ctx, s.Primary, vcs.CanonicalPath(s.Path))
 }
 
 // create runs `jj workspace add` into the directory dest holds, colocated
@@ -330,17 +386,22 @@ func (d Driver) create(ctx context.Context, s vcs.Slot, dest vcs.Dest, colocated
 	return nil
 }
 
-// Remove removes the slot in the order the probes require (plan section 2).
-// It forgets the workspace by name (`jj workspace forget`), which also drops
-// its git worktree registration while its directory exists; forgetting a
-// workspace the primary does not have changes nothing. It then removes the
-// directory through dest, and runs `git worktree prune` in the primary, which
-// drops the registration of a slot whose directory was gone before the forget,
-// and of any other worktree of the primary whose checkout is missing. Each
-// step runs even when an earlier one failed, so whatever part of the slot did
-// go is not left registered; the errors are joined. A primary that is not
-// colocated with git (no .git) registers no git worktree, so it is not
-// pruned: git run there would prune whatever repository encloses it.
+// Remove removes the slot, touching nothing git keeps of any other slot:
+//   - it removes the directory through dest first, since `jj workspace
+//     forget` of a workspace whose directory exists also prunes every git
+//     worktree of the primary whose checkout is missing (probed), which drops
+//     other stacks' registrations a container cannot see;
+//   - then forgets the workspace by name, which with the directory gone
+//     changes only jj's record; forgetting a workspace the primary does not
+//     have changes nothing;
+//   - then drops the slot's own git worktree registration (deregister), and
+//     no other.
+//
+// A removal that fails and leaves the directory stops there, since both
+// later steps would then reach into it outside the guard. Otherwise each step
+// runs even when an earlier one failed, and the errors are joined. A primary
+// that is not colocated with git (no .git) registers no git worktree, so git
+// is not run: run there, it would act on whatever repository encloses it.
 //
 // The forget touches no working copy. The caller holds the primary's lock
 // (plan D9).
@@ -348,15 +409,14 @@ func (d Driver) Remove(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 	if err := lifecycleFacts(s); err != nil {
 		return err
 	}
-	_, err := d.jj.store(ctx, s.Primary, "workspace", "forget", "--", s.Name)
-	err = errors.Join(err, dest.RemoveAll())
-	switch colocated, colocatedErr := colocated(s.Primary); {
-	case colocatedErr != nil:
-		return errors.Join(err, colocatedErr)
-	case colocated:
-		return errors.Join(err, d.git.WorktreePrune(ctx, s.Primary))
+	err := dest.RemoveAll()
+	if err != nil {
+		if _, statErr := os.Lstat(s.Path); !errors.Is(statErr, fs.ErrNotExist) {
+			return err
+		}
 	}
-	return err
+	_, forgetErr := d.jj.store(ctx, s.Primary, "workspace", "forget", "--", s.Name)
+	return errors.Join(err, forgetErr, d.deregister(ctx, s))
 }
 
 // ForgetName forgets the primary's workspace Slot.Name once the slot's
@@ -373,7 +433,9 @@ func (d Driver) Remove(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 // working copy is still that change: the lock's holder may have added a
 // workspace of the same name meanwhile, such as another stack's, which is
 // then left alone, with an error saying so. A name the primary no longer has
-// is nothing to forget.
+// is nothing to forget. The check and the forget are two jj commands, so a
+// workspace re-added in the moment between them is still forgotten; the
+// window is that narrow, and only open while another process holds the lock.
 func (d Driver) ForgetName(ctx context.Context, s vcs.Slot, change string) error {
 	if err := lifecycleFacts(s); err != nil {
 		return err
