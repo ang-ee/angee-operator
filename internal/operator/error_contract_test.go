@@ -50,6 +50,16 @@ func TestSyncBaseErrorContract(t *testing.T) {
 			wantPrefix: `Sync base for workspace "feature-a": source slot "lib" is missing at `,
 		},
 		{
+			name: "jj slot",
+			prepare: func(t *testing.T, root, _, _ string) {
+				declareOperatorSlot(t, root, "feature-a", "work", manifest.WorkspaceSource{Source: "app", Mode: manifest.WorkspaceSourceModeJJ, Ref: "main", Subpath: "work"})
+			},
+			wantStatus: http.StatusBadRequest,
+			wantExt: map[string]any{"code": "INVALID_INPUT", "cause": "jj_slot_unsupported", "operation": "workspace.sync-base",
+				"workspace": "feature-a", "slot": "work", "hint": "Run jj in the slot instead."},
+			wantPrefix: `Sync base for workspace "feature-a": sync-base is not supported on jj slot "work" yet.`,
+		},
+		{
 			name: "ssh unavailable",
 			prepare: func(t *testing.T, _, _, cache string) {
 				runTestGit(t, cache, "remote", "set-url", "fork", "git@github-deploy:org/app.git")

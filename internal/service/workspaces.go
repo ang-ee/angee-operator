@@ -1057,6 +1057,9 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 	if !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
+	if err := p.refuseJJSlots("workspace push", name, workspace, stack); err != nil {
+		return nil, err
+	}
 	// Check the slots are materialized first: the branch check reads git in
 	// each slot's path and would read an enclosing repository's branch.
 	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeClone)
@@ -1321,6 +1324,9 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if !ok {
 		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", vcs.SyncMerge, vcs.SyncRebase)}
 	}
+	if err := p.refuseJJSlots("sync-base", name, workspace, stack); err != nil {
+		return nil, err
+	}
 	// Check the slots are materialized first: the branch check reads git in
 	// each slot's path and would read an enclosing repository's branch.
 	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree)
@@ -1548,7 +1554,7 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
-		if err := checkWorkspaceSlotBase(workspaceName, slot, source, resolved); err != nil {
+		if err := checkWorkspaceSlotBase(workspaceName, slot, source, resolved, stack.EffectiveSourceMode(resolved)); err != nil {
 			return nil, cleanup, err
 		}
 		if resolved.Subpath == "" {
@@ -1595,8 +1601,13 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 // checkWorkspaceSlotBase rejects a slot that has nothing to start from, before
 // anything is materialized. A worktree without a branch is detached at its
 // base; with no base it would detach at whatever the cache has checked out,
-// and nothing would record where its work starts.
-func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource) error {
+// and nothing would record where its work starts. mode is the slot's
+// effective mode (manifest.Stack.EffectiveSourceMode). A jj slot cannot be
+// created yet.
+func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource, mode string) error {
+	if mode == manifest.WorkspaceSourceModeJJ {
+		return jjSlotNotYet("create", workspaceName, []string{slot}, nil)
+	}
 	if source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree && ws.Branch == "" && ws.Ref == "" && source.DefaultRef == "" {
 		return fmt.Errorf("workspace %q source %q: a worktree without a branch needs a ref or the source's default_ref to start from", workspaceName, slot)
 	}

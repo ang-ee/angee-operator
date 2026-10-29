@@ -601,6 +601,13 @@
           },
           "type": "object"
         },
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "jj"
+          ]
+        },
         "sources": {
           "additionalProperties": {
             "$ref": "#/$defs/Source"
@@ -761,7 +768,8 @@
           "type": "string",
           "enum": [
             "worktree",
-            "clone"
+            "clone",
+            "jj"
           ]
         },
         "branch": {

@@ -155,7 +155,7 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 		}
 	}
 	done := logctx.Step(ctx, "materializing source slot "+slot)
-	err = p.repairMissingWorkspaceSlot(ctx, workspaceName, slot, source, wsSource, path)
+	err = p.repairMissingWorkspaceSlot(ctx, stack, workspaceName, slot, source, wsSource, path)
 	done(err)
 	status := p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack)
 	outcome.Status = &status
@@ -186,8 +186,8 @@ func repairReason(err error) string {
 // cleanup: if the cut fails, or the new slot is not on its branch, whatever was
 // created is rolled back through workspaceSourceCleanup as a failed create
 // would, so nothing is left at the path and no other slot is affected.
-func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource, dest string) (retErr error) {
-	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws); err != nil {
+func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manifest.Stack, workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource, dest string) (retErr error) {
+	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws, stack.EffectiveSourceMode(ws)); err != nil {
 		return err
 	}
 	cleanup := &workspaceSourceCleanup{}

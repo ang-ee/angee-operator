@@ -46,6 +46,7 @@ const (
 	CauseCloneFailed        = "clone_failed"
 	CauseMergeConflict      = "merge_conflict"
 	CauseDependencyFailed   = "dependency_failed"
+	CauseJJSlotUnsupported  = "jj_slot_unsupported"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.

@@ -158,7 +158,7 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 		return api.WorkspaceSourceStatus{}, err
 	}
 	defer release()
-	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspaceName, slot)
+	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "fetch", workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
@@ -180,7 +180,7 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 		return api.WorkspaceSourceStatus{}, err
 	}
 	defer release()
-	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspaceName, slot)
+	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "pull", workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
@@ -208,7 +208,7 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 		return api.WorkspaceSourceStatus{}, err
 	}
 	defer release()
-	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspaceName, slot)
+	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "push", workspaceName, slot)
 	if err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
@@ -232,7 +232,11 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 	return p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack), nil
 }
 
-func (p *Platform) workspaceSourceTarget(ctx context.Context, workspaceName, slot string) (*manifest.Stack, manifest.WorkspaceSource, manifest.Source, string, error) {
+// workspaceSourceTarget resolves the slot verb names, for it to act on: the
+// stack, the slot, its source and its path, which must be materialized. A
+// jj slot is refused for every verb that calls it, until phase 8 of the jj
+// plan implements them (jjSlotNotYet).
+func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceName, slot string) (*manifest.Stack, manifest.WorkspaceSource, manifest.Source, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err
 	}
@@ -255,6 +259,11 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, workspaceName, slo
 	_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 	if err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+	}
+	if stack.EffectiveSourceMode(wsSource) == manifest.WorkspaceSourceModeJJ {
+		refusal := jjSlotNotYet(verb, workspaceName, []string{slot}, []string{path})
+		refusal.Source = wsSource.Source
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", refusal
 	}
 	if err := requireWorkspaceSlotsOnDisk(workspaceName, []workspaceSlotPath{{slot: slot, path: path, source: source}}); err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", err

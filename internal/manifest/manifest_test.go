@@ -502,9 +502,11 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 		{mode: ""},
 		{mode: WorkspaceSourceModeWorktree},
 		{mode: WorkspaceSourceModeClone},
+		{mode: WorkspaceSourceModeJJ},
 		{mode: "worktre", wantErr: true},
 		{mode: "Worktree", wantErr: true},
-		{mode: "jj", wantErr: true},
+		{mode: "JJ", wantErr: true},
+		{mode: "link", wantErr: true},
 	} {
 		stack := &Stack{
 			Version: VersionCurrent,
@@ -546,5 +548,50 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 		if err := stack.Validate(); err != nil {
 			t.Errorf("Validate() of a local source with mode %q error = %v, want nil", mode, err)
 		}
+	}
+}
+
+// A stack's vcs is git or jj, or omitted; nothing else loads.
+func TestValidateStackVCS(t *testing.T) {
+	for _, tc := range []struct {
+		vcs     string
+		wantErr bool
+	}{
+		{vcs: ""},
+		{vcs: VCSGit},
+		{vcs: VCSJJ},
+		{vcs: "hg", wantErr: true},
+		{vcs: "JJ", wantErr: true},
+	} {
+		stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "vcs", VCS: tc.vcs}
+		err := stack.Validate()
+		if tc.wantErr != (err != nil) {
+			t.Errorf("Validate() with vcs %q error = %v, want error %v", tc.vcs, err, tc.wantErr)
+		}
+	}
+}
+
+// A slot's own mode wins; a slot with none is a jj slot under vcs: jj and
+// keeps its source kind's default (the empty mode) otherwise.
+func TestEffectiveSourceMode(t *testing.T) {
+	for _, tc := range []struct {
+		vcs, mode, want string
+	}{
+		{vcs: "", mode: "", want: ""},
+		{vcs: VCSGit, mode: "", want: ""},
+		{vcs: VCSJJ, mode: "", want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeWorktree, want: WorkspaceSourceModeWorktree},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeClone, want: WorkspaceSourceModeClone},
+		{vcs: VCSGit, mode: WorkspaceSourceModeJJ, want: WorkspaceSourceModeJJ},
+		{vcs: "", mode: WorkspaceSourceModeWorktree, want: WorkspaceSourceModeWorktree},
+	} {
+		stack := &Stack{VCS: tc.vcs}
+		if got := stack.EffectiveSourceMode(WorkspaceSource{Source: "app", Mode: tc.mode}); got != tc.want {
+			t.Errorf("EffectiveSourceMode(vcs %q, mode %q) = %q, want %q", tc.vcs, tc.mode, got, tc.want)
+		}
+	}
+	var none *Stack
+	if got := none.EffectiveSourceMode(WorkspaceSource{Source: "app"}); got != "" {
+		t.Errorf("EffectiveSourceMode() on no stack = %q, want the empty mode", got)
 	}
 }
