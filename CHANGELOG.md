@@ -19,6 +19,8 @@ latest tag.
   Local held jobs use isolated native execution, with per-node durable status and
   output for logs and prerequisites; newer native generations take precedence.
   Unsafe hot registration of recovery services fails without a project rewrite.
+  The durable root lock protects live job receipts from interrupted-operation
+  recovery by concurrent CLI or daemon readers.
 
 - **Status reports a jj slot's conflicts, change id and base, and the
   topology lists a source's jj workspaces** (phase 7 of

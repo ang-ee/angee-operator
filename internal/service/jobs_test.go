@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/fslock"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
@@ -301,6 +303,15 @@ func TestJobRunStartTimesOutReleasesLeaseAndFailsReceipt(t *testing.T) {
 	p.jobRunsMu.RUnlock()
 	if active {
 		t.Fatal("activeJobRun still set after timeout")
+	}
+	lockCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	lock := fslock.RootLock(root)
+	if err := lock.Lock(lockCtx); err != nil {
+		t.Fatalf("root lock not released after timeout: %v", err)
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -885,6 +896,92 @@ func TestHeldLocalJobsUseIsolatedExecutionAndDurableReaders(t *testing.T) {
 	}
 	for chunk := range logs {
 		t.Fatalf("stale isolated output used over native reader: %q", chunk)
+	}
+}
+
+// A different CLI/daemon must not recover an operation that still owns the
+// durable execution lock, including while buffered isolated logs are followed.
+func TestFreshReadersPreserveLiveHeldJobReceipt(t *testing.T) {
+	backend := holdTestBackend()
+	entered, resume := make(chan struct{}), make(chan struct{})
+	backend.beforeJob = func(ctx context.Context, _ runtime.JobSpec) {
+		close(entered)
+		select {
+		case <-resume:
+		case <-ctx.Done():
+		}
+	}
+	root := t.TempDir()
+	if err := manifest.SaveFile(manifest.Path(root), holdTestStack()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewWithBackends(root, backend, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	op, err := p.JobRunStart(ctx, "root", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumeJob := sync.OnceFunc(func() { close(resume) })
+	defer func() {
+		resumeJob()
+		waitBackup(t, p, op.ID)
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("job did not reach isolated execution")
+	}
+	reader, err := NewWithBackends(root, backend, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := reader.JobRunGet(ctx, op.ID)
+	if err != nil || observed.Status != api.JobRunRunning {
+		t.Fatalf("fresh live receipt = %#v, %v", observed, err)
+	}
+	status, err := reader.StackStatus(ctx)
+	if err != nil || status.Jobs["root"].Status != api.JobRunning {
+		t.Fatalf("fresh live status = %#v, %v", status.Jobs, err)
+	}
+	logs, err := reader.StackLogs(ctx, []string{"root"}, true, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each read above used recovery's lock check. The disk receipt remains live
+	// and the follow stays attached until this command publishes its output.
+	data, err := os.ReadFile(filepath.Join(root, "state/job-runs", op.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var durable api.JobRunOperation
+	if err := json.Unmarshal(data, &durable); err != nil || durable.Status != api.JobRunRunning {
+		t.Fatalf("durable live receipt = %#v, %v", durable, err)
+	}
+	resumeJob()
+	var output strings.Builder
+	for chunk := range logs {
+		output.WriteString(chunk)
+	}
+	if output.String() != "root output" {
+		t.Fatalf("fresh isolated follow = %q", output.String())
+	}
+	if completed := waitBackup(t, p, op.ID); completed.Status != api.JobRunSucceeded {
+		t.Fatalf("completed owner = %#v", completed)
+	}
+	completed, err := reader.JobRunGet(ctx, op.ID)
+	if err != nil || completed.Status != api.JobRunSucceeded {
+		t.Fatalf("fresh terminal receipt = %#v, %v", completed, err)
+	}
+	lock := fslock.RootLock(root)
+	if err := lock.Lock(ctx); err != nil {
+		t.Fatalf("root lock not released after terminal publication: %v", err)
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatal(err)
 	}
 }
 

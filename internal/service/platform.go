@@ -175,60 +175,69 @@ func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[st
 	lock := fslock.RootLock(p.root)
 	var compiled *CompiledStack
 	err := lock.With(ctx, func() error {
-		finishLoading := logctx.Step(ctx, "loading stack")
-		stack, err := p.LoadStack()
-		finishLoading(err)
-		if err != nil {
-			return err
-		}
-		finishSources := logctx.Step(ctx, "materializing sources")
-		err = p.materializeStackResources(ctx, stack)
-		finishSources(err)
-		if err != nil {
-			return err
-		}
-		finishWorkspaces := logctx.Step(ctx, "materializing declared workspaces")
-		cut, err := p.materializeDeclaredWorkspaces(ctx, stack)
-		finishWorkspaces(err)
-		if err != nil {
-			return err
-		}
-		if cut {
-			// The cut wrote full workspace records (sources, allocations,
-			// resolved chain) to the manifest; reload before compiling.
-			if stack, err = p.LoadStack(); err != nil {
-				return err
-			}
-		}
-		compileStack := stack
-		if operationRoot != "" {
-			compileStack, err = jobOperationStack(stack, operationRoot, chained)
-			if err != nil {
-				return err
-			}
-		}
-		finishCompiling := logctx.Step(ctx, "compiling stack")
-		compiledStack, resolvedSecrets, err := p.compileStackArtifactsWithJobInputs(ctx, compileStack, jobInputs, operationRoot != "")
-		if err == nil && operationRoot != "" {
-			err = contributeOperationIngress(stack, compiledStack)
-		}
-		finishCompiling(err)
-		if err != nil {
-			return err
-		}
-		compiled = compiledStack
-		finishWriting := logctx.Step(ctx, "writing runtime files")
-		writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
-		if writeErr == nil && writeRuntime {
-			writeErr = p.writeCompiled(compiled)
-		}
-		if writeErr == nil && transient && operationRoot == "" {
-			compiled, writeErr = compile(compileStack, p.root, resolvedSecrets, nil, true)
-		}
-		finishWriting(writeErr)
-		return writeErr
+		var err error
+		compiled, err = p.stackPrepareLocked(ctx, jobInputs, writeRuntime, operationRoot, chained, transient)
+		return err
 	})
 	return compiled, err
+}
+
+// stackPrepareLocked requires the root lock. Long-running operations retain
+// that lock through execution so receipt recovery cannot mistake them for dead
+// owners; ordinary preparation releases it after this shared body returns.
+func (p *Platform) stackPrepareLocked(ctx context.Context, jobInputs map[string]map[string]string, writeRuntime bool, operationRoot string, chained, transient bool) (*CompiledStack, error) {
+	finishLoading := logctx.Step(ctx, "loading stack")
+	stack, err := p.LoadStack()
+	finishLoading(err)
+	if err != nil {
+		return nil, err
+	}
+	finishSources := logctx.Step(ctx, "materializing sources")
+	err = p.materializeStackResources(ctx, stack)
+	finishSources(err)
+	if err != nil {
+		return nil, err
+	}
+	finishWorkspaces := logctx.Step(ctx, "materializing declared workspaces")
+	cut, err := p.materializeDeclaredWorkspaces(ctx, stack)
+	finishWorkspaces(err)
+	if err != nil {
+		return nil, err
+	}
+	if cut {
+		// The cut wrote full workspace records (sources, allocations,
+		// resolved chain) to the manifest; reload before compiling.
+		if stack, err = p.LoadStack(); err != nil {
+			return nil, err
+		}
+	}
+	compileStack := stack
+	if operationRoot != "" {
+		compileStack, err = jobOperationStack(stack, operationRoot, chained)
+		if err != nil {
+			return nil, err
+		}
+	}
+	finishCompiling := logctx.Step(ctx, "compiling stack")
+	compiledStack, resolvedSecrets, err := p.compileStackArtifactsWithJobInputs(ctx, compileStack, jobInputs, operationRoot != "")
+	if err == nil && operationRoot != "" {
+		err = contributeOperationIngress(stack, compiledStack)
+	}
+	finishCompiling(err)
+	if err != nil {
+		return nil, err
+	}
+	compiled := compiledStack
+	finishWriting := logctx.Step(ctx, "writing runtime files")
+	writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
+	if writeErr == nil && writeRuntime {
+		writeErr = p.writeCompiled(compiled)
+	}
+	if writeErr == nil && transient && operationRoot == "" {
+		compiled, writeErr = compile(compileStack, p.root, resolvedSecrets, nil, true)
+	}
+	finishWriting(writeErr)
+	return compiled, writeErr
 }
 
 func (p *Platform) materializeStackResources(ctx context.Context, stack *manifest.Stack) error {

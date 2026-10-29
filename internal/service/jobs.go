@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	"github.com/ang-ee/angee-operator/internal/fslock"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	"github.com/ang-ee/angee-operator/internal/query"
@@ -83,11 +84,24 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 	if err != nil {
 		return api.JobRunOperation{}, err
 	}
+	// Receipt recovery uses this lock to distinguish a live operation from an
+	// interrupted one. Retain it from preparation through final publication,
+	// including the interval before the executor goroutine starts.
+	rootLock := fslock.RootLock(p.root)
+	if err := rootLock.Lock(ctx); err != nil {
+		release()
+		return api.JobRunOperation{}, err
+	}
+	releaseMutation := release
+	release = func() {
+		_ = rootLock.Unlock()
+		releaseMutation()
+	}
 	jobInputs := map[string]map[string]string(nil)
 	if len(inputs) != 0 {
 		jobInputs = map[string]map[string]string{name: inputs}
 	}
-	compiled, err := p.stackPrepare(ctx, jobInputs, false, name, chainedRestart, true)
+	compiled, err := p.stackPrepareLocked(ctx, jobInputs, false, name, chainedRestart, true)
 	if err != nil {
 		release()
 		return api.JobRunOperation{}, err
@@ -490,7 +504,8 @@ func (p *Platform) executeJobRun(ctx context.Context, id string, release func())
 		releaseLease()
 	}()
 	// Bound every detached operation while retaining its mutation lease through
-	// runtime execution, hold restoration and durable outcome publication.
+	// runtime execution, hold restoration and durable outcome publication. The
+	// release also owns the root lock used by cross-Platform receipt recovery.
 	ctx, cancel, timeout := jobRunContext(ctx)
 	defer cancel()
 	p.jobRunsMu.RLock()
