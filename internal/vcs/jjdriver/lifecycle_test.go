@@ -636,9 +636,10 @@ func TestLifecycleRefusesMissingFacts(t *testing.T) {
 // lifecycle runs and where: `jj git init` outside any repository; the
 // workspace list and the forget on the primary's repository without a
 // working copy; `jj workspace add` in the primary, with the name, the start
-// revset and the path as single arguments; and git's prune in the primary,
-// before the add and after the removal. The primary has a .git, as a
-// source's cache has, so the slot is colocated.
+// revset and the path as single arguments; git's worktree list before the
+// add, which finds no registration at the slot's path to prune; and git's
+// prune after the removal. The primary has a .git, as a source's cache has,
+// so the slot is colocated.
 func TestLifecycleCommands(t *testing.T) {
 	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n"})
 	ctx := context.Background()
@@ -675,7 +676,7 @@ func TestLifecycleCommands(t *testing.T) {
 	}{
 		{"jj", os.TempDir(), jj("git", "init", "--git-repo", primary, "--", primary)},
 		{"jj", primary, jj("-R", ".", "--ignore-working-copy", "workspace", "list", "-T", workspacesTemplate)},
-		{"git", primary, []string{"worktree", "prune"}},
+		{"git", primary, []string{"worktree", "list", "--porcelain"}},
 		{"jj", primary, jj("-R", ".", "workspace", "add", "--colocate", "--name=stack--ws", "-r", start, "--", s.Path)},
 		{"jj", primary, jj("-R", ".", "--ignore-working-copy", "workspace", "forget", "--", "stack--ws")},
 		{"git", primary, []string{"worktree", "prune"}},

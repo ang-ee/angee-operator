@@ -22,8 +22,10 @@ latest tag.
     named `<stack>--<workspace>` (plus `--<slot>` for several jj slots of
     one primary) in the primary; no stack, workspace or slot name in such a
     name may be empty, hold `--` or start or end with `-`. A name the
-    primary already has for a slot this stack's manifest does not record is
-    a `CONFLICT` naming it, and is never forgotten.
+    primary already has for a slot this stack's manifest does not record, or
+    that is checked out anywhere else, is a `CONFLICT` naming it, and is
+    never forgotten; destroy forgets only the workspace the slot's own
+    checkout is.
   - A create first checks that this machine can run jj slots (jj with
     `workspace add --colocate`, git 2.48 or later, not Windows;
     `PRECONDITION_FAILED`, cause `jj_unavailable`) and that each primary is

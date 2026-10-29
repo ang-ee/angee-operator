@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,8 +26,9 @@ type jjLifecycle interface {
 	vcs.Driver
 	EnsurePrimary(ctx context.Context, primary string) error
 	Holds(ctx context.Context, s vcs.Slot, dir string) (bool, error)
+	HeldChange(ctx context.Context, s vcs.Slot, dir string) (string, error)
 	Elsewhere(ctx context.Context, s vcs.Slot) (string, error)
-	ForgetName(ctx context.Context, s vcs.Slot) error
+	ForgetName(ctx context.Context, s vcs.Slot, change string) error
 }
 
 var _ jjLifecycle = jjdriver.Driver{}
@@ -174,12 +176,18 @@ func (p *Platform) requireJJSlots(ctx context.Context) error {
 	caps := probe(ctx)
 	unsupported := &jjdriver.UnsupportedError{}
 	var hints []string
+	// git's version is judged against the jj slots' floor alone, so a git
+	// below the driver's own floor is told the version it actually needs.
+	others := caps
+	if caps.Git != "" {
+		others.GitErr = nil
+	}
 	var probed *jjdriver.UnsupportedError
-	if errors.As(caps.Err(), &probed) {
+	if errors.As(others.Err(), &probed) {
 		unsupported.Causes = append(unsupported.Causes, probed.Causes...)
 		hints = append(hints, probed.Hint)
 	}
-	if caps.GitErr == nil && !git.VersionAtLeast(caps.Git, git.RelativeWorktreesVersion) {
+	if caps.Git != "" && !git.VersionAtLeast(caps.Git, git.RelativeWorktreesVersion) {
 		unsupported.Causes = append(unsupported.Causes, fmt.Errorf("%s is older than %s, which jj slots need: jj's workspace add sets extensions.relativeWorktrees on the source cache", caps.Git, git.RelativeWorktreesVersion))
 		hints = append(hints, "Upgrade git to "+git.RelativeWorktreesVersion+" or later.")
 	}
@@ -228,8 +236,9 @@ func (p *Platform) checkJJPrimary(sourceName string, source manifest.Source, pri
 	if err != nil {
 		return err
 	}
-	_, dangling := os.Lstat(primary)
-	if source.Kind == "git" && inside && dangling != nil {
+	// A missing cache inside the stack root is cloned; a symlink there that
+	// leads nowhere is not, since the clone would land where it leads.
+	if _, lstatErr := os.Lstat(primary); source.Kind == "git" && inside && lstatErr != nil {
 		return nil
 	}
 	hint := fmt.Sprintf("Where angee runs in a container, mount %s at that same path; on the host, run `angee source fetch %s` first.", primary, sourceName)
@@ -321,12 +330,8 @@ func (p *Platform) addJJSlot(ctx context.Context, driver vcs.Driver, slot vcs.Sl
 		logctx.From(ctx).Info(fmt.Sprintf("keeping jj slot %s as it is: it is already jj workspace %q of %s", slot.Path, slot.Name, slot.Primary))
 		return true, nil
 	case taken:
-		elsewhere, err := jj.Elsewhere(ctx, slot)
-		if err != nil {
+		if err := p.reclaimJJName(ctx, jj, slot, recorded); err != nil {
 			return false, err
-		}
-		if elsewhere != "" || !recorded {
-			return false, jjNameTaken(slot, elsewhere)
 		}
 		// The slot's checkout is gone: its name is this stack's own, left
 		// behind, so forget it and add the slot again.
@@ -343,6 +348,35 @@ func (p *Platform) addJJSlot(ctx context.Context, driver vcs.Driver, slot vcs.Sl
 	return false, nil
 }
 
+// reclaimJJName decides whether the taken name of a jj slot whose own path
+// holds nothing, or an empty directory, may be forgotten and the slot added
+// again. Only when the saved manifest records the slot under that name, and
+// jj's record of the name's path leads nowhere else (Elsewhere, which fails
+// closed). A record jj cannot resolve is this stack's own only when the
+// primary lies inside the stack root, which no other stack's slots use; for
+// a shared primary it may be another stack's checkout out of this process's
+// sight, as from a container, so it is refused with the forget command for
+// whoever knows.
+func (p *Platform) reclaimJJName(ctx context.Context, jj jjLifecycle, slot vcs.Slot, recorded bool) error {
+	elsewhere, err := jj.Elsewhere(ctx, slot)
+	unresolved := errors.Is(err, jjdriver.ErrRootUnresolved)
+	switch {
+	case err != nil && !unresolved:
+		return err
+	case elsewhere != "" || !recorded:
+		return jjNameTaken(slot, elsewhere)
+	case unresolved:
+		owned, err := sameOrNestedPath(p.root, slot.Primary)
+		if err != nil {
+			return err
+		}
+		if !owned {
+			return jjNameTaken(slot, "")
+		}
+	}
+	return nil
+}
+
 // jjNameTaken is the CONFLICT of a jj slot whose workspace name its primary
 // already has for a checkout this stack's manifest does not account for
 // (plan D13): another stack of the same name sharing the source, a checkout
@@ -356,7 +390,7 @@ func jjNameTaken(slot vcs.Slot, elsewhere string) error {
 		where = "the checkout at " + elsewhere
 		paths = append(paths, elsewhere)
 	}
-	hint := fmt.Sprintf("Give one of the stacks that share it another name, or, if nothing uses the workspace, forget it with `jj -R %s workspace forget %s` and retry.", slot.Primary, slot.Name)
+	hint := fmt.Sprintf("Give one of the stacks that share it another name, or, if nothing uses the workspace, forget it with `jj -R %s workspace forget %s` and retry.", shellQuote(slot.Primary), shellQuote(slot.Name))
 	return &OperationError{
 		Code:    CodeConflict,
 		Paths:   paths,
@@ -365,25 +399,61 @@ func jjNameTaken(slot vcs.Slot, elsewhere string) error {
 	}
 }
 
-// forgetJJName frees the name of a jj slot that a rollback or destroy removed
-// without its primary's lock, which the primary's next prune does not do for
-// jj. With the slot's directory gone, the forget changes only jj's own
-// record (jjdriver.Driver.ForgetName), so it needs no lock; it runs on a
-// context of its own, since the lock's wait may have used up the caller's.
-func forgetJJName(ctx context.Context, driver vcs.Driver, slot vcs.Slot) error {
+// removeJJSlotUnlocked removes a jj slot through dest without its primary's
+// lock, for a rollback or destroy that cannot take it, and frees its name,
+// which the primary's next prune does not do for jj. The slot's working-copy
+// change is read first (HeldChange), and the name forgotten after the
+// directory is gone only while it still has that change: with the directory
+// gone, the forget changes only jj's own record (jjdriver.Driver.ForgetName),
+// so it needs no lock, and a workspace of the same name the lock's holder
+// added meanwhile is left alone. A path that is not the name's checkout is
+// removed with its name left as it is. The jj calls run on a context of
+// their own, since the lock's wait may have used up the caller's.
+func removeJJSlotUnlocked(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath) error {
 	jj, ok := driver.(jjLifecycle)
 	if !ok || slot.Name == "" {
+		return dest.RemoveAll()
+	}
+	jjCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackForgetTimeout)
+	defer cancel()
+	change, err := jj.HeldChange(jjCtx, slot, slot.Path)
+	if err != nil {
+		change = ""
+		logctx.From(ctx).Warn(fmt.Sprintf("could not tell whether %s is jj workspace %q of %s: %v", slot.Path, slot.Name, slot.Primary, err))
+	}
+	if err := dest.RemoveAll(); err != nil {
+		return err
+	}
+	if change == "" {
+		logctx.From(ctx).Warn(fmt.Sprintf("removed %s without forgetting jj workspace %q of %s, whose checkout it was not", slot.Path, slot.Name, slot.Primary))
 		return nil
 	}
-	forgetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackForgetTimeout)
-	defer cancel()
-	if err := jj.ForgetName(forgetCtx, slot); err != nil {
-		return fmt.Errorf("forget jj workspace %q of %s, so its name stays taken until `jj -R %s workspace forget %s`: %w", slot.Name, slot.Primary, slot.Primary, slot.Name, err)
+	if err := jj.ForgetName(jjCtx, slot, change); err != nil {
+		return fmt.Errorf("forget jj workspace %q of %s, so its name stays taken until `jj -R %s workspace forget %s`: %w", slot.Name, slot.Primary, shellQuote(slot.Primary), shellQuote(slot.Name), err)
 	}
 	return nil
 }
 
-// rollbackForgetTimeout bounds forgetJJName.
+// destroyedJJSlot names the jj workspace that the checkout at slot.Path is,
+// for a destroy that is about to forget it: the name the manifest computes
+// now (jjWorkspaceNames) can differ from the one the slot was made under, as
+// when an optional sibling of one primary was skipped at create, or a slot
+// was added or removed since. So the name forgotten is the one the checkout
+// itself holds (HeldChange), of the two this stack could have given it, and
+// none when it holds neither: the slot is then removed from disk only.
+func (p *Platform) destroyedJJSlot(ctx context.Context, jj jjLifecycle, stack *manifest.Stack, workspaceName, slotName string, slot vcs.Slot) (vcs.Slot, bool) {
+	base := stack.Name + "--" + workspaceName
+	for _, name := range []string{base, base + "--" + slotName} {
+		candidate := slot
+		candidate.Name = name
+		if change, err := jj.HeldChange(ctx, candidate, slot.Path); err == nil && change != "" {
+			return candidate, true
+		}
+	}
+	return slot, false
+}
+
+// rollbackForgetTimeout bounds removeJJSlotUnlocked's jj calls.
 const rollbackForgetTimeout = 30 * time.Second
 
 // errJJSlotNotYet is what a verb phase 8 of the jj plan has not implemented
@@ -455,8 +525,10 @@ const maxNestedShown = 10
 // clean and pushed over the work it holds, and only the destroy guard, which
 // would delete it, looks (owner, 2026-10-29; plan Q10). It walks the slot
 // through os.Root, following no link and skipping nothing else, and does not
-// descend into the repository metadata it finds.
-func nestedRepositories(path string) ([]string, error) {
+// descend into the repository metadata it finds. skip lists the paths,
+// relative to the slot, of the workspace's other slots nested in it, which
+// are checkouts the guard reads on their own.
+func nestedRepositories(path string, skip []string) ([]string, error) {
 	root, err := os.OpenRoot(path)
 	if err != nil {
 		return nil, err
@@ -469,6 +541,8 @@ func nestedRepositories(path string) ([]string, error) {
 		}
 		base := entry.Name()
 		switch {
+		case entry.IsDir() && slices.Contains(skip, name):
+			return fs.SkipDir
 		case name == "." || base != ".git" && base != ".jj":
 			return nil
 		case name == base:
@@ -485,7 +559,37 @@ func nestedRepositories(path string) ([]string, error) {
 		}
 		return nil
 	})
-	return found, err
+	if err != nil {
+		return nil, fmt.Errorf("%w; make it readable or remove it, since jj does not record what a repository there holds", err)
+	}
+	return found, nil
+}
+
+// nestedSlots lists the paths, relative to the slot at subpath, of the other
+// slots of sources that lie inside it, slash-separated as fs.WalkDir names
+// them.
+func nestedSlots(subpath string, sources map[string]manifest.WorkspaceSource, self string) []string {
+	var nested []string
+	for slot, ws := range sources {
+		if slot == self {
+			continue
+		}
+		other := ws.Subpath
+		if other == "" {
+			other = slot
+		}
+		other, err := normalizeWorkspaceSubpath(other)
+		if err != nil {
+			continue
+		}
+		switch {
+		case subpath == ".":
+			nested = append(nested, other)
+		case strings.HasPrefix(other, subpath+"/"):
+			nested = append(nested, strings.TrimPrefix(other, subpath+"/"))
+		}
+	}
+	return nested
 }
 
 // nestedRepositoriesReason says why a destroy keeps a jj slot that holds

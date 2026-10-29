@@ -604,7 +604,12 @@ workspaces:
 - **A name already taken.** When the primary already has a workspace of
   that name that this stack's manifest does not account for, such as one of
   another stack with the same name that shares the cache, the create is
-  refused as a conflict naming it, and nothing is forgotten.
+  refused as a conflict naming it, and nothing is forgotten. A slot whose
+  directory is gone is added again under its name only when nothing else is
+  at the path jj recorded for it; for a cache outside the stack root, where
+  that path may be another stack's out of angee's sight, the conflict says
+  to forget the name with `jj workspace forget` instead. Destroy forgets
+  only the workspace the slot's own checkout is.
 - **Requirements.** jj with `jj workspace add --colocate` (a current build,
   such as `brew install --HEAD jj`), git 2.48 or later, since jj's add sets
   `extensions.relativeWorktrees` on the cache, and not Windows. A create
@@ -614,7 +619,8 @@ workspaces:
   outside it (an absolute `cache_path`) must already exist where angee runs,
   so an operator in a container must mount it at the same path. Otherwise
   the create is refused naming the path, rather than cloning a cache only
-  the container sees.
+  the container sees. The primary's lock file, `.<name>.angee.lock`, is
+  written beside a local store too.
 - **What angee does with one.** `workspace create`, `status`, `git`,
   `repair` and `destroy` handle jj slots: status reads them through jj,
   which snapshots the working copy first, so an edit no jj command has

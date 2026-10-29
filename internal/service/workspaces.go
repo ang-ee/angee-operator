@@ -434,6 +434,14 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.State = "ready"
 		return status
 	}
+	if jjSlot {
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			status.State = "error"
+			status.Pushed = false
+			status.Error = fmt.Sprintf("%s is a link, not a jj workspace: a jj slot is never linked", path)
+			return status
+		}
+	}
 	if !jjSlot && wsSource.Mode != manifest.WorkspaceSourceModeWorktree {
 		p.reportCloneSlotRemotes(ctx, workspaceName, slot, path, source, wsSource)
 	}
@@ -605,6 +613,11 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 			}
 			return err
 		}
+		// A link at a jj slot's path, left from when the slot linked a local
+		// source, holds nothing of its own: destroy removes only the link.
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 && wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+			continue
+		}
 		// A jj slot's status snapshots its working copy first, so an edit no
 		// jj command has recorded yet counts as uncommitted (plan D7).
 		target := workspaceVCSSlot(path, source, wsSource)
@@ -624,7 +637,8 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		// jj records no repository nested in a jj slot, such as a clone an
 		// agent made in it, so its status says nothing of their work.
 		if wsSource.Mode == manifest.WorkspaceSourceModeJJ {
-			nested, err := nestedRepositories(path)
+			subpath, _, _ := p.workspaceSourcePath(workspaceName, slot, wsSource)
+			nested, err := nestedRepositories(path, nestedSlots(subpath, workspace.Sources, slot))
 			if err != nil {
 				return fmt.Errorf("workspace %q source %q: look for repositories inside it: %w", workspaceName, slot, err)
 			}
@@ -1191,6 +1205,11 @@ func inspectWorkspaceSlot(path string, source manifest.Source, mode string) (wor
 		return 0, err
 	}
 	isLink := info.Mode()&os.ModeSymlink != 0
+	if isLink && mode == manifest.WorkspaceSourceModeJJ {
+		// A jj slot is made in place, never linked: a link is what a local
+		// source left from before its slots became jj slots.
+		return workspaceSlotNotCheckout, nil
+	}
 	if isLink {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return workspaceSlotDangling, nil
@@ -1546,8 +1565,8 @@ func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 // rollback's deadline or ANGEE_LOCK_TIMEOUT), the slot is still removed
 // through dest, and the primary keeps its git registration until its next
 // prune. A jj slot's name is not pruned, so it is forgotten once the
-// directory is gone, which needs no lock (forgetJJName); otherwise the name
-// would stay taken and refuse the next create of the slot.
+// directory is gone, which needs no lock (removeJJSlotUnlocked); otherwise
+// the name would stay taken and refuse the next create of the slot.
 func removeWorkspaceSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath) error {
 	switch {
 	case driver == nil:
@@ -1560,10 +1579,10 @@ func removeWorkspaceSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, 
 		return err
 	}
 	logctx.From(ctx).Warn(fmt.Sprintf("removing %s without deregistering it from source cache %s (%v); the cache drops the registration when it is next pruned", slot.Path, slot.Primary, err))
-	if err := dest.RemoveAll(); err != nil {
-		return err
+	if slot.Mode == vcs.ModeJJ {
+		return removeJJSlotUnlocked(ctx, driver, slot, dest)
 	}
-	return forgetJJName(ctx, driver, slot)
+	return dest.RemoveAll()
 }
 
 // restoreEmptyDir puts back the empty directory a jj slot was made in, once
@@ -1655,6 +1674,7 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			if item.optional {
 				// An optional source that cannot be materialized is skipped by
 				// design, so the phase completes normally rather than as a failure.
+				logctx.From(ctx).Warn(fmt.Sprintf("skipping optional source slot %q: %v", item.slot, err))
 				finish(nil)
 				continue
 			}
@@ -1707,16 +1727,17 @@ func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *worksp
 // workspace: git and jj slots through their drivers, which also deregister
 // linked worktrees from their caches and forget jj workspaces, and local
 // links directly. Every destination is removed through a stack-rooted
-// capability; per-source cleanup is best effort. A jj slot whose workspace
-// name cannot be computed (jjWorkspaceNames) is removed from disk only, with
-// a warning that its name stays taken.
+// capability; per-source cleanup is best effort. A jj slot's workspace is
+// forgotten only when the checkout at its path is that workspace
+// (destroyedJJSlot), so a name another checkout now has, such as another
+// stack's of the same name, is never forgotten; otherwise the slot is removed
+// from disk only, with a warning.
 func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, sources map[string]manifest.WorkspaceSource) {
 	type materializedSource struct {
 		dest   string
 		driver vcs.Driver // nil for a local source's link
 		slot   vcs.Slot
 	}
-	jjNames, jjNamesErr := p.jjWorkspaceNames(stack, workspaceName, sources)
 	var materialized []materializedSource
 	for slot, ws := range sources {
 		subpath := ws.Subpath
@@ -1728,12 +1749,18 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 		source, ok := stack.Sources[ws.Source]
 		switch {
 		case !ok:
-		case ws.Mode == manifest.WorkspaceSourceModeJJ && jjNamesErr != nil:
-			logctx.From(ctx).Warn(fmt.Sprintf("removing jj slot %s without forgetting its jj workspace: %v", item.dest, jjNamesErr))
 		case ws.Mode == manifest.WorkspaceSourceModeJJ:
-			item.slot = p.workspaceLifecycleSlot(item.dest, source, ws)
-			item.slot.Name = jjNames[slot]
-			item.driver = p.slotDriver(item.slot)
+			jjSlot := p.workspaceLifecycleSlot(item.dest, source, ws)
+			driver := p.slotDriver(jjSlot)
+			jj, isJJ := driver.(jjLifecycle)
+			if !isJJ {
+				break
+			}
+			if named, held := p.destroyedJJSlot(ctx, jj, stack, workspaceName, slot, jjSlot); held {
+				item.slot, item.driver = named, driver
+			} else {
+				logctx.From(ctx).Warn(fmt.Sprintf("removing jj slot %s without forgetting a jj workspace: it is no checkout of %s this stack made", item.dest, jjSlot.Primary))
+			}
 		case source.Kind == "git":
 			item.slot = p.workspaceLifecycleSlot(item.dest, source, ws)
 			item.driver = p.slotDriver(item.slot)

@@ -2,6 +2,7 @@ package jjdriver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -161,22 +162,25 @@ func TestHolds(t *testing.T) {
 	}
 }
 
-// TestElsewhere finds a name's live checkout at another path, and nothing
-// when the name is free, when its checkout is the slot's own path, or when
-// jj's record of its path leads nowhere.
+// TestElsewhere fails closed: it finds a name's checkout at another path,
+// even one jj cannot load there, and nothing when the name is free or its
+// checkout is the slot's own path. A record jj cannot resolve, because the
+// checkout is gone or out of sight, is ErrRootUnresolved, never "free".
 func TestElsewhere(t *testing.T) {
 	f := newPrimary(t)
 	ctx := context.Background()
 	d := driver()
 	live := f.slotSpec("workspaces/a/src", "stack--ws", "")
-	if err := f.add(live); err != nil {
-		t.Fatalf("Add() error = %v", err)
+	unreadable := f.slotSpec("workspaces/u/src", "stack--u", "")
+	for _, s := range []vcs.Slot{live, unreadable} {
+		if err := f.add(s); err != nil {
+			t.Fatalf("Add(%s) error = %v", s.Name, err)
+		}
 	}
 	moved := f.slotSpec("workspaces/b/src", "stack--ws", "")
 	free := f.slotSpec("workspaces/c/src", "stack--free", "")
 
-	got, err := d.Elsewhere(ctx, moved)
-	if err != nil || !samePath(got, live.Path) {
+	if got, err := d.Elsewhere(ctx, moved); err != nil || !samePath(got, live.Path) {
 		t.Errorf("Elsewhere(another path) = %q, %v; want %s", got, err, live.Path)
 	}
 	for name, s := range map[string]vcs.Slot{"its own path": live, "a free name": free} {
@@ -184,11 +188,21 @@ func TestElsewhere(t *testing.T) {
 			t.Errorf("Elsewhere(%s) = %q, %v; want none", name, got, err)
 		}
 	}
+	jjDir := filepath.Join(unreadable.Path, ".jj")
+	if err := os.Chmod(jjDir, 0); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(jjDir, 0o755) })
+	elsewhere := unreadable
+	elsewhere.Path = filepath.Join(f.root, "workspaces", "v", "src")
+	if got, err := d.Elsewhere(ctx, elsewhere); err != nil || !samePath(got, unreadable.Path) {
+		t.Errorf("Elsewhere() of a checkout jj cannot load = %q, %v; want %s", got, err, unreadable.Path)
+	}
 	if err := os.RemoveAll(live.Path); err != nil {
 		t.Fatalf("RemoveAll() error = %v", err)
 	}
-	if got, err := d.Elsewhere(ctx, moved); got != "" || err != nil {
-		t.Errorf("Elsewhere() once the checkout is gone = %q, %v; want none", got, err)
+	if got, err := d.Elsewhere(ctx, moved); got != "" || !errors.Is(err, ErrRootUnresolved) {
+		t.Errorf("Elsewhere() once the checkout is gone = %q, %v; want ErrRootUnresolved", got, err)
 	}
 }
 
@@ -207,8 +221,12 @@ func TestForgetName(t *testing.T) {
 			t.Fatalf("Add(%s) error = %v", slot.Name, err)
 		}
 	}
+	change, err := d.HeldChange(ctx, s, s.Path)
+	if err != nil || change == "" {
+		t.Fatalf("HeldChange() = %q, %v; want the slot's change", change, err)
+	}
 	op := f.opHead()
-	if err := d.ForgetName(ctx, s); err == nil || !strings.Contains(err.Error(), "still exists") {
+	if err := d.ForgetName(ctx, s, change); err == nil || !strings.Contains(err.Error(), "still exists") {
 		t.Errorf("ForgetName() with the checkout in place error = %v, want a refusal", err)
 	}
 	if got := f.opHead(); got != op {
@@ -224,7 +242,7 @@ func TestForgetName(t *testing.T) {
 	if len(regs) != 2 {
 		t.Fatalf("git worktrees besides the primary = %q, want both slots', prunable", regs)
 	}
-	if err := d.ForgetName(ctx, s); err != nil {
+	if err := d.ForgetName(ctx, s, change); err != nil {
 		t.Fatalf("ForgetName() error = %v", err)
 	}
 	if names := f.workspaceNames(); slices.Contains(names, s.Name) || !slices.Contains(names, unrelated.Name) {
@@ -232,6 +250,22 @@ func TestForgetName(t *testing.T) {
 	}
 	if got := f.registrations(); !slices.Equal(got, regs) {
 		t.Errorf("git worktrees = %q, want them as they were: %q", got, regs)
+	}
+	if err := d.ForgetName(ctx, s, change); err != nil {
+		t.Errorf("ForgetName() of a name already forgotten error = %v, want nothing to do", err)
+	}
+
+	// A workspace of the same name added meanwhile, as the lock's holder
+	// could, has another change, and is left alone.
+	again := f.slotSpec("workspaces/c/src", s.Name, "")
+	if err := f.add(again); err != nil {
+		t.Fatalf("Add(again) error = %v", err)
+	}
+	if err := d.ForgetName(ctx, s, change); err == nil || !strings.Contains(err.Error(), "no longer the slot") {
+		t.Errorf("ForgetName() of a name re-added elsewhere error = %v, want a refusal", err)
+	}
+	if names := f.workspaceNames(); !slices.Contains(names, s.Name) {
+		t.Errorf("workspaces = %q, want the re-added %s kept", names, s.Name)
 	}
 }
 
@@ -245,10 +279,14 @@ func TestAddOverAStaleRegistration(t *testing.T) {
 	if err := f.add(s); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
+	change, err := driver().HeldChange(ctx, s, s.Path)
+	if err != nil {
+		t.Fatalf("HeldChange() error = %v", err)
+	}
 	if err := os.RemoveAll(s.Path); err != nil {
 		t.Fatalf("RemoveAll() error = %v", err)
 	}
-	if err := driver().ForgetName(ctx, s); err != nil {
+	if err := driver().ForgetName(ctx, s, change); err != nil {
 		t.Fatalf("ForgetName() error = %v", err)
 	}
 	if regs := f.registrations(); len(regs) != 1 || !strings.Contains(regs[0], "prunable") {
@@ -262,5 +300,26 @@ func TestAddOverAStaleRegistration(t *testing.T) {
 	}
 	if got := f.gitOut(s.Path, "rev-parse", "--is-inside-work-tree"); got != "true" {
 		t.Errorf("git rev-parse --is-inside-work-tree in the new slot = %q, want true", got)
+	}
+}
+
+// TestAddLeavesOtherStaleRegistrations prunes nothing when git registers no
+// worktree at the new slot's path: a prune would also drop registrations of
+// checkouts this process cannot see, such as another stack's from inside a
+// container.
+func TestAddLeavesOtherStaleRegistrations(t *testing.T) {
+	f := newPrimary(t)
+	gone := f.slotSpec("workspaces/a/src", "stack--a", "")
+	if err := f.add(gone); err != nil {
+		t.Fatalf("Add(a) error = %v", err)
+	}
+	if err := os.RemoveAll(gone.Path); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	if err := f.add(f.slotSpec("workspaces/b/src", "stack--b", "")); err != nil {
+		t.Fatalf("Add(b) error = %v", err)
+	}
+	if regs := f.registrations(); len(regs) != 2 || !slices.ContainsFunc(regs, func(r string) bool { return strings.Contains(r, "prunable") }) {
+		t.Errorf("git worktrees = %q, want a's, still prunable, and b's", regs)
 	}
 }
