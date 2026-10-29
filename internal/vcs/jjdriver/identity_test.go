@@ -210,3 +210,35 @@ func TestIdentityFallbackCommits(t *testing.T) {
 		})
 	}
 }
+
+// A jj config jj cannot read adds no identity, even where git has one: a
+// guess must never override an identity jj has. A resolution its context
+// cut short is not kept, so the next run of the driver resolves it.
+func TestIdentityFallbackAddsNothingItCouldNotRead(t *testing.T) {
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n", "git-var": "Git User <git@example.com> 1793222148 -0400\n",
+		"jj-config-user": "user.email\t\"\"\nuser.name\t\"\"\n", "fail-on": "config\n"})
+	unsetEnv(t, "JJ_USER", "JJ_EMAIL")
+	unsetEnv(t, append(slices.Clone(git.IdentityEnvKeys), "EMAIL")...)
+	slot := t.TempDir()
+	for _, dir := range []string{".jj", ".git"} {
+		if err := os.Mkdir(filepath.Join(slot, dir), 0o755); err != nil {
+			t.Fatalf("Mkdir() error = %v", err)
+		}
+	}
+	id := &identity{git: git.New()}
+	if got := id.env(context.Background(), runner{}, slot); got != nil {
+		t.Fatalf("env() with jj's config unreadable = %q, want none", got)
+	}
+	if err := os.Remove(filepath.Join(home, "fail-on")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	id = &identity{git: git.New()}
+	if got := id.env(canceled, runner{}, slot); got != nil {
+		t.Fatalf("env() on a cancelled context = %q, want none", got)
+	}
+	if got, want := id.env(context.Background(), runner{}, slot), []string{"JJ_USER=Git User", "JJ_EMAIL=git@example.com"}; !slices.Equal(got, want) {
+		t.Fatalf("env() after a cancelled one = %q, want it resolved again: %q", got, want)
+	}
+}
