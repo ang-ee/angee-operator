@@ -845,10 +845,9 @@ func TestJJSlotRollbackWhileTheCacheLockIsHeld(t *testing.T) {
 	}
 }
 
-// nestedRepositories finds the .git directories and files and the .jj
-// directories below a slot's own, and nothing a link leads to: a link named
-// .git, a link to a repository, and the metadata of a nested repository are
-// not looked into.
+// nestedRepositories finds every .git and .jj below a slot's own, whatever
+// they are, links included, and nothing a link leads to: a link to a
+// repository, and the metadata of a nested repository, are not looked into.
 func TestNestedRepositories(t *testing.T) {
 	slot, outside := filepath.Join(t.TempDir(), "slot"), t.TempDir()
 	for _, dir := range []string{".jj/working_copy", "a/b/.git/objects", "a/b/.git/x/.jj", "c/.jj", "node_modules/pkg/.git"} {
@@ -865,13 +864,17 @@ func TestNestedRepositories(t *testing.T) {
 		}
 	}
 	mustMkdirAll(t, filepath.Join(slot, "slots", "inner", ".git"))
-	got, err := nestedRepositories(slot, []string{"slots/inner"})
+	got, err := nestedRepositories(slot, []string{"slots/inner"}, true)
 	if err != nil {
 		t.Fatalf("nestedRepositories() error = %v", err)
 	}
-	want := []string{filepath.FromSlash("a/b/.git"), filepath.FromSlash("c/.jj"), filepath.FromSlash("d/.git"), filepath.FromSlash("node_modules/pkg/.git")}
+	want := []string{filepath.FromSlash("a/b/.git"), filepath.FromSlash("c/.jj"), filepath.FromSlash("d/.git"), filepath.FromSlash("e/.git"), filepath.FromSlash("node_modules/pkg/.git")}
 	if !slices.Equal(got, want) {
-		t.Errorf("nestedRepositories() = %q, want %q, leaving the other slot at slots/inner to its own status", got, want)
+		t.Errorf("nestedRepositories() = %q, want %q: a link named .git counts, and the other slot at slots/inner is left to its own status", got, want)
+	}
+	// A slot that is not colocated has no .git of its own at its top.
+	if got, err := nestedRepositories(slot, []string{"slots/inner"}, false); err != nil || !slices.Equal(got, append([]string{".git"}, want...)) {
+		t.Errorf("nestedRepositories() of a slot not colocated = %q, %v; want its top .git counted too", got, err)
 	}
 	sources := map[string]manifest.WorkspaceSource{
 		"root": {Source: "app", Subpath: "."}, "inner": {Source: "app", Subpath: "slots/inner"},
@@ -1104,5 +1107,147 @@ func TestJJSlotDestroyWithItsBaseGone(t *testing.T) {
 	}
 	if !pathExists(t, filepath.Join(f.workspace("ws"), "work", "new.txt")) {
 		t.Errorf("a refused destroy removed the slot's work")
+	}
+}
+
+// Repair adds a jj slot whose directory was deleted again under the name
+// create gave it, which the primary records at the slot's path, rather than
+// the name the manifest computes now: create counted an optional sibling of
+// the same cache, which was skipped and never recorded. Destroy then forgets
+// it, and the workspace can be created again.
+func TestJJSlotRepairKeepsTheNameCreateGave(t *testing.T) {
+	f := newJJFixture(t, "")
+	ctx := context.Background()
+	template := f.template("siblings", map[string]string{
+		"a": f.app("mode: jj\nref: main\nsubpath: a"),
+		"b": f.app("mode: jj\nref: no-such-base\nsubpath: b\noptional: true"),
+	})
+	if err := f.create(template, "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	if names := sortedKeys(f.jjWorkspaces(f.cache())); !slices.Equal(names, []string{"default", "dev--ws--a"}) {
+		t.Fatalf("jj workspaces after create = %q, want default and dev--ws--a", names)
+	}
+	if err := os.RemoveAll(filepath.Join(f.workspace("ws"), "a")); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	if result, err := f.platform.WorkspaceRepair(ctx, "ws"); err != nil {
+		t.Fatalf("WorkspaceRepair() error = %v (%+v)", err, result)
+	}
+	if names := sortedKeys(f.jjWorkspaces(f.cache())); !slices.Equal(names, []string{"default", "dev--ws--a"}) {
+		t.Errorf("jj workspaces after repair = %q, want dev--ws--a added again, and no dev--ws", names)
+	}
+	if err := f.platform.WorkspaceDestroy(ctx, "ws", true); err != nil {
+		t.Fatalf("WorkspaceDestroy() error = %v", err)
+	}
+	if names := sortedKeys(f.jjWorkspaces(f.cache())); !slices.Equal(names, []string{"default"}) {
+		t.Errorf("jj workspaces after destroy = %q, want only the cache's own", names)
+	}
+	if err := f.create(template, "ws", false); err != nil {
+		t.Errorf("WorkspaceCreate() again error = %v", err)
+	}
+}
+
+// A cache whose path is inside the stack root only by its spelling, through
+// a symlink to a shared directory, is shared: a record of another path jj
+// cannot resolve there is not this stack's to forget, and a missing cache
+// there is not cloned through the link.
+func TestJJSlotCacheSharedThroughASymlink(t *testing.T) {
+	f := newJJFixture(t, "")
+	shared := filepath.Join(f.base, "shared")
+	mustMkdirAll(t, shared)
+	runGit(t, f.base, "clone", "-q", f.remote, filepath.Join(shared, "app"))
+	otherRoot := filepath.Join(f.base, "other", ".angee")
+	f.writeStack(otherRoot, "")
+	other, err := New(otherRoot)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	direct := f.template("direct", map[string]string{"work": "source: app\nkind: git\nrepo: " + f.remote + "\ndefault_ref: main\ncache_path: " + filepath.Join(shared, "app") + "\nmode: jj\nref: main\nsubpath: work"})
+	if _, err := other.WorkspaceCreate(context.Background(), api.WorkspaceCreateRequest{Template: direct, Name: "ws"}); err != nil {
+		t.Fatalf("WorkspaceCreate() in the other stack error = %v", err)
+	}
+	theirs := filepath.Join(otherRoot, "workspaces", "ws", "work")
+	if err := os.Rename(theirs, theirs+"-hidden"); err != nil {
+		t.Fatalf("Rename() error = %v", err)
+	}
+	change := f.jjWorkspaces(filepath.Join(shared, "app"))["dev--ws"]
+
+	if err := os.Symlink(shared, filepath.Join(f.root, ".cache")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	stack, err := manifest.LoadFile(manifest.Path(f.root))
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	linked := f.template("linked", map[string]string{"work": f.app("mode: jj\nref: main\nsubpath: work")})
+	stack.Sources = map[string]manifest.Source{"app": {Kind: "git", Repo: f.remote, DefaultRef: "main", CachePath: ".cache/app"}}
+	stack.Workspaces = map[string]manifest.Workspace{"ws": {Template: linked, Sources: map[string]manifest.WorkspaceSource{
+		"work": {Source: "app", Mode: manifest.WorkspaceSourceModeJJ, Ref: "main", Subpath: "work"},
+	}}}
+	if err := manifest.SaveFile(manifest.Path(f.root), stack); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	err = f.create(linked, "ws", false)
+	if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodeConflict || !strings.Contains(err.Error(), `jj workspace "dev--ws"`) {
+		t.Fatalf("WorkspaceCreate() over a cache shared through a symlink error = %v, want a CONFLICT", err)
+	}
+	if got := f.jjWorkspaces(filepath.Join(shared, "app"))["dev--ws"]; got != change {
+		t.Errorf("the other stack's dev--ws = %q, want %s kept", got, change)
+	}
+
+	f.platform.jjProbe = supportedJJ
+	err = f.create(f.template("missing", map[string]string{"work": "source: lib\nkind: git\nrepo: " + f.remote + "\ndefault_ref: main\ncache_path: .cache/lib\nmode: jj\nref: main\nsubpath: work"}), "lib", false)
+	if opErr := AsOperationError(err); opErr == nil || opErr.Code != CodePreconditionFailed || !strings.Contains(err.Error(), "mount") {
+		t.Fatalf("WorkspaceCreate() of a missing cache behind the symlink error = %v, want it refused", err)
+	}
+	if pathExists(t, filepath.Join(shared, "lib")) {
+		t.Errorf("the refused create cloned a cache through the symlink")
+	}
+}
+
+// Destroy lets a jj slot whose directory is empty go, as repair takes it for
+// a missing slot, and forgets the workspace jj recorded there.
+func TestJJSlotDestroyOverAnEmptyDirectory(t *testing.T) {
+	f := newJJFixture(t, "")
+	if err := f.create(f.template("jj", map[string]string{"work": f.app("mode: jj\nref: main\nsubpath: work")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	work := filepath.Join(f.workspace("ws"), "work")
+	if err := os.RemoveAll(work); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+	mustMkdirAll(t, work)
+	if err := f.platform.WorkspaceDestroy(context.Background(), "ws", true); err != nil {
+		t.Fatalf("WorkspaceDestroy() error = %v", err)
+	}
+	if names := sortedKeys(f.jjWorkspaces(f.cache())); !slices.Equal(names, []string{"default"}) {
+		t.Errorf("jj workspaces after the destroy = %q, want dev--ws forgotten", names)
+	}
+	if regs := f.registrations(f.cache()); len(regs) != 0 {
+		t.Errorf("git worktrees after the destroy = %q, want none", regs)
+	}
+}
+
+// Destroy removes its slots on a context the request cannot cancel: with the
+// request's context already cancelled, a jj slot's name is still forgotten,
+// not left taken by a read that could not run.
+func TestJJSlotDestroyCleanupOutlivesTheRequest(t *testing.T) {
+	f := newJJFixture(t, "")
+	if err := f.create(f.template("jj", map[string]string{"work": f.app("mode: jj\nref: main\nsubpath: work")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	stack, err := manifest.LoadFile(manifest.Path(f.root))
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.platform.removeWorkspaceSources(ctx, stack, "ws", f.workspace("ws"), stack.Workspaces["ws"].Sources)
+	if pathExists(t, filepath.Join(f.workspace("ws"), "work")) {
+		t.Errorf("the slot is still there")
+	}
+	if names := sortedKeys(f.jjWorkspaces(f.cache())); !slices.Equal(names, []string{"default"}) {
+		t.Errorf("jj workspaces = %q, want dev--ws forgotten", names)
 	}
 }

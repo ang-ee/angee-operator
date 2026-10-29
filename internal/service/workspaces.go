@@ -613,10 +613,23 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 			}
 			return err
 		}
-		// A link at a jj slot's path, left from when the slot linked a local
-		// source, holds nothing of its own: destroy removes only the link.
-		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 && wsSource.Mode == manifest.WorkspaceSourceModeJJ {
-			continue
+		if wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+			// A link at a jj slot's path, left from when the slot linked a
+			// local source, and an empty directory, which repair takes for a
+			// missing slot, hold nothing of their own: destroy removes only
+			// them.
+			info, err := os.Lstat(path)
+			if err != nil {
+				return err
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+			if empty, err := emptyDirectory(path); err != nil {
+				return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+			} else if empty {
+				continue
+			}
 		}
 		// A jj slot's status snapshots its working copy first, so an edit no
 		// jj command has recorded yet counts as uncommitted (plan D7).
@@ -638,7 +651,8 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		// agent made in it, so its status says nothing of their work.
 		if wsSource.Mode == manifest.WorkspaceSourceModeJJ {
 			subpath, _, _ := p.workspaceSourcePath(workspaceName, slot, wsSource)
-			nested, err := nestedRepositories(path, nestedSlots(subpath, workspace.Sources, slot))
+			_, colocatedErr := os.Lstat(filepath.Join(p.sourcePath(wsSource.Source, source), ".git"))
+			nested, err := nestedRepositories(path, nestedSlots(subpath, workspace.Sources, slot), colocatedErr == nil)
 			if err != nil {
 				return fmt.Errorf("workspace %q source %q: look for repositories inside it: %w", workspaceName, slot, err)
 			}
@@ -1585,6 +1599,10 @@ func removeWorkspaceSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, 
 	return dest.RemoveAll()
 }
 
+// slotCleanupTimeout bounds the removal of one slot by a destroy, which runs
+// on a context the request cannot cancel.
+const slotCleanupTimeout = 30 * time.Second
+
 // restoreEmptyDir puts back the empty directory a jj slot was made in, once
 // the slot is removed, with the permissions of mode, the directory's mode as
 // Lstat read it; 0 means there was none.
@@ -1731,8 +1749,12 @@ func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *worksp
 // forgotten only when the checkout at its path is that workspace
 // (destroyedJJSlot), so a name another checkout now has, such as another
 // stack's of the same name, is never forgotten; otherwise the slot is removed
-// from disk only, with a warning.
+// from disk only, with a warning. Destroy calls it once the manifest no
+// longer records the workspace, so each slot is removed on a context of its
+// own, as a rollback's is: a request cancelled now would otherwise fail the
+// read that tells whose a jj slot's name is, and leave the name taken.
 func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, sources map[string]manifest.WorkspaceSource) {
+	ctx = context.WithoutCancel(ctx)
 	type materializedSource struct {
 		dest   string
 		driver vcs.Driver // nil for a local source's link
@@ -1756,7 +1778,10 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 			if !isJJ {
 				break
 			}
-			if named, held := p.destroyedJJSlot(ctx, jj, stack, workspaceName, slot, jjSlot); held {
+			slotCtx, cancel := context.WithTimeout(ctx, slotCleanupTimeout)
+			named, held := p.destroyedJJSlot(slotCtx, jj, stack, workspaceName, slot, jjSlot)
+			cancel()
+			if held {
 				item.slot, item.driver = named, driver
 			} else {
 				logctx.From(ctx).Warn(fmt.Sprintf("removing jj slot %s without forgetting a jj workspace: it is no checkout of %s this stack made", item.dest, jjSlot.Primary))
@@ -1777,9 +1802,14 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 		}
 		dest, err := copierx.OpenGuardedPath(p.root, p.root, filepath.ToSlash(rel), nil)
 		if err != nil {
+			logctx.From(ctx).Warn(fmt.Sprintf("leaving source slot %s for the workspace's removal: %v", item.dest, err))
 			continue
 		}
-		_ = removeWorkspaceSlot(ctx, item.driver, item.slot, dest)
+		slotCtx, cancel := context.WithTimeout(ctx, slotCleanupTimeout)
+		if err := removeWorkspaceSlot(slotCtx, item.driver, item.slot, dest); err != nil {
+			logctx.From(ctx).Warn(fmt.Sprintf("removing source slot %s: %v", item.dest, err))
+		}
+		cancel()
 		_ = dest.Close()
 	}
 }

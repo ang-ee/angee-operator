@@ -32,11 +32,12 @@ latest tag.
     where the manifest says: a cache outside the stack root must already
     exist, so a container must mount it at the same path.
   - `--sync` keeps a jj slot that is still its workspace's checkout, with
-    its uncommitted work; a slot whose directory is gone is added again by
-    repair. Rollback and `destroy --purge` forget the slot's jj workspace
-    and leave no git worktree registration, also when the cache's lock
+    its uncommitted work; a slot whose directory is gone, or empty, is added
+    again by repair, under the name it had. Rollback and `destroy --purge`
+    forget the slot's jj workspace and drop its git worktree registration,
+    and no other, without pruning the cache, also when the cache's lock
     cannot be taken, and a rollback puts back an empty directory a slot was
-    made in.
+    made in. `destroy` lets a jj slot whose directory is empty go.
   - Status reads a jj slot through jj, which snapshots it first, so an edit
     no jj command has recorded yet is `dirty`; a jj slot is never
     `branch-mismatch`. `destroy` refuses a jj slot with work of its own, and

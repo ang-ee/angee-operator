@@ -211,7 +211,7 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 	var jj jjSlotTarget
 	if ws.Mode == manifest.WorkspaceSourceModeJJ {
 		var err error
-		if jj, err = p.recordedJJSlotTarget(stack, workspaceName, slot); err != nil {
+		if jj, err = p.recordedJJSlotTarget(ctx, stack, workspaceName, slot, source, ws, dest); err != nil {
 			return err
 		}
 	}

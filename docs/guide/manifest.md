@@ -605,11 +605,14 @@ workspaces:
   that name that this stack's manifest does not account for, such as one of
   another stack with the same name that shares the cache, the create is
   refused as a conflict naming it, and nothing is forgotten. A slot whose
-  directory is gone is added again under its name only when nothing else is
-  at the path jj recorded for it; for a cache outside the stack root, where
-  that path may be another stack's out of angee's sight, the conflict says
-  to forget the name with `jj workspace forget` instead. Destroy forgets
-  only the workspace the slot's own checkout is.
+  directory is gone is added again under its name when jj recorded the name
+  at the slot's own path, or nothing else is at the path it recorded; for a
+  cache outside the stack root (symlinks resolved), where that other path
+  may be another stack's out of angee's sight, the conflict says to forget
+  the name with `jj workspace forget` instead. Destroy forgets only the
+  workspace the slot's own checkout is, or that jj recorded at its path.
+  Removing a jj slot drops only that slot's git worktree registration,
+  never pruning the cache's others.
 - **Requirements.** jj with `jj workspace add --colocate` (a current build,
   such as `brew install --HEAD jj`), git 2.48 or later, since jj's add sets
   `extensions.relativeWorktrees` on the cache, and not Windows. A create
