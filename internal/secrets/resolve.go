@@ -15,6 +15,16 @@ import (
 type EnvLookup func(string) (string, bool)
 
 func ResolveDeclarations(ctx context.Context, backend Backend, declarations map[string]manifest.Secret, lookup EnvLookup) (map[string]string, error) {
+	return resolveDeclarations(ctx, backend, declarations, lookup, true)
+}
+
+// ReadDeclarations reads original declared key material without imports,
+// generation or persistence. Recovery must fail when original secrets are absent.
+func ReadDeclarations(ctx context.Context, backend Backend, declarations map[string]manifest.Secret) (map[string]string, error) {
+	return resolveDeclarations(ctx, backend, declarations, nil, false)
+}
+
+func resolveDeclarations(ctx context.Context, backend Backend, declarations map[string]manifest.Secret, lookup EnvLookup, materialize bool) (map[string]string, error) {
 	if lookup == nil {
 		lookup = func(string) (string, bool) { return "", false }
 	}
@@ -23,6 +33,9 @@ func ResolveDeclarations(ctx context.Context, backend Backend, declarations map[
 		value, ok, err := backend.Get(ctx, name)
 		if err != nil {
 			return nil, fmt.Errorf("get secret %q: %w", name, err)
+		}
+		if !ok && !materialize && (spec.Import != "" || spec.Generated || spec.Required) {
+			return nil, fmt.Errorf("original secret %q is missing; recovery capture never generates or imports replacement keys", name)
 		}
 		if !ok && spec.Import != "" {
 			importValue, err := importSecret(spec.Import, lookup)

@@ -126,7 +126,7 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
-	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, b.upArgs(target, false)...)
+	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, foregroundOptions{prompt: true}, b.upArgs(target, false)...)
 }
 
 // upArgs returns the `process-compose up` arguments for a detached or a
@@ -462,6 +462,14 @@ func (b Backend) awaitSupervisor(ctx context.Context, target runtime.Target) err
 	}
 }
 
+// ValidateJob reports native platform constraints without starting a workload.
+func (b Backend) ValidateJob(job runtime.JobSpec) error {
+	if job.Transient {
+		return transientJobSupport()
+	}
+	return nil
+}
+
 func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
 	name := job.Name
 	var document File
@@ -471,6 +479,9 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	process, ok := document.Processes[name]
 	if !ok {
 		return nil, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", name)
+	}
+	if job.Transient {
+		return b.runTransientJob(ctx, target, name, process)
 	}
 	target.Services = []string{name}
 	// Snapshot the job's process entry before triggering the re-run. Both the
@@ -868,8 +879,16 @@ func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Targe
 }
 
 // addMissingProcess round-trips every current native process configuration
-// before adding the compiled job. POST /project replaces the project set, so a
-// partial payload would remove unrelated processes.
+// before adding the compiled process. POST /project replaces the project set,
+// so a partial payload would remove unrelated processes.
+//
+// Apply and RunJob reach it for a process the stack declared after the
+// supervisor started, as a restart or a chained restart of a new service or
+// job does. On process-compose v1.120.0 the first such post also relaunches the
+// processes the supervisor loaded from its file (see upThroughSupervisor),
+// which is why Up refuses an unknown process instead. A transient job never
+// gets here: RunJob runs it under a private foreground supervisor
+// (runTransientJob) and leaves the shared project untouched.
 func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
 	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
 	list, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/processes", nil)
@@ -1528,8 +1547,14 @@ func (b Backend) run(ctx context.Context, root string, envFile string, args ...s
 	return b.Runner.Run(ctx, root, env, name, args...)
 }
 
-func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, args ...string) error {
-	name, err := b.processComposeBinary(ctx, b.input(), stdout, stderr, true)
+type foregroundOptions struct {
+	prompt    bool
+	isolated  bool
+	waitDelay time.Duration
+}
+
+func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, options foregroundOptions, args ...string) error {
+	name, err := b.processComposeBinary(ctx, b.input(), stdout, stderr, options.prompt)
 	if err != nil {
 		return err
 	}
@@ -1542,6 +1567,12 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 	cmd.Env = runtime.ChildEnviron(env)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.WaitDelay = options.waitDelay
+	if options.isolated {
+		if err := isolateForegroundCommand(cmd); err != nil {
+			return err
+		}
+	}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
@@ -1707,3 +1738,63 @@ func effectiveControlPort(controlPort int) int {
 	}
 	return controlPort
 }
+
+// runTransientJob uses the native foreground workload lifecycle without adding
+// or updating any process in the shared supervisor. Prerequisites were checked
+// by the Platform; native --no-deps prevents a second copy of them being started.
+func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, name string, process Process) ([]byte, error) {
+	if err := b.ValidateJob(runtime.JobSpec{Name: name, Transient: true}); err != nil {
+		return nil, err
+	}
+	process.DependsOn = nil
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{name: process}})
+	if err != nil {
+		return nil, err
+	}
+	directory, err := os.MkdirTemp("", "angee-process-job-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(directory) }()
+	config := filepath.Join(directory, "process-compose.yaml")
+	if err = os.WriteFile(config, document, 0600); err != nil {
+		return nil, err
+	}
+	output := runtime.NewLimitedLogRead(maxJobOutputBytes)
+	shutdown := manifestDefaultJobShutdown
+	if process.Shutdown != nil && process.Shutdown.TimeoutSeconds > 0 {
+		shutdown = time.Duration(process.Shutdown.TimeoutSeconds) * time.Second
+	}
+	args := []string{"--no-server", "--log-file", filepath.Join(directory, "process-compose.log"), "--log-no-color", "run", "--no-deps", "--config", config, name}
+	err = b.runForeground(ctx, target.Root, target.EnvFile, output, output, foregroundOptions{isolated: true, waitDelay: shutdown + time.Second}, args...)
+	// Strip terminal controls (the window title names the host) before redacting,
+	// so a secret an escape sequence splits is masked whole.
+	safeOutput := logctx.RedactText(runtime.StripTerminalControls(output.String()))
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		// Startup/configuration failures may be written only to the native logger.
+		// Retain its bounded tail before removing the private runtime directory.
+		if strings.TrimSpace(safeOutput) == "" {
+			if file, openErr := os.Open(filepath.Join(directory, "process-compose.log")); openErr == nil {
+				if info, statErr := file.Stat(); statErr == nil {
+					keep := int64(maxJobOutputBytes + 1)
+					if info.Size() > keep {
+						_, _ = file.Seek(info.Size()-keep, io.SeekStart)
+					}
+					collector := runtime.NewLimitedLogRead(maxJobOutputBytes)
+					_, _ = io.Copy(collector, io.LimitReader(file, keep))
+					safeOutput = logctx.RedactText(runtime.StripTerminalControls(collector.String()))
+				}
+				_ = file.Close()
+			}
+		}
+		if diagnostics := strings.TrimSpace(runtime.LimitLogBytes(safeOutput, 2<<10)); diagnostics != "" {
+			err = fmt.Errorf("%w; native output: %s", err, diagnostics)
+		}
+	}
+	return []byte(safeOutput), err
+}
+
+const manifestDefaultJobShutdown = 10 * time.Second

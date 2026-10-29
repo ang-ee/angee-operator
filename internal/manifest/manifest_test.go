@@ -548,3 +548,31 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 		}
 	}
 }
+
+func TestCaptureJobsAreManualDependencyLeaves(t *testing.T) {
+	for _, kind := range []string{"run_on", "job", "service_after", "service_depends_on", "valid"} {
+		t.Run(kind, func(t *testing.T) {
+			stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "test", Jobs: map[string]Job{"capture": {Runtime: RuntimeLocal, Command: []string{"true"}, Capture: &BackupCapture{Group: "databases", Name: "app", Output: "app.dump"}}}, Services: map[string]Service{}}
+			switch kind {
+			case "run_on":
+				job := stack.Jobs["capture"]
+				job.RunOn = []string{"up"}
+				stack.Jobs["capture"] = job
+			case "job":
+				stack.Jobs["consumer"] = Job{Runtime: RuntimeLocal, Command: []string{"true"}, DependsOn: []string{"capture"}}
+			case "service_after":
+				stack.Services["consumer"] = Service{Runtime: RuntimeLocal, Command: []string{"true"}, After: []string{"capture"}}
+			case "service_depends_on":
+				stack.Services["consumer"] = Service{Runtime: RuntimeLocal, Command: []string{"true"}, DependsOn: []string{"capture"}}
+			}
+			err := stack.Validate()
+			if kind == "valid" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "capture") {
+				t.Fatalf("expected capture dependency validation, got %v", err)
+			}
+		})
+	}
+}

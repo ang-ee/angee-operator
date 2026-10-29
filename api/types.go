@@ -192,16 +192,18 @@ type JobRunNode struct {
 }
 
 type JobRunOperation struct {
-	ID             string       `json:"id"`
-	RootJob        string       `json:"root_job"`
-	ChainedRestart bool         `json:"chained_restart"`
-	Status         JobRunStatus `json:"status"`
-	CurrentStep    string       `json:"current_step,omitempty"`
-	StartedAt      time.Time    `json:"started_at"`
-	EndedAt        *time.Time   `json:"ended_at,omitempty"`
-	Nodes          []JobRunNode `json:"nodes"`
-	Output         string       `json:"output,omitempty"`
-	Error          string       `json:"error,omitempty"`
+	Artifact       *BackupArtifact `json:"artifact,omitempty"`
+	RequestDigest  string          `json:"request_digest,omitempty"`
+	ID             string          `json:"id"`
+	RootJob        string          `json:"root_job"`
+	ChainedRestart bool            `json:"chained_restart"`
+	Status         JobRunStatus    `json:"status"`
+	CurrentStep    string          `json:"current_step,omitempty"`
+	StartedAt      time.Time       `json:"started_at"`
+	EndedAt        *time.Time      `json:"ended_at,omitempty"`
+	Nodes          []JobRunNode    `json:"nodes"`
+	Output         string          `json:"output,omitempty"`
+	Error          string          `json:"error,omitempty"`
 	// ErrorCode and ErrorCause classify a failed run with the error
 	// contract's code (JOB_FAILED or TIMEOUT) and cause.
 	ErrorCode  string `json:"error_code,omitempty"`
