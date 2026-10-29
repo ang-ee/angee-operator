@@ -6,6 +6,25 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **A jj slot's branch publishes to a second remote.** A branch already
+  published to one remote (origin) could not be published to another: jj
+  refuses to create a remote bookmark for a bookmark that tracks another
+  remote but not that one ("Refusing to create new remote bookmark"), and
+  the publish failed with `push_failed` after setting the bookmark. Publish
+  now tracks the branch on the remote that does not have it yet before it
+  pushes.
+- **A jj publish refused with `branch_moved` names what to merge.** When
+  the branch moved on another remote than the publish's (the slot published
+  to origin, sync-base rebased it, and a collaborator pushed onto the old
+  version, so a publish to a second remote finds the bookmark conflicted),
+  the hint named the bare branch, and `angee workspace source merge … feature`
+  then failed with "Name 'feature' is conflicted". The hint now names a ref
+  that is one commit holding the stray commits: the remote branch that holds
+  them (`feature@origin`), the slot's own branch when it is not conflicted,
+  else the stray commits themselves by id.
+
 ## v0.25.0 — 2026-10-29
 
 ### Added

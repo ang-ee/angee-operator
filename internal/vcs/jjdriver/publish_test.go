@@ -884,7 +884,7 @@ func TestPublishLeavesALocalStoresConfigAlone(t *testing.T) {
 // holds the stray commit: bookmark feature is conflicted between the slot's
 // version and the collaborator's, so `merge feature` would name no one
 // commit (review of #144). Merging feature@origin takes it in, and the
-// publish to the second remote is planned.
+// publish to the second remote goes on.
 func TestPublishToAnotherRemoteNamesTheRemoteTheBranchMovedOn(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -915,8 +915,40 @@ func TestPublishToAnotherRemoteNamesTheRemoteTheBranchMovedOn(t *testing.T) {
 	if result, err := d.Merge(ctx, s, "feature@origin"); err != nil || !result.OK || result.Conflicted {
 		t.Fatalf("Merge(feature@origin), the hint's remedy, = %+v, %v, want the collaborator's work merged", result, err)
 	}
-	if _, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Remote: "fork", Branch: "feature"}); err != nil {
-		t.Fatalf("PlanPublish(fork) after the merge error = %v", err)
+	plan := f.publish(s, vcs.PublishIntent{Remote: "fork", Branch: "feature"})
+	if got := f.remoteBranch(fork, "feature"); got != plan.Commit {
+		t.Fatalf("fork has feature at %q, want the merge %s", got, plan.Commit)
+	}
+}
+
+// A branch already published to origin publishes to a second remote that
+// does not have it yet: jj refuses to create a remote bookmark for a
+// bookmark that tracks another remote but not that one, so PreparePublish
+// tracks it there first. Status then counts against the second remote, which
+// the publish recorded as the branch's push remote (plan Q8).
+func TestPublishABranchOnOriginToASecondRemote(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	d := driver()
+	s := f.slotAt("feature")
+	fork := filepath.Join(f.root, "fork.git")
+	f.git(f.root, "init", "-q", "--bare", "-b", "main", fork)
+	f.git(f.primary, "remote", "add", "fork", fork)
+	f.commit(f.slot, "g.txt", "mine\n", "slot change")
+	first := f.publish(s, vcs.PublishIntent{Branch: "feature"})
+	if f.remoteBranch(fork, "feature") != "" {
+		t.Fatal("fork has feature before it was published there")
+	}
+	plan := f.publish(s, vcs.PublishIntent{Remote: "fork", Branch: "feature"})
+	if plan.Commit != first.Commit || !plan.RecordRemote {
+		t.Fatalf("plan to fork = %+v, want commit %s, recorded", plan, first.Commit)
+	}
+	if got := f.remoteBranch(fork, "feature"); got != first.Commit {
+		t.Fatalf("fork has feature at %q, want %s", got, first.Commit)
+	}
+	status, err := d.Status(ctx, s)
+	if err != nil || status.Upstream != "feature@fork" || !status.Pushed {
+		t.Fatalf("Status() = %+v, %v, want pushed against feature@fork", status, err)
 	}
 }
 

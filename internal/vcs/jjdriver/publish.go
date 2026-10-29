@@ -508,6 +508,29 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 	if _, err := d.jj.snapshot(ctx, s.Path, "bookmark", "set", "-r", commitOf(plan.Commit).String(), "--", quote(plan.Branch)); err != nil {
 		return fmt.Errorf("set bookmark %q in %s: %w", plan.Branch, s.Path, err)
 	}
+	return d.trackNew(ctx, s.Path, op, plan)
+}
+
+// trackNew tracks the plan's branch on the plan's remote when that remote
+// does not have it yet, as jj's push needs once the bookmark tracks another
+// remote: jj creates a remote bookmark only for a bookmark tracked there, or
+// one that tracks no remote at all, and otherwise refuses ("Refusing to
+// create new remote bookmark X@R"; probed with jj 0.45), so a branch
+// published to origin could not be published to a second remote. op is the
+// operation the plan's commit was checked at, which the bookmark set did not
+// change on any remote. A remote bookmark X@R that exists is left as it is:
+// PlanPublish refuses one the repository does not track.
+func (d Driver) trackNew(ctx context.Context, dir, op string, plan vcs.PublishPlan) error {
+	marks, err := d.bookmarks(ctx, dir, op, plan.Branch)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(marks, func(m bookmark) bool { return m.Name == plan.Branch && m.Remote == plan.Remote }) {
+		return nil
+	}
+	if _, err := d.jj.store(ctx, dir, "bookmark", "track", "--remote="+exact(plan.Remote), "--", exact(plan.Branch)); err != nil {
+		return fmt.Errorf("track bookmark %q on %s in %s: %w", plan.Branch, plan.Remote, dir, err)
+	}
 	return nil
 }
 
