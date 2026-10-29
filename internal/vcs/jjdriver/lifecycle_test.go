@@ -636,15 +636,17 @@ func TestLifecycleRefusesMissingFacts(t *testing.T) {
 // lifecycle runs and where: `jj git init` outside any repository; the
 // workspace list and the forget on the primary's repository without a
 // working copy; `jj workspace add` in the primary, with the name, the start
-// revset and the path as single arguments; and git's prune in the primary.
+// revset and the path as single arguments; and git's prune in the primary,
+// before the add and after the removal. The primary has a .git, as a
+// source's cache has, so the slot is colocated.
 func TestLifecycleCommands(t *testing.T) {
 	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n"})
 	ctx := context.Background()
 	d := driver()
 	root := t.TempDir()
 	primary := filepath.Join(root, "primary")
-	if err := os.Mkdir(primary, 0o755); err != nil {
-		t.Fatalf("Mkdir() error = %v", err)
+	if err := os.MkdirAll(filepath.Join(primary, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	s := vcs.Slot{
 		Path: filepath.Join(root, "ws", "src"), Name: "stack--ws", Primary: primary,
@@ -673,6 +675,7 @@ func TestLifecycleCommands(t *testing.T) {
 	}{
 		{"jj", os.TempDir(), jj("git", "init", "--git-repo", primary, "--", primary)},
 		{"jj", primary, jj("-R", ".", "--ignore-working-copy", "workspace", "list", "-T", workspacesTemplate)},
+		{"git", primary, []string{"worktree", "prune"}},
 		{"jj", primary, jj("-R", ".", "workspace", "add", "--colocate", "--name=stack--ws", "-r", start, "--", s.Path)},
 		{"jj", primary, jj("-R", ".", "--ignore-working-copy", "workspace", "forget", "--", "stack--ws")},
 		{"git", primary, []string{"worktree", "prune"}},
@@ -691,15 +694,16 @@ func TestLifecycleCommands(t *testing.T) {
 	}
 }
 
-// fakeSlot is a jj slot of an empty primary directory, for the fake jj and
-// git, and the guard the service opens on its path. The path holds nothing,
-// or, with files, a directory holding those, as Remove finds a slot.
+// fakeSlot is a jj slot of a primary directory holding only an empty .git,
+// for the fake jj and git, and the guard the service opens on its path. The
+// path holds nothing, or, with files, a directory holding those, as Remove
+// finds a slot.
 func fakeSlot(t *testing.T, files ...string) (vcs.Slot, *copierx.GuardedPath) {
 	t.Helper()
 	root := t.TempDir()
 	primary := filepath.Join(root, "primary")
-	if err := os.Mkdir(primary, 0o755); err != nil {
-		t.Fatalf("Mkdir() error = %v", err)
+	if err := os.MkdirAll(filepath.Join(primary, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	s := vcs.Slot{Path: filepath.Join(root, "ws", "src"), Name: "stack--ws", Primary: primary, BaseRef: "main"}
 	if len(files) > 0 {
@@ -735,6 +739,16 @@ func commandLines(t *testing.T, home string) []string {
 // lineWith is the index of the first of lines that contains s, else -1.
 func lineWith(lines []string, s string) int {
 	return slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, s) })
+}
+
+// lastLineWith is the index of the last of lines that contains s, else -1.
+func lastLineWith(lines []string, s string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], s) {
+			return i
+		}
+	}
+	return -1
 }
 
 // failedJJ reports whether err holds a failed jj command with arg among its
@@ -800,7 +814,7 @@ func TestAddRollsBackOnItsOwnContext(t *testing.T) {
 		t.Errorf("Add() error = %v, want the rollback to succeed", err)
 	}
 	lines := commandLines(t, home)
-	if forget, prune := lineWith(lines, "workspace forget"), lineWith(lines, "worktree prune"); forget < 0 || prune < forget {
+	if forget, prune := lineWith(lines, "workspace forget"), lastLineWith(lines, "worktree prune"); forget < 0 || prune < forget {
 		t.Errorf("Add() ran %q; want the rollback's forget, then its prune", lines)
 	}
 	if exists(t, s.Path) {

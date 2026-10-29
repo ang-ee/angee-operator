@@ -13,8 +13,9 @@
 // The primary's lock (plan D9) is the caller's: EnsurePrimary (which creates
 // the primary's .jj), Add and Remove (which add and forget a workspace, and
 // prune the primary's git worktree registrations) run under it. jj merges
-// concurrent operations on its own, so nothing else needs it: Exists,
-// Status, Diff and the slot verbs take none.
+// concurrent operations on its own, so nothing else needs it: Exists, Holds,
+// Elsewhere, ForgetName (of a slot whose directory is gone), Status, Diff and
+// the slot verbs take none.
 package jjdriver
 
 import (
@@ -204,10 +205,15 @@ func baseRemote(remote string) string {
 
 // upstream returns branch on the remote git pushes it to from the slot, when
 // that remote bookmark exists. It reports none when git names no push remote
-// for it (several remotes, none of them origin, and no push default).
+// for it (several remotes, none of them origin, and no push default), and for
+// a slot that is not colocated with git, which has no git config of its own
+// to ask: git run there would read whatever repository encloses it.
 func (d Driver) upstream(ctx context.Context, dir, branch string, marks []bookmark) (target, bool, error) {
 	if branch == "" {
 		return target{}, false, nil
+	}
+	if colocated, err := colocated(dir); err != nil || !colocated {
+		return target{}, false, err
 	}
 	remote, err := d.git.PushRemoteFor(ctx, dir, branch)
 	var none *git.NoPushRemoteError

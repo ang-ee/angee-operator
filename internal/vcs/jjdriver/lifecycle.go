@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
@@ -68,15 +70,114 @@ func (d Driver) Exists(ctx context.Context, s vcs.Slot) (bool, error) {
 	if err := lifecycleFacts(s); err != nil {
 		return false, err
 	}
-	out, err := d.jj.primaryStore(ctx, s.Primary, "workspace", "list", "-T", workspacesTemplate)
+	_, ok, err := d.workspace(ctx, s)
+	return ok, err
+}
+
+// workspace returns the primary's workspace named Slot.Name, and whether it
+// has one.
+func (d Driver) workspace(ctx context.Context, s vcs.Slot) (workspace, bool, error) {
+	out, err := d.jj.store(ctx, s.Primary, "workspace", "list", "-T", workspacesTemplate)
 	if err != nil {
-		return false, err
+		return workspace{}, false, err
 	}
 	workspaces, err := decodeLines[workspace](out)
 	if err != nil {
+		return workspace{}, false, err
+	}
+	i := slices.IndexFunc(workspaces, func(w workspace) bool { return w.Name == s.Name })
+	if i < 0 {
+		return workspace{}, false, nil
+	}
+	return workspaces[i], true, nil
+}
+
+// Holds reports whether dir is the checkout of the primary's workspace
+// Slot.Name: jj, run in dir, loads a workspace whose working-copy commit is
+// that workspace's, by name and by change id (a snapshot keeps the change id,
+// and another repository's ids never match). It touches no working copy and
+// reads no path jj recorded. A directory with no .jj, or one jj cannot load
+// as a workspace, holds none.
+//
+// The service asks it before it keeps what --sync finds at a slot's path
+// (plan phase 6 step 4): a taken name alone does not say whose the checkout
+// is.
+func (d Driver) Holds(ctx context.Context, s vcs.Slot, dir string) (bool, error) {
+	if err := lifecycleFacts(s); err != nil {
 		return false, err
 	}
-	return slices.ContainsFunc(workspaces, func(w workspace) bool { return w.Name == s.Name }), nil
+	if dir == "" {
+		return false, errNoSlot
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".jj")); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	out, err := d.jj.store(ctx, dir, "log", "--no-graph", "-r", workingCopy.String(), "-T", commitsTemplate)
+	if exited(ctx, err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	entries, err := decodeLines[commitEntry](out)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) != 1 || !slices.Contains(entries[0].WorkingCopies, s.Name) {
+		return false, nil
+	}
+	named, ok, err := d.workspace(ctx, s)
+	if err != nil || !ok {
+		return false, err
+	}
+	return named.Target.ChangeID == entries[0].Commit.ChangeID, nil
+}
+
+// Elsewhere returns where the primary's workspace Slot.Name is checked out,
+// when that is a live checkout at a path other than Slot.Path; else "". It is
+// the one call that reads jj's record of a workspace's path (`jj workspace
+// root --name`), which goes stale once a workspace moves (plan section 2), so
+// it trusts the record only this far: the path counts only when Holds
+// confirms the workspace's checkout there.
+//
+// The service asks it before it forgets a taken name whose own checkout is
+// gone, so that it never forgets a workspace another live checkout uses, such
+// as another stack's of the same name, whose .git the forget would delete.
+func (d Driver) Elsewhere(ctx context.Context, s vcs.Slot) (string, error) {
+	if err := lifecycleFacts(s); err != nil {
+		return "", err
+	}
+	out, err := d.jj.store(ctx, s.Primary, "workspace", "root", "--name="+s.Name)
+	if exited(ctx, err) {
+		// No such workspace, or a record jj cannot resolve.
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" || samePath(root, s.Path) {
+		return "", nil
+	}
+	held, err := d.Holds(ctx, s, root)
+	if err != nil || !held {
+		return "", err
+	}
+	return root, nil
+}
+
+// samePath reports whether a and b name the same path, once symbolic links
+// in either are resolved; a path that does not resolve is compared as it is.
+func samePath(a, b string) bool {
+	resolve := func(path string) string {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return resolved
+		}
+		return filepath.Clean(path)
+	}
+	return resolve(a) == resolve(b)
 }
 
 // Add makes the slot in place (plan D4): jj writes a secondary workspace of
@@ -121,6 +222,12 @@ func (d Driver) Exists(ctx context.Context, s vcs.Slot) (bool, error) {
 // refuses to add a workspace with --ignore-working-copy (after creating it),
 // and the import is what shows jj the base the service has just fetched into
 // the primary with git. The caller holds the primary's lock (plan D9).
+//
+// The slot is colocated with git (`--colocate`) when the primary is: when it
+// has a .git, as a source's cache always has. A local store jj keeps without
+// git's working tree (`jj git init` without colocation) gets a slot without
+// one too (plan phase 6 step 7). A colocated primary's git worktrees whose
+// checkouts are missing are pruned before the add.
 func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure func(context.Context, string) error) error {
 	if configure != nil {
 		return fmt.Errorf("configuring a jj slot, which shares its primary's git and jj configuration: %w", vcs.ErrUnsupported)
@@ -134,6 +241,10 @@ func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure fu
 	if s.BaseRef == "" {
 		return fmt.Errorf("jj slot %s has no base ref to start from: %w", s.Path, vcs.ErrBaseNotFound)
 	}
+	colocated, err := colocated(s.Primary)
+	if err != nil {
+		return err
+	}
 	if err := emptyDestination(s.Path, dest); err != nil {
 		return err
 	}
@@ -144,10 +255,20 @@ func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure fu
 	if taken {
 		return fmt.Errorf("jj workspace %q already exists in %s: %w", s.Name, s.Primary, vcs.ErrNameTaken)
 	}
+	if colocated {
+		// git refuses to add a worktree at a path where it still registers
+		// one whose checkout is missing (probed), as a slot removed without
+		// the primary's lock leaves it, so such registrations go first; the
+		// caller holds the lock. A failed prune only warns: the add then
+		// fails with git's own words if it matters.
+		if err := d.git.WorktreePrune(ctx, s.Primary); err != nil {
+			logctx.From(ctx).Warn(fmt.Sprintf("could not prune the git worktrees of %s before adding jj slot %s: %v", s.Primary, s.Path, err))
+		}
+	}
 	if err := dest.MkdirAll(0o755); err != nil {
 		return fmt.Errorf("make jj slot directory %s: %w", s.Path, err)
 	}
-	if err := d.create(ctx, s, dest); err != nil {
+	if err := d.create(ctx, s, dest, colocated); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
 		defer cancel()
 		if rollbackErr := d.Remove(cleanupCtx, s, dest); rollbackErr != nil {
@@ -158,13 +279,18 @@ func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure fu
 	return nil
 }
 
-// create runs `jj workspace add` into the directory dest holds, checking
-// before and after that Slot.Path leads to it.
-func (d Driver) create(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
+// create runs `jj workspace add` into the directory dest holds, colocated
+// when the primary is, checking before and after that Slot.Path leads to it.
+func (d Driver) create(ctx context.Context, s vcs.Slot, dest vcs.Dest, colocated bool) error {
 	if err := dest.VerifyPathIdentity(s.Path); err != nil {
 		return fmt.Errorf("jj slot %s: %w", s.Path, err)
 	}
-	if _, err := d.jj.inPrimary(ctx, s.Primary, "workspace", "add", "--colocate", "--name="+s.Name, "-r", startRevset(s).String(), "--", s.Path); err != nil {
+	args := []string{"workspace", "add"}
+	if colocated {
+		args = append(args, "--colocate")
+	}
+	args = append(args, "--name="+s.Name, "-r", startRevset(s).String(), "--", s.Path)
+	if _, err := d.jj.inPrimary(ctx, s.Primary, args...); err != nil {
 		return err
 	}
 	if err := dest.VerifyPathIdentity(s.Path); err != nil {
@@ -181,7 +307,9 @@ func (d Driver) create(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 // drops the registration of a slot whose directory was gone before the forget,
 // and of any other worktree of the primary whose checkout is missing. Each
 // step runs even when an earlier one failed, so whatever part of the slot did
-// go is not left registered; the errors are joined.
+// go is not left registered; the errors are joined. A primary that is not
+// colocated with git (no .git) registers no git worktree, so it is not
+// pruned: git run there would prune whatever repository encloses it.
 //
 // The forget touches no working copy. The caller holds the primary's lock
 // (plan D9).
@@ -189,9 +317,50 @@ func (d Driver) Remove(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 	if err := lifecycleFacts(s); err != nil {
 		return err
 	}
-	_, err := d.jj.primaryStore(ctx, s.Primary, "workspace", "forget", "--", s.Name)
+	_, err := d.jj.store(ctx, s.Primary, "workspace", "forget", "--", s.Name)
 	err = errors.Join(err, dest.RemoveAll())
-	return errors.Join(err, d.git.WorktreePrune(ctx, s.Primary))
+	switch colocated, colocatedErr := colocated(s.Primary); {
+	case colocatedErr != nil:
+		return errors.Join(err, colocatedErr)
+	case colocated:
+		return errors.Join(err, d.git.WorktreePrune(ctx, s.Primary))
+	}
+	return err
+}
+
+// ForgetName forgets the primary's workspace Slot.Name once the slot's
+// directory is gone, as a rollback or destroy that cannot take the primary's
+// lock must, so the name does not stay taken. With nothing at the
+// workspace's path, `jj workspace forget` changes only jj's own record: it
+// removes no git worktree registration and prunes none (probed), which is
+// what the lock guards, and jj merges concurrent operations on its own. It
+// refuses while Slot.Path holds anything, since the forget would then remove
+// the slot's git registration and prune the primary's missing ones.
+func (d Driver) ForgetName(ctx context.Context, s vcs.Slot) error {
+	if err := lifecycleFacts(s); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(s.Path); err == nil {
+		return fmt.Errorf("forget jj workspace %q: its slot %s still exists", s.Name, s.Path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	_, err := d.jj.store(ctx, s.Primary, "workspace", "forget", "--", s.Name)
+	return err
+}
+
+// colocated reports whether the repository at dir is colocated with git: it
+// has a .git, which git's own commands would otherwise look for in the
+// directories above it.
+func colocated(dir string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	}
+	return false, fmt.Errorf("look for a git repository in %s: %w", dir, err)
 }
 
 // lifecycleFacts refuses a slot the lifecycle cannot name in its primary.
