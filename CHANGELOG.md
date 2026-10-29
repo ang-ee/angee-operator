@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.23.0 — 2026-10-28
+
 ### Added
 
 - Manual backup preview and capture REST APIs, restricted to the operator admin
