@@ -777,3 +777,32 @@ func TestJobHoldsCancellationDuringRecoveryRestoresHoldWithLiveContext(t *testin
 		}
 	}
 }
+
+func TestCanceledOrdinaryJobGraphTerminatesPendingNodes(t *testing.T) {
+	backend := &recordingJobBackend{}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backend.beforeJob = func(_ context.Context, _ runtime.JobSpec) { cancel() }
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "cancel",
+		Jobs: map[string]manifest.Job{
+			"root": {Runtime: manifest.RuntimeLocal, Command: []string{"root"}},
+			"tail": {Runtime: manifest.RuntimeLocal, Command: []string{"tail"}, DependsOn: []string{"root"}},
+		},
+		Services: map[string]manifest.Service{"web": {Runtime: manifest.RuntimeLocal, Command: []string{"web"}, DependsOn: []string{"tail"}}},
+	}
+	p, id := newJobOperationPlatform(t, stack, backend, "root", true)
+	p.executeJobRun(ctx, id, func() {})
+	op, _ := p.JobRunGet(t.Context(), id)
+	if op.Status != api.JobRunFailed || !strings.Contains(op.Error, "canceled") {
+		t.Fatalf("operation = %#v", op)
+	}
+	for _, node := range op.Nodes {
+		if node.Status == api.JobRunPending || node.Status == api.JobRunRunning {
+			t.Fatalf("unterminated node = %#v", node)
+		}
+	}
+	if got, want := backend.recordedCalls(), []string{"job:root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+}

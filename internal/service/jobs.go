@@ -511,7 +511,7 @@ func (p *Platform) runJobGraph(ctx context.Context, id string, stack *manifest.S
 	// every attempted recovery, even when the operation context was canceled.
 	resuming := map[string]bool{}
 	defer func() {
-		if runErr == nil || len(held) == 0 {
+		if runErr == nil {
 			return
 		}
 		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtime.GracefulWaitDelay)
