@@ -1,11 +1,11 @@
-// Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces,
-// colocated with git, of a source's primary. It makes and removes a slot
-// (lifecycle.go) and reads its status and diff; every other verb waits for
-// phase 8 of .agents/plans/jj-native-operator.md and reports
-// vcs.ErrUnsupported. No manifest can name a jj slot yet, so normal slot
-// dispatch does not select this driver. Source captures use it as the
-// vcs.BackupLayer over a Git checkout, which plans nothing unless colocated
-// JJ metadata is present.
+// Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces of
+// a source's primary, colocated with git when the primary is. It makes and
+// removes a slot (lifecycle.go) and reads its status and diff; every other
+// verb waits for phase 8 of .agents/plans/jj-native-operator.md and reports
+// vcs.ErrUnsupported. The service selects it for a slot whose mode is jj, and
+// refuses those verbs on a jj slot itself before it asks the driver. Source
+// captures also use it as the vcs.BackupLayer over a Git checkout, which
+// plans nothing unless colocated JJ metadata is present.
 //
 // jj owns the slot: the lifecycle, status, diff and verbs run the jj CLI and
 // interpret what it prints through the templates in templates.go. BackupLayerPlan additionally
@@ -17,9 +17,10 @@
 //
 // The primary's lock (plan D9) is the caller's: EnsurePrimary (which creates
 // the primary's .jj), Add and Remove (which add and forget a workspace, and
-// prune the primary's git worktree registrations) run under it. jj merges
-// concurrent operations on its own, so nothing else needs it: Exists,
-// Status, Diff and the slot verbs take none.
+// drop its git worktree registration) run under it. jj merges
+// concurrent operations on its own, so nothing else needs it: Exists, Holds,
+// Elsewhere, ForgetName (of a slot whose directory is gone), Status, Diff and
+// the slot verbs take none.
 package jjdriver
 
 import (
@@ -265,10 +266,15 @@ func baseRemote(remote string) string {
 
 // upstream returns branch on the remote git pushes it to from the slot, when
 // that remote bookmark exists. It reports none when git names no push remote
-// for it (several remotes, none of them origin, and no push default).
+// for it (several remotes, none of them origin, and no push default), and for
+// a slot that is not colocated with git, which has no git config of its own
+// to ask: git run there would read whatever repository encloses it.
 func (d Driver) upstream(ctx context.Context, dir, branch string, marks []bookmark) (target, bool, error) {
 	if branch == "" {
 		return target{}, false, nil
+	}
+	if colocated, err := colocated(dir); err != nil || !colocated {
+		return target{}, false, err
 	}
 	remote, err := d.git.PushRemoteFor(ctx, dir, branch)
 	var none *git.NoPushRemoteError

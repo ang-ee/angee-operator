@@ -65,6 +65,7 @@ type Stack struct {
 	Ports             map[string]Port              `yaml:"ports,omitempty" json:"ports,omitempty"`
 	Volumes           map[string]Volume            `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 	Persist           map[string]PersistPath       `yaml:"persist,omitempty" json:"persist,omitempty"`
+	VCS               string                       `yaml:"vcs,omitempty" json:"vcs,omitempty" validate:"omitempty,oneof=git jj" jsonschema:"enum=git,enum=jj"`
 	Sources           map[string]Source            `yaml:"sources,omitempty" json:"sources,omitempty"`
 	WorkspaceDefaults map[string]WorkspaceDefaults `yaml:"workspace_defaults,omitempty" json:"workspace_defaults,omitempty"`
 	Workspaces        map[string]Workspace         `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
@@ -475,10 +476,12 @@ type Workspace struct {
 
 type WorkspaceSource struct {
 	Source string `yaml:"source" json:"source" validate:"required" jsonschema:"required"`
-	// Mode selects how a git source is materialized: a worktree of the shared
-	// cache or a standalone clone. Omitted, a git source is cloned and a local
-	// source is linked; a local source is linked whatever the mode says.
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone"`
+	// Mode selects how a source is checked out: a worktree of a git source's
+	// shared cache, a standalone clone, or a jj workspace of the cache, or of
+	// a local source that already is a jj repository. Omitted, the stack's vcs
+	// decides (Stack.EffectiveSourceMode). A local source is linked under any
+	// mode but jj.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone,enum=jj"`
 	// Branch is the branch a worktree slot is cut on. Omitted, the worktree
 	// starts on a detached HEAD at Ref and gets a branch when it is published.
 	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
@@ -486,21 +489,46 @@ type WorkspaceSource struct {
 	Subpath string `yaml:"subpath,omitempty" json:"subpath,omitempty"`
 }
 
-// Workspace source modes. The empty mode is also valid and keeps the source
-// kind's default.
+// Workspace source modes. The empty mode is also valid and leaves the choice
+// to the stack's vcs (Stack.EffectiveSourceMode).
 const (
 	WorkspaceSourceModeWorktree = "worktree"
 	WorkspaceSourceModeClone    = "clone"
+	WorkspaceSourceModeJJ       = "jj"
+)
+
+// The version control systems a stack's vcs can name: the one a workspace
+// slot that names no mode is checked out with (Stack.EffectiveSourceMode).
+// Empty is git.
+const (
+	VCSGit = "git"
+	VCSJJ  = "jj"
 )
 
 // ValidateWorkspaceSourceMode rejects a workspace source mode the operator
 // does not implement, so a typo fails loudly instead of quietly cloning.
 func ValidateWorkspaceSourceMode(mode string) error {
 	switch mode {
-	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone:
+	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone, WorkspaceSourceModeJJ:
 		return nil
 	}
-	return fmt.Errorf("mode %q is not supported; use %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone)
+	return fmt.Errorf("mode %q is not supported; use %q, %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone, WorkspaceSourceModeJJ)
+}
+
+// EffectiveSourceMode is the mode ws is checked out in, which everything that
+// reads a slot's mode asks. A mode the slot names wins. With none, a stack
+// whose vcs is jj makes the slot a jj workspace, and otherwise the mode stays
+// empty, keeping each source kind's default: a git source is cloned and a
+// local source linked (plan D3). The manifest keeps the mode as written, so
+// vcs decides for every slot that names no mode, existing ones included.
+func (s *Stack) EffectiveSourceMode(ws WorkspaceSource) string {
+	switch {
+	case ws.Mode != "":
+		return ws.Mode
+	case s != nil && s.VCS == VCSJJ:
+		return WorkspaceSourceModeJJ
+	}
+	return ""
 }
 
 type WorkspaceResolved struct {

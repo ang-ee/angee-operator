@@ -93,7 +93,7 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		return api.GitOpResult{}, err
 	}
 	defer release()
-	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
+	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "publish", workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
@@ -162,7 +162,8 @@ type slotOp func(ctx context.Context, d vcs.Driver, s vcs.Slot) (api.GitOpResult
 
 // runWorkspaceGitOp runs a local operation in a slot through its driver. step
 // names the action for a failure's message; its object and slot are filled in
-// here.
+// here. The verb a refusal names is the operation's, as the CLI spells it
+// (`merge-abort` for workspace.source-merge-abort).
 func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step gitStep, workspace, slot string, run slotOp) (result api.GitOpResult, err error) {
 	defer op.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace source")
@@ -170,7 +171,7 @@ func (p *Platform) runWorkspaceGitOp(ctx context.Context, op operation, step git
 		return api.GitOpResult{}, err
 	}
 	defer release()
-	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
+	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, strings.TrimPrefix(op.name, "workspace.source-"), workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err
 	}

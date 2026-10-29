@@ -341,7 +341,7 @@ func TestWorkspaceCreateResolvesAndValidatesSlotMode(t *testing.T) {
 		{name: "worktree from input", fields: map[string]string{"mode": `"${inputs.slot_mode}"`}, slotMode: "worktree", wantMode: "worktree"},
 		{name: "clone from input", fields: map[string]string{"mode": `"${inputs.slot_mode}"`}, slotMode: "clone", wantMode: "clone"},
 		{name: "unknown literal", fields: map[string]string{"mode": "worktre"}, wantErr: `workspace "feature-a" source "app": mode "worktre" is not supported`},
-		{name: "unknown from input", fields: map[string]string{"mode": `"${inputs.slot_mode}"`}, slotMode: "jj", wantErr: `workspace "feature-a" source "app": mode "jj" is not supported`},
+		{name: "unknown from input", fields: map[string]string{"mode": `"${inputs.slot_mode}"`}, slotMode: "fossil", wantErr: `workspace "feature-a" source "app": mode "fossil" is not supported`},
 		{name: "branchless without a base", fields: map[string]string{"mode": "worktree", "branch": `""`, "ref": `""`, "default_ref": `""`}, wantErr: `workspace "feature-a" source "app": a worktree without a branch needs a ref`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -8,6 +8,48 @@ latest tag.
 
 ### Added
 
+- **A workspace slot can be a jj workspace** (phase 6 of
+  `.agents/plans/jj-native-operator.md`). `mode: jj` makes a slot a jj
+  workspace of its source's cache, which angee colocates with jj the first
+  time, or of a `kind: local` store that already is a jj repository; a
+  stack's new `vcs: jj` (default `git`) makes every slot that names no mode
+  one. The manifest keeps a slot's mode as written, so `vcs` decides for
+  existing slots without one too. One stack can mix git and jj slots of one
+  source.
+  - `workspace create`, `status`, `git`, `repair` and `destroy` handle jj
+    slots. A slot is created in place on its branch's bookmark when that
+    exists, else at its base, colocated with git when the primary is, and
+    named `<stack>--<workspace>` (plus `--<slot>` for several jj slots of
+    one primary) in the primary; no stack, workspace or slot name in such a
+    name may be empty, hold `--` or start or end with `-`. A name the
+    primary already has for a slot this stack's manifest does not record, or
+    that is checked out anywhere else, is a `CONFLICT` naming it, and is
+    never forgotten; destroy forgets only the workspace the slot's own
+    checkout is.
+  - A create first checks that this machine can run jj slots (jj with
+    `workspace add --colocate`, git 2.48 or later, not Windows;
+    `PRECONDITION_FAILED`, cause `jj_unavailable`) and that each primary is
+    where the manifest says: a cache outside the stack root must already
+    exist, so a container must mount it at the same path.
+  - `--sync` keeps a jj slot that is still its workspace's checkout, with
+    its uncommitted work; a slot whose directory is gone, or empty, is added
+    again by repair, under the name it had. Rollback and `destroy --purge`
+    forget the slot's jj workspace and drop its git worktree registration,
+    and no other, without pruning the cache, also when the cache's lock
+    cannot be taken, and a rollback puts back an empty directory a slot was
+    made in. `destroy` lets a jj slot whose directory is empty go.
+  - Status reads a jj slot through jj, which snapshots it first, so an edit
+    no jj command has recorded yet is `dirty`; a jj slot is never
+    `branch-mismatch`. `destroy` refuses a jj slot with work of its own, and
+    one that holds a nested `.git` or `.jj`, which jj does not record,
+    naming them.
+  - Every other slot verb (`workspace source fetch`, `pull`, `push`,
+    `diff`, `merge`, `rebase`, `merge-abort`, `rebase-abort`,
+    `rebase-continue`, `publish`) refuses a jj slot, and `workspace push`
+    and `sync-base` refuse a workspace that has one, before touching any
+    slot: `INVALID_INPUT` (HTTP 400), cause `jj_slot_unsupported`. They
+    come with phase 8.
+
 - **`angee doctor` says that jj slots need git 2.48.** Adding a jj slot
   (`jj workspace add --colocate`) links its git worktree with relative paths,
   so git sets `extensions.relativeWorktrees` and
@@ -15,7 +57,12 @@ latest tag.
   2.48 refuses that cache and every worktree slot of it. `tool.jj` now warns
   when jj can create slots but git is older than 2.48. `tool.git` still warns
   only below 2.42, now naming 2.48, so a stack that does not use jj gets no
-  new warning. Both are warnings, since no stack can declare a jj slot yet.
+  new warning.
+
+### Changed
+
+- **`workspace destroy`'s refusal says "sources that have not been
+  pushed"** rather than "git sources", since it now names jj slots too.
 
 ### Changed
 

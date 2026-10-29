@@ -69,11 +69,12 @@ const waitDelay = 100 * time.Millisecond
 // that follow a snapshot in the same call: they all see that operation,
 // whatever agents do in the repository meanwhile.
 //
-// On a primary, primaryStore adds --ignore-working-copy, so the workspace
-// list and the forget touch no working copy. Only `jj workspace add` runs in
-// the primary without it (inPrimary), as any jj command there runs: jj
-// refuses to add a workspace with it, and its import of git's refs is what
-// shows jj the base just fetched into the primary with git (Add).
+// store adds --ignore-working-copy, so the workspace list and the forget on
+// a primary, and the question of which workspace a directory is (Holds),
+// touch no working copy. Only `jj workspace add` runs in the primary without
+// it (inPrimary), as any jj command there runs: jj refuses to add a
+// workspace with it, and its import of git's refs is what shows jj the base
+// just fetched into the primary with git (Add).
 type runner struct {
 	bin string
 }
@@ -123,18 +124,25 @@ func (r runner) inPrimary(ctx context.Context, primary string, args ...string) (
 	return r.run(ctx, primary, append([]string{"-R", "."}, args...))
 }
 
-// primaryStore runs a jj command on the primary's repository without loading
-// any working copy.
-func (r runner) primaryStore(ctx context.Context, primary string, args ...string) ([]byte, error) {
-	if primary == "" {
+// store runs a jj command on the repository of the checkout at dir, a
+// primary or a slot, without loading any working copy.
+func (r runner) store(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	if dir == "" {
 		return nil, errNoPrimary
 	}
-	return r.run(ctx, primary, append([]string{"-R", ".", "--ignore-working-copy"}, args...))
+	return r.run(ctx, dir, append([]string{"-R", ".", "--ignore-working-copy"}, args...))
 }
 
 // errNoPrimary refuses a command on a primary with no primary, which would
 // otherwise run jj in the process's working directory.
 var errNoPrimary = errors.New("a jj command on a primary needs the primary's path")
+
+// exited reports whether err is a jj command that ran and exited non-zero,
+// rather than one that could not start or that ctx stopped.
+func exited(ctx context.Context, err error) bool {
+	var exit *exec.ExitError
+	return ctx.Err() == nil && errors.As(err, &exit)
+}
 
 // network runs a jj command in the slot that reaches a remote (`jj git
 // fetch`, `jj git push`), snapshotting first, under ANGEE_GIT_TIMEOUT like
