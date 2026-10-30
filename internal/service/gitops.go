@@ -290,8 +290,8 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, verb, workspaceNam
 	if err != nil {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 	}
-	if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
-		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason)
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason, hint)
 	}
 	wsSource = withEffectiveMode(stack, wsSource)
 	if wsSource.Mode == manifest.WorkspaceSourceModeJJ && !slices.Contains(jjSlotVerbs, verb) {

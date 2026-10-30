@@ -65,6 +65,9 @@ const (
 	// CauseMigrateIncomplete: a migrate of the slot did not finish, so its
 	// checkout may be set aside under a private name.
 	CauseMigrateIncomplete = "migrate_incomplete"
+	// CauseNestedRepositories: a slot holds a repository of its own (a .git
+	// or .jj below its own), which a migrate does not carry across.
+	CauseNestedRepositories = "nested_repositories"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.

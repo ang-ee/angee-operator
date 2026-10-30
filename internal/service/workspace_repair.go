@@ -128,8 +128,8 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 	}
 	// A slot path a migrate left empty is not missing: its checkout may be set
 	// aside beside it.
-	if reason, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
-		return finish(api.WorkspaceRepairFailed, reason)
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		return finish(api.WorkspaceRepairFailed, reason+". "+hint)
 	}
 	if owner, taken := run.claimed[path]; taken {
 		return finish(api.WorkspaceRepairFailed, fmt.Sprintf("shares its path with slot %q", owner))
