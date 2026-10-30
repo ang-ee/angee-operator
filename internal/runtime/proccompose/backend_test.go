@@ -2605,6 +2605,72 @@ func TestStopSkipsMissingProcessesButStopsEveryPresentTarget(t *testing.T) {
 	}
 }
 
+func TestStopTerminalAndDisabledProcessesAreAlreadyStopped(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed": {Status: "Completed"},
+		"error":     {Status: "Error"},
+		"skipped":   {Status: "Skipped"},
+		"disabled":  {Status: "Disabled"},
+	})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{
+		Root: root, ControlPort: port, Services: []string{"completed", "error", "skipped", "disabled"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command for stopped processes: %v", runner.args)
+	}
+}
+
+func TestStopMixedTargetsKeepsRunningAndTransitionalProcesses(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed":         {Status: "Completed"},
+		"disabled":          {Status: "Disabled"},
+		"running":           {Status: "Running", IsRunning: true},
+		"pending":           {Status: "Pending"},
+		"scheduled":         {Status: "Scheduled"},
+		"restarting":        {Status: "Restarting"},
+		"unknown":           {Status: "Unknown"},
+		"running-completed": {Status: "Completed", IsRunning: true},
+		"running-error":     {Status: "Error", IsRunning: true},
+		"running-skipped":   {Status: "Skipped", IsRunning: true},
+		"running-disabled":  {Status: "Disabled", IsRunning: true},
+	})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	services := []string{"completed", "running", "missing", "disabled", "pending", "scheduled", "restarting", "unknown", "running-completed", "running-error", "running-skipped", "running-disabled"}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: services}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "running", "pending", "scheduled", "restarting", "unknown", "running-completed", "running-error", "running-skipped", "running-disabled"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopPreservesCommandFailure(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed": {Status: "Completed"},
+		"web":       {Status: "Running", IsRunning: true},
+	})
+	port := project.serve(t)
+	failure := errors.New("stop failed")
+	runner := &stubListRunner{err: failure}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"completed", "web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop error = %v, want %v", err, failure)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
 func TestStopDoesNotTreatControlPlaneFailureAsAbsence(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

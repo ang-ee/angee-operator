@@ -179,6 +179,8 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	// An absent supervisor or process is already stopped, including a stack's
 	// first dependency operation before the supervisor has ever started.
+	// Terminal and disabled processes need no stop either; transitional ones
+	// may still launch even when is_running is false.
 	serving, err := b.supervisorServing(ctx, target)
 	if err != nil || !serving {
 		return err
@@ -193,9 +195,14 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 			if err != nil {
 				return err
 			}
-			if state != nil {
-				present = append(present, name)
+			if state == nil {
+				continue
 			}
+			status := strings.ToLower(strings.TrimSpace(state.Status))
+			if !state.IsRunning && (isTerminalState(status) || status == "disabled") {
+				continue
+			}
+			present = append(present, name)
 		}
 		if len(present) == 0 {
 			return nil
