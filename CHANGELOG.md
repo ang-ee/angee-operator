@@ -6,6 +6,43 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **A migrate to a worktree killed while git made it is recovered by its
+  record.** `angee workspace source migrate` makes the new git worktree in
+  a staging directory first, where a migrate killed then leaves a full
+  checkout registered in the source's cache. The record's step named that
+  directory in words only, so running its commands left the checkout
+  behind. The staging directory is now made before git runs, and the step
+  removes it by its path: the worktree there and its registration, if git
+  lists one, then the directory.
+- **Undoing a migrate no longer deletes an entry the old checkout holds
+  again.** A process still writing into the slot's old checkout (a watcher
+  rebuilding `node_modules/`) could make an entry there again once it was
+  carried across. The record's step then left the carried copy in the new
+  checkout, and the next one, `rm -rf` of the new checkout, deleted it.
+  Now, by hand and in the rollback alike, the carried copy is kept beside
+  the slot, in `.angee-migrate-<id>-kept/<slot>/`, outside both checkouts
+  and with a `.gitignore` that hides it from a checkout around it, so
+  neither git nor jj picks it up, and the new checkout is removed only once
+  it holds none of the entries the migrate carries across: the record's
+  command refuses, naming one and where to move it, and the rollback
+  stops. A rollback that kept a copy names it in its error, and `workspace
+  destroy` refuses while the directory is there. Each recorded step is now
+  one command, so following the steps cannot run past a refusal into the
+  removal of the checkout, and a step that moves a checkout back to the
+  slot's path refuses while something is there instead of moving it
+  inside. A rollback stopped by something that appeared at the slot's path
+  before the new checkout was made records a step that removes nothing
+  there. Stop the slot's services before a migrate, as before.
+- **A repository in a directory git ignores beside one it re-includes
+  migrates to jj.** With `/vendor/*` and `!/vendor/keep/` in `.gitignore`,
+  a repository in `vendor/other/` was refused (`nested_repositories`),
+  though git ignores that directory whole and the migrate moves `vendor/`
+  whole. A directory git's own listing (`git ls-files --others --ignored
+  --exclude-standard --directory`) reports as ignored whole now counts as
+  moved whole; a repository in `vendor/keep/` is still refused.
+
 ## v0.27.2 — 2026-10-30
 
 ### Fixed

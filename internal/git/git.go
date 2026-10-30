@@ -207,6 +207,27 @@ func (c Client) OtherPaths(ctx context.Context, dir string, ignored bool) ([]str
 	return paths, nil
 }
 
+// IgnoredPaths lists what git ignores of what the checkout at dir holds that
+// it does not track, as `git ls-files --others --ignored --exclude-standard
+// --directory` lists it: a directory git ignores whole is one entry, ending
+// in "/", even beside a sibling it re-includes, as `/vendor/*` with
+// `!/vendor/keep/` lists vendor/other/ while OtherPaths lists vendor/ alone.
+// A directory whose files are all ignored, though it is not, is listed both
+// as one and file by file.
+func (c Client) IgnoredPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
 // HiddenPaths lists the tracked files of the checkout at dir that git is told
 // not to look at, and that are on disk: those flagged skip-worktree (`git
 // update-index --skip-worktree`) or assume-unchanged. git status reports no
