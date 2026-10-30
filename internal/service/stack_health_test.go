@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -223,13 +225,16 @@ func TestRuntimeOutcome(t *testing.T) {
 		{"job skipped", "Skipped", exitCode(0), true, api.JobSkipped},
 		{"query failed", "unknown", nil, true, api.JobUnknown},
 		{"service crashed", "Completed", exitCode(2), false, api.JobFailed},
-		{"service stopped by signal", "Completed", exitCode(-1), false, serviceStopped},
-		{"container stopped by SIGTERM", "exited", exitCode(143), false, serviceStopped},
-		{"container killed after the grace period", "exited", exitCode(137), false, serviceStopped},
+		{"service stopped by signal", "Completed", exitCode(-1), false, api.ServiceStopped},
+		{"container stopped by SIGTERM", "exited", exitCode(143), false, api.ServiceStopped},
+		{"container killed after the grace period", "exited", exitCode(137), false, api.ServiceStopped},
 		{"container exited cleanly", "exited", exitCode(0), false, api.JobCompleted},
-		{"container never started", "created", exitCode(0), false, serviceStopped},
+		{"container never started", "created", exitCode(0), false, api.ServiceStopped},
 		{"service running", "running", exitCode(0), false, api.JobRunning},
 		{"service skipped", "Skipped", exitCode(0), false, api.JobSkipped},
+		{"local service in its restart backoff", "Restarting", exitCode(1), false, api.ServiceRestarting},
+		{"container in its restart backoff", "restarting", exitCode(1), false, api.ServiceRestarting},
+		{"a job has no restart policy", "Restarting", exitCode(1), true, api.JobRunning},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := runtimeOutcome(runtime.ServiceStatus{State: tc.state, ExitCode: tc.exit}, tc.job); got != tc.want {
@@ -391,8 +396,13 @@ func (b *devJobsBackend) Status(context.Context, runtime.StatusRequest) ([]runti
 
 func runDevForeground(t *testing.T, local *devJobsBackend, settle func(*syncBuffer) bool) (string, error) {
 	t.Helper()
+	return runDevForegroundAt(t, devFailureStack(t), local, settle)
+}
+
+// runDevForegroundAt runs runDevForeground on the stack at root.
+func runDevForegroundAt(t *testing.T, root string, local *devJobsBackend, settle func(*syncBuffer) bool) (string, error) {
+	t.Helper()
 	fastAwaitJobs(t)
-	root := devFailureStack(t)
 	platform, err := NewWithBackends(root, stubStatusBackend{}, local)
 	if err != nil {
 		t.Fatalf("NewWithBackends: %v", err)
@@ -441,6 +451,42 @@ func TestStackDevForegroundReportsFailedJobAndExitsNonZero(t *testing.T) {
 	var failure *StackFailureError
 	if !errors.As(err, &failure) || err.Error() != want {
 		t.Fatalf("StackDevForeground = %v, want the summary as its error after Ctrl-C", err)
+	}
+}
+
+// A job pending on a service in a crash loop never finishes, so the foreground
+// watch names the service while it goes on waiting, from the status reads it
+// makes anyway.
+func TestStackDevForegroundNamesTheRestartingServiceAJobWaitsFor(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version:  manifest.VersionCurrent,
+		Kind:     manifest.KindStack,
+		Name:     "loop",
+		Services: map[string]manifest.Service{"db": {Runtime: manifest.RuntimeLocal, Command: []string{"db"}, Ready: &manifest.ReadyProbe{TCP: &manifest.ReadyTCP{Port: 5432}}}},
+		Jobs:     map[string]manifest.Job{"migrate": {Runtime: manifest.RuntimeLocal, Command: []string{"migrate"}, DependsOn: []string{"db"}}},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "process-compose.yaml"), []byte("generated\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	looping := []runtime.ServiceStatus{
+		{Name: "db", State: "Restarting", ExitCode: exitCode(1), Restarts: 3},
+		{Name: "migrate", State: "Pending", ExitCode: exitCode(0)},
+	}
+	local := &devJobsBackend{statuses: [][]runtime.ServiceStatus{looping}}
+	stderr, err := runDevForegroundAt(t, root, local, func(*syncBuffer) bool {
+		local.mu.Lock()
+		defer local.mu.Unlock()
+		return local.calls >= 4
+	})
+	if want := "angee dev: job migrate is waiting for service db: restarting (exit 1, 3 restarts)\n"; stderr != want {
+		t.Fatalf("stderr = %q, want %q once", stderr, want)
+	}
+	if err != nil {
+		t.Fatalf("StackDevForeground = %v, want nil after Ctrl-C while the job waits", err)
 	}
 }
 
@@ -626,6 +672,20 @@ func (b *logsRecorder) Logs(_ context.Context, req runtime.LogsRequest) (<-chan 
 	return ch, nil
 }
 
+func (b *logsRecorder) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+	return b.Logs(ctx, req)
+}
+
+func (b *logsRecorder) tails() []int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	tails := make([]int, 0, len(b.requests))
+	for _, req := range b.requests {
+		tails = append(tails, req.Tail)
+	}
+	return tails
+}
+
 func TestStackLogsAcceptsJobNames(t *testing.T) {
 	root := devFailureStack(t)
 	local := &logsRecorder{}
@@ -633,7 +693,7 @@ func TestStackLogsAcceptsJobNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithBackends: %v", err)
 	}
-	lines, err := platform.StackLogs(t.Context(), []string{"deps"}, false)
+	lines, err := platform.StackLogs(t.Context(), []string{"deps"}, false, 0)
 	if err != nil {
 		t.Fatalf("StackLogs(deps): %v", err)
 	}
@@ -645,7 +705,329 @@ func TestStackLogsAcceptsJobNames(t *testing.T) {
 		t.Fatalf("logs = %q, requests %+v; want the deps process logs", out.String(), local.requests)
 	}
 	var notFound *NotFoundError
-	if _, err := platform.StackLogs(t.Context(), []string{"missing"}, false); !errors.As(err, &notFound) {
+	if _, err := platform.StackLogs(t.Context(), []string{"missing"}, false, 0); !errors.As(err, &notFound) {
 		t.Fatalf("StackLogs(missing) = %v, want *NotFoundError", err)
+	}
+}
+
+// process-compose calls a process that exited `Completed` whatever its exit
+// status, and docker compose calls a container `exited`. A service's state
+// carries that raw status, and beside it the verdict the summary counts and the
+// exit code, so a crashed service reads as failed (#112).
+func TestStackStatusReportsFailedServiceOutcomeAndExitCode(t *testing.T) {
+	root := devFailureStack(t)
+	containers := stubStatusBackend{statuses: []runtime.ServiceStatus{{Name: "postgres", Runtime: "container", State: "exited", ExitCode: exitCode(2)}}}
+	local := stubStatusBackend{statuses: []runtime.ServiceStatus{
+		{Name: "deps", State: "Completed", ExitCode: exitCode(0)},
+		{Name: "codegen", State: "Completed", ExitCode: exitCode(0)},
+		{Name: "django", State: "Completed", ExitCode: exitCode(1)},
+		{Name: "frontend", State: "Completed", ExitCode: exitCode(143)},
+		{Name: "storybook", State: "Error", ExitCode: exitCode(0)},
+	}}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	status, err := platform.StackStatus(t.Context())
+	if err != nil {
+		t.Fatalf("StackStatus: %v", err)
+	}
+	tests := []struct {
+		name     string
+		status   string
+		outcome  string
+		exitCode *int
+		reason   string
+	}{
+		{name: "django", status: "Completed", outcome: api.JobFailed, exitCode: exitCode(1)},
+		{name: "postgres", status: "exited", outcome: api.JobFailed, exitCode: exitCode(2)},
+		{name: "storybook", status: "Error", outcome: api.JobFailed, reason: couldNotStart},
+		{name: "frontend", status: "Completed", outcome: api.ServiceStopped, exitCode: exitCode(143)},
+	}
+	for _, tt := range tests {
+		got := status.Services[tt.name]
+		if got.Status != tt.status || got.Outcome != tt.outcome || got.Reason != tt.reason || !sameExitCode(got.ExitCode, tt.exitCode) {
+			t.Errorf("%s = %+v, want status %q, outcome %q, exit %v, reason %q", tt.name, got, tt.status, tt.outcome, derefExit(tt.exitCode), tt.reason)
+		}
+	}
+	if want := (api.StatusCounts{Total: 4, Failed: 3}); status.Summary.Services != want {
+		t.Fatalf("services summary = %+v, want %+v", status.Summary.Services, want)
+	}
+}
+
+// A service in its restart backoff reads as restarting, with its last exit and
+// restart count, and is counted apart from running services. A dependent stays
+// pending while process-compose waits for the service to become healthy, so its
+// reason names the service, directly or through a pending dependency.
+func TestStackStatusReportsRestartingServiceAndWhoWaitsOnIt(t *testing.T) {
+	root := t.TempDir()
+	ready := &manifest.ReadyProbe{TCP: &manifest.ReadyTCP{Port: 5432}}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "loop",
+		Services: map[string]manifest.Service{
+			"db":    {Runtime: manifest.RuntimeLocal, Command: []string{"db"}, Ready: ready},
+			"cache": {Runtime: manifest.RuntimeLocal, Command: []string{"cache"}, Ready: ready},
+			"api":   {Runtime: manifest.RuntimeLocal, Command: []string{"api"}, Ready: ready},
+			"redis": {Runtime: manifest.RuntimeLocal, Command: []string{"redis"}},
+			"web":   {Runtime: manifest.RuntimeLocal, Command: []string{"web"}, DependsOn: []string{"migrate"}},
+			"edge":  {Runtime: manifest.RuntimeContainer, Image: "caddy"},
+		},
+		Jobs: map[string]manifest.Job{
+			"migrate": {Runtime: manifest.RuntimeLocal, Command: []string{"migrate"}, DependsOn: []string{"db", "redis"}},
+			"warm":    {Runtime: manifest.RuntimeLocal, Command: []string{"warm"}, DependsOn: []string{"cache", "api"}},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	for _, name := range []string{"docker-compose.yaml", "process-compose.yaml"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("generated\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+	containers := stubStatusBackend{statuses: []runtime.ServiceStatus{{Name: "edge", Runtime: "container", State: "restarting"}}}
+	local := stubStatusBackend{statuses: []runtime.ServiceStatus{
+		{Name: "db", State: "restarting", ExitCode: exitCode(1), Restarts: 3},
+		// Between two crashes: running again, not yet healthy.
+		{Name: "cache", State: "running", ExitCode: exitCode(0), Restarts: 2, Health: "unhealthy"},
+		// Restarted once and healthy since: not a cause.
+		{Name: "api", State: "running", ExitCode: exitCode(0), Restarts: 1, Health: "healthy"},
+		// No readiness probe, so never healthy and never holding dependents
+		// back while it runs: its restart is not a cause.
+		{Name: "redis", State: "running", ExitCode: exitCode(0), Restarts: 1},
+		{Name: "migrate", State: "pending", ExitCode: exitCode(0)},
+		{Name: "web", State: "pending", ExitCode: exitCode(0)},
+		{Name: "warm", State: "pending", ExitCode: exitCode(0)},
+	}}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	status, err := platform.StackStatus(t.Context())
+	if err != nil {
+		t.Fatalf("StackStatus: %v", err)
+	}
+	if got := status.Services["db"]; got.Outcome != api.ServiceRestarting || got.Restarts != 3 || !sameExitCode(got.ExitCode, exitCode(1)) || got.Reason != "" {
+		t.Fatalf("db = %+v, want restarting after exit 1 with 3 restarts", got)
+	}
+	if got := status.Services["edge"]; got.Outcome != api.ServiceRestarting || got.Restarts != 0 || got.ExitCode != nil {
+		t.Fatalf("edge = %+v, want restarting, without the exit or count docker does not report", got)
+	}
+	if got := status.Services["cache"]; got.Outcome != api.JobRunning || got.Restarts != 2 {
+		t.Fatalf("cache = %+v, want running with 2 restarts", got)
+	}
+	const dbReason = "waiting for service db: restarting (exit 1, 3 restarts)"
+	if got := status.Jobs["migrate"]; got.Status != api.JobPending || got.Reason != dbReason {
+		t.Fatalf("migrate = %+v, want pending, %s", got, dbReason)
+	}
+	if got := status.Services["web"]; got.Outcome != api.JobPending || got.Reason != dbReason {
+		t.Fatalf("web = %+v, want pending through migrate, %s", got, dbReason)
+	}
+	if got, want := status.Jobs["warm"].Reason, "waiting for service cache: restarted 2 time(s), not healthy"; got != want {
+		t.Fatalf("warm reason = %q, want %q", got, want)
+	}
+	if want := (api.StatusCounts{Total: 6, Running: 3, Restarting: 2}); status.Summary.Services != want {
+		t.Fatalf("services summary = %+v, want %+v", status.Summary.Services, want)
+	}
+	failure := stackFailure(status)
+	if failure == nil {
+		t.Fatal("stackFailure = nil, want the restarting services")
+	}
+	if want := "service \"db\" restarting (exit 1, 3 restarts); service \"edge\" restarting; see `angee service list` and `angee job list`"; failure.Error() != want {
+		t.Fatalf("failure = %q, want %q", failure.Error(), want)
+	}
+	one := &StackFailureError{Restarting: []api.ServiceState{status.Services["db"]}}
+	if want := "service \"db\" restarting (exit 1, 3 restarts); see `angee service logs db`"; one.Error() != want {
+		t.Fatalf("one restarting = %q, want %q", one.Error(), want)
+	}
+}
+
+// The detached `angee dev` wait names, once, the restarting service a pending
+// job waits for, from the status reads it already makes.
+func TestCheckDevJobsReportsAJobWaitingOnARestartingService(t *testing.T) {
+	fastAwaitJobs(t)
+	t.Setenv(jobRunTimeoutEnv, "30ms")
+	const reason = "waiting for service db: restarting (exit 1, 3 restarts)"
+	waiting := jobsStatus(api.JobState{Name: "migrate", Status: api.JobPending, Reason: reason})
+	stack := &statusSequence{statuses: []api.StackStatusResponse{waiting}}
+	var progress bytes.Buffer
+	err := CheckDevJobs(t.Context(), stack, &progress)
+	if err == nil || !strings.Contains(err.Error(), "jobs not finished after 30ms: migrate") {
+		t.Fatalf("CheckDevJobs = %v, want the timeout naming migrate", err)
+	}
+	want := "waiting for jobs to finish: migrate (Ctrl-C stops waiting; the stack keeps running)\njob migrate is " + reason + "\n"
+	if got := progress.String(); got != want {
+		t.Fatalf("progress = %q, want %q", got, want)
+	}
+	if stack.calls < 2 {
+		t.Fatalf("StackStatus calls = %d, want the reason reported once over several reads", stack.calls)
+	}
+}
+
+func sameExitCode(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func derefExit(code *int) any {
+	if code == nil {
+		return nil
+	}
+	return *code
+}
+
+// A log read or follow asks both runtimes for the last lines only. Without a
+// tail, process-compose replays its whole 1000-line buffer over a websocket that
+// drops lines once a client falls behind, and returns the oldest lines (#113).
+func TestStackLogsAskBothRuntimesForTheLastLines(t *testing.T) {
+	root := devFailureStack(t)
+	containers := &logsRecorder{}
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	for _, follow := range []bool{false, true} {
+		lines, err := platform.StackLogs(t.Context(), []string{"postgres", "django"}, follow, 0)
+		if err != nil {
+			t.Fatalf("StackLogs(follow=%v): %v", follow, err)
+		}
+		for range lines {
+		}
+	}
+	for name, backend := range map[string]*logsRecorder{"container": containers, "local": local} {
+		if got, want := backend.tails(), []int{runtime.DefaultLogTail, runtime.DefaultLogTail}; !slices.Equal(got, want) {
+			t.Errorf("%s backend tails = %v, want %v for a read and a follow", name, got, want)
+		}
+	}
+}
+
+// An explicit tail reaches the runtimes, capped at MaxLogTail. A buffered read
+// of a local service takes any tail, since it goes through the supervisor's
+// log range endpoint. A follow of a local service or job is refused a backlog
+// above MaxLocalFollowTail, where process-compose drops the newest lines, with
+// an error naming its log file rather than a silent clamp (#114).
+func TestStackLogsTailLimits(t *testing.T) {
+	root := devFailureStack(t)
+	containers := &logsRecorder{}
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, containers, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	drain := func(lines <-chan string) {
+		for range lines {
+		}
+	}
+	for _, read := range []struct {
+		services []string
+		follow   bool
+		tail     int
+	}{
+		{[]string{"postgres"}, false, 300},
+		{[]string{"postgres"}, true, 20000},
+		{[]string{"django"}, false, 1000},
+		{[]string{"django"}, true, runtime.MaxLocalFollowTail},
+	} {
+		lines, err := platform.StackLogs(t.Context(), read.services, read.follow, read.tail)
+		if err != nil {
+			t.Fatalf("StackLogs(%v, follow %v, tail %d): %v", read.services, read.follow, read.tail, err)
+		}
+		drain(lines)
+	}
+	if got, want := containers.tails(), []int{300, runtime.MaxLogTail}; !slices.Equal(got, want) {
+		t.Fatalf("container tails = %v, want %v", got, want)
+	}
+
+	var invalid *InvalidInputError
+	for _, services := range [][]string{{"django"}, {"postgres", "deps"}} {
+		_, err := platform.StackLogs(t.Context(), services, true, 300)
+		if !errors.As(err, &invalid) || invalid.Field != "tail" || !strings.Contains(err.Error(), "256") || !strings.Contains(err.Error(), "run/logs/"+services[len(services)-1]+".log") {
+			t.Fatalf("StackLogs(%v, follow, tail 300) = %v, want an invalid tail naming 256 and the log file", services, err)
+		}
+	}
+	if _, err := platform.StreamServiceLogs(t.Context(), "django", 300); !errors.As(err, &invalid) || !strings.Contains(err.Error(), "run/logs/django.log") {
+		t.Fatalf("StreamServiceLogs(django, 300) = %v, want an invalid tail naming the log file", err)
+	}
+	if _, err := platform.StackLogs(t.Context(), []string{"postgres"}, false, -1); !errors.As(err, &invalid) {
+		t.Fatalf("StackLogs(tail -1) = %v, want an invalid tail", err)
+	}
+	if got, want := local.tails(), []int{1000, runtime.MaxLocalFollowTail}; !slices.Equal(got, want) {
+		t.Fatalf("local tails = %v, want %v: a refused tail reaches no runtime", got, want)
+	}
+}
+
+// A read that covers more than one service has its local lines labelled, even
+// when only one of them is local; a read of one service is not labelled.
+func TestStackLogsLabelsLocalLinesWhenTheReadCoversSeveralServices(t *testing.T) {
+	root := devFailureStack(t)
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, &logsRecorder{}, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	for _, services := range [][]string{{"django"}, {"postgres", "django"}, {"django", "deps"}} {
+		lines, err := platform.StackLogs(t.Context(), services, false, 0)
+		if err != nil {
+			t.Fatalf("StackLogs(%v): %v", services, err)
+		}
+		for range lines {
+		}
+	}
+	local.mu.Lock()
+	defer local.mu.Unlock()
+	var noPrefix []bool
+	for _, req := range local.requests {
+		noPrefix = append(noPrefix, req.NoPrefix)
+	}
+	if want := []bool{true, false, false}; !slices.Equal(noPrefix, want) {
+		t.Fatalf("local NoPrefix = %v, want %v", noPrefix, want)
+	}
+}
+
+// A local service the running supervisor has not loaded is a NotFound error,
+// so REST answers 404 and GraphQL reports NOT_FOUND.
+func TestProcessNotLoadedIsNotFound(t *testing.T) {
+	err := fmt.Errorf("read: %w", &runtime.ProcessNotLoadedError{Name: "late", ControlPort: 28100})
+	if got := AsOperationError(err).Code; got != CodeNotFound {
+		t.Fatalf("code = %q, want %q", got, CodeNotFound)
+	}
+}
+
+// A process the supervisor is replacing with an updated definition is a
+// Conflict, worth retrying, not a NotFound that suggests a supervisor restart.
+func TestProcessBeingReplacedIsConflict(t *testing.T) {
+	err := fmt.Errorf("read: %w", &runtime.ProcessNotLoadedError{Name: "web", ControlPort: 28100, Replacing: true})
+	if got := AsOperationError(err).Code; got != CodeConflict {
+		t.Fatalf("code = %q, want %q", got, CodeConflict)
+	}
+	if strings.Contains(err.Error(), "restart the supervisor") {
+		t.Fatalf("error = %v, want no advice to restart the supervisor", err)
+	}
+}
+
+// A service stream that names no backlog replays the default tail; one that
+// names a backlog keeps it.
+func TestStreamServiceLogsDefaultsTheTail(t *testing.T) {
+	root := devFailureStack(t)
+	local := &logsRecorder{}
+	platform, err := NewWithBackends(root, &logsRecorder{}, local)
+	if err != nil {
+		t.Fatalf("NewWithBackends: %v", err)
+	}
+	for _, tail := range []int{0, 50} {
+		lines, err := platform.StreamServiceLogs(t.Context(), "django", tail)
+		if err != nil {
+			t.Fatalf("StreamServiceLogs(tail=%d): %v", tail, err)
+		}
+		for range lines {
+		}
+	}
+	if got, want := local.tails(), []int{runtime.DefaultLogTail, 50}; !slices.Equal(got, want) {
+		t.Fatalf("tails = %v, want %v", got, want)
 	}
 }

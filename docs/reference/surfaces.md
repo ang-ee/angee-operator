@@ -37,6 +37,9 @@ helper used by adapters or tests and should not be exposed directly.
 | `ServiceStop` | Yes | Yes | Yes | - |
 | `ServiceRestart` | Yes | Yes | Yes | - |
 | `IngressStatus` | No | Yes | Yes | REST `GET /ingress/status`; GraphQL `ingressStatus` route summary. |
+| `BackupPreview` | No | Yes | No | Admin-bearer-only discovery for Django-owned backup plans. |
+| `BackupStart` | No | Yes | No | Admin-bearer-only manual capture; existing job-run receipt owns polling. |
+| `BackupArchive` | No | Yes | No | Streams a completed verified ZIP; cold restore CLI is deferred. |
 | `JobList` | Yes | Yes | Yes | - |
 | `JobRun` | Internal | Internal | Internal | Synchronous compatibility wrapper; CLI and transports start and poll receipts. |
 | `JobRunStart` | Yes | Yes | Yes | Starts an operation; `job run --chained-restart` applies downstream jobs and services after the root succeeds. |
@@ -54,8 +57,8 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceStatus` | Yes | Yes | Yes | - |
 | `WorkspaceUpdate` | Yes | Yes | Yes | - |
 | `WorkspaceDestroy` | Yes | Yes | Yes | - |
-| `WorkspaceLogs` | Yes | Yes | No | GraphQL uses bounded `WorkspaceLogsLimited`. |
-| `WorkspaceLogsLimited` | No | No | Yes | GraphQL snapshot guardrail. |
+| `WorkspaceLogs` | Yes | Yes | No | Deprecated (#110): always empty. GraphQL uses bounded `WorkspaceLogsLimited`. |
+| `WorkspaceLogsLimited` | No | No | Yes | Deprecated (#110): always empty. |
 | `WorkspaceGitStatus` | Yes | Yes | Yes | - |
 | `WorkspacePush` | Yes | Yes | Yes | - |
 | `WorkspaceSyncBase` | Yes | Yes | Yes | - |
@@ -73,6 +76,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceSourceRebaseAbort` | Yes | Yes | Yes | `angee workspace source rebase-abort`; REST `POST /workspaces/{name}/sources/{slot}/rebase-abort`. |
 | `WorkspaceSourceRebaseContinue` | Yes | Yes | Yes | `angee workspace source rebase-continue`; REST `POST /workspaces/{name}/sources/{slot}/rebase-continue`. |
 | `WorkspaceSourcePublish` | Yes | Yes | Yes | `angee workspace source publish`; REST `POST /workspaces/{name}/sources/{slot}/publish`. |
+| `WorkspaceSourceMigrate` | Yes | Yes | Yes | `angee workspace source migrate`; REST `POST /workspaces/{name}/sources/{slot}/migrate`. |
 | `WorkspaceCreatePreflight` | Yes | Yes | Yes | `angee workspace preflight`; REST `POST /workspaces/preflight`. |
 | `Templates` | Yes | Yes | Yes | `angee template list`; REST `GET /templates`. |
 | `Template` | Yes | Yes | Yes | `angee template get`; REST `GET /templates/{ref...}`. |

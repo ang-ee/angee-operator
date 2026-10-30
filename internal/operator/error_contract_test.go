@@ -145,6 +145,75 @@ func TestSyncBaseErrorContract(t *testing.T) {
 	})
 }
 
+// A jj slot's refusals report the same code, cause and context on GraphQL
+// and REST: a jj slot is never pulled, and sync-base by merge cannot sync one
+// (plan D11).
+func TestJJSlotRefusalErrorContract(t *testing.T) {
+	for _, tc := range []struct {
+		name, query, path, body string
+		wantExt                 map[string]any
+		wantPrefix              string
+	}{
+		{
+			name: "source pull", query: `mutation { workspaceSourcePull(workspace: "feature-a", slot: "work") { slot } }`, path: "/workspaces/feature-a/sources/work/pull", body: `{}`,
+			wantExt: map[string]any{"code": "INVALID_INPUT", "cause": "jj_slot_unsupported", "operation": "workspace.source-pull",
+				"workspace": "feature-a", "slot": "work", "source": "app",
+				"hint": "Sync it with `angee workspace sync-base feature-a`, which syncs every slot of the workspace with its base, or alone with `angee workspace source rebase feature-a work main@origin` after `angee workspace source fetch feature-a work`."},
+			wantPrefix: `Pull for workspace "feature-a" slot "work": source slot "work" is a jj slot, which is never pulled: jj takes in its base by rebasing the slot onto it.`,
+		},
+		{
+			name: "sync-base by merge", query: `mutation { workspaceSyncBase(name: "feature-a", method: "merge") { name } }`, path: "/workspaces/feature-a/sync-base", body: `{"method":"merge"}`,
+			wantExt:    map[string]any{"code": "INVALID_INPUT", "operation": "workspace.sync-base", "workspace": "feature-a", "slot": "work", "source": "app"},
+			wantPrefix: `Sync base for workspace "feature-a": source slot "work" cannot be synced by merge (a jj slot is synced by rebasing`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _, _, _ := setupOperatorGitWorkspace(t)
+			declareOperatorSlot(t, root, "feature-a", "work", manifest.WorkspaceSource{Source: "app", Mode: manifest.WorkspaceSourceModeJJ, Ref: "main", Subpath: "work"})
+			// The slot looks materialized; both refusals come before jj runs.
+			if err := os.MkdirAll(filepath.Join(root, "workspaces", "feature-a", "work", ".jj"), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 28094})
+			if err != nil {
+				t.Fatalf("NewServer() error = %v", err)
+			}
+			t.Cleanup(server.Close)
+
+			rr := serveRequest(server, graphQLRequest(t, tc.query))
+			var resp struct {
+				Errors []struct {
+					Message    string         `json:"message"`
+					Extensions map[string]any `json:"extensions"`
+				} `json:"errors"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil || len(resp.Errors) != 1 {
+				t.Fatalf("GraphQL response = %s (%v), want one error", rr.Body.String(), err)
+			}
+			gqlErr := resp.Errors[0]
+			if !strings.HasPrefix(gqlErr.Message, tc.wantPrefix) {
+				t.Fatalf("GraphQL message = %q, want it to start %q", gqlErr.Message, tc.wantPrefix)
+			}
+			for key, want := range tc.wantExt {
+				if got := gqlErr.Extensions[key]; !reflect.DeepEqual(got, want) {
+					t.Errorf("extensions[%q] = %#v, want %#v (all: %#v)", key, got, want, gqlErr.Extensions)
+				}
+			}
+			rest := serveREST(server, http.MethodPost, tc.path, tc.body)
+			var body api.ErrorResponse
+			if err := json.Unmarshal(rest.Body.Bytes(), &body); err != nil {
+				t.Fatalf("Unmarshal(REST error) error = %v: %s", err, rest.Body.String())
+			}
+			if rest.Code != http.StatusBadRequest || body.Code != tc.wantExt["code"] || body.Error != gqlErr.Message || body.Operation != tc.wantExt["operation"] {
+				t.Fatalf("REST = %d %+v, want 400 with the GraphQL error's code and message", rest.Code, body)
+			}
+			if cause, _ := tc.wantExt["cause"].(string); body.Cause != cause {
+				t.Errorf("REST cause = %q, want %q", body.Cause, cause)
+			}
+		})
+	}
+}
+
 // Every REST error body has a code, including ones written before a request
 // reaches the platform, and an unusable X-Request-ID is replaced.
 func TestRESTErrorsAlwaysCarryACodeAndRequestID(t *testing.T) {

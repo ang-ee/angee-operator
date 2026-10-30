@@ -377,6 +377,12 @@ func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace
 	return &res, err
 }
 
+// WorkspaceSourceMigrate is the resolver for the workspaceSourceMigrate field.
+func (r *mutationResolver) WorkspaceSourceMigrate(ctx context.Context, workspace string, slot string, to *string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceMigrate(ctx, workspace, slot, stringPtrValue(to))
+	return &res, err
+}
+
 // InsertSecretsOne is the resolver for the insert_secrets_one field.
 func (r *mutationResolver) InsertSecretsOne(ctx context.Context, object model.SecretsInsertInput) (*api.SecretRef, error) {
 	ref, err := r.Platform.SecretSet(ctx, object.Name, object.Value)
@@ -415,6 +421,10 @@ func (r *queryResolver) JobRunOperation(ctx context.Context, id string) (*model.
 	op, err := r.Platform.JobRunGet(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	// A backup's receipt is the admin bearer's alone, as on REST.
+	if service.IsBackupReceipt(op) && (r.IsAdmin == nil || !r.IsAdmin(ctx)) {
+		return nil, &service.NotFoundError{Kind: "job run", Name: op.ID}
 	}
 	return jobRunOperationModel(op), nil
 }
@@ -771,23 +781,23 @@ func (r *queryResolver) WorkspaceSourceDiff(ctx context.Context, workspace strin
 }
 
 // StackLogs is the resolver for the stackLogs field.
-func (r *queryResolver) StackLogs(ctx context.Context, services []string, limit *int) (string, error) {
+func (r *queryResolver) StackLogs(ctx context.Context, services []string, limit *int, tail *int) (string, error) {
 	maxBytes := logLimitValue(limit)
-	logs, err := r.Platform.StackLogsLimited(ctx, services, false, maxBytes)
+	logs, err := r.Platform.StackLogsLimited(ctx, services, false, logTailValue(tail), maxBytes)
 	if err != nil {
 		return "", err
 	}
-	return collectLogStream(logs, maxBytes), nil
+	return collectLogStream(logs), nil
 }
 
 // ServiceLogs is the resolver for the serviceLogs field.
-func (r *queryResolver) ServiceLogs(ctx context.Context, name string, limit *int) (string, error) {
+func (r *queryResolver) ServiceLogs(ctx context.Context, name string, limit *int, tail *int) (string, error) {
 	maxBytes := logLimitValue(limit)
-	logs, err := r.Platform.StackLogsLimited(ctx, []string{name}, false, maxBytes)
+	logs, err := r.Platform.StackLogsLimited(ctx, []string{name}, false, logTailValue(tail), maxBytes)
 	if err != nil {
 		return "", err
 	}
-	return collectLogStream(logs, maxBytes), nil
+	return collectLogStream(logs), nil
 }
 
 // WorkspaceLogs is the resolver for the workspaceLogs field.
@@ -797,7 +807,7 @@ func (r *queryResolver) WorkspaceLogs(ctx context.Context, name string, limit *i
 	if err != nil {
 		return "", err
 	}
-	return collectLogStream(logs, maxBytes), nil
+	return collectLogStream(logs), nil
 }
 
 // McpDescriptor is the resolver for the mcpDescriptor field.
@@ -943,11 +953,11 @@ func (r *subscriptionResolver) OnGitOpsTopologyChange(ctx context.Context) (<-ch
 }
 
 // OnServiceLogs is the resolver for the onServiceLogs field.
-func (r *subscriptionResolver) OnServiceLogs(ctx context.Context, name string) (<-chan string, error) {
+func (r *subscriptionResolver) OnServiceLogs(ctx context.Context, name string, tail *int) (<-chan string, error) {
 	if r.Events == nil {
 		return nil, errSubscriptionsUnavailable
 	}
-	return r.Events.SubscribeServiceLogs(ctx, name)
+	return r.Events.SubscribeServiceLogs(ctx, name, logTailValue(tail))
 }
 
 // OnWorkspaceLogs is the resolver for the onWorkspaceLogs field.

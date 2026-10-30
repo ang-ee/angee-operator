@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +26,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
@@ -381,6 +384,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 	restartCmd := serviceActionCommand(stdout, root, operatorURL, "restart")
 
 	var follow bool
+	var tail int
 	logsCmd := &cobra.Command{
 		Use:   "logs [service...]",
 		Short: "Show service logs",
@@ -390,7 +394,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 			if err != nil {
 				return err
 			}
-			lines, err := platform.StackLogs(cmd.Context(), args, follow)
+			lines, err := platform.StackLogs(cmd.Context(), args, follow, tail)
 			if err != nil {
 				return err
 			}
@@ -403,6 +407,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 		},
 	}
 	logsCmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
+	logsCmd.Flags().IntVarP(&tail, "tail", "n", 0, logTailUsage)
 
 	var devBuild bool
 	var devDetach bool
@@ -507,8 +512,12 @@ func serviceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *boo
 	return cmd
 }
 
+// logTailUsage is the help of the logs commands' -n/--tail flag.
+const logTailUsage = "lines to show from the end of each log; 0 shows 200. A local service or job holds its last 1000 lines (its full output is in run/logs/<name>.log), and --follow replays at most 256 of them"
+
 func serviceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var follow bool
+	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "Show service logs",
@@ -518,7 +527,7 @@ func serviceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 			if err != nil {
 				return err
 			}
-			logs, err := platform.StackLogs(cmd.Context(), args, follow)
+			logs, err := platform.StackLogs(cmd.Context(), args, follow, tail)
 			if err != nil {
 				return err
 			}
@@ -531,6 +540,7 @@ func serviceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Comm
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
+	cmd.Flags().IntVarP(&tail, "tail", "n", 0, logTailUsage)
 	return cmd
 }
 
@@ -544,19 +554,23 @@ func jobCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *
 
 func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var follow bool
+	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "Show the output of a job's last run",
-		Long: "Show the output of a job's last run, as the runtime holds it: the\n" +
-			"process-compose log buffer for a local job, the exited container for a\n" +
-			"container job. The output lasts until the stack goes down.",
+		Long: "Show the last lines of a job's last run (200 unless -n says otherwise),\n" +
+			"as the runtime holds it: the process-compose log buffer for a local job,\n" +
+			"the exited container for a container job. Isolated held jobs read their\n" +
+			"durable operation output. Native supervisor output lasts until the\n" +
+			"stack goes down; a local job's output is also written to\n" +
+			"run/logs/<name>.log under the stack root.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
 				return err
 			}
-			logs, err := platform.StackLogs(cmd.Context(), args, follow)
+			logs, err := platform.StackLogs(cmd.Context(), args, follow, tail)
 			if err != nil {
 				return err
 			}
@@ -569,6 +583,7 @@ func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command 
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow logs")
+	cmd.Flags().IntVarP(&tail, "tail", "n", 0, logTailUsage)
 	return cmd
 }
 
@@ -834,13 +849,37 @@ func serviceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput 
 				return writeJSON(stdout, services)
 			}
 			for _, service := range services {
-				if _, err := fmt.Fprintln(stdout, listRow(service.Name, service.Runtime, service.Status, service.Reason)); err != nil {
+				if _, err := fmt.Fprintln(stdout, listRow(service.Name, service.Runtime, serviceStatusText(service), service.Reason)); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
+}
+
+// serviceStatusText renders a service's runtime state, `failed (exit 1)` for a
+// failed service (the runtime calls an exited process `Completed` whatever its
+// exit status), or `restarting (exit 1, 3 restarts)` for one the runtime is
+// restarting. A service that runs after restarts shows their count, such as
+// `running (3 restarts)`.
+func serviceStatusText(state api.ServiceState) string {
+	switch state.Outcome {
+	case api.JobFailed:
+		if state.ExitCode == nil {
+			return api.JobFailed
+		}
+		return fmt.Sprintf("%s (exit %d)", api.JobFailed, *state.ExitCode)
+	case api.ServiceRestarting:
+		return service.RestartingText(state.ExitCode, state.Restarts)
+	}
+	switch {
+	case state.Restarts == 1:
+		return state.Status + " (1 restart)"
+	case state.Restarts > 1:
+		return fmt.Sprintf("%s (%d restarts)", state.Status, state.Restarts)
+	}
+	return state.Status
 }
 
 func bindServiceFlags(cmd *cobra.Command, req *api.ServiceInitRequest, env *[]string) {
@@ -1173,11 +1212,16 @@ func workspaceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Co
 	var follow bool
 	cmd := &cobra.Command{
 		Use:   "logs [name]",
-		Short: "Show workspace logs",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Deprecated: a workspace has no logs of its own",
+		Long: "Deprecated (angee-operator#110): a workspace is files and has no logs of its own, so this prints nothing. " +
+			"Read the logs of the services and jobs that mount the workspace with `angee logs <service>`. The command is removed in a later release.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, name, err := workspaceTarget(args, root, operatorURL, "logs")
 			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "angee: `workspace logs` is deprecated: a workspace has no logs of its own (angee-operator#110); use `angee logs <service>` for the services and jobs that mount it"); err != nil {
 				return err
 			}
 			logs, err := platform.WorkspaceLogs(cmd.Context(), name, follow)
@@ -1228,6 +1272,9 @@ func workspaceGitCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 				if state.UnpushedReason != "" {
 					stateText += " " + state.UnpushedReason
 				}
+				if conflict := conflictDetail(state.JJSlotState); conflict != "" {
+					stateText += " " + conflict
+				}
 				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
@@ -1241,8 +1288,11 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 	var ref string
 	cmd := &cobra.Command{
 		Use:   "push <name>",
-		Short: "Push workspace git sources",
-		Args:  cobra.ExactArgs(1),
+		Short: "Push workspace sources",
+		Long: "Push each slot whose manifest names a mode (worktree, clone or jj); a slot that names no mode, and a jj slot of a local store, is skipped. " +
+			"A git slot pushes its branch; a jj slot is published under --ref, else its manifest branch, to the remote git pushes that branch to. " +
+			"Every slot is checked before any is pushed, and a slot with nothing of its own is left alone.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -1267,7 +1317,7 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&ref, "ref", "", "ref to push")
+	cmd.Flags().StringVar(&ref, "ref", "", "ref to push (for a jj slot, the branch to publish under)")
 	return cmd
 }
 
@@ -1276,14 +1326,24 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 	var rebase bool
 	cmd := &cobra.Command{
 		Use:   "sync-base [name]",
-		Short: "Update workspace git sources from their base ref without changing branches",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Update workspace sources from their base ref without changing branches",
+		Long: "Update each workspace slot whose manifest names a mode that syncs (worktree or jj) from its base ref; " +
+			"a slot that names no mode is skipped. With neither flag, each slot is synced its own way: " +
+			"a git worktree by merging, a jj slot by rebasing. --merge is refused for a workspace with a slot that names mode jj.\n\n" +
+			"Example:\n  angee workspace sync-base feature-a\n  angee workspace sync-base feature-a --rebase",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if merge && rebase {
 				return fmt.Errorf("choose only one of --merge or --rebase")
 			}
-			method := "merge"
-			if rebase {
+			// No flag sends no method, so the operator picks each slot's own
+			// sync (plan D11) and can tell an explicit --merge from the
+			// default.
+			method := ""
+			switch {
+			case merge:
+				method = "merge"
+			case rebase:
 				method = "rebase"
 			}
 			platform, name, err := workspaceTarget(args, root, operatorURL, "sync-base")
@@ -1302,15 +1362,19 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 				if ref == "" {
 					ref = state.Ref
 				}
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, state.State, state.Path); err != nil {
+				stateText := state.State
+				if conflict := conflictDetail(state.JJSlotState); conflict != "" {
+					stateText += " " + conflict
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each workspace branch (default)")
-	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each workspace branch onto its base ref")
+	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each git worktree's branch (git's default; refused with a jj slot)")
+	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each slot onto its base ref (a jj slot's default)")
 	return cmd
 }
 
@@ -1550,7 +1614,6 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 	}{
 		{key: "path", value: status.Path},
 		{key: "template", value: status.Template},
-		{key: "chain_root", value: status.ChainRoot},
 		{key: "ttl", value: status.TTL},
 	}
 	for _, row := range rows {
@@ -1600,6 +1663,9 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 			if source.Ahead > 0 || source.Behind > 0 {
 				detail += fmt.Sprintf(" ahead=%d behind=%d", source.Ahead, source.Behind)
 			}
+			if conflict := conflictDetail(source.JJSlotState); conflict != "" {
+				detail += " " + conflict
+			}
 			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n", source.Slot, source.Source, source.Kind, source.Mode, ref, detail, source.Path); err != nil {
 				return err
 			}
@@ -1615,17 +1681,25 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 			}
 		}
 	}
-	if status.InnerStack != nil {
-		if _, err := fmt.Fprintf(stdout, "inner_stack\t%s\tservices=%d\tjobs=%d\tworkspaces=%d\n", status.InnerStack.Name, len(status.InnerStack.Services), len(status.InnerStack.Jobs), len(status.InnerStack.Workspaces)); err != nil {
-			return err
-		}
-	}
-	if status.InnerError != "" {
-		if _, err := fmt.Fprintf(stdout, "inner_error\t%s\n", status.InnerError); err != nil {
-			return err
-		}
-	}
 	return nil
+}
+
+// maxConflictPathsShown caps how many conflicted files a status line names;
+// --json lists them all.
+const maxConflictPathsShown = 10
+
+// conflictDetail says that a jj slot holds a conflicted commit, naming up to
+// maxConflictPathsShown of its conflicted files, or is "" for a slot that
+// holds none. The files are named as vcs.NamePaths names them, so an escape
+// sequence in a name stays off the terminal.
+func conflictDetail(jj api.JJSlotState) string {
+	if !jj.Conflicted {
+		return ""
+	}
+	if len(jj.ConflictPaths) == 0 {
+		return "conflicted"
+	}
+	return "conflicted: " + vcs.NamePaths(jj.ConflictPaths, maxConflictPathsShown)
 }
 
 func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
@@ -1667,8 +1741,19 @@ func statusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool
 			if *jsonOutput {
 				return writeJSON(stdout, status)
 			}
-			_, err = fmt.Fprintf(stdout, "%s\nroot: %s\nservices: %s\njobs: %s\nworkspaces: %d\n", status.Name, status.Root,
-				statusCountsText(len(status.Services), status.Summary.Services), statusCountsText(len(status.Jobs), status.Summary.Jobs), len(status.Workspaces))
+			if _, err := fmt.Fprintf(stdout, "%s\nroot: %s\nservices: %s\n", status.Name, status.Root, statusCountsText(len(status.Services), status.Summary.Services)); err != nil {
+				return err
+			}
+			for _, name := range slices.Sorted(maps.Keys(status.Services)) {
+				service := status.Services[name]
+				if service.Outcome != api.JobFailed && service.Outcome != api.ServiceRestarting {
+					continue
+				}
+				if _, err := fmt.Fprintln(stdout, "  "+listRow(name, serviceStatusText(service), service.Reason)); err != nil {
+					return err
+				}
+			}
+			_, err = fmt.Fprintf(stdout, "jobs: %s\nworkspaces: %d\n", statusCountsText(len(status.Jobs), status.Summary.Jobs), len(status.Workspaces))
 			return err
 		},
 	}
@@ -1685,6 +1770,7 @@ func statusCountsText(total int, counts api.StatusCounts) string {
 		{"running", counts.Running},
 		{"completed", counts.Completed},
 		{"failed", counts.Failed},
+		{"restarting", counts.Restarting},
 		{"skipped", counts.Skipped},
 	} {
 		if outcome.count > 0 {

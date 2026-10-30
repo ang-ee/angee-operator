@@ -92,7 +92,7 @@ func (p *Platform) refreshTemplateRepo(ctx context.Context, repoURL, repoDir, re
 		if err := os.MkdirAll(filepath.Dir(repoDir), 0o755); err != nil {
 			return err
 		}
-		return client.CloneRef(timeoutCtx, repoURL, repoDir, ref)
+		return client.CloneRef(timeoutCtx, repoURL, repoDir, ref, "origin")
 	})
 }
 

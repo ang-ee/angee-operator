@@ -24,6 +24,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 	"github.com/ang-ee/angee-operator/internal/service"
 )
 
@@ -229,19 +230,36 @@ func (p *RemoteClient) StackDown(ctx context.Context) error {
 	return p.doJSON(ctx, http.MethodPost, "/stack/down", nil, nil, nil)
 }
 
-func (p *RemoteClient) StackLogs(ctx context.Context, services []string, _ bool) (<-chan string, error) {
+func (p *RemoteClient) StackLogs(ctx context.Context, services []string, _ bool, tail int) (<-chan string, error) {
 	query := url.Values{}
 	for _, service := range services {
 		query.Add("service", service)
 	}
+	if tail != 0 {
+		query.Set("tail", strconv.Itoa(tail))
+	}
 	return p.stream(ctx, "/stack/logs", query)
 }
 
-// StackLogsLimited delegates to the operator's /stack/logs stream. The
-// operator emits a finite, already-bounded snapshot, so follow and maxBytes
-// are not forwarded — the same degradation StackLogs applies to follow.
-func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, _ bool, _ int) (<-chan string, error) {
-	return p.StackLogs(ctx, services, false)
+// StackLogsLimited reads the operator's /stack/logs stream, a finite read
+// (follow is not forwarded, as in StackLogs), and keeps it within maxBytes as
+// the local platform does (runtime.LimitLogBytes): /stack/logs takes no byte
+// limit.
+func (p *RemoteClient) StackLogsLimited(ctx context.Context, services []string, _ bool, tail, maxBytes int) (<-chan string, error) {
+	logs, err := p.StackLogs(ctx, services, false, tail)
+	if err != nil || maxBytes <= 0 {
+		return logs, err
+	}
+	out := make(chan string, 1)
+	go func() {
+		defer close(out)
+		read := runtime.NewLimitedLogRead(maxBytes)
+		for chunk := range logs {
+			read.Add(chunk)
+		}
+		out <- read.String()
+	}()
+	return out, nil
 }
 
 // StreamServiceLogs is not proxied by the HTTP remote client: the per-service
@@ -664,6 +682,14 @@ func (p *RemoteClient) WorkspaceSourceRebaseContinue(ctx context.Context, worksp
 
 func (p *RemoteClient) WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error) {
 	return p.gitOp(ctx, workspace, slot, "publish", api.WorkspaceSourceGitOpRequest{Remote: remote, Branch: branch})
+}
+
+func (p *RemoteClient) WorkspaceSourceMigrate(ctx context.Context, workspace, slot, to string) (api.GitOpResult, error) {
+	var result api.GitOpResult
+	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, "migrate"), nil, api.WorkspaceSourceMigrateRequest{To: to}, &result); err != nil {
+		return api.GitOpResult{}, err
+	}
+	return result, nil
 }
 
 func (p *RemoteClient) gitOp(ctx context.Context, workspace, slot, op string, body api.WorkspaceSourceGitOpRequest) (api.GitOpResult, error) {

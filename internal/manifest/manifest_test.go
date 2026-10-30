@@ -187,6 +187,45 @@ func TestServiceStopGracePeriodValidation(t *testing.T) {
 	}
 }
 
+func TestServiceRestartPolicy(t *testing.T) {
+	load := func(t *testing.T, body string) (*Stack, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "angee.yaml")
+		data := "version: 1\nkind: stack\nname: restart\n" + body
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		return LoadFile(path)
+	}
+	// An unquoted `no` is a YAML 1.1 boolean; it must load as the policy name.
+	for _, tc := range []struct{ value, want string }{
+		{"", "on_failure"},
+		{"no", "no"},
+		{`"no"`, "no"},
+		{"on_failure", "on_failure"},
+		{"always", "always"},
+	} {
+		body := "services:\n  web:\n    runtime: local\n    command: [server]\n"
+		if tc.value != "" {
+			body += "    restart: " + tc.value + "\n"
+		}
+		stack, err := load(t, body)
+		if err != nil {
+			t.Fatalf("restart %q: LoadFile() error = %v", tc.value, err)
+		}
+		if got := stack.Services["web"].NormalizedRestart(); string(got) != tc.want {
+			t.Fatalf("restart %q: NormalizedRestart() = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+	if _, err := load(t, "services:\n  web:\n    runtime: local\n    command: [server]\n    restart: on-failure\n"); err == nil || !strings.Contains(err.Error(), `service "web": restart must be no, on_failure or always, not "on-failure"`) {
+		t.Fatalf("restart on-failure: LoadFile() error = %v", err)
+	}
+	// Jobs are run on request and never restart, so they have no such field.
+	if _, err := load(t, "jobs:\n  migrate:\n    runtime: local\n    command: [migrate]\n    restart: always\n"); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("job restart: LoadFile() error = %v", err)
+	}
+}
+
 func TestLoadFileReadyProbeRejectsZeroRetries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "angee.yaml")
 	data := `version: 1
@@ -463,9 +502,11 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 		{mode: ""},
 		{mode: WorkspaceSourceModeWorktree},
 		{mode: WorkspaceSourceModeClone},
+		{mode: WorkspaceSourceModeJJ},
 		{mode: "worktre", wantErr: true},
 		{mode: "Worktree", wantErr: true},
-		{mode: "jj", wantErr: true},
+		{mode: "JJ", wantErr: true},
+		{mode: "link", wantErr: true},
 	} {
 		stack := &Stack{
 			Version: VersionCurrent,
@@ -507,5 +548,146 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 		if err := stack.Validate(); err != nil {
 			t.Errorf("Validate() of a local source with mode %q error = %v, want nil", mode, err)
 		}
+	}
+}
+
+// A stack's vcs is git or jj, or omitted; nothing else loads.
+func TestValidateStackVCS(t *testing.T) {
+	for _, tc := range []struct {
+		vcs     string
+		wantErr bool
+	}{
+		{vcs: ""},
+		{vcs: VCSGit},
+		{vcs: VCSJJ},
+		{vcs: "hg", wantErr: true},
+		{vcs: "JJ", wantErr: true},
+	} {
+		stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "vcs", VCS: tc.vcs}
+		err := stack.Validate()
+		if tc.wantErr != (err != nil) {
+			t.Errorf("Validate() with vcs %q error = %v, want error %v", tc.vcs, err, tc.wantErr)
+		}
+	}
+}
+
+// A slot's own mode wins; a slot with none follows the vcs it records, else
+// the stack's: a jj slot under jj, and its source kind's default (the empty
+// mode) under git.
+func TestEffectiveSourceMode(t *testing.T) {
+	for _, tc := range []struct {
+		vcs, mode, slotVCS, want string
+	}{
+		{vcs: "", mode: "", want: ""},
+		{vcs: VCSGit, mode: "", want: ""},
+		{vcs: VCSJJ, mode: "", want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeWorktree, want: WorkspaceSourceModeWorktree},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeClone, want: WorkspaceSourceModeClone},
+		{vcs: VCSGit, mode: WorkspaceSourceModeJJ, want: WorkspaceSourceModeJJ},
+		{vcs: "", mode: WorkspaceSourceModeWorktree, want: WorkspaceSourceModeWorktree},
+		{vcs: "", mode: "", slotVCS: VCSJJ, want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: "", slotVCS: VCSGit, want: ""},
+		{vcs: VCSGit, mode: "", slotVCS: VCSJJ, want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeWorktree, slotVCS: VCSJJ, want: WorkspaceSourceModeWorktree},
+		{vcs: "", mode: WorkspaceSourceModeJJ, slotVCS: VCSGit, want: WorkspaceSourceModeJJ},
+	} {
+		stack := &Stack{VCS: tc.vcs}
+		if got := stack.EffectiveSourceMode(WorkspaceSource{Source: "app", Mode: tc.mode, VCS: tc.slotVCS}); got != tc.want {
+			t.Errorf("EffectiveSourceMode(vcs %q, mode %q, slot vcs %q) = %q, want %q", tc.vcs, tc.mode, tc.slotVCS, got, tc.want)
+		}
+	}
+	for vcs, want := range map[string]string{"": VCSGit, VCSGit: VCSGit, VCSJJ: VCSJJ} {
+		if got := (&Stack{VCS: vcs}).SlotVCS(); got != want {
+			t.Errorf("SlotVCS() under vcs %q = %q, want %q", vcs, got, want)
+		}
+	}
+	var none *Stack
+	if got := none.EffectiveSourceMode(WorkspaceSource{Source: "app"}); got != "" {
+		t.Errorf("EffectiveSourceMode() on no stack = %q, want the empty mode", got)
+	}
+}
+
+// A slot vcs angee does not know is refused when the manifest is validated.
+func TestWorkspaceSourceVCSIsValidated(t *testing.T) {
+	for vcs, ok := range map[string]bool{"": true, VCSGit: true, VCSJJ: true, "hg": false} {
+		stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "test", Workspaces: map[string]Workspace{
+			"ws": {Template: "t", Sources: map[string]WorkspaceSource{"app": {Source: "app", VCS: vcs}}},
+		}}
+		err := stack.Validate()
+		if ok != (err == nil) || !ok && !strings.Contains(err.Error(), `workspace "ws" source "app": vcs "hg" is not supported`) {
+			t.Errorf("Validate() of a slot with vcs %q error = %v, want ok %v", vcs, err, ok)
+		}
+	}
+}
+
+func TestCaptureJobsAreManualDependencyLeaves(t *testing.T) {
+	for _, kind := range []string{"run_on", "job", "service_after", "service_depends_on", "valid"} {
+		t.Run(kind, func(t *testing.T) {
+			stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "test", Jobs: map[string]Job{"capture": {Runtime: RuntimeLocal, Command: []string{"true"}, Capture: &BackupCapture{Group: "databases", Name: "app", Output: "app.dump"}}}, Services: map[string]Service{}}
+			switch kind {
+			case "run_on":
+				job := stack.Jobs["capture"]
+				job.RunOn = []string{"up"}
+				stack.Jobs["capture"] = job
+			case "job":
+				stack.Jobs["consumer"] = Job{Runtime: RuntimeLocal, Command: []string{"true"}, DependsOn: []string{"capture"}}
+			case "service_after":
+				stack.Services["consumer"] = Service{Runtime: RuntimeLocal, Command: []string{"true"}, After: []string{"capture"}}
+			case "service_depends_on":
+				stack.Services["consumer"] = Service{Runtime: RuntimeLocal, Command: []string{"true"}, DependsOn: []string{"capture"}}
+			}
+			err := stack.Validate()
+			if kind == "valid" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "capture") {
+				t.Fatalf("expected capture dependency validation, got %v", err)
+			}
+		})
+	}
+}
+
+func TestJobHoldsValidationAndRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		holds   []string
+		capture bool
+		want    string
+	}{
+		{"valid", []string{"web"}, false, ""},
+		{"unknown", []string{"absent"}, false, "unknown service"},
+		{"job-not-service", []string{"build"}, false, "unknown service"},
+		{"duplicate", []string{"web", "web"}, false, "more than once"},
+		{"capture", []string{"web"}, true, "cannot declare holds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := Job{Runtime: RuntimeLocal, Command: []string{"build"}, Holds: tc.holds}
+			if tc.capture {
+				job.Capture = &BackupCapture{Name: "capture", Output: "result", Group: "databases"}
+			}
+			stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "holds", Jobs: map[string]Job{"build": job}, Services: map[string]Service{"web": {Runtime: RuntimeLocal, Command: []string{"web"}}}}
+			err := stack.Validate()
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("Validate = %v, want %s", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "angee.yaml")
+			if err := SaveFile(path, stack); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded.Jobs["build"].Holds) != 1 || loaded.Jobs["build"].Holds[0] != "web" {
+				t.Fatalf("round trip holds = %v", loaded.Jobs["build"].Holds)
+			}
+		})
 	}
 }

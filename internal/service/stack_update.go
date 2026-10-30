@@ -2,30 +2,24 @@ package service
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
-	"github.com/ang-ee/angee-operator/internal/substitute"
 	"gopkg.in/yaml.v3"
 )
 
-// allocRefRE matches a chain input that references a port allocation, e.g.
-// "${alloc.web}" (tolerating inner whitespace, matching the substitute grammar).
-// Such inputs carry the workspace's authoritative ports; all others stay sourced
-// from the inner stack's answers file.
-var allocRefRE = regexp.MustCompile(`\$\{\s*alloc\.`)
-
 // StackUpdateTemplateOptions configures StackUpdateFromTemplate.
 type StackUpdateTemplateOptions struct {
-	// Inputs overrides recorded answers; managed workspace ports take precedence.
+	// Inputs overrides the recorded answers.
 	Inputs map[string]string
 	// DryRun computes the merge and reports the changes without writing the
 	// manifest or regenerating the derived runtime files.
@@ -71,37 +65,30 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		return StackUpdateTemplateResult{}, err
 	}
 
-	// A workspace inner stack's allocated ports are owned by the parent stack's
-	// workspace record, not the inner stack's frozen answers file — copier can
-	// reset that file to template defaults, silently dropping the allocation. If
-	// this stack is a managed workspace inner stack, overlay the authoritative
-	// allocated ports onto the recorded answers so the re-render honours the
-	// workspace's ports; other inputs (project, sources, …) still come from the
-	// answers file, so a stale workspace record can't repoint them.
+	// The stack's own answers file holds its inputs, ports included: a stack
+	// inside a workspace's directory is a stack like any other (#110). copier
+	// recorded them as the last render resolved them, so an answer the caller
+	// does not change is replayed as recorded, and only the caller's other
+	// inputs and the defaults of unrecorded questions are resolved (#121). A
+	// value passed equal to the recorded one is that answer unchanged, as the
+	// -i form and the immutability check take it.
 	renderInputs := copierx.Inputs{}
+	recorded := copierx.Inputs{}
 	for key, value := range answers {
 		renderInputs[key] = value
+		if override, overridden := opts.Inputs[key]; !overridden || override == value {
+			recorded[key] = value
+		}
 	}
 	for key, value := range opts.Inputs {
 		renderInputs[key] = value
-	}
-	workspaceInner := false
-	portInputs, err := p.workspacePortInputs(ctx)
-	if err != nil {
-		return StackUpdateTemplateResult{}, err
-	}
-	if len(portInputs) > 0 {
-		workspaceInner = true
-		for key, value := range portInputs {
-			renderInputs[key] = value
-		}
 	}
 
 	mergedInputs, err := copierx.TemplateInputs(templatePath, renderInputs)
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	plan, stackDocuments, err := p.buildStackRenderPlan(ctx, templatePath, renderTarget, mergedInputs, renderPlanStatePath(p.root, "stack", ""), stackPlanOptions{InputsAlreadyResolved: workspaceInner})
+	plan, stackDocuments, err := p.buildStackRenderPlan(ctx, templatePath, renderTarget, mergedInputs, recorded, renderPlanStatePath(p.root, "stack", ""))
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
@@ -174,7 +161,7 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 		}
 		merged := theirs
 		if current != nil {
-			merged = mergeStackFromTemplate(current, theirs, isCurrentStack && workspaceInner)
+			merged = mergeStackFromTemplate(current, theirs)
 		}
 		metadata, err := copierx.ReadMetadata(document.Template)
 		if err != nil {
@@ -333,12 +320,12 @@ func (p *Platform) resolveStackTemplateOrigin(ctx context.Context) (stackTemplat
 		}
 		ref = ours.Template.Active
 	}
-	// The answers file is written by copier at the render target, which is the
-	// ANGEE_ROOT or its parent (e.g. <project>/.copier-answers.yml with the
-	// manifest at <project>/.angee/angee.yaml). Look in both — but only accept
-	// the parent's file if its recorded ANGEE_ROOT points back to this root, so
-	// an unrelated parent project's answers can't be picked up.
-	renderTarget, srcPath, answers, ok, err := p.locateStackAnswers(answersFile)
+	// The answers file is written by copier at the render target, the
+	// directory ANGEE_ROOT is relative to (e.g. <project>/.copier-answers.yml
+	// with the manifest at <project>/deploy/.angee/angee.yaml). Only a file
+	// whose recorded ANGEE_ROOT points back to this root is accepted, so an
+	// unrelated project's answers above it can't be picked up.
+	renderTarget, srcPath, answers, ok, err := locateStackAnswers(p.root, "", answersFile)
 	if err != nil {
 		return stackTemplateOrigin{}, err
 	}
@@ -399,16 +386,29 @@ func summarizeRenderedFileChange(renderTarget, stackRoot string, change copierx.
 // mergeStackFromTemplate merges the freshly-rendered `theirs` over the current
 // `ours`. Template-origin sections are refreshed (theirs wins for its keys,
 // ours-only keys preserved); runtime sections (`operator`, `workspaces`,
-// `port_leases`) are preserved verbatim from ours.
+// `port_leases`) are preserved verbatim from ours. A port's allocated value
+// lives in ours' manifest, so `ports` keep ours' values and only gain new
+// template keys.
 //
-// For ports, the authoritative source decides who wins: normally the allocated
-// value lives in ours' manifest, so `ports` keep ours' values and only gain new
-// template keys (authoritativePorts=false). For a workspace inner stack the
-// allocation lives in the parent stack's workspace record and was rendered into
-// theirs, so theirs' values win (authoritativePorts=true) — otherwise a drifted
-// ours value (e.g. a template default) would clobber the workspace allocation.
-func mergeStackFromTemplate(ours, theirs *manifest.Stack, authoritativePorts bool) *manifest.Stack {
+// `vcs` is template-origin too, when the render names one (a template that
+// does not render it keeps ours). It is the default for slots created
+// afterwards: a slot that names no mode keeps the vcs create recorded on it
+// (manifest.WorkspaceSource.VCS), so changing it reads no existing slot as
+// another kind of checkout. A slot recorded before create recorded it follows
+// the stack's vcs, so when the merge changes it, each such slot is given the
+// stack's vcs before the merge, ours (pinSlotVCS). That freezes ours, which
+// is the slot's own only when ours is the vcs it was cut with: a stack whose
+// vcs was edited by hand since such a slot was cut pins it to the edited
+// value. The summary reports the change and each slot pinned
+// (summarizeStackChanges).
+func mergeStackFromTemplate(ours, theirs *manifest.Stack) *manifest.Stack {
 	merged := *ours
+	if theirs.VCS != "" {
+		merged.VCS = theirs.VCS
+	}
+	if ours.SlotVCS() != merged.SlotVCS() {
+		merged.Workspaces = pinSlotVCS(ours.Workspaces, ours.SlotVCS())
+	}
 	merged.Version = theirs.Version
 	merged.Kind = theirs.Kind
 	merged.Name = theirs.Name
@@ -430,12 +430,34 @@ func mergeStackFromTemplate(ours, theirs *manifest.Stack, authoritativePorts boo
 	merged.Persist = overlayMap(ours.Persist, theirs.Persist)
 	merged.Services = overlayMap(ours.Services, theirs.Services)
 	merged.Jobs = overlayMap(ours.Jobs, theirs.Jobs)
-	if authoritativePorts {
-		merged.Ports = overlayMap(ours.Ports, theirs.Ports)
-	} else {
-		merged.Ports = mergePorts(ours.Ports, theirs.Ports)
-	}
+	merged.Ports = mergePorts(ours.Ports, theirs.Ports)
 	return &merged
+}
+
+// pinSlotVCS returns workspaces with vcs recorded on every slot that names no
+// mode and records none, as create records it now, copying what it changes.
+// vcs is the stack's before the change, which is taken for the one the slot
+// was cut with: the best evidence the manifest has, and wrong only for a slot
+// cut before the stack's vcs was last edited by hand.
+func pinSlotVCS(workspaces map[string]manifest.Workspace, vcs string) map[string]manifest.Workspace {
+	if len(workspaces) == 0 {
+		return workspaces
+	}
+	out := make(map[string]manifest.Workspace, len(workspaces))
+	for name, workspace := range workspaces {
+		sources := make(map[string]manifest.WorkspaceSource, len(workspace.Sources))
+		for slot, ws := range workspace.Sources {
+			if ws.Mode == "" && ws.VCS == "" {
+				ws.VCS = vcs
+			}
+			sources[slot] = ws
+		}
+		if workspace.Sources != nil {
+			workspace.Sources = sources
+		}
+		out[name] = workspace
+	}
+	return out
 }
 
 // mergePorts refreshes each template port's fields from theirs while preserving
@@ -479,6 +501,17 @@ func overlayMap[V any](ours, theirs map[string]V) map[string]V {
 // applied (e.g. a preserved port value shows no change).
 func summarizeStackChanges(ours, merged *manifest.Stack) []string {
 	var changes []string
+	if ours.VCS != merged.VCS {
+		changes = append(changes, fmt.Sprintf("~ vcs (%s to %s)", cmp.Or(ours.VCS, `""`), cmp.Or(merged.VCS, `""`)))
+	}
+	for _, name := range sortedKeys(merged.Workspaces) {
+		sources := merged.Workspaces[name].Sources
+		for _, slot := range sortedKeys(sources) {
+			if before := ours.Workspaces[name].Sources[slot]; before.VCS != sources[slot].VCS {
+				changes = append(changes, fmt.Sprintf("~ workspaces/%s/sources/%s (vcs pinned to %s, the stack's before)", name, slot, sources[slot].VCS))
+			}
+		}
+	}
 	reportKeyChanges(&changes, "sources", ours.Sources, merged.Sources)
 	reportKeyChanges(&changes, "workspace_defaults", ours.WorkspaceDefaults, merged.WorkspaceDefaults)
 	reportKeyChanges(&changes, "secrets", ours.Secrets, merged.Secrets)
@@ -516,116 +549,110 @@ func yamlEqual(a, b any) bool {
 	return bytes.Equal(ab, bb)
 }
 
-// workspacePortInputs detects whether p.root is the inner stack of a managed
-// workspace and, if so, returns the workspace template's chain inputs that carry
-// the workspace's allocated ports — each resolved against the parent stack's
-// authoritative record (e.g. {"django_port": "8104"}). These overlay the inner
-// stack's frozen answers so a template re-render honours the workspace's
-// allocated ports even when the answers file has drifted to template defaults.
+// locateStackAnswers reads the Copier answers of the stack at root and returns
+// the render target holding them. copier writes the answers file in the
+// directory a relative ANGEE_ROOT is relative to: the stack root for `.`, its
+// parent for `.angee`, two levels up for `deploy/.angee`. So it walks up from
+// root, nearest first, and takes the first answers file that rendersStackRoot
+// says put its stack at root. Files above that one are never read.
 //
-// A managed workspace inner stack lives at
-// <parent ANGEE_ROOT>/workspaces/<name>/<chain_root>, and the parent stack
-// manifest records that workspace's inputs and resolved port allocations. Only
-// chain inputs that reference an ${alloc.*} allocation are returned, so non-port
-// inputs (project name/path, etc.) keep flowing from the answers file and a
-// stale workspace record cannot repoint them. Returns (nil, nil) for any stack
-// that is not such an inner stack (the common case).
-func (p *Platform) workspacePortInputs(ctx context.Context) (copierx.Inputs, error) {
-	workspacePath := filepath.Dir(p.root)        // <parent root>/workspaces/<name>
-	workspacesDir := filepath.Dir(workspacePath) // <parent root>/workspaces
-	if filepath.Base(workspacesDir) != "workspaces" {
-		return nil, nil
-	}
-	hostRoot := filepath.Dir(workspacesDir) // parent stack ANGEE_ROOT
-	name := filepath.Base(workspacePath)
-	hostPlatform, err := New(hostRoot)
-	if err != nil {
-		return nil, nil
-	}
-	hostStack, err := hostPlatform.LoadStack()
-	if err != nil {
-		// errors.Is, not os.IsNotExist: LoadStack reports a missing manifest as
-		// NoManifestError, and os.IsNotExist does not traverse Unwrap.
-		if errors.Is(err, os.ErrNotExist) {
-			// No parent stack manifest here: not a managed workspace inner stack.
-			return nil, nil
+// Any other answers file on the way is skipped, so an unrelated project's
+// answers can't be mistaken for ours. Only its ANGEE_ROOT is read, so its
+// other answers may hold anything. A file on the way that can't be read as a
+// YAML mapping stops the walk with an *InvalidInputError naming it: it may be
+// this stack's own answers, damaged, and the walk can't tell.
+//
+// The walk ends at top when top is not empty, else at the filesystem root.
+func locateStackAnswers(root, top, answersFile string) (target string, srcPath string, inputs copierx.Inputs, ok bool, err error) {
+	for dir := root; ; dir = filepath.Dir(dir) {
+		path := filepath.Join(dir, answersFile)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+			return "", "", nil, false, unreadableAnswersError(path, readErr)
 		}
-		// The parent manifest exists but is unreadable/malformed. Surface it
-		// rather than silently dropping the workspace's allocated ports — that
-		// silent fallback is exactly the bug this path guards against.
-		return nil, fmt.Errorf("load parent stack at %s: %w", hostRoot, err)
-	}
-	ws, ok := hostStack.Workspaces[name]
-	if !ok {
-		return nil, nil
-	}
-	// Confirm p.root is exactly this workspace's chain root, so an unrelated
-	// nested stack under workspaces/ is not mistaken for the inner stack.
-	if filepath.Clean(filepath.Join(workspacePath, ws.Resolved.ChainRoot)) != filepath.Clean(p.root) {
-		return nil, nil
-	}
-	// Without recorded allocations there is nothing authoritative to inject, so
-	// let the caller use the answers file unchanged.
-	if ws.Template == "" || len(ws.Resolved.Allocations) == 0 {
-		return nil, nil
-	}
-	templatePath, _, err := hostPlatform.resolveTemplate(ctx, ws.Template, "workspace")
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace template %q: %w", ws.Template, err)
-	}
-	metadata, err := copierx.ReadMetadata(templatePath)
-	if err != nil {
-		return nil, err
-	}
-	subCtx := substitute.Context{
-		Inputs:        ws.Inputs,
-		Name:          name,
-		Alloc:         ws.Resolved.Allocations,
-		WorkspacePath: workspacePath,
-	}
-	portInputs := copierx.Inputs{}
-	for _, entry := range metadata.Chain {
-		for key, value := range entry.Inputs {
-			// Only allocation-bearing inputs are authoritative here; leave the
-			// rest (project name/path, browser, …) to the answers file.
-			if !allocRefRE.MatchString(value) {
-				continue
+		if readErr == nil {
+			angeeRoot, isPath, err := recordedAngeeRoot(data)
+			if err != nil {
+				return "", "", nil, false, unreadableAnswersError(path, err)
 			}
-			resolved, rerr := substitute.Resolve(value, subCtx)
-			if rerr != nil {
-				return nil, fmt.Errorf("resolve workspace chain input %q: %w", key, rerr)
+			if isPath && rendersStackRoot(dir, angeeRoot, root) {
+				srcPath, inputs, err := parseTemplateAnswers(path, data)
+				if err != nil {
+					return "", "", nil, false, &InvalidInputError{Field: "template", Reason: err.Error()}
+				}
+				return dir, srcPath, inputs, true, nil
 			}
-			portInputs[key] = resolved
+		}
+		if dir == top || filepath.Dir(dir) == dir {
+			return "", "", nil, false, nil
 		}
 	}
-	if len(portInputs) == 0 {
-		return nil, nil
-	}
-	return portInputs, nil
 }
 
-// locateStackAnswers reads the Copier answers for this stack. The answers file
-// sits at the render target, which is the stack root or — when ANGEE_ROOT is a
-// subdir like `.angee` — its parent. The parent file is only accepted when its
-// recorded ANGEE_ROOT answer names this root's basename, so an unrelated parent
-// project's answers can't be mistaken for ours.
-func (p *Platform) locateStackAnswers(answersFile string) (target string, srcPath string, inputs copierx.Inputs, ok bool, err error) {
-	rootPath := filepath.Join(p.root, answersFile)
-	if _, statErr := os.Stat(rootPath); statErr == nil {
-		srcPath, inputs, err = readTemplateAnswers(rootPath)
-		return p.root, srcPath, inputs, err == nil, err
+func unreadableAnswersError(path string, err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		err = pathErr.Err // the reason names the path once
 	}
-	parentPath := filepath.Join(filepath.Dir(p.root), answersFile)
-	if _, statErr := os.Stat(parentPath); statErr == nil {
-		srcPath, inputs, err = readTemplateAnswers(parentPath)
-		if err != nil {
-			return "", "", nil, false, err
-		}
-		if inputs["ANGEE_ROOT"] == filepath.Base(p.root) {
-			return filepath.Dir(p.root), srcPath, inputs, true, nil
-		}
+	return &InvalidInputError{
+		Field:  "template",
+		Reason: fmt.Sprintf("cannot read answers file %s: %v; fix or move it, since the update cannot tell whether it holds this stack's answers", path, err),
 	}
-	return "", "", nil, false, nil
+}
+
+// rendersStackRoot reports whether a render into dir with the given recorded
+// ANGEE_ROOT put its stack at root, by the rule stack init places a stack with
+// (expectedStackRoot): an empty answer means dir itself, an absolute one names
+// root exactly, and a relative one is joined to dir, so `./deploy/.angee` and
+// `deploy/.angee/` count. A relative answer that climbs out of dir with `..`,
+// which stack init refuses, never matches. Paths compare cleaned, without
+// resolving symlinks.
+func rendersStackRoot(dir, angeeRoot, root string) bool {
+	if angeeRoot != "" && !filepath.IsAbs(angeeRoot) && !filepath.IsLocal(angeeRoot) {
+		return false
+	}
+	return expectedStackRoot(dir, map[string]string{"ANGEE_ROOT": angeeRoot}) == root
+}
+
+// recordedAngeeRoot reads only the ANGEE_ROOT answer of an answers file, as
+// parseTemplateAnswers would read it, leaving the file's other answers alone.
+// isPath is false when the answer is not a scalar, so it names no directory.
+// A file that records no ANGEE_ROOT answers "".
+func recordedAngeeRoot(data []byte) (angeeRoot string, isPath bool, err error) {
+	root, err := answersMapping(data)
+	if err != nil {
+		return "", false, err
+	}
+	if root == nil {
+		return "", true, nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "ANGEE_ROOT" {
+			continue
+		}
+		value, err := recordedAnswerValue(root.Content[i+1])
+		text, isScalar := value.(string)
+		return text, err == nil && isScalar, nil
+	}
+	return "", true, nil
+}
+
+var errAnswersNotMapping = errors.New("expected a YAML mapping")
+
+// answersMapping parses an answers file into its top-level mapping, which is
+// nil for an empty file.
+func answersMapping(data []byte) (*yaml.Node, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	if len(document.Content) == 0 {
+		return nil, nil
+	}
+	if root := document.Content[0]; root.Kind == yaml.MappingNode {
+		return root, nil
+	}
+	return nil, errAnswersNotMapping
 }
 
 // readTemplateAnswers parses a Copier answers file, returning its recorded
@@ -636,17 +663,21 @@ func readTemplateAnswers(path string) (srcPath string, inputs copierx.Inputs, er
 	if err != nil {
 		return "", nil, err
 	}
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
+	return parseTemplateAnswers(path, data)
+}
+
+// parseTemplateAnswers is readTemplateAnswers over the file's content.
+func parseTemplateAnswers(path string, data []byte) (srcPath string, inputs copierx.Inputs, err error) {
+	root, err := answersMapping(data)
+	if errors.Is(err, errAnswersNotMapping) {
+		return "", nil, fmt.Errorf("answers file %s: %w", path, err)
+	}
+	if err != nil {
 		return "", nil, err
 	}
 	inputs = copierx.Inputs{}
-	if len(document.Content) == 0 {
+	if root == nil {
 		return "", inputs, nil
-	}
-	root := document.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return "", nil, fmt.Errorf("answers file %s: expected a YAML mapping", path)
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key := root.Content[i].Value

@@ -44,6 +44,7 @@ ingress: {}
 secrets: {}
 ports: {}
 volumes: {}
+vcs: git
 sources: {}
 workspaces: {}
 services: {}
@@ -52,6 +53,9 @@ port_leases: {}
 ```
 
 `version`, `kind`, and `name` are required. Empty maps are accepted.
+`vcs` (`git`, the default, or `jj`) is the version control a workspace
+slot that names no `mode` is checked out with; see
+[jj slots](#jj-slots).
 
 ## Operator
 
@@ -256,6 +260,71 @@ force-stops a service. The value uses Go duration syntax, such as `30s` or
 `2m`. Compose receives the duration directly; process-compose rounds it up to
 whole seconds. The default is `10s`.
 
+### Restart policy
+
+`restart` says what the runtime does when a service exits:
+
+- `on_failure` (the default) restarts it after a non-zero exit, a crash or a
+  kill from outside the runtime;
+- `always` restarts it after any exit;
+- `no` leaves it stopped.
+
+```yaml
+services:
+  worker:
+    runtime: local
+    command: ["celery", "-A", "app", "worker"]
+    restart: always
+```
+
+Each runtime applies its own policy. Angee writes it into the generated files
+and never restarts a process itself:
+
+| `restart` | process-compose (`availability`) | Docker Compose (`restart`) |
+|---|---|---|
+| `on_failure` | `restart: on_failure` | `on-failure` |
+| `always` | `restart: always` | `unless-stopped` |
+| `no` | `restart: "no"` | `"no"` |
+
+- **Backoff.** Angee sets none, so each runtime uses its own. process-compose
+  waits a constant second before each restart. It also waits that second
+  between stopping and starting a process on `angee service restart`, so a
+  longer backoff would add to every restart. Docker doubles its wait from
+  100 ms up to a minute. Neither limits the number of restarts.
+- **Crash loops.** A local service that keeps crashing restarts about once a
+  second, plus however long it runs. Its output goes to its own
+  `run/logs/<name>.log`, which process-compose rotates at 10 MB, keeping three
+  rotated files, so a crash loop's log stays bounded.
+- **Status.** A service waiting out its backoff reads `restarting` in
+  `angee status` and `angee service list`. A local service also shows the exit
+  that ended its last run and its restart count, such as
+  `restarting (exit 1, 3 restarts)`, and once running again, the count, such
+  as `running (3 restarts)`. Docker's status reports neither for a container.
+  A job or service waiting on a service the runtime keeps restarting says so
+  in its reason, and `angee dev` prints it while it waits for jobs.
+- **Deliberate stops.** A stop either runtime was asked for never triggers a
+  restart: `angee down`, `angee service stop` and `angee service restart`, and
+  for Docker also `docker kill`.
+- **Fixing a crash loop.** After fixing `angee.yaml`, run
+  `angee service restart <name>`: it always gives the service the compiled
+  definition and restarts it. `angee service up <name>` passes a changed
+  definition only to a local service caught in its restart backoff; one that
+  has relaunched reads as running, so `up` leaves it on the old definition.
+  A job that was waiting on the service is skipped when process-compose
+  replaces it; run it again with `angee job run <job>`.
+- **Readiness.** process-compose stops a local service whose readiness probe
+  fails `retries` times in a row. With `always` it then restarts it, and with
+  `on_failure` it does unless the service exited 0 on that stop. Docker only
+  marks a failing container unhealthy.
+- **Jobs** take no `restart`. They run on request, and a failed run is reported
+  as failed.
+- **The edge** container that serves routes restarts on failure.
+
+A process-compose supervisor that is already running applies a changed policy
+when Angee next starts or restarts the process, or after `angee down`.
+Compose recreates container services whose policy changed on the next
+`angee up`.
+
 ### Readiness probes
 
 A service can declare when it is ready to accept work. Set exactly one probe
@@ -327,6 +396,63 @@ jobs:
 
 Jobs are run explicitly with `angee job run <name>`.
 
+### Hold services during a job chain
+
+Use `holds` when jobs must modify shared inputs while services are stopped:
+
+```yaml
+jobs:
+  prepare:
+    runtime: local
+    command: ["./prepare"]
+    holds: [web, worker]
+  validate:
+    runtime: local
+    command: ["./validate"]
+    depends_on: [prepare]
+```
+
+Before any selected job command runs, the operator stops the union of those
+jobs' held services, once per service. Each name must identify a declared
+service; duplicate names within a job and holds on manual capture jobs are
+invalid. An absent local supervisor or process is already stopped.
+
+`angee job run prepare` runs only `prepare` and leaves its held services stopped.
+Use `angee job run prepare --chained-restart` to run the downstream jobs and
+then reapply the held and dependent services in dependency order, once each.
+Every selected job must succeed before any selected service is reapplied. A job
+cannot require a service selected for this recovery, directly or transitively:
+that would require starting it before the jobs have finished.
+
+A failed stop prevents all commands and recovery; services that stopped
+successfully remain stopped. Job failure or cancellation also leaves the held
+services stopped. If recovery fails after resuming a held service, the operator
+stops that service again; any failure to restore a hold is reported explicitly.
+Local jobs selected by a held operation run through the native isolated
+foreground lifecycle; adding a job never rewrites the shared process-compose
+project. The existing operation receipt retains each job's bounded, redacted
+output, exit code when available, status and pre-run native generation. Status,
+logs and prerequisite checks use that attempt until a newer native job generation
+exists. Ordinary supervisor-backed runs keep their native behavior.
+
+`job logs` reads isolated output from the durable receipt, including after an
+operator restart. `--follow` waits for the selected attempt's buffered output;
+it closes after that attempt ends. Local full log files remain at their declared
+`run/logs/<name>.log` paths. Failed or interrupted attempts cannot satisfy a
+later job's prerequisites.
+
+Recovery only applies already loaded local services. Adding a new service while
+holds are active fails explicitly: process-compose's whole-project registration
+can relaunch other stopped services. Load declared services through an ordinary
+supervisor restart before retrying the job chain. Any held services already
+resumed before this refusal are stopped again. Ordinary startup still uses the
+native `up` lifecycle.
+
+Operation service nodes report `held stopped`, a failed stop, or a successful
+resume through their existing status and message fields, including partial
+stop outcomes. A successful plain run can therefore contain a successful
+service node whose outcome is `held stopped`, rather than a restart.
+
 ## Sources
 
 Implemented source kinds:
@@ -346,16 +472,119 @@ sources:
 
 Git commands use the host git environment.
 
-A git source's `repo` is cloned into its cache once. When the cache
-already exists, `angee source fetch` and `angee source pull` first set the
-cache's `origin` remote to the declared `repo` (adding `origin` if it is
-missing) and log a warning when that changes it, so an edited `repo` takes
-effect; a remote with several URLs is refused rather than rewritten. Stack
-bring-up, `angee workspace create` and `angee workspace repair` leave
-`origin` alone and only warn when it differs: a `cache_path` can be shared
-by several stacks or be your own clone. Worktree slots share the cache's
-remotes. Remotes other than `origin` are never changed, and a relative
+### Remotes
+
+`repo` declares one remote, `origin`. A git source with more than one remote
+lists them under `remotes` instead; setting both is an error:
+
+```yaml
+sources:
+  app:
+    kind: git
+    remotes:
+      origin: git@github.com:me/app.git        # a bare URL
+      upstream:
+        url: https://github.com/acme/app.git
+        canonical: true                        # fetch-only
+      staging:
+        url: git@example.com:acme/app.git
+        branches: ["release/*"]
+    push_default: origin
+    default_ref: main
+```
+
+- **`canonical`** marks the remote the project lives in. The cache is cloned
+  from it, under its own name, and git is set up so that nothing can push to
+  it: its push URL becomes `angee-fetch-only://<name>`, a scheme no git
+  remote helper serves, and every push to it fails. At most one remote is
+  canonical.
+- **The clone remote** is the canonical remote, else `origin`, else the only
+  remote. A source with several remotes where none qualifies is an error.
+- **`push_default`** names the remote a push goes to when the branch names
+  no `pushRemote`. It becomes the cache's (and a clone slot's)
+  `remote.pushDefault`, so plain `git push` and
+  `angee workspace source publish` without `--remote` both follow it. It
+  must be declared, and cannot be the canonical remote.
+- **`branches`** lists the branch patterns a publish to that remote may
+  create or update, in `path.Match` syntax, where `*` does not match across
+  a `/`: `feature/*` matches `feature/x` but not `feature/x/y`. Publishing a
+  branch that matches none of them is refused before anything changes. The
+  patterns apply to a publish to a declared remote; a remote added to the
+  cache by hand has none. The canonical remote takes none, since nothing is
+  published to it: a publish to it is refused before anything changes, and
+  git's push block refuses any push to it made outside angee.
+- Remote names start with a letter or digit and hold only letters, digits,
+  `.`, `_` and `-`, and no two differ only in case.
+- A URL under `remotes` is a URL, an `host:path` address or an absolute
+  path, never a relative path. No URL, `repo` included, may hold a control
+  character or start or end with a space.
+
+**The base.** A slot's base ref (its `ref`, else the source's `default_ref`)
+is read from, in order: the remote branch git has the local branch of that
+name track, the clone remote's branch, then the other remotes' branches by
+remote name. For `repo:` that is `origin`'s, unless the local branch tracks
+another remote. The same base is used for a new worktree slot's start, for
+status counts and for `sync-base`.
+
+### How the cache follows the manifest
+
+A missing cache is cloned from the clone remote, named as in the manifest
+whatever git's `clone.defaultRemoteName` says, into a staging directory beside
+the cache path. It is given every other declared remote, the canonical push
+block and the push default there, and only then moved to the cache path, so
+nothing can use it while it could still push to the canonical remote. Its
+permissions are those of a plain `git clone`.
+
+- A `cache_path` that is a symlink is cloned into the symlink's target.
+- A `cache_path` that is an existing empty directory (a mount point, say) is
+  cloned in place, as `git clone` does, and configured right after. For that
+  short moment the canonical remote is not yet blocked.
+- A path that holds anything other than a git checkout is refused.
+- The directory that holds `cache_path` must be writable, for the cache's
+  lock file (below). To bind-mount a cache into a container, mount its parent
+  directory rather than the cache alone.
+
+A clone slot (`mode: clone`, or a git slot with no `mode`) is set up the same
+way, since it is a repository of its own. Worktree slots share the cache's
+config.
+
+A cache can be shared by several stacks, so angee holds a lock file beside
+it, `.<name>.angee.lock` (beside the target of a symlinked `cache_path`),
+while it changes the cache's worktree registrations or talks to its remotes:
+cloning or fetching the cache, `source pull` and `source push`, and adding or
+pruning workspace worktrees. A stack or the CLI that finds the lock held
+warns that another angee process is changing the cache and waits, up to
+`ANGEE_LOCK_TIMEOUT` when that is set. The verbs on a workspace slot (fetch,
+pull, push, sync-base, merge, rebase, publish) take no lock: git keeps each
+ref update whole, and they never prune registrations.
+
+When the cache already exists, `angee source fetch` and `angee source pull`
+first reconcile it with the declared remotes, logging a warning for each
+change, so an edited remote takes effect:
+
+- each declared remote's URL, added when the remote is missing;
+- under `remotes`, the canonical remote's push block, which a remote declared
+  without `canonical` loses;
+- `remote.pushDefault`, when `push_default` is set;
+- under `remotes`, after the fetch, the branch `default_ref` tracks: it is
+  set to the clone remote's, as a fresh clone has it. A cache cloned under
+  `repo:` tracks `origin`, which `remotes` may now name a fork.
+
+A remote with several URLs is refused rather than rewritten. Stack bring-up,
+`angee workspace create` and `angee workspace repair` change nothing and
+only warn about each difference, because a `cache_path` can be shared by
+several stacks or be your own clone. A source declared with `repo` never
+reads or changes push URLs or tracking, so it cannot lift a block another
+stack sharing the cache set. Remotes the manifest does not declare are never
+read or changed, and one it stops declaring stays in the cache. A relative
 `repo` path is not compared.
+
+A clone slot is configured only when it is created. `angee workspace status`
+and `angee workspace repair` compare it with the declared remotes whenever
+they read it, and warn about each difference, such as a remote marked
+canonical since. They change nothing, so the warning says to use git in the
+slot, and it repeats on every read until the slot is fixed. A slot without
+its own `.git` is not compared.
 
 ## Workspaces
 
@@ -382,12 +611,114 @@ TTL values are stored and surfaced by status commands.
 
 Each entry under a workspace's `sources` records how one source was
 materialized into the workspace. `mode` is `worktree` (a git worktree of the
-source's shared cache) or `clone` (a standalone clone). Omitted, a git source
-is cloned and a local source is linked; a local source is linked whatever the
-mode says. Any other value is rejected when the manifest is loaded. A worktree
-source is cut on `branch`. Without a branch it starts on a detached HEAD at
-`ref` and gets its branch when it is published (see
+source's shared cache), `clone` (a standalone clone) or `jj` (a jj workspace
+of the cache, see [jj slots](#jj-slots)). Omitted, the slot's `vcs` decides,
+else the stack's: under `jj` the slot is a jj slot; under `git` a git source
+is cloned and a local source is linked. A local source is linked under any
+mode but `jj`. Any other value of either is rejected when the manifest is
+loaded. `angee workspace create` records `vcs` on every slot that names no
+mode, set to the stack's `vcs` (`git` when it names none), so changing the
+stack's `vcs` later changes only the slots of workspaces created after it.
+angee v0.25.0 and earlier refuse a manifest that holds a slot's `vcs`, so
+every angee that reads the stack must be newer. A worktree source is cut on
+`branch`. Without a branch it starts on a detached HEAD at `ref` and
+gets its branch when it is published (see
 [workspace commands](./commands.md)).
+
+### jj slots
+
+A jj slot is a [jj](https://jj-vcs.github.io/jj/) workspace of its source's
+primary, made in place at the slot's path. For a git source the primary is
+its cache, which angee colocates with jj (`jj git init --git-repo`) the
+first time a jj slot needs it; git keeps working there and in the cache's
+git worktree slots, so one stack can mix git and jj slots of one source. For
+a `kind: local` source the primary is the local store, which must already be
+a jj repository: angee never makes one.
+
+```yaml
+vcs: jj               # slots with no mode are jj slots
+workspaces:
+  fix-123:
+    template: workspaces/src
+    sources:
+      app:
+        source: app   # no mode: a jj slot under vcs: jj
+        vcs: jj       # recorded by create, so the slot stays a jj slot
+        ref: main
+      tree:
+        source: app
+        mode: worktree
+        branch: fix-123
+```
+
+- **Colocated.** A slot of a primary that has a `.git` (a cache always has
+  one) is colocated: it has a `.git` of its own, so git reads it too, on a
+  detached HEAD. A slot of a local store without one has none.
+- **Where it starts.** On the bookmark named by the slot's `branch` when the
+  primary has it, else at the base: `ref` (or the source's `default_ref`) on
+  the source's clone remote, else the local bookmark. A jj slot needs a base.
+  No bookmark or branch is created for it.
+- **Its name.** The jj workspace is named `<stack>--<workspace>`, with
+  `--<slot>` added when a workspace has several jj slots of one primary. The
+  name is computed from the manifest, never stored, so none of the stack,
+  workspace or slot names may be empty, hold `--`, or start or end with `-`.
+  Renaming a stack that has jj slots leaves their workspaces under the old
+  names.
+- **A name already taken.** When the primary already has a workspace of
+  that name that this stack's manifest does not account for, such as one of
+  another stack with the same name that shares the cache, the create is
+  refused as a conflict naming it, and nothing is forgotten. A slot whose
+  directory is gone is added again under its name when jj recorded the name
+  at the slot's own path, or nothing else is at the path it recorded; for a
+  cache outside the stack root (symlinks resolved), where that other path
+  may be another stack's out of angee's sight, the conflict says to forget
+  the name with `jj workspace forget` instead. Destroy forgets only the
+  workspace the slot's own checkout is, or that jj recorded at its path.
+  Removing a jj slot drops only that slot's git worktree registration,
+  never pruning the cache's others.
+- **Requirements.** jj with `jj workspace add --colocate` (a current build,
+  such as `brew install --HEAD jj`), git 2.48 or later, since jj's add sets
+  `extensions.relativeWorktrees` on the cache, and not Windows. A create
+  checks them before any slot is cut, and `angee doctor` reports them.
+- **Containers.** A slot's `.git` and `.jj` lead to the primary by path. A
+  cache inside the stack root is reachable wherever the stack is; one
+  outside it (an absolute `cache_path`) must already exist where angee runs,
+  so an operator in a container must mount it at the same path. Otherwise
+  the create is refused naming the path, rather than cloning a cache only
+  the container sees. The primary's lock file, `.<name>.angee.lock`, is
+  written beside a local store too.
+- **What angee does with one.** `workspace create`, `status`, `git`,
+  `repair` and `destroy` handle jj slots: status reads them through jj,
+  which snapshots the working copy first, so an edit no jj command has
+  recorded yet counts as uncommitted, and a jj slot is never
+  `branch-mismatch`. `workspace sync-base` and `workspace source rebase`
+  rebase a jj slot onto its base; `workspace source publish`, `push` and
+  `workspace push` publish its commits under the slot's `branch`, to the
+  remote git pushes that branch to (the source's `push_default` decides, as
+  for git slots, unless a publish to another remote recorded that one for
+  the branch, which it does in a source cache and never in a `kind: local`
+  store); `merge`, `fetch` and `diff` run on it too, and `workspace source
+  migrate` makes a git worktree of it, or of a worktree a jj slot. `workspace push`
+  leaves a jj slot of a `kind: local` store to its own publish. Only `workspace
+  source pull` is refused: jj takes in a base by rebasing onto it (see
+  [workspace commands](./commands.md#jj-slots)). The verbs that walk a whole
+  workspace (`sync-base`, `workspace push`) act only on slots that name a
+  mode, so a slot that `vcs: jj` alone makes a jj slot, such as a work-state
+  `.work`, is left to the per-slot verbs.
+- **Not supported.** angee never makes a jj slot sparse, so files outside
+  sparse patterns are not looked at. jj does not record a repository nested
+  in a slot (a `git clone` into it, say), so status reads such a slot clean;
+  `workspace destroy` refuses it until the nested repository is gone.
+
+A slot that names no mode keeps the `vcs` create recorded on it, whatever
+the stack's `vcs` says later: a jj slot stays one, read through jj, and its
+destroy forgets its jj workspace; a clone stays a clone. To move an existing
+slot between a git worktree and a jj slot, use
+[`angee workspace source migrate`](./commands.md#migrating-a-slot), which
+records the slot's new `mode`. A slot recorded before angee recorded `vcs` on
+it (a workspace created with v0.25.0 or earlier) follows the stack's `vcs`,
+existing ones included: before changing the stack's `vcs`, give such a slot
+the `vcs` or `mode` it was created with.
 
 ### Workspace defaults
 
@@ -432,3 +763,9 @@ ${name}
 Supported filters include `slug`, `lower`, `upper`, `local_part`,
 `truncate(n)`, `default(value)`, `required(message)`, `b64encode`, and
 `replace(old,new)`.
+
+A missing job input is optional only with an explicit leading default, such as
+`${inputs.action | default('run')}` or `${inputs.value | default('')}`. Present
+empty strings keep the filter's existing fallback behavior; strings such as
+`false` and `0` remain values. Missing inputs without a leading default, secrets,
+and other namespaces still fail instead of silently supplying a value.

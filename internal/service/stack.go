@@ -63,7 +63,7 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 		return StackInitResult{}, err
 	}
 	statePath := renderPlanStatePath(preparedRoot, "stack", "")
-	plan, documents, err := p.buildStackRenderPlan(ctx, templatePath, targetPath, mergedInputs, statePath, stackPlanOptions{})
+	plan, documents, err := p.buildStackRenderPlan(ctx, templatePath, targetPath, mergedInputs, nil, statePath)
 	if err != nil {
 		return StackInitResult{}, err
 	}
@@ -150,9 +150,8 @@ func pathExistsNonEmpty(path string) (bool, error) {
 	return false, err
 }
 
-// resolveChainTemplate resolves a chain entry's template reference the same way
-// workspace chains do (resolveWorkspaceChainTemplate): a path relative to the
-// chaining stack template's own directory when a `copier.yml` lives there (e.g.
+// resolveChainTemplate resolves a stack template's chain entry: a path relative
+// to the chaining stack template's own directory when a `copier.yml` lives there (e.g.
 // `../../projects/web`), otherwise through the shared resolver, which handles a
 // remote ref, an absolute path, or a `stacks/<name>` template in the configured
 // template roots. Refs come from the (semi-trusted) template author, so a relative

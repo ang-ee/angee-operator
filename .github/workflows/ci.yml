@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.9"
+  GO_VERSION: "1.26.10"
 
 permissions:
   contents: read
@@ -106,6 +106,76 @@ jobs:
         with:
           files: coverage.out
         continue-on-error: true
+
+  # ── Stage 3b: jj driver tests against the pinned jj ─────────────────
+  # jj slots need `jj workspace add --colocate`, which only jj main has, so
+  # jj is built from the commit in .github/jj-rev (bump it deliberately) and
+  # cached by that commit. ANGEE_REQUIRE_JJ=1 makes the jj integration tests
+  # fail, instead of skip, when jj or the capability is missing.
+  test-jj:
+    name: test (jj)
+    needs: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Read the pinned jj commit
+        id: jj
+        run: |
+          rev=$(tr -d '[:space:]' < .github/jj-rev)
+          if ! printf '%s' "$rev" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::.github/jj-rev must hold one full jj commit id, not '$rev'"
+            exit 1
+          fi
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Restore jj
+        id: jj-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.jj-ci
+          key: jj-${{ runner.os }}-${{ runner.arch }}-${{ steps.jj.outputs.rev }}
+
+      - name: Build jj
+        if: steps.jj-cache.outputs.cache-hit != 'true'
+        env:
+          JJ_REV: ${{ steps.jj.outputs.rev }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo +stable install --git https://github.com/jj-vcs/jj --rev "$JJ_REV" \
+            --locked --root "$HOME/.jj-ci" --bin jj jj-cli
+
+      # Saved as soon as it is built, so a failing test does not throw the
+      # build away.
+      - name: Save jj
+        if: steps.jj-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.jj-ci
+          key: ${{ steps.jj-cache.outputs.cache-primary-key }}
+
+      - name: Put jj on PATH
+        run: |
+          echo "$HOME/.jj-ci/bin" >> "$GITHUB_PATH"
+          "$HOME/.jj-ci/bin/jj" --version
+
+      - name: Test the jj driver
+        env:
+          ANGEE_REQUIRE_JJ: "1"
+        run: go test -race ./internal/vcs/... ./internal/service/...
+
+      # The template fixtures must be what the pinned jj prints: regenerate
+      # them and fail on any difference.
+      - name: Template fixtures match the pinned jj
+        run: |
+          go test -count=1 -run TestTemplateFixtures ./internal/vcs/jjdriver -update
+          git diff --exit-code -- internal/vcs/jjdriver/testdata
 
   # ── Stage 4: cross-compile sanity check ─────────────────────────────
   build:

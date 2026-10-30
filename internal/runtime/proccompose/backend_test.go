@@ -125,6 +125,7 @@ func TestExecRunnerDoesNotWaitForDaemonPipes(t *testing.T) {
 // waits until it answers, and a start slower than the first probes still
 // succeeds.
 func TestBackendUpCommand(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
 	port := freePort(t)
 	project := newFakeProject("/stack", nil)
 	project.onUp = func() { project.serveLater(t, port, 300*time.Millisecond) }
@@ -133,7 +134,7 @@ func TestBackendUpCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := [][]string{{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", strconv.Itoa(port), "up", "-D", "--keep-project", "--tui=false", "web"}}
+	want := [][]string{{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", strconv.Itoa(port), "--log-file", "/stack/run/process-compose.log", "--log-no-color", "up", "-D", "--keep-project", "--tui=false", "web"}}
 	if got := project.upCommands(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("up commands = %v, want %v", got, want)
 	}
@@ -403,7 +404,7 @@ func TestUpStartsProcessTheUpdateDidNotRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			project := newFakeProject("/stack", map[string]processListEntry{"api": tt.state})
 			if tt.unchanged {
-				project.processes["api"].config = map[string]any{"name": "api", "command": "run-api", "environment": nil, "workingDir": "", "dependsOn": nil, "readinessProbe": nil}
+				project.processes["api"].config = map[string]any{"name": "api", "command": "run-api", "environment": nil, "workingDir": "", "dependsOn": nil, "readinessProbe": nil, "restartPolicy": map[string]any{}}
 			}
 			project.processes["api"].afterPost = tt.afterPost
 			port := project.serve(t)
@@ -421,6 +422,53 @@ func TestUpStartsProcessTheUpdateDidNotRun(t *testing.T) {
 			}
 			if got := project.startedProcesses(); !slices.Equal(got, tt.started) {
 				t.Fatalf("started processes = %v, want %v", got, tt.started)
+			}
+		})
+	}
+}
+
+// A named process in its restart backoff gets its compiled definition, so `up`
+// applies a manifest fix to a crash loop: process-compose replaces a process
+// whose definition changed and runs it. An unchanged one is left to the restart
+// under way, and neither is started, which `process start` would refuse. One
+// up brings up as a dependency only is left alone.
+func TestUpReappliesTheDefinitionOfARestartingProcess(t *testing.T) {
+	const configuration = "version: \"0.5\"\nprocesses:\n  api:\n    command: run-api\n    depends_on:\n      db:\n        condition: process_started\n  db:\n    command: run-db\n"
+	for _, tt := range []struct {
+		name      string
+		unchanged bool
+		posted    []string
+	}{
+		{name: "changed definition", posted: []string{"api"}},
+		{name: "unchanged definition", unchanged: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			project := newFakeProject("/stack", map[string]processListEntry{
+				"api": {Status: "Restarting", ExitCode: 1, Restarts: 4},
+				"db":  {Status: "Restarting", ExitCode: 1, Restarts: 2},
+			})
+			if tt.unchanged {
+				project.processes["api"].config = map[string]any{
+					"name": "api", "command": "run-api", "environment": nil, "workingDir": "",
+					"dependsOn": map[string]any{"db": map[string]any{"condition": float64(3)}}, "readinessProbe": nil,
+					"restartPolicy": map[string]any{},
+				}
+			}
+			port := project.serve(t)
+			backend := Backend{Runner: project}
+
+			err := backend.Up(t.Context(), runtime.Target{Root: "/stack", Services: []string{"api"}, ControlPort: port, Configuration: []byte(configuration)})
+			if err != nil {
+				t.Fatalf("Up() error = %v", err)
+			}
+			if got := project.postedProcesses(); !slices.Equal(got, tt.posted) {
+				t.Fatalf("updated processes = %v, want %v", got, tt.posted)
+			}
+			if got := project.startedProcesses(); len(got) != 0 {
+				t.Fatalf("started processes = %v, want none", got)
+			}
+			if got := project.state("db"); got.Status != "Restarting" {
+				t.Fatalf("db = %+v, want left to its restart", got)
 			}
 		})
 	}
@@ -551,7 +599,7 @@ func newFakeProject(root string, states map[string]processListEntry) *fakeProjec
 	}
 	for name, state := range states {
 		state.Name = name
-		config := map[string]any{"name": name, "command": "old"}
+		config := map[string]any{"name": name, "command": "old", "restartPolicy": map[string]any{}}
 		if state.Status == "Disabled" {
 			config["disabled"] = true
 		}
@@ -785,24 +833,457 @@ func writeCompiledConfig(t *testing.T, config string) string {
 // stack whose processes all completed or were skipped keeps the states `angee
 // dev` reports.
 func TestBackendUpForegroundKeepsProject(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
 	got := Backend{}.upArgs(runtime.Target{Root: "/stack", ControlPort: 10002}, false)
-	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "--keep-project", "--tui=false"}
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "--log-file", "/stack/run/process-compose.log", "--log-no-color", "up", "--keep-project", "--tui=false"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("foreground up args = %v, want %v", got, want)
 	}
 }
 
+// Each stack's supervisor logs to the stack's own run/process-compose.log
+// rather than the $TMPDIR file every stack of the user shares (#113), unless the
+// stack names a log with PC_LOG_FILE, which process-compose then reads itself.
+func TestBackendUpLogsToTheStackOrToPCLogFile(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PC_LOG_FILE=/srv/stack/run/process-compose.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		envFile string
+		want    []string
+	}{
+		{name: "stack log", want: []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "--log-file", "/stack/run/process-compose.log", "--log-no-color", "up", "-D", "--keep-project", "--tui=false"}},
+		{name: "PC_LOG_FILE", envFile: envFile, want: []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--keep-project", "--tui=false"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Backend{}.upArgs(runtime.Target{Root: "/stack", EnvFile: tt.envFile, ControlPort: 10002}, true)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("up args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// logSupervisor serves the parts of process-compose's API a log read uses, as
+// v1.120.0 answers them: a process's state, and the last lines of its buffer
+// (GET /process/logs/{name}/0/{limit}, newest last, limit 0 for all). An unknown
+// process is a 400, as the supervisor answers one. Each request waits delay.
+type logSupervisor struct {
+	lines map[string][]string
+	delay time.Duration
+	token string
+	// replacing names processes the supervisor is swapping for an updated
+	// definition: its log endpoint reports them missing while its process
+	// endpoint still serves them, as process-compose v1.120.0 does.
+	replacing map[string]bool
+
+	mu       sync.Mutex
+	requests []string
+}
+
+func (s *logSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.requests = append(s.requests, r.URL.Path)
+	s.mu.Unlock()
+	time.Sleep(s.delay)
+	if s.token != "" && r.Header.Get("X-PC-Token-Key") != s.token {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/process/logs/"); ok {
+		parts := strings.Split(rest, "/")
+		lines, known := s.lines[parts[0]]
+		if !known || s.replacing[parts[0]] {
+			http.Error(w, `{"error":"process `+parts[0]+` doesn't exist"}`, http.StatusBadRequest)
+			return
+		}
+		if limit, _ := strconv.Atoi(parts[2]); limit > 0 && limit < len(lines) {
+			lines = lines[len(lines)-limit:]
+		}
+		_ = json.NewEncoder(w).Encode(map[string][]string{"logs": lines})
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/process/")
+	if _, known := s.lines[name]; !known {
+		http.Error(w, `{"error":"can't get state of process `+name+`: no such process"}`, http.StatusBadRequest)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(processListEntry{Name: name, Status: "Running", IsRunning: true})
+}
+
+// writeLogPage answers a log range request with output's lines.
+func writeLogPage(w http.ResponseWriter, output []byte) {
+	lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+	if len(output) == 0 {
+		lines = []string{}
+	}
+	_ = json.NewEncoder(w).Encode(map[string][]string{"logs": lines})
+}
+
+func (s *logSupervisor) paths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.requests)
+}
+
+func startLogSupervisor(t *testing.T, s *logSupervisor) int {
+	t.Helper()
+	server := httptest.NewServer(s)
+	t.Cleanup(server.Close)
+	return serverPort(t, server)
+}
+
+// A follow runs `process logs --follow --tail N` once the supervisor confirms
+// it has loaded the process.
 func TestBackendStreamLogsTail(t *testing.T) {
+	supervisor := &logSupervisor{lines: map[string][]string{"web": nil}}
+	port := startLogSupervisor(t, supervisor)
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}
 	if _, err := backend.StreamLogs(context.Background(), runtime.LogsRequest{
-		Root: "/stack", Services: []string{"web"}, Follow: true, Tail: 50, ControlPort: 10004,
+		Root: "/stack", Services: []string{"web"}, Follow: true, Tail: 50, NoPrefix: true, ControlPort: port,
 	}); err != nil {
 		t.Fatalf("StreamLogs() error = %v", err)
 	}
-	want := []string{"--address", "127.0.0.1", "--port", "10004", "process", "logs", "--follow", "--tail", "50", "web"}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "logs", "--follow", "--tail", "50", "web"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
+	}
+	if got := supervisor.paths(); !slices.Equal(got, []string{"/process/web"}) {
+		t.Fatalf("supervisor requests = %v, want the state of web", got)
+	}
+}
+
+// perProcessLogs answers `process logs <name>` with that process's output and
+// records each command, as process-compose reads one process per command.
+type perProcessLogs struct {
+	mu       sync.Mutex
+	output   map[string]string
+	commands [][]string
+}
+
+func (r *perProcessLogs) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands = append(r.commands, append([]string(nil), args...))
+	return []byte(r.output[args[len(args)-1]]), nil
+}
+
+// A buffered read of several local services reads each from the supervisor's
+// log range endpoint, all at once, and returns them in request order with
+// every line labelled and padded as docker compose labels services (#114). A
+// follow runs one `process logs` per process and labels them the same way.
+func TestBackendLogsReadsEachProcess(t *testing.T) {
+	const delay = 300 * time.Millisecond
+	supervisor := &logSupervisor{
+		lines: map[string][]string{"api": {"listening", "ready"}, "worker": {"started"}, "db": {"up"}, "cache": {"warm"}},
+		delay: delay,
+	}
+	port := startLogSupervisor(t, supervisor)
+	backend := Backend{}
+	req := runtime.LogsRequest{Root: "/stack", Services: []string{"api", "worker", "db", "cache"}, Tail: 200, ControlPort: port}
+
+	started := time.Now()
+	logs, err := backend.Logs(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Logs() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*delay {
+		t.Fatalf("Logs() of four processes took %s, want them read at once (each read takes %s)", elapsed, delay)
+	}
+	var got strings.Builder
+	for chunk := range logs {
+		got.WriteString(chunk)
+	}
+	if want := "api    | listening\napi    | ready\nworker | started\ndb     | up\ncache  | warm\n"; got.String() != want {
+		t.Fatalf("Logs() = %q, want %q", got.String(), want)
+	}
+	paths := supervisor.paths()
+	slices.Sort(paths)
+	if want := []string{"/process/logs/api/0/200", "/process/logs/cache/0/200", "/process/logs/db/0/200", "/process/logs/worker/0/200"}; !slices.Equal(paths, want) {
+		t.Fatalf("supervisor requests = %v, want %v", paths, want)
+	}
+
+	runner := &perProcessLogs{output: map[string]string{"api": "listening\nready\n", "worker": "started\n"}}
+	supervisor.delay = 0
+	stream, err := Backend{Runner: runner}.StreamLogs(t.Context(), runtime.LogsRequest{Root: "/stack", Services: []string{"api", "worker"}, Follow: true, Tail: 200, ControlPort: port})
+	if err != nil {
+		t.Fatalf("StreamLogs() error = %v", err)
+	}
+	var lines []string
+	for line := range stream {
+		lines = append(lines, line)
+	}
+	slices.Sort(lines)
+	if want := []string{"api    | listening\n", "api    | ready\n", "worker | started\n"}; !slices.Equal(lines, want) {
+		t.Fatalf("StreamLogs() lines = %q, want %q", lines, want)
+	}
+
+	logs, err = backend.Logs(t.Context(), runtime.LogsRequest{Services: []string{"api", "worker"}, NoPrefix: true, ControlPort: port})
+	if err != nil {
+		t.Fatalf("Logs(NoPrefix) error = %v", err)
+	}
+	got.Reset()
+	for chunk := range logs {
+		got.WriteString(chunk)
+	}
+	if want := "listening\nready\nstarted\n"; got.String() != want {
+		t.Fatalf("Logs(NoPrefix) = %q, want %q", got.String(), want)
+	}
+}
+
+// A buffered read asks the range endpoint for the tail, which returns the
+// newest lines whole, and sends the supervisor's token.
+func TestBackendLogsTail(t *testing.T) {
+	lines := make([]string, 1500)
+	for i := range lines {
+		lines[i] = "line-" + strconv.Itoa(i)
+	}
+	supervisor := &logSupervisor{lines: map[string][]string{"web": lines}, token: "secret"}
+	port := startLogSupervisor(t, supervisor)
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PC_API_TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func(req runtime.LogsRequest) string {
+		t.Helper()
+		req.Services, req.NoPrefix, req.ControlPort, req.EnvFile = []string{"web"}, true, port, envFile
+		logs, err := Backend{}.Logs(t.Context(), req)
+		if err != nil {
+			t.Fatalf("Logs(%+v) error = %v", req, err)
+		}
+		var got strings.Builder
+		for chunk := range logs {
+			got.WriteString(chunk)
+		}
+		return got.String()
+	}
+	if got := read(runtime.LogsRequest{Tail: 500}); strings.Count(got, "\n") != 500 || !strings.HasPrefix(got, "line-1000\n") || !strings.HasSuffix(got, "line-1499\n") {
+		t.Fatalf("Logs(tail 500) = %d lines from %q, want lines 1000 to 1499", strings.Count(got, "\n"), got[:min(len(got), 12)])
+	}
+	if got := supervisor.paths()[0]; got != "/process/logs/web/0/500" {
+		t.Fatalf("first request = %q, want /process/logs/web/0/500", got)
+	}
+}
+
+// The supervisor's API token is read as process-compose v1.120.0 reads it
+// (GetApiToken in src/config/config.go): PC_API_TOKEN when set and not empty,
+// as it is; else the contents of the file PC_API_TOKEN_PATH names, trimmed;
+// else none. A file that can't be read gives none, as in process-compose
+// (#118).
+func TestProcessComposeTokenReadsAsProcessComposeDoes(t *testing.T) {
+	const fromVariable = "dummy-variable-token-0123456789"
+	const fromFile = "dummy-file-token-0123456789"
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "pc-token")
+	if err := os.WriteFile(tokenFile, []byte(" \t"+fromFile+"\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		envFile   string
+		inherited map[string]string
+		want      string
+	}{
+		{name: "variable", envFile: "PC_API_TOKEN=" + fromVariable, want: fromVariable},
+		{name: "file", envFile: "PC_API_TOKEN_PATH=" + tokenFile, want: fromFile},
+		{name: "variable before file", envFile: "PC_API_TOKEN=" + fromVariable + "\nPC_API_TOKEN_PATH=" + tokenFile, want: fromVariable},
+		{name: "empty variable falls back to the file", envFile: "PC_API_TOKEN=\nPC_API_TOKEN_PATH=" + tokenFile, want: fromFile},
+		{name: "relative file from the stack root", envFile: "PC_API_TOKEN_PATH=pc-token", want: fromFile},
+		{name: "file from the inherited environment", inherited: map[string]string{"PC_API_TOKEN_PATH": tokenFile}, want: fromFile},
+		{name: "inherited variable kept as it is", inherited: map[string]string{"PC_API_TOKEN": " " + fromVariable + " ", "PC_API_TOKEN_PATH": tokenFile}, want: " " + fromVariable + " "},
+		{name: "missing file", envFile: "PC_API_TOKEN_PATH=" + filepath.Join(root, "missing"), want: ""},
+		{name: "neither", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PC_API_TOKEN", "")
+			t.Setenv("PC_API_TOKEN_PATH", "")
+			for key, value := range tt.inherited {
+				t.Setenv(key, value)
+			}
+			envFile := filepath.Join(t.TempDir(), "runtime.env")
+			if err := os.WriteFile(envFile, []byte(tt.envFile+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := processComposeToken(t.Context(), root, envFile); got != tt.want {
+				t.Fatalf("processComposeToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// When the env file sets a key twice, the setting is the last one, as os/exec
+// passes the last of duplicate entries to the supervisor.
+func TestProcessComposeSettingTakesTheLastOfADuplicatedKey(t *testing.T) {
+	t.Setenv("PC_API_TOKEN", "")
+	envFile := filepath.Join(t.TempDir(), "runtime.env")
+	if err := os.WriteFile(envFile, []byte("PC_API_TOKEN=dummy-first-token-0123456789\nPC_API_TOKEN=dummy-last-token-0123456789\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := processComposeSetting(envFile, "PC_API_TOKEN"), "dummy-last-token-0123456789"; got != want {
+		t.Fatalf("processComposeSetting() = %q, want %q", got, want)
+	}
+}
+
+// envRunner records the env file entries every process-compose command runs
+// with, by the command's first argument after the client flags. It hands each
+// command to next, or answers `list` with no processes when next is nil.
+type envRunner struct {
+	next Runner
+	mu   sync.Mutex
+	envs map[string][][]string
+}
+
+func (r *envRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	command := args[len(Backend{}.clientArgs(0))]
+	r.envs[command] = append(r.envs[command], slices.Clone(env))
+	r.mu.Unlock()
+	if r.next != nil {
+		return r.next.Run(ctx, dir, env, name, args...)
+	}
+	if command == "list" {
+		return []byte("[]"), nil
+	}
+	return nil, nil
+}
+
+// `down` and `list -o json` (status, RunJob's baseline and its polling) run
+// with the stack's env file over the inherited environment, as `up` and the
+// other client commands do, so a token set only there reaches process-compose's
+// client instead of a 401. A missing env file runs them with the inherited
+// environment alone, as before.
+func TestClientCommandsRunWithTheStackEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	written := filepath.Join(dir, "runtime.env")
+	if err := os.WriteFile(written, []byte("PC_API_TOKEN_PATH=/stack/pc-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for envFile, want := range map[string][]string{
+		written:                       {"PC_API_TOKEN_PATH=/stack/pc-token"},
+		filepath.Join(dir, "missing"): nil,
+	} {
+		runner := &envRunner{envs: map[string][][]string{}}
+		backend := Backend{Runner: runner}
+		if err := backend.Down(t.Context(), runtime.Target{Root: dir, EnvFile: envFile, ControlPort: 28100}); err != nil {
+			t.Fatalf("Down() error = %v", err)
+		}
+		if _, err := backend.Status(t.Context(), runtime.StatusRequest{Root: dir, EnvFile: envFile, ControlPort: 28100}); err != nil {
+			t.Fatalf("Status() error = %v", err)
+		}
+
+		// RunJob lists the processes for its baseline, then polls the list
+		// until the re-run completes.
+		ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+		supervisor := &fakeSupervisor{
+			name:   "job",
+			config: `{"name":"job","command":"run"}`,
+			state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ProcessEndTime: &ended},
+		}
+		server := httptest.NewServer(supervisor)
+		jobRunner := &envRunner{next: supervisor, envs: runner.envs}
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		_, err := Backend{Runner: jobRunner}.RunJob(ctx, runtime.Target{Root: dir, EnvFile: envFile, ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "job", Configuration: jobConfiguration})
+		cancel()
+		server.Close()
+		if err != nil {
+			t.Fatalf("RunJob() error = %v", err)
+		}
+
+		if got := len(runner.envs["list"]); got < 3 {
+			t.Fatalf("env file %s: %d `list` commands, want status, the baseline and a poll", filepath.Base(envFile), got)
+		}
+		for _, command := range []string{"down", "list"} {
+			for i, got := range runner.envs[command] {
+				if !slices.Equal(got, want) {
+					t.Errorf("env file %s: `%s` #%d ran with %q, want %q", filepath.Base(envFile), command, i+1, got, want)
+				}
+			}
+		}
+	}
+}
+
+// A supervisor whose token comes from PC_API_TOKEN_PATH alone serves a log
+// read, rather than answering 401; with the file missing, angee sends no token
+// and the supervisor's 401 stands.
+func TestBackendLogsSendsTheTokenFromPCAPITokenPath(t *testing.T) {
+	const token = "dummy-file-token-0123456789"
+	t.Setenv("PC_API_TOKEN", "")
+	t.Setenv("PC_API_TOKEN_PATH", "")
+	port := startLogSupervisor(t, &logSupervisor{lines: map[string][]string{"web": {"up"}}, token: token})
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "pc-token")
+	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func(path string) (string, error) {
+		t.Helper()
+		envFile := filepath.Join(dir, "runtime.env")
+		if err := os.WriteFile(envFile, []byte("PC_API_TOKEN_PATH="+path+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		logs, err := Backend{}.Logs(t.Context(), runtime.LogsRequest{Root: dir, Services: []string{"web"}, Tail: 200, NoPrefix: true, EnvFile: envFile, ControlPort: port})
+		if err != nil {
+			return "", err
+		}
+		var got strings.Builder
+		for chunk := range logs {
+			got.WriteString(chunk)
+		}
+		return got.String(), nil
+	}
+	if got, err := read(tokenFile); err != nil || got != "up\n" {
+		t.Fatalf("Logs() with the token file = %q, %v; want up", got, err)
+	}
+	if _, err := read(filepath.Join(dir, "missing")); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("Logs() with a missing token file error = %v, want the supervisor's 401", err)
+	}
+}
+
+// A process the supervisor has not loaded fails at once, in both modes, as a
+// *runtime.ProcessNotLoadedError: `process logs` would wait on it forever
+// (#114), and a follow never starts its command.
+func TestBackendLogsUnknownProcessFailsFast(t *testing.T) {
+	supervisor := &logSupervisor{lines: map[string][]string{"web": {"up"}}}
+	port := startLogSupervisor(t, supervisor)
+	runner := &perProcessLogs{}
+	backend := Backend{Runner: runner}
+	for _, follow := range []bool{false, true} {
+		req := runtime.LogsRequest{Root: "/stack", Services: []string{"web", "late"}, Follow: follow, Tail: 200, ControlPort: port}
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		var err error
+		if follow {
+			_, err = backend.StreamLogs(ctx, req)
+		} else {
+			_, err = backend.Logs(ctx, req)
+		}
+		cancel()
+		var notLoaded *runtime.ProcessNotLoadedError
+		if !errors.As(err, &notLoaded) || notLoaded.Name != "late" || !strings.Contains(err.Error(), "has not loaded late") {
+			t.Fatalf("follow=%v: error = %v, want late not loaded", follow, err)
+		}
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("ran %v, want no `process logs` for a follow with an unknown process", runner.commands)
+	}
+}
+
+// A read while the supervisor replaces a process with an updated definition
+// says so and asks for a retry, rather than reporting it unloaded and
+// suggesting a supervisor restart (which would restart every local service).
+func TestBackendLogsDuringReplacementAsksForRetry(t *testing.T) {
+	supervisor := &logSupervisor{lines: map[string][]string{"web": {"up"}}, replacing: map[string]bool{"web": true}}
+	port := startLogSupervisor(t, supervisor)
+	backend := Backend{Runner: &perProcessLogs{}}
+	_, err := backend.Logs(t.Context(), runtime.LogsRequest{Root: "/stack", Services: []string{"web"}, Tail: 200, ControlPort: port})
+	var notLoaded *runtime.ProcessNotLoadedError
+	if !errors.As(err, &notLoaded) || !notLoaded.Replacing || !strings.Contains(err.Error(), "is replacing web") || strings.Contains(err.Error(), "restart the supervisor") {
+		t.Fatalf("error = %v, want web being replaced, with a retry", err)
 	}
 }
 
@@ -834,7 +1315,8 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 	const payload = `[
 	{"name":"build-watch","status":"Running","is_running":true,"exit_code":0,"is_ready":"-"},
 	{"name":"web","status":"Running","is_running":true,"exit_code":0,"is_ready":"Ready"},
-	{"name":"migrate","status":"Completed","is_running":false,"exit_code":0,"is_ready":"-"}
+	{"name":"migrate","status":"Completed","is_running":false,"exit_code":0,"is_ready":"-"},
+	{"name":"worker","status":"Restarting","is_running":false,"exit_code":1,"is_ready":"-","restarts":3}
 ]`
 	runner := &stubListRunner{output: []byte(payload)}
 	backend := Backend{Runner: runner}
@@ -847,17 +1329,86 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 		t.Fatalf("args = %v, want %v", runner.args, wantArgs)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "worker", Runtime: "local", State: "restarting", ExitCode: intPointer(1), Restarts: 3, Generation: "0:3:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
 	}
 }
 
+// A process started through a running supervisor gets its log file as a fresh
+// `up` would, in process-compose's native field names (logLocation,
+// loggerConfig, maxSize). A process compiled without one leaves the
+// supervisor's setting alone.
+func TestProcessUpdatesIncludesLogFile(t *testing.T) {
+	updates, err := processUpdates(Process{
+		LogLocation: "/stack/run/logs/web.log",
+		LogConfig: &LogConfig{
+			FlushEachLine: true, DisableJSON: true, NoColor: true, NoMetadata: true, AddTimestamp: true,
+			TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+			Rotation:        &LogRotation{MaxSizeMB: 10, MaxBackups: 3},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("processUpdates() error = %v", err)
+	}
+	wantLogger := map[string]any{
+		"flushEachLine": true, "disableJSON": true, "noColor": true, "noMetadata": true, "addTimestamp": true,
+		"timestampFormat": "2006-01-02T15:04:05.000Z07:00",
+		"rotation":        map[string]any{"maxSize": 10, "maxBackups": 3},
+	}
+	if updates["logLocation"] != "/stack/run/logs/web.log" || !reflect.DeepEqual(updates["loggerConfig"], wantLogger) {
+		t.Fatalf("log updates = %v, %#v; want the log file and %#v", updates["logLocation"], updates["loggerConfig"], wantLogger)
+	}
+	updates, err = processUpdates(Process{}, false)
+	if err != nil {
+		t.Fatalf("processUpdates() error = %v", err)
+	}
+	if _, ok := updates["logLocation"]; ok {
+		t.Fatalf("updates = %v, want no logLocation for a process without a log file", updates)
+	}
+	if _, ok := updates["loggerConfig"]; ok {
+		t.Fatalf("updates = %v, want no loggerConfig for a process without a log file", updates)
+	}
+}
+
+// PC_LOG_FILE in the operator's own environment counts as the stack's choice
+// too: process-compose reads it there, so no --log-file overrides it, and the
+// error names it.
+func TestBackendUpLeavesPCLogFileFromTheEnvironment(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "/env/process-compose.log")
+	got := Backend{}.upArgs(runtime.Target{Root: "/stack", ControlPort: 10002}, true)
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-D", "--keep-project", "--tui=false"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("up args = %v, want %v", got, want)
+	}
+	port := freePort(t)
+	project := newFakeProject("/stack", nil)
+	backend := Backend{Runner: project, SupervisorReadyTimeout: 300 * time.Millisecond}
+	err := backend.Up(t.Context(), runtime.Target{Root: "/stack", ControlPort: port})
+	if err == nil || !strings.Contains(err.Error(), "the process-compose log /env/process-compose.log") {
+		t.Fatalf("Up() error = %v, want it to name /env/process-compose.log", err)
+	}
+}
+
+// Without PC_LOG_FILE, the error for a supervisor that never answered points at
+// the stack's own log, which upArgs passed to it.
+func TestUpFailureNamesTheStackLog(t *testing.T) {
+	t.Setenv("PC_LOG_FILE", "")
+	port := freePort(t)
+	project := newFakeProject("/stack", nil)
+	backend := Backend{Runner: project, SupervisorReadyTimeout: 300 * time.Millisecond}
+	err := backend.Up(t.Context(), runtime.Target{Root: "/stack", ControlPort: port})
+	if err == nil || !strings.Contains(err.Error(), "the process-compose log /stack/run/process-compose.log") {
+		t.Fatalf("Up() error = %v, want it to name /stack/run/process-compose.log", err)
+	}
+}
+
 func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
-	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}})
+	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -868,7 +1419,7 @@ func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
 }
 
 func TestProcessUpdatesPreservesShutdownWhenGraceIsOmitted(t *testing.T) {
-	updates, err := processUpdates(Process{})
+	updates, err := processUpdates(Process{}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -991,6 +1542,131 @@ func TestUpdateProcessRefusesUnboundedRunningLegacyProcess(t *testing.T) {
 	}
 }
 
+func TestProcessUpdatesIncludesRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		availability *Availability
+		want         map[string]any
+	}{
+		{&Availability{Restart: "on_failure"}, map[string]any{"restart": 2, "backoffSeconds": 0, "maxRestarts": 0}},
+		{&Availability{Restart: "always"}, map[string]any{"restart": 1, "backoffSeconds": 0, "maxRestarts": 0}},
+		{&Availability{Restart: "no"}, map[string]any{"restart": 0, "backoffSeconds": 0, "maxRestarts": 0}},
+		// A job compiles no availability: process-compose's default, no restart.
+		{nil, map[string]any{"restart": 0, "backoffSeconds": 0, "maxRestarts": 0}},
+	} {
+		updates, err := processUpdates(Process{Availability: tc.availability}, false)
+		if err != nil {
+			t.Fatalf("processUpdates(%+v) error = %v", tc.availability, err)
+		}
+		if got := updates["restartPolicy"]; !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("processUpdates(%+v) restartPolicy = %#v, want %#v", tc.availability, got, tc.want)
+		}
+	}
+	if _, err := processUpdates(Process{Availability: &Availability{Restart: "exit_on_failure"}}, false); err == nil {
+		t.Fatal("processUpdates() accepted a restart policy Angee does not compile")
+	}
+}
+
+// restartPolicyServer serves one process whose native configuration is info and
+// records what is posted for it.
+func restartPolicyServer(t *testing.T, info string, posted *map[string]any) int {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/process/info/worker":
+			_, _ = io.WriteString(w, info)
+		case r.Method == http.MethodPost && r.URL.Path == "/process":
+			if err := json.NewDecoder(r.Body).Decode(posted); err != nil {
+				t.Errorf("decode process: %v", err)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	_, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	return port
+}
+
+// postRestartPolicy updates the served worker to availability and returns
+// whether it posted, and what.
+func postRestartPolicy(t *testing.T, info string, availability *Availability) (bool, map[string]any) {
+	t.Helper()
+	var posted map[string]any
+	port := restartPolicyServer(t, info, &posted)
+	policy, err := nativeAvailability(availability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := (Backend{}).updateProcess(t.Context(), runtime.Target{ControlPort: port}, "worker", map[string]any{"command": "run", "restartPolicy": policy})
+	if err != nil {
+		t.Fatalf("updateProcess(%s, %+v) error = %v", info, availability, err)
+	}
+	if changed != (posted != nil) {
+		t.Fatalf("updateProcess(%s, %+v) = %v, but posted %#v", info, availability, changed, posted)
+	}
+	return changed, posted
+}
+
+// The policy is merged into what the supervisor holds: exit_on_end and
+// exit_on_skipped are not Angee's to set, and a zero field is process-compose's
+// omitted default, so it is removed rather than posted.
+func TestUpdateProcessMergesRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		info         string
+		availability *Availability
+		want         map[string]any
+	}{
+		{
+			name:         "a supervisor without a policy",
+			info:         `{"name":"worker","command":"run","restartPolicy":{"exitOnEnd":true}}`,
+			availability: &Availability{Restart: "on_failure"},
+			want:         map[string]any{"restart": float64(2), "exitOnEnd": true},
+		},
+		{
+			// A deleted field, not a skipped one: skipping the zero would post
+			// the old on_failure back.
+			name:         "a running process switched to restart: no",
+			info:         `{"name":"worker","command":"run","restartPolicy":{"restart":2,"exitOnEnd":true}}`,
+			availability: &Availability{Restart: "no"},
+			want:         map[string]any{"exitOnEnd": true},
+		},
+		{
+			name:         "a backoff and a limit Angee does not set",
+			info:         `{"name":"worker","command":"run","restartPolicy":{"restart":2,"backoffSeconds":5,"maxRestarts":3}}`,
+			availability: &Availability{Restart: "on_failure"},
+			want:         map[string]any{"restart": float64(2)},
+		},
+	} {
+		changed, posted := postRestartPolicy(t, tc.info, tc.availability)
+		if !changed {
+			t.Fatalf("%s: updateProcess() posted nothing", tc.name)
+		}
+		if got := posted["restartPolicy"]; !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: posted restartPolicy = %#v, want %#v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// An unchanged definition is not posted: the post replaces the process, and a
+// zero-valued policy field is one process-compose leaves out of what it reports.
+func TestUpdateProcessSeesUnchangedRestartPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		info         string
+		availability *Availability
+	}{
+		{`{"name":"worker","command":"run","restartPolicy":{}}`, &Availability{Restart: "no"}},
+		{`{"name":"worker","command":"run","restartPolicy":{}}`, nil},
+		{`{"name":"worker","command":"run","restartPolicy":{"restart":2}}`, &Availability{Restart: "on_failure"}},
+	} {
+		if changed, posted := postRestartPolicy(t, tc.info, tc.availability); changed {
+			t.Fatalf("updateProcess(%s, %+v) posted %#v", tc.info, tc.availability, posted)
+		}
+	}
+}
+
 // process-compose prints an ANSI-coloured "new version available" notice to
 // stderr, which CombinedOutput folds in ahead of the JSON array. Its escape
 // codes (e.g. "\x1b[33m") contain a '[', so a naive "trim to the first '['"
@@ -1008,7 +1684,7 @@ func TestBackendStatusParsesProcessListWithANSIBanner(t *testing.T) {
 		t.Fatalf("Status() error = %v", err)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -1027,20 +1703,9 @@ func TestBackendStatusIncludesNativeGeneration(t *testing.T) {
 	if len(got) != 1 || got[0].ExitCode == nil || *got[0].ExitCode != 0 {
 		t.Fatalf("statuses = %#v, want completed zero-exit process", got)
 	}
-	wantGeneration := "2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
+	wantGeneration := "0:2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
 	if got[0].Generation != wantGeneration {
 		t.Fatalf("generation = %q, want %q", got[0].Generation, wantGeneration)
-	}
-}
-
-func TestRunLimitedReturnsOnlyProcessLogStdout(t *testing.T) {
-	backend := Backend{LookupPath: func(string) (string, error) { return "/bin/sh", nil }}
-	out, err := backend.runLimited(context.Background(), t.TempDir(), "", 1024, "-c", "printf 'job-output\\n'; printf 'update-notice\\n' >&2")
-	if err != nil {
-		t.Fatalf("runLimited() error = %v", err)
-	}
-	if got, want := string(out), "job-output\n"; got != want {
-		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 
@@ -1065,15 +1730,11 @@ func TestBackendStatusPropagatesErrors(t *testing.T) {
 // invocations so a test can tell which trigger spawned the re-run.
 type scriptedJobRunner struct {
 	lists    [][]byte
-	logs     []byte
 	listIdx  int
 	restarts int
 }
 
 func (r *scriptedJobRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
-	if hasArg(args, "logs") {
-		return r.logs, nil
-	}
 	if hasArg(args, "list") {
 		out := r.lists[r.listIdx]
 		if r.listIdx < len(r.lists)-1 {
@@ -1096,6 +1757,48 @@ func hasArg(args []string, want string) bool {
 	return false
 }
 
+func TestRunJobUsesVerifiedPrerequisitesOnlyWhenRequested(t *testing.T) {
+	for _, verified := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verified=%t", verified), func(t *testing.T) {
+			supervisor := &fakeSupervisor{
+				name: "job", config: `{"name":"job","command":"old"}`,
+				state: processListEntry{Name: "job", Status: "Completed", PID: 100},
+			}
+			server := httptest.NewServer(supervisor)
+			defer server.Close()
+			configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{
+				"job": {Command: "run", DependsOn: map[string]ProcessDependency{
+					"prerequisite": {Condition: "process_completed_successfully"},
+				}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			_, err = (Backend{Runner: supervisor}).RunJob(ctx, runtime.Target{
+				ControlPort: serverPort(t, server), DependenciesSatisfied: verified,
+			}, runtime.JobSpec{Name: "job", Configuration: configuration})
+			if err != nil {
+				t.Fatal(err)
+			}
+			supervisor.mu.Lock()
+			defer supervisor.mu.Unlock()
+			if len(supervisor.posted) != 1 {
+				t.Fatalf("posted %d updates, want 1", len(supervisor.posted))
+			}
+			dependencies := supervisor.posted[0]["dependsOn"]
+			var want any
+			if !verified {
+				want = map[string]any{"prerequisite": map[string]any{"condition": float64(1)}}
+			}
+			if !reflect.DeepEqual(dependencies, want) {
+				t.Fatalf("native dependencies = %#v, want %#v", dependencies, want)
+			}
+		})
+	}
+}
+
 // A re-run driven through UpdateProcess goes Pending -> Launching -> Launched ->
 // Running -> Completed, and ProcessStartTime (part of the generation string)
 // advances at launch, long before the process actually runs. The old gate treated
@@ -1108,7 +1811,6 @@ func TestRunJobReportsCompletionNotLaunchWindow(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion, captured before the re-run.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1159,6 +1861,8 @@ func replacingJobServer(t *testing.T) *httptest.Server {
 	var replaced atomic.Bool
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/job/"):
+			writeLogPage(w, []byte("job log line\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
 			_, _ = io.WriteString(w, `{"name":"job","command":"old"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/process/job":
@@ -1184,8 +1888,10 @@ func restartFallbackServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/job/"):
+			writeLogPage(w, []byte("job log line\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/process/info/job":
-			_, _ = io.WriteString(w, `{"name":"job","command":"run","workingDir":""}`)
+			_, _ = io.WriteString(w, `{"name":"job","command":"run","workingDir":"","restartPolicy":{}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/process":
 			t.Errorf("updateProcess posted an update; want changed=false restart fallback")
 			http.NotFound(w, r)
@@ -1222,7 +1928,6 @@ func TestRunJobDetectsRestartPathCompletionWithUnchangedEndTime(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion, captured before the re-run.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1262,7 +1967,6 @@ func TestRunJobDetectsFastRestartCompletionByPid(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1301,7 +2005,6 @@ func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
 	port := serverPort(t, server)
 
 	runner := &scriptedJobRunner{
-		logs: []byte("job log line\n"),
 		lists: [][]byte{
 			// baseline: the previous run's completion.
 			[]byte(`[{"name":"job","status":"Completed","exit_code":0,"pid":100,"process_start_time":"2026-09-13T08:55:00Z","process_end_time":"2026-09-13T09:00:00Z"}]`),
@@ -1330,6 +2033,73 @@ func TestRunJobIgnoresStaleTerminalSample(t *testing.T) {
 	}
 	if runner.restarts != 0 {
 		t.Fatalf("RunJob() restarted the job %d times; want the applied update to be its only trigger", runner.restarts)
+	}
+}
+
+// A job's output is read from the supervisor's log range endpoint, every line
+// its buffer holds, newest last, so a long job shows its last lines rather than
+// the oldest; a failure points at the job's log file for the whole output
+// (#114).
+func TestRunJobReadsTheLastLinesAndNamesTheLogFile(t *testing.T) {
+	ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:   "job",
+		config: `{"name":"job","command":"run","logLocation":"/stack/run/logs/job.log","loggerConfig":{}}`,
+		state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ExitCode: 1, ProcessEndTime: &ended},
+		logs:   []byte("last line\n"),
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	backend := Backend{Runner: supervisor}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := backend.RunJob(ctx, runtime.Target{ControlPort: serverPort(t, server)}, runtime.JobSpec{
+		Name:          "job",
+		Configuration: []byte("version: \"0.5\"\nprocesses:\n  job:\n    command: run\n    log_location: /stack/run/logs/job.log\n"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "exited with status 1; full output in /stack/run/logs/job.log") {
+		t.Fatalf("RunJob() error = %v, want the exit status and the log file", err)
+	}
+	if string(out) != "last line\n" {
+		t.Fatalf("RunJob() output = %q, want the job's logs", out)
+	}
+	supervisor.mu.Lock()
+	logsPath := supervisor.logsPath
+	supervisor.mu.Unlock()
+	if logsPath != "/process/logs/job/0/0" {
+		t.Fatalf("logs request = %q, want every buffered line of job", logsPath)
+	}
+}
+
+// RunJob keeps a run's output within maxJobOutputBytes (1 MiB): the newest
+// whole lines behind the marker. The supervisor here holds 1100 lines of 1 KiB.
+func TestRunJobKeepsTheNewestMiBOfOutput(t *testing.T) {
+	var logs strings.Builder
+	for i := range 1100 {
+		line := fmt.Sprintf("line-%04d ", i)
+		logs.WriteString(line + strings.Repeat("x", 1023-len(line)) + "\n")
+	}
+	ended := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
+	supervisor := &fakeSupervisor{
+		name:   "job",
+		config: `{"name":"job","command":"run"}`,
+		state:  processListEntry{Name: "job", Status: "Completed", PID: 100, ExitCode: 1, ProcessEndTime: &ended},
+		logs:   []byte(logs.String()),
+	}
+	server := httptest.NewServer(supervisor)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	out, err := Backend{Runner: supervisor}.RunJob(ctx, runtime.Target{ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "job", Configuration: jobConfiguration})
+	if err == nil || !strings.Contains(err.Error(), "exited with status 1") {
+		t.Fatalf("RunJob() error = %v, want the exit status", err)
+	}
+	// 1 MiB less the 12-byte marker holds 1023 whole 1 KiB lines: 77 to 1099.
+	got := string(out)
+	if len(got) > maxJobOutputBytes || !strings.HasPrefix(got, runtime.LogTruncatedMarker+"line-0077 ") || !strings.Contains(got, "\nline-1099 ") || strings.Count(got, "\n") != 1024 {
+		t.Fatalf("RunJob() output = %d bytes, %d lines, from %q; want at most %d: the marker, then lines 77 to 1099",
+			len(got), strings.Count(got, "\n"), got[:min(len(got), 30)], maxJobOutputBytes)
 	}
 }
 
@@ -1391,6 +2161,7 @@ type fakeSupervisor struct {
 	state       processListEntry
 	afterUpdate *processListEntry
 	logs        []byte
+	logsPath    string
 	posted      []map[string]any
 	restarts    int
 }
@@ -1399,6 +2170,9 @@ func (s *fakeSupervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/process/logs/"+s.name+"/"):
+		s.logsPath = r.URL.Path
+		writeLogPage(w, s.logs)
 	case s.missing && r.Method == http.MethodGet && r.URL.Path == "/process/info/"+s.name:
 		http.Error(w, `{"error":"no such process: `+s.name+`"}`, http.StatusBadRequest)
 	case s.missing && r.Method == http.MethodGet && r.URL.Path == "/process/"+s.name:
@@ -1441,8 +2215,6 @@ func (s *fakeSupervisor) Run(_ context.Context, _ string, _ []string, _ string, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
-	case hasArg(args, "logs"):
-		return s.logs, nil
 	case hasArg(args, "list"):
 		return json.Marshal([]processListEntry{s.state})
 	case hasArg(args, "restart"):
@@ -1645,7 +2417,7 @@ func TestApplyRegistersMissingProcessWithoutRestartingIt(t *testing.T) {
 func TestApplyRestartsProcessWithUnchangedDefinition(t *testing.T) {
 	supervisor := &fakeSupervisor{
 		name:   "web",
-		config: `{"name":"web","command":"serve","workingDir":"/srv"}`,
+		config: `{"name":"web","command":"serve","workingDir":"/srv","restartPolicy":{}}`,
 		state:  processListEntry{Name: "web", Status: "Running", IsRunning: true, PID: 100},
 	}
 	server := httptest.NewServer(supervisor)
@@ -1711,5 +2483,454 @@ func TestBackendStatusReturnsParseError(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("statuses = %v, want nil", got)
+	}
+}
+
+func TestTransientNativeLogTailDoesNotExposeTruncatedSecrets(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	for _, secret := range []string{"boundary-secret-abcdefghijklmnopqrstuvwxyz", "private-first-line\nprivate-sensitive-last-line"} {
+		t.Run(strings.ReplaceAll(secret, "\n", "-"), func(t *testing.T) {
+			root := t.TempDir()
+			logctx.RegisterSecrets(secret)
+			payload := secret + "\n" + strings.Repeat("x", maxJobOutputBytes+8-len(secret)-1)
+			fixture := filepath.Join(root, "fixture.log")
+			if err := os.WriteFile(fixture, []byte(payload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(root, "fake-process-compose")
+			script := fmt.Sprintf("#!/bin/sh\ncp %q \"$3\"\nexit 1\n", fixture)
+			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+			output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			if !strings.HasPrefix(string(output), runtime.LogTruncatedMarker) {
+				t.Fatalf("native fallback was not exercised: %q", output)
+			}
+			if strings.Contains(string(output), secret[8:]) || strings.Contains(string(output), "private-sensitive-last-line") {
+				t.Fatal("truncated native log exposed secret fragment")
+			}
+		})
+	}
+}
+
+func TestTransientNativeStdoutTailRedactsMultilineSecrets(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	material := "local-secret-material-long-line"
+	secret := "BEGIN-PRIVATE-KEY-LINE\n" + material + "\nEND-PRIVATE-KEY-LINE"
+	logctx.RegisterSecrets(secret)
+	payload := secret + "\n" + strings.Repeat("x\n", (maxJobOutputBytes+6-len(secret)-1)/2)
+	fixture := filepath.Join(root, "fixture.log")
+	if err := os.WriteFile(fixture, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\nexit 1\n", fixture)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if strings.Contains(string(output), material) {
+		t.Fatal("native stdout tail exposed complete private-key line after dropping registered multiline key prefix")
+	}
+}
+
+// process-compose's foreground run sets the terminal's title to
+// "process-compose: <host>/<directory>". Neither that nor a capture's colours
+// reach the output or the error a receipt keeps.
+func TestTransientNativeDiagnosticsDropTerminalControls(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	script := "#!/bin/sh\nprintf '\\033]0;process-compose: razor.local/001\\007pg_dump: \\033[31merror\\033[0m: connection refused\\n'\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	output, err := backend.runTransientJob(t.Context(), runtime.Target{Root: root}, "capture", Process{Command: "unused"})
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	if string(output) != "pg_dump: error: connection refused\n" {
+		t.Fatalf("output = %q, want the capture's text alone", output)
+	}
+	if message := err.Error(); strings.Contains(message, "\x1b") || strings.Contains(message, "razor.local") || !strings.Contains(message, "native output: pg_dump: error: connection refused") {
+		t.Fatalf("error = %q, want the capture's text without terminal controls", message)
+	}
+}
+
+// A transient job stays out of the registration path that serves a process the
+// supervisor has not loaded (addMissingProcess): it runs under its own
+// foreground supervisor, so the shared one gets no request at all, let alone a
+// project post that would relaunch the processes it runs.
+func TestRunJobKeepsTransientJobOutOfTheSharedSupervisor(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	supervisor := &fakeSupervisor{name: "capture", missing: true}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		supervisor.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho transient-ok\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"capture": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{Runner: supervisor, LookupPath: func(string) (string, error) { return binary, nil }}
+	// A job run through the shared supervisor would wait on it for good.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	output, err := backend.RunJob(ctx, runtime.Target{Root: root, ControlPort: serverPort(t, server)}, runtime.JobSpec{Name: "capture", Configuration: config, Transient: true})
+	if err != nil || !strings.Contains(string(output), "transient-ok") {
+		t.Fatalf("RunJob() = %q, %v; want the foreground run's output", output, err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("shared supervisor got %d requests; want none", got)
+	}
+	if posts, restarts, _ := supervisor.observed(); posts != 0 || restarts != 0 {
+		t.Fatalf("shared supervisor got %d updates and %d restarts; want none", posts, restarts)
+	}
+}
+
+func TestStopAbsentSupervisorIsAlreadyStopped(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	port := serverPort(t, server)
+	server.Close()
+	runner := &recordingRunner{}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), ControlPort: port, Services: []string{"web"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("unexpected command: %v", runner.args)
+	}
+}
+
+func TestStopSkipsMissingProcessesButStopsEveryPresentTarget(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", PID: 1}})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if err := backend.Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"missing"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command for absent process: %v", runner.args)
+	}
+	if err := backend.Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"missing", "web"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopTerminalAndDisabledProcessesAreAlreadyStopped(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed": {Status: "Completed"},
+		"error":     {Status: "Error"},
+		"skipped":   {Status: "Skipped"},
+		"disabled":  {Status: "Disabled"},
+	})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{
+		Root: root, ControlPort: port, Services: []string{"completed", "error", "skipped", "disabled"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command for stopped processes: %v", runner.args)
+	}
+}
+
+func TestStopMixedTargetsKeepsRunningAndTransitionalProcesses(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed":         {Status: "Completed"},
+		"disabled":          {Status: "Disabled"},
+		"running":           {Status: "Running", IsRunning: true},
+		"pending":           {Status: "Pending"},
+		"scheduled":         {Status: "Scheduled"},
+		"restarting":        {Status: "Restarting"},
+		"unknown":           {Status: "Unknown"},
+		"running-completed": {Status: "Completed", IsRunning: true},
+		"running-error":     {Status: "Error", IsRunning: true},
+		"running-skipped":   {Status: "Skipped", IsRunning: true},
+		"running-disabled":  {Status: "Disabled", IsRunning: true},
+	})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	services := []string{"completed", "running", "missing", "disabled", "pending", "scheduled", "restarting", "unknown", "running-completed", "running-error", "running-skipped", "running-disabled"}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: services}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "running", "pending", "scheduled", "restarting", "unknown", "running-completed", "running-error", "running-skipped", "running-disabled"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopPreservesCommandFailure(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed": {Status: "Completed"},
+		"web":       {Status: "Running", IsRunning: true},
+	})
+	port := project.serve(t)
+	failure := errors.New("stop failed")
+	runner := &stubListRunner{err: failure}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"completed", "web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop error = %v, want %v", err, failure)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+// stopRunner answers a `process stop` by running onStop, as a supervisor
+// whose processes change state while it handles the stop does, and then
+// returning err.
+type stopRunner struct {
+	onStop func()
+	err    error
+	args   []string
+}
+
+func (r *stopRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	r.args = append([]string(nil), args...)
+	if hasArg(args, "stop") && r.onStop != nil {
+		r.onStop()
+	}
+	return nil, r.err
+}
+
+func (p *fakeProject) setState(name string, state processListEntry) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state.Name = name
+	p.processes[name].state = state
+}
+
+func TestStopAcceptsProcessesThatEndedBeforeTheSupervisorStoppedThem(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"web":    {Status: "Running", IsRunning: true},
+		"worker": {Status: "Running", IsRunning: true},
+	})
+	port := project.serve(t)
+	// process-compose v1.122.0 refuses to stop a process that has ended, and
+	// exits 1 naming it (probed).
+	runner := &stopRunner{err: errors.New("Successfully stopped 'worker' but encountered failures for: 'web'")}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.setState("worker", processListEntry{Status: "Disabled"})
+	}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}}); err != nil {
+		t.Fatalf("Stop() = %v, want nil once every named process reads as stopped", err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web", "worker"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopKeepsTheFailureWhileANamedProcessStillRunsOrMayLaunch(t *testing.T) {
+	for _, after := range []processListEntry{
+		{Status: "Running", IsRunning: true},
+		{Status: "Pending"},
+		{Status: "Restarting"},
+		{Status: "Completed", IsRunning: true},
+	} {
+		t.Run(after.Status, func(t *testing.T) {
+			root := t.TempDir()
+			project := newFakeProject(root, map[string]processListEntry{
+				"web":    {Status: "Running", IsRunning: true},
+				"worker": {Status: "Running", IsRunning: true},
+			})
+			port := project.serve(t)
+			failure := errors.New("Failed to stop: 'worker'")
+			runner := &stopRunner{err: failure}
+			runner.onStop = func() {
+				project.setState("web", processListEntry{Status: "Completed"})
+				project.setState("worker", after)
+			}
+			err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}})
+			if !errors.Is(err, failure) {
+				t.Fatalf("Stop() = %v, want %v while worker is %+v", err, failure, after)
+			}
+		})
+	}
+}
+
+func TestStopKeepsTheFailureWhenASkippedRequestedProcessStarted(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"web":    {Status: "Running", IsRunning: true},
+		"worker": {Status: "Completed"},
+	})
+	port := project.serve(t)
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.setState("worker", processListEntry{Status: "Running", IsRunning: true})
+	}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v: worker, skipped as completed, started during the stop", err, failure)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopKeepsTheFailureWhenAnotherProjectNowServesThePort(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	port := project.serve(t)
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.mu.Lock()
+		project.fileNames = []string{filepath.Join(t.TempDir(), "process-compose.yaml")}
+		project.mu.Unlock()
+	}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v when another project's supervisor answers the re-read", err, failure)
+	}
+}
+
+func TestStopAcceptsASupervisorThatExitedWithItsLastProcess(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	server := httptest.NewServer(project)
+	defer server.Close()
+	runner := &stopRunner{err: errors.New("Failed to stop: 'web'"), onStop: server.Close}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: serverPort(t, server), Services: []string{"web"}}); err != nil {
+		t.Fatalf("Stop() = %v, want nil once the supervisor no longer serves", err)
+	}
+}
+
+func TestStopKeepsTheFailureWhenStatesCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	var forbid atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if forbid.Load() && strings.HasPrefix(r.URL.Path, "/process/") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		project.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure, onStop: func() { forbid.Store(true) }}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: serverPort(t, server), Services: []string{"web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v when the states cannot be read again", err, failure)
+	}
+}
+
+func TestStopDoesNotTreatControlPlaneFailureAsAbsence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/live":
+			_, _ = w.Write([]byte(`{"status":"alive"}`))
+		case "/project/state":
+			http.NotFound(w, r)
+		default:
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	runner := &recordingRunner{}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), ControlPort: serverPort(t, server), Services: []string{"web"}})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("Stop error = %v, want control-plane failure", err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command after failed state read: %v", runner.args)
+	}
+}
+
+func TestProtectedApplyRefusesNewServiceWithoutProjectReplacement(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"held": {Status: "Completed"}})
+	port := project.serve(t)
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"new": {Command: "new"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (Backend{Runner: project}).Apply(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"new"}, Configuration: document, ProtectStopped: true, DependenciesSatisfied: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot register service") {
+		t.Fatalf("Apply = %v", err)
+	}
+	if writes := project.writes(); len(writes) != 0 {
+		t.Fatalf("unsafe project write: %v", writes)
+	}
+}
+
+func TestApplyOmitsPrerequisitesAlreadySatisfiedByOperation(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Completed"}})
+	port := project.serve(t)
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"web": {Command: "web", DependsOn: map[string]ProcessDependency{"isolated-job": {Condition: "process_completed_successfully"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (Backend{Runner: project}).Apply(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web"}, Configuration: document, DependenciesSatisfied: true}); err != nil {
+		t.Fatal(err)
+	}
+	project.mu.Lock()
+	dependencies := project.processes["web"].config["dependsOn"]
+	project.mu.Unlock()
+	if dependencies != nil {
+		t.Fatalf("native service still waits for isolated prerequisite: %#v", dependencies)
+	}
+}
+
+func TestNativeGenerationChangesOnManualRestartPID(t *testing.T) {
+	runner := &stubListRunner{output: []byte(`[{"name":"job","status":"Completed","pid":100,"exit_code":0}]`)}
+	backend := Backend{Runner: runner}
+	before, err := backend.Status(t.Context(), runtime.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.output = []byte(`[{"name":"job","status":"Completed","pid":101,"exit_code":0}]`)
+	after, err := backend.Status(t.Context(), runtime.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[0].Generation == after[0].Generation {
+		t.Fatal("manual restart reused native generation despite changed PID")
 	}
 }

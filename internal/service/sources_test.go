@@ -314,28 +314,12 @@ func TestRedactedURLAgainstNotesCredentialOnlyDifference(t *testing.T) {
 	}
 }
 
-func TestRelativeRepoPath(t *testing.T) {
-	for repo, want := range map[string]bool{
-		"../app":                                 true,
-		"sources/app":                            true,
-		"app":                                    true,
-		"./dir:name":                             true,
-		"host:repo.git":                          false,
-		"/srv/git/app.git":                       false,
-		"https://github.com/acme/app.git":        false,
-		"file:///srv/git/app.git":                false,
-		"git@github.com:acme/app.git":            false,
-		"git@github-arpee:/ang-ee/angee-arp.git": false,
-	} {
-		if got := relativeRepoPath(repo); got != want {
-			t.Errorf("relativeRepoPath(%q) = %v, want %v", repo, got, want)
-		}
-	}
-
-	// A relative repo is left out of origin reconciliation entirely.
+// A relative repo (manifest.IsRelativeURL) is left out of origin
+// reconciliation entirely.
+func TestRelativeRepoPathIsNotReconciled(t *testing.T) {
 	p, cache, oldRemote, _, _ := newMovedGitSource(t)
-	if err := syncSourceOrigin(context.Background(), p.gitClient(), "app", cache, "../new.git", true); err != nil {
-		t.Fatalf("syncSourceOrigin(relative) error = %v", err)
+	if err := syncSourceRemotes(context.Background(), p.gitClient(), cacheRemotes("app"), cache, manifest.Source{Kind: "git", Repo: "../new.git"}, remoteSyncAdopt); err != nil {
+		t.Fatalf("syncSourceRemotes(relative) error = %v", err)
 	}
 	if got := strings.TrimSpace(runGitOutput(t, cache, "config", "--get", "remote.origin.url")); got != oldRemote {
 		t.Fatalf("cache origin = %q, want it left at %q", got, oldRemote)

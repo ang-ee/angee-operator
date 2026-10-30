@@ -33,6 +33,7 @@ type API interface {
 	RuntimeAPI
 	ServiceAPI
 	JobAPI
+	BackupAPI
 	WorkspaceAPI
 	SourceAPI
 	WorkspaceSourceAPI
@@ -41,6 +42,13 @@ type API interface {
 	FileAPI
 	IngressAPI
 	TemplateAPI
+}
+
+// BackupAPI captures manifest-owned resources using existing operation receipts.
+type BackupAPI interface {
+	BackupPreview(context.Context, api.BackupRequest) (api.BackupPreview, error)
+	BackupStart(context.Context, api.BackupRequest) (api.JobRunOperation, error)
+	BackupArchive(context.Context, string) (io.ReadCloser, api.BackupArtifact, error)
 }
 
 // StackAPI covers stack lifecycle and compilation.
@@ -66,10 +74,18 @@ type RuntimeAPI interface {
 	StackDev(ctx context.Context, build bool) error
 	StackDevForeground(ctx context.Context, build bool, stdout, stderr io.Writer) error
 	StackDown(ctx context.Context) error
-	StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error)
-	StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error)
+	// StackLogs reads the last tail lines of each service or job, or replays
+	// them before following live; 0 means runtime.DefaultLogTail. A follow of
+	// a local service or job is refused a tail above
+	// runtime.MaxLocalFollowTail.
+	StackLogs(ctx context.Context, services []string, follow bool, tail int) (<-chan string, error)
+	// StackLogsLimited is StackLogs with a buffered read kept within maxBytes
+	// (0: no limit) as a whole, after labelling, its newest whole lines kept
+	// (runtime.LimitLogBytes).
+	StackLogsLimited(ctx context.Context, services []string, follow bool, tail, maxBytes int) (<-chan string, error)
 	// StreamServiceLogs opens a live, structured per-service log stream,
-	// optionally replaying the last `tail` lines first (0 = no backlog cap).
+	// replaying the last `tail` lines first (0 = runtime.DefaultLogTail), with
+	// StackLogs' tail limits.
 	StreamServiceLogs(ctx context.Context, service string, tail int) (<-chan api.LogLine, error)
 	ServiceUp(ctx context.Context, names []string) error
 	ServiceStart(ctx context.Context, names []string) error
@@ -106,6 +122,9 @@ type WorkspaceAPI interface {
 	WorkspaceStatus(ctx context.Context, name string) (api.WorkspaceStatusResponse, error)
 	WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error)
 	WorkspaceDestroy(ctx context.Context, name string, purge bool) error
+	// WorkspaceLogs and WorkspaceLogsLimited serve the deprecated workspace
+	// logs surfaces: a workspace has no logs of its own (#110), so they answer
+	// a closed stream. They go with those surfaces in #110 step 2.
 	WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error)
 	WorkspaceLogsLimited(ctx context.Context, name string, follow bool, maxBytes int) (<-chan string, error)
 	WorkspaceCreatePreflight(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceCreatePreflightResponse, error)
@@ -139,6 +158,10 @@ type WorkspaceSourceAPI interface {
 	WorkspaceSourceRebaseAbort(ctx context.Context, workspace, slot string) (api.GitOpResult, error)
 	WorkspaceSourceRebaseContinue(ctx context.Context, workspace, slot string) (api.GitOpResult, error)
 	WorkspaceSourcePublish(ctx context.Context, workspace, slot, remote, branch string) (api.GitOpResult, error)
+	// WorkspaceSourceMigrate moves a slot between a git worktree and a jj
+	// slot of its source's cache; to is "jj" or "worktree", empty for the
+	// other of the two. The result's Source is the slot's status after it.
+	WorkspaceSourceMigrate(ctx context.Context, workspace, slot, to string) (api.GitOpResult, error)
 }
 
 // GitOpsAPI covers the aggregate sources/workspaces topology view.

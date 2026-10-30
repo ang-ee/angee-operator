@@ -39,10 +39,9 @@ func TestLoadStackMissingManifestExplainsNextStep(t *testing.T) {
 	if strings.Contains(err.Error(), "no such file or directory") {
 		t.Fatalf("error = %q, want no raw open error", err)
 	}
-	// Callers branch on the missing-manifest case (workspacePortInputs treats
-	// it as "not a managed workspace inner stack", WorkspaceCreatePreflight as
-	// "no host stack defaults"), so the friendlier message must not cost the
-	// error its os.ErrNotExist identity.
+	// Callers branch on the missing-manifest case (WorkspaceCreatePreflight
+	// treats it as "no host stack defaults"), so the friendlier message must
+	// not cost the error its os.ErrNotExist identity.
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("error = %q, want errors.Is(err, os.ErrNotExist)", err)
 	}
@@ -643,6 +642,7 @@ services:
         extra_hosts:
             - host.docker.internal:host-gateway
         stop_grace_period: 10s
+        restart: on-failure
 `, composeProjectName("demo", root))
 	if !bytes.Equal(composeYAML, []byte(wantCompose)) {
 		t.Fatalf("Compose output changed without ready\ngot:\n%s\nwant:\n%s", composeYAML, wantCompose)
@@ -662,9 +662,121 @@ processes:
         shutdown:
             timeout_seconds: 10
             signal: 15
+        log_location: /stack/run/logs/local.log
+        log_configuration:
+            flush_each_line: true
+            disable_json: true
+            no_color: true
+            no_metadata: true
+            add_timestamp: true
+            timestamp_format: 2006-01-02T15:04:05.000Z07:00
+            rotation:
+                max_size_mb: 10
+                max_backups: 3
+        availability:
+            restart: on_failure
 `
 	if !bytes.Equal(processYAML, []byte(wantProcess)) {
 		t.Fatalf("process-compose output changed without ready\ngot:\n%s\nwant:\n%s", processYAML, wantProcess)
+	}
+}
+
+// Every local service and job keeps its output in run/logs/<name>.log, past the
+// supervisor's 1000-line buffer: plain text lines with a dated timestamp and the
+// level, flushed per line and rotated by process-compose (#113). A name with a
+// path separator gets no file, even one that would resolve back into run/logs.
+func TestCompileKeepsLocalOutputInRunLogs(t *testing.T) {
+	root := t.TempDir()
+	stack := &manifest.Stack{
+		Version:  manifest.VersionCurrent,
+		Kind:     manifest.KindStack,
+		Name:     "demo",
+		Services: map[string]manifest.Service{"web": {Runtime: manifest.RuntimeLocal, Command: []string{"serve"}}},
+		Jobs:     map[string]manifest.Job{"deps": {Runtime: manifest.RuntimeLocal, Command: []string{"install"}}},
+	}
+	stack.Defaults()
+	compiled, err := Compile(stack, root, nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	wantConfig := &proccompose.LogConfig{
+		FlushEachLine:   true,
+		DisableJSON:     true,
+		NoColor:         true,
+		NoMetadata:      true,
+		AddTimestamp:    true,
+		TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+		Rotation:        &proccompose.LogRotation{MaxSizeMB: 10, MaxBackups: 3},
+	}
+	for _, name := range []string{"web", "deps"} {
+		process := compiled.ProcessCompose.Processes[name]
+		if want := filepath.Join(root, "run", "logs", name+".log"); process.LogLocation != want {
+			t.Errorf("%s log_location = %q, want %q", name, process.LogLocation, want)
+		}
+		if !reflect.DeepEqual(process.LogConfig, wantConfig) {
+			t.Errorf("%s log_configuration = %+v, want %+v", name, process.LogConfig, wantConfig)
+		}
+	}
+	for _, name := range []string{"../escape", "nested/name", "x/../web"} {
+		if path, config := processLogFile(root, name); path != "" || config != nil {
+			t.Errorf("processLogFile(%q) = %q, %+v; want no file", name, path, config)
+		}
+	}
+}
+
+func TestCompileRestartPolicies(t *testing.T) {
+	stack := &manifest.Stack{
+		Name: "demo",
+		Services: map[string]manifest.Service{
+			"web":        {Runtime: manifest.RuntimeContainer, Image: "nginx:alpine"},
+			"web-no":     {Runtime: manifest.RuntimeContainer, Image: "nginx:alpine", Restart: manifest.RestartNo},
+			"web-always": {Runtime: manifest.RuntimeContainer, Image: "nginx:alpine", Restart: manifest.RestartAlways},
+			"worker":     {Runtime: manifest.RuntimeLocal, Command: []string{"worker"}},
+			"worker-no":  {Runtime: manifest.RuntimeLocal, Command: []string{"worker"}, Restart: manifest.RestartNo},
+			"worker-all": {Runtime: manifest.RuntimeLocal, Command: []string{"worker"}, Restart: manifest.RestartAlways},
+		},
+		Jobs: map[string]manifest.Job{
+			"migrate": {Runtime: manifest.RuntimeContainer, Image: "example/app:latest", Command: []string{"migrate"}},
+			"seed":    {Runtime: manifest.RuntimeLocal, Command: []string{"seed"}},
+		},
+	}
+	stack.Defaults()
+	if err := stack.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	compiled, err := Compile(stack, "/stack", nil)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	for name, want := range map[string]string{"web": "on-failure", "web-no": "no", "web-always": "unless-stopped", "migrate": ""} {
+		if got := compiled.Compose.Services[name].Restart; got != want {
+			t.Errorf("compose %s restart = %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range map[string]*proccompose.Availability{
+		"worker":     {Restart: "on_failure"},
+		"worker-no":  {Restart: "no"},
+		"worker-all": {Restart: "always"},
+		"seed":       nil,
+	} {
+		if got := compiled.ProcessCompose.Processes[name].Availability; !reflect.DeepEqual(got, want) {
+			t.Errorf("process %s availability = %+v, want %+v", name, got, want)
+		}
+	}
+	// `no` is quoted in both files: an unquoted no is false to a YAML 1.1 reader.
+	composeYAML, err := compose.Marshal(compiled.Compose)
+	if err != nil {
+		t.Fatalf("compose.Marshal() error = %v", err)
+	}
+	if !bytes.Contains(composeYAML, []byte(`restart: "no"`)) {
+		t.Errorf("compose YAML does not quote restart no:\n%s", composeYAML)
+	}
+	processYAML, err := proccompose.Marshal(compiled.ProcessCompose)
+	if err != nil {
+		t.Fatalf("proccompose.Marshal() error = %v", err)
+	}
+	if !bytes.Contains(processYAML, []byte(`restart: "no"`)) {
+		t.Errorf("process-compose YAML does not quote restart no:\n%s", processYAML)
 	}
 }
 
@@ -833,5 +945,30 @@ func TestPlatformInteractiveOptionConfiguresGit(t *testing.T) {
 	}
 	if interactive.gitClient().NonInteractive {
 		t.Fatal("interactive platform git client is non-interactive")
+	}
+}
+
+func TestCompileOptionalJobInputs(t *testing.T) {
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "optional-inputs",
+		Jobs: map[string]manifest.Job{"work": {
+			Runtime: manifest.RuntimeLocal,
+			Command: []string{"tool", "${inputs.action | default('run')}"},
+			Env:     map[string]string{"VALUE": "${inputs.value | default('')}"},
+		}},
+	}
+	ordinary, err := Compile(stack, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ordinary.ProcessCompose.Processes["work"]; got.Command != "tool run" || !reflect.DeepEqual(got.Environment, []string{"VALUE="}) {
+		t.Fatalf("ordinary command = %#v", got)
+	}
+	explicit, err := compile(stack, t.TempDir(), nil, map[string]map[string]string{"work": {"action": "false", "value": "chosen"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := explicit.ProcessCompose.Processes["work"]; got.Command != "tool false" || !reflect.DeepEqual(got.Environment, []string{"VALUE=chosen"}) {
+		t.Fatalf("explicit command = %#v", got)
 	}
 }

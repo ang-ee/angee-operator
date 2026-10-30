@@ -27,6 +27,8 @@ import (
 	"github.com/ang-ee/angee-operator/internal/runtime/proccompose"
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
+	"github.com/ang-ee/angee-operator/internal/vcs"
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,8 +37,13 @@ type Platform struct {
 	composeBackend  runtime.Backend
 	procBackend     runtime.Backend
 	portUnavailable func(int) bool
+	slotDrivers     func(vcs.Slot) vcs.Driver                   // nil selects slotDriver's default
+	backupLayers    func(vcs.Slot) vcs.BackupLayer              // nil selects backupLayer's default
+	jjProbe         func(context.Context) jjdriver.Capabilities // nil probes this machine (jjdriver.Probe)
+	migrateFault    func(step string) error                     // a test's failure after a migrate step; nil fails none
 	jobOutput       *jobOutputSink
 	interactive     bool
+	backupMu        sync.Mutex
 	jobRunsMu       sync.RWMutex
 	jobRuns         map[string]api.JobRunOperation
 	latestJobRun    string
@@ -169,60 +176,69 @@ func (p *Platform) stackPrepare(ctx context.Context, jobInputs map[string]map[st
 	lock := fslock.RootLock(p.root)
 	var compiled *CompiledStack
 	err := lock.With(ctx, func() error {
-		finishLoading := logctx.Step(ctx, "loading stack")
-		stack, err := p.LoadStack()
-		finishLoading(err)
-		if err != nil {
-			return err
-		}
-		finishSources := logctx.Step(ctx, "materializing sources")
-		err = p.materializeStackResources(ctx, stack)
-		finishSources(err)
-		if err != nil {
-			return err
-		}
-		finishWorkspaces := logctx.Step(ctx, "materializing declared workspaces")
-		cut, err := p.materializeDeclaredWorkspaces(ctx, stack)
-		finishWorkspaces(err)
-		if err != nil {
-			return err
-		}
-		if cut {
-			// The cut wrote full workspace records (sources, allocations,
-			// resolved chain) to the manifest; reload before compiling.
-			if stack, err = p.LoadStack(); err != nil {
-				return err
-			}
-		}
-		compileStack := stack
-		if operationRoot != "" {
-			compileStack, err = jobOperationStack(stack, operationRoot, chained)
-			if err != nil {
-				return err
-			}
-		}
-		finishCompiling := logctx.Step(ctx, "compiling stack")
-		compiledStack, resolvedSecrets, err := p.compileStackArtifactsWithJobInputs(ctx, compileStack, jobInputs, operationRoot != "")
-		if err == nil && operationRoot != "" {
-			err = contributeOperationIngress(stack, compiledStack)
-		}
-		finishCompiling(err)
-		if err != nil {
-			return err
-		}
-		compiled = compiledStack
-		finishWriting := logctx.Step(ctx, "writing runtime files")
-		writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
-		if writeErr == nil && writeRuntime {
-			writeErr = p.writeCompiled(compiled)
-		}
-		if writeErr == nil && transient && operationRoot == "" {
-			compiled, writeErr = compile(compileStack, p.root, resolvedSecrets, nil, true)
-		}
-		finishWriting(writeErr)
-		return writeErr
+		var err error
+		compiled, err = p.stackPrepareLocked(ctx, jobInputs, writeRuntime, operationRoot, chained, transient)
+		return err
 	})
 	return compiled, err
+}
+
+// stackPrepareLocked requires the root lock. Long-running operations retain
+// that lock through execution so receipt recovery cannot mistake them for dead
+// owners; ordinary preparation releases it after this shared body returns.
+func (p *Platform) stackPrepareLocked(ctx context.Context, jobInputs map[string]map[string]string, writeRuntime bool, operationRoot string, chained, transient bool) (*CompiledStack, error) {
+	finishLoading := logctx.Step(ctx, "loading stack")
+	stack, err := p.LoadStack()
+	finishLoading(err)
+	if err != nil {
+		return nil, err
+	}
+	finishSources := logctx.Step(ctx, "materializing sources")
+	err = p.materializeStackResources(ctx, stack)
+	finishSources(err)
+	if err != nil {
+		return nil, err
+	}
+	finishWorkspaces := logctx.Step(ctx, "materializing declared workspaces")
+	cut, err := p.materializeDeclaredWorkspaces(ctx, stack)
+	finishWorkspaces(err)
+	if err != nil {
+		return nil, err
+	}
+	if cut {
+		// The cut wrote full workspace records (sources, allocations,
+		// resolved chain) to the manifest; reload before compiling.
+		if stack, err = p.LoadStack(); err != nil {
+			return nil, err
+		}
+	}
+	compileStack := stack
+	if operationRoot != "" {
+		compileStack, err = jobOperationStack(stack, operationRoot, chained)
+		if err != nil {
+			return nil, err
+		}
+	}
+	finishCompiling := logctx.Step(ctx, "compiling stack")
+	compiledStack, resolvedSecrets, err := p.compileStackArtifactsWithJobInputs(ctx, compileStack, jobInputs, operationRoot != "")
+	if err == nil && operationRoot != "" {
+		err = contributeOperationIngress(stack, compiledStack)
+	}
+	finishCompiling(err)
+	if err != nil {
+		return nil, err
+	}
+	compiled := compiledStack
+	finishWriting := logctx.Step(ctx, "writing runtime files")
+	writeErr := p.writeRuntimeEnv(stack, resolvedSecrets)
+	if writeErr == nil && writeRuntime {
+		writeErr = p.writeCompiled(compiled)
+	}
+	if writeErr == nil && transient && operationRoot == "" {
+		compiled, writeErr = compile(compileStack, p.root, resolvedSecrets, nil, true)
+	}
+	finishWriting(writeErr)
+	return compiled, writeErr
 }
 
 func (p *Platform) materializeStackResources(ctx context.Context, stack *manifest.Stack) error {
@@ -565,6 +581,15 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		Workspaces: map[string]api.WorkspaceRef{},
 	}
 	runtimeStates := p.runtimeServiceStates(ctx, stack)
+	attempts, err := p.latestJobAttempts(ctx)
+	if err != nil {
+		return api.StackStatusResponse{}, err
+	}
+	for name, attempt := range attempts {
+		if job, exists := stack.Jobs[name]; exists && attempt.owns(runtimeStates[name]) {
+			runtimeStates[name] = attempt.runtimeState(name, string(job.Runtime))
+		}
+	}
 	outcomes := stackOutcomes(stack, runtimeStates)
 	for _, name := range sortedKeys(stack.Services) {
 		service := stack.Services[name]
@@ -573,9 +598,16 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		if status == "" {
 			status = "declared"
 		}
-		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Health: observed.Health}
-		if outcomes[name] == api.JobSkipped {
+		state := api.ServiceState{Name: name, Runtime: string(service.Runtime), Status: status, Outcome: outcomes[name], ExitCode: runtimeExitCode(observed), Restarts: observed.Restarts, Health: observed.Health}
+		switch state.Outcome {
+		case api.JobSkipped:
 			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		case api.JobPending:
+			state.Reason = waitReason(stack, runtimeStates, outcomes, name)
+		case api.JobFailed:
+			if startFailed(observed) {
+				state.Reason = couldNotStart
+			}
 		}
 		resp.Services[name] = state
 		countOutcome(&resp.Summary.Services, outcomes[name])
@@ -587,10 +619,15 @@ func (p *Platform) StackStatus(ctx context.Context) (api.StackStatusResponse, er
 		switch state.Status {
 		case api.JobSkipped:
 			state.Reason = skipReason(stack, runtimeStates, outcomes, name)
+		case api.JobPending:
+			state.Reason = waitReason(stack, runtimeStates, outcomes, name)
 		case api.JobFailed:
 			if startFailed(observed) {
 				state.Reason = couldNotStart
 			}
+		}
+		if attempt, exists := attempts[name]; exists && attempt.owns(observed) && attempt.node.Message != "" {
+			state.Reason = attempt.node.Message
 		}
 		resp.Jobs[name] = state
 		countOutcome(&resp.Summary.Jobs, outcomes[name])
@@ -628,7 +665,7 @@ func (p *Platform) runtimeServiceStates(ctx context.Context, stack *manifest.Sta
 		}
 	}
 	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) {
-		procReq := runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}
+		procReq := runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
 		if statuses, err := p.procBackend.Status(ctx, procReq); err == nil {
 			for _, s := range statuses {
 				states[s.Name] = s
@@ -668,7 +705,21 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 	return compile(stack, root, resolvedSecrets, nil, false)
 }
 
+// compile renders the stack's runtime documents. It leaves every backup capture
+// job out, whatever inputs it is given, so neither the generated runtime files
+// nor a job run's snapshot can start one.
 func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]string, jobInputs map[string]map[string]string, resolveProcessSecrets bool) (*CompiledStack, error) {
+	return compileRuntime(stack, root, resolvedSecrets, jobInputs, resolveProcessSecrets, "")
+}
+
+// compileCapture compiles the private snapshot a backup runs one capture job
+// in, with the output paths the backup chose as that job's inputs. It is the
+// only compile that includes a capture job.
+func compileCapture(stack *manifest.Stack, root string, resolvedSecrets map[string]string, capture string, inputs map[string]string) (*CompiledStack, error) {
+	return compileRuntime(stack, root, resolvedSecrets, map[string]map[string]string{capture: inputs}, true, capture)
+}
+
+func compileRuntime(stack *manifest.Stack, root string, resolvedSecrets map[string]string, jobInputs map[string]map[string]string, resolveProcessSecrets bool, capture string) (*CompiledStack, error) {
 	secretEnvVars := map[string]string{}
 	for name := range resolvedSecrets {
 		secretEnvVars[name] = substitute.SecretEnvName(name)
@@ -748,6 +799,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Healthcheck:     composeHealthcheck(service.Ready),
 				DependsOn:       composeDependsOn(append(service.After, service.DependsOn...), stack),
 				StopGracePeriod: stopGracePeriod,
+				Restart:         composeRestart(service.NormalizedRestart()),
 			}
 		case manifest.RuntimeLocal:
 			localEnv, err := localMountEnv(mounts, mountResolver)
@@ -771,6 +823,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			if err != nil {
 				return nil, fmt.Errorf("service %s ready: %w", name, err)
 			}
+			logLocation, logConfig := processLogFile(root, name)
 			compiled.ProcessCompose.Processes[name] = proccompose.Process{
 				Command:        shellCommand(command),
 				Environment:    envList(env),
@@ -778,12 +831,18 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				ReadinessProbe: readinessProbe,
 				DependsOn:      processDependsOn(append(service.After, service.DependsOn...), stack),
 				Shutdown:       stopTimeout,
+				LogLocation:    logLocation,
+				LogConfig:      logConfig,
+				Availability:   processAvailability(service.NormalizedRestart()),
 			}
 		}
 	}
 
 	for _, name := range sortedKeys(stack.Jobs) {
 		job := stack.Jobs[name]
+		if job.Capture != nil && name != capture {
+			continue
+		}
 		jobCtx := ctx
 		if resolveProcessSecrets && job.Runtime == manifest.RuntimeLocal {
 			jobCtx.SecretEnvVars = nil
@@ -835,6 +894,7 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 		if err != nil {
 			return nil, fmt.Errorf("job %s default stop grace: %w", name, err)
 		}
+		logLocation, logConfig := processLogFile(root, name)
 		compiled.ProcessCompose.Processes[name] = proccompose.Process{
 			Command:     shellCommand(command),
 			Environment: envList(env),
@@ -842,7 +902,9 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			DependsOn:   processDependsOn(job.DependsOn, stack),
 			// Local jobs share the runtime's default bounded shutdown so the
 			// foreground supervisor can honor every process before its own exit.
-			Shutdown: shutdown,
+			Shutdown:    shutdown,
+			LogLocation: logLocation,
+			LogConfig:   logConfig,
 		}
 	}
 
@@ -855,6 +917,28 @@ func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 	}
 
 	return compiled, nil
+}
+
+// processLogFile returns the file process-compose keeps a local service's or
+// job's output in, run/logs/<name>.log, and its log configuration. The
+// supervisor's in-memory buffer holds only the last 1000 lines and ends with
+// it; the file keeps the rest as plain text lines, each with its time and
+// level, flushed line by line and rotated by process-compose at 10 MB with
+// three rotated files kept (40 MB at most per process). A name with a path
+// separator gets no file.
+func processLogFile(root, name string) (string, *proccompose.LogConfig) {
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, filepath.Separator) {
+		return "", nil
+	}
+	return filepath.Join(root, "run", "logs", name+".log"), &proccompose.LogConfig{
+		FlushEachLine:   true,
+		DisableJSON:     true,
+		NoColor:         true,
+		NoMetadata:      true,
+		AddTimestamp:    true,
+		TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
+		Rotation:        &proccompose.LogRotation{MaxSizeMB: 10, MaxBackups: 3},
+	}
 }
 
 func envList(env map[string]string) []string {
@@ -884,6 +968,36 @@ func processDependsOn(names []string, stack *manifest.Stack) map[string]proccomp
 		deps[name] = proccompose.ProcessDependency{Condition: condition}
 	}
 	return deps
+}
+
+// processAvailability compiles a service's restart policy for process-compose.
+//
+// It sets no backoff, so process-compose's own one second applies. Its backoff
+// is constant, and `process restart` also waits it out between stopping and
+// starting the process, so a longer one would add to every restart's downtime,
+// once per service in a chained restart. A crash loop's output stays bounded by
+// the rotated log file each local service writes.
+//
+// It sets no restart limit: process-compose counts every restart since the
+// process was last started and never resets the count after a healthy run, so
+// any limit would leave a long-running service down after enough crashes,
+// however far apart.
+func processAvailability(policy manifest.RestartPolicy) *proccompose.Availability {
+	return &proccompose.Availability{Restart: string(policy)}
+}
+
+// composeRestart compiles a service's restart policy for Docker Compose.
+// Docker never restarts a container it was asked to stop; unless-stopped also
+// keeps such a container stopped when the Docker daemon restarts.
+func composeRestart(policy manifest.RestartPolicy) string {
+	switch policy {
+	case manifest.RestartNo:
+		return "no"
+	case manifest.RestartAlways:
+		return "unless-stopped"
+	default:
+		return "on-failure"
+	}
 }
 
 func composeDependsOn(names []string, stack *manifest.Stack) map[string]compose.ServiceDependency {

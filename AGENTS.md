@@ -102,6 +102,8 @@ service.Platform
 | `internal/secrets/` | env-file and OpenBao secret backends. |
 | `internal/service/` | Business logic shared by CLI and operator. |
 | `internal/substitute/` | `${...}` substitution resolver and filters. |
+| `internal/vcs/` | Slot driver interface between the service and a slot's version control: reads and verbs. |
+| `internal/vcs/gitdriver/` | Driver for git worktree and clone slots. |
 
 ## Current Concepts
 
@@ -114,8 +116,9 @@ service.Platform
 - **Source**: reusable source material. Implemented materialization kinds are
   `git` and `local`.
 - **Workspace**: a rendered Copier template under
-  `$ANGEE_ROOT/workspaces/<name>`, optionally with materialized sources and an
-  inner stack.
+  `$ANGEE_ROOT/workspaces/<name>`, optionally with materialized sources. It
+  renders no stack; a stack's services and jobs reach it through
+  `workspace://` mounts, workdir and env.
 - **Operator**: the REST and GraphQL control-plane server for one root.
 
 ## Patterns

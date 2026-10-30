@@ -306,6 +306,7 @@ func workspaceSourceCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 			return p.WorkspaceSourceRebaseContinue(ctx, ws, slot)
 		}))
 	cmd.AddCommand(workspaceSlotPublishCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceSlotMigrateCommand(stdout, root, operatorURL, jsonOutput))
 	return cmd
 }
 
@@ -443,8 +444,37 @@ func workspaceSlotPublishCommand(stdout io.Writer, root, operatorURL *string, js
 			return printGitOpResult(stdout, jsonOutput, result)
 		},
 	}
-	cmd.Flags().StringVar(&remote, "remote", "", "remote name (default: origin)")
+	cmd.Flags().StringVar(&remote, "remote", "", "remote name (default: the source's push_default, else git's push remote, else origin)")
 	cmd.Flags().StringVar(&branch, "branch", "", "branch name (default: workspace source manifest branch)")
+	return cmd
+}
+
+func workspaceSlotMigrateCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
+	var to string
+	cmd := &cobra.Command{
+		Use:   "migrate <workspace> <slot>",
+		Short: "Move a workspace source slot between a git worktree and a jj slot",
+		Long: `Move a workspace source slot between a git worktree and a jj slot of its
+source's cache, keeping its untracked and ignored files, and record the new
+mode in angee.yaml. Without --to the slot becomes the other of the two.
+
+Example:
+  angee workspace source migrate feature app --to jj
+  angee workspace source migrate feature app --to worktree`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			platform, err := localPlatform(root, operatorURL)
+			if err != nil {
+				return err
+			}
+			result, err := platform.WorkspaceSourceMigrate(cmd.Context(), args[0], args[1], to)
+			if err != nil {
+				return err
+			}
+			return printGitOpResult(stdout, jsonOutput, result)
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "mode to move the slot to: jj or worktree (default: the other of the two)")
 	return cmd
 }
 

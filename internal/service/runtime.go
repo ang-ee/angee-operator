@@ -204,7 +204,7 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 	// Nothing rendered to run yet: fall back to following whatever logs the
 	// backends can produce so `angee dev` against an empty stack still tails.
 	if !hasContainers && !hasLocal {
-		logs, err := p.StackLogs(ctx, nil, true)
+		logs, err := p.StackLogs(ctx, nil, true, 0)
 		if err != nil {
 			return err
 		}
@@ -294,12 +294,14 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 }
 
 // watchDevJobs waits for the jobs `angee dev` started to finish and reports what
-// they left broken. As soon as they finish, a failed job or a skipped service or
-// job is printed to stderr while the rest of the stack keeps running, and the
-// *StackFailureError is returned so the command exits non-zero when it ends. It
-// returns nil for a healthy bring-up, and when ctx ends first (Ctrl-C, `angee
-// down`, or the supervisor failing) because the runtime is then shutting down
-// and its states no longer describe the bring-up.
+// they left broken. As soon as they finish, a failed job, a restarting service,
+// or a skipped service or job is printed to stderr while the rest of the stack
+// keeps running, and the *StackFailureError is returned so the command exits
+// non-zero when it ends. A job found waiting on a service the runtime keeps
+// restarting is printed while the wait goes on. It returns nil for a healthy
+// bring-up, and when ctx ends first (Ctrl-C, `angee down`, or the supervisor
+// failing) because the runtime is then shutting down and its states no longer
+// describe the bring-up.
 func (p *Platform) watchDevJobs(ctx context.Context, stack *manifest.Stack, hasLocal bool, stderr io.Writer) error {
 	// The foreground supervisor starts concurrently with this watch. Until it
 	// answers, its jobs read as never run, which awaitJobs counts as finished,
@@ -307,7 +309,9 @@ func (p *Platform) watchDevJobs(ctx context.Context, stack *manifest.Stack, hasL
 	if hasLocal && !p.awaitSupervisor(ctx, stack) {
 		return nil
 	}
-	status, err := awaitJobs(ctx, p, 0, nil)
+	status, err := awaitJobs(ctx, p, 0, nil, func(job, reason string) {
+		fmt.Fprintf(stderr, "angee dev: job %s is %s\n", job, reason)
+	})
 	if err != nil || ctx.Err() != nil {
 		return nil
 	}
@@ -324,7 +328,7 @@ func (p *Platform) awaitSupervisor(ctx context.Context, stack *manifest.Stack) b
 	ticker := time.NewTicker(awaitJobsInterval)
 	defer ticker.Stop()
 	for {
-		if _, err := p.procBackend.Status(ctx, runtime.StatusRequest{Root: p.root, ControlPort: processComposeControlPort(stack)}); err == nil {
+		if _, err := p.procBackend.Status(ctx, runtime.StatusRequest{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}); err == nil {
 			return true
 		}
 		select {
@@ -415,7 +419,7 @@ func (p *Platform) StackDown(ctx context.Context) (err error) {
 		downErrors = append(downErrors, statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(p.root, "process-compose.yaml")); statErr == nil {
-		downErrors = append(downErrors, p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)}))
+		downErrors = append(downErrors, p.procBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}))
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		downErrors = append(downErrors, statErr)
 	}
@@ -438,11 +442,19 @@ func (p *Platform) ServiceRestart(ctx context.Context, names []string) error {
 	return p.serviceRuntimeAction(ctx, "restart", names)
 }
 
-func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error) {
-	return p.StackLogsLimited(ctx, services, follow, 0)
+func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool, tail int) (<-chan string, error) {
+	return p.StackLogsLimited(ctx, services, follow, tail, 0)
 }
 
-func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, maxBytes int) (<-chan string, error) {
+// StackLogsLimited reads the last tail lines of each service or job (0:
+// runtime.DefaultLogTail; see logTail), or replays them before following live.
+// A buffered read is kept within maxBytes (0: no limit) as a whole, once both
+// runtimes' lines are labelled and joined, its last whole lines in read order
+// kept (runtime.LimitLogBytes). Read order is the container lines, then the
+// local lines grouped by service in the order requested, so a small limit can
+// leave out the services read first. Only the last maxBytes+1 bytes are held
+// while the read is collected. A follow is not limited.
+func (p *Platform) StackLogsLimited(ctx context.Context, services []string, follow bool, tail, maxBytes int) (<-chan string, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
@@ -464,6 +476,9 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 			return nil, err
 		}
 	}
+	if tail, err = logTail(tail, local, follow); err != nil {
+		return nil, err
+	}
 	// follow streams line-by-line (StreamLogs) so subscribers see logs live;
 	// a bounded read (follow=false) keeps the buffered Logs path unchanged.
 	logsFor := func(backend runtime.Backend, req runtime.LogsRequest) (<-chan string, error) {
@@ -473,15 +488,40 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		return backend.Logs(ctx, req)
 	}
 	var channels []<-chan string
+	targetCount := len(container) + len(local)
+	if len(services) > 0 && len(local) > 0 {
+		attempts, err := p.latestJobAttempts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		observed := p.runtimeServiceStates(ctx, stack)
+		remaining := make([]string, 0, len(local))
+		width := 0
+		if targetCount > 1 {
+			for _, name := range services {
+				width = max(width, len(name))
+			}
+		}
+		for _, name := range local {
+			if attempt, exists := attempts[name]; exists && attempt.owns(observed[name]) {
+				channels = append(channels, p.isolatedJobLogs(ctx, name, attempt, tail, follow, width))
+			} else {
+				remaining = append(remaining, name)
+			}
+		}
+		local = remaining
+	}
 	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) && len(container) > 0 {
-		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes})
+		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail})
 		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, ch)
 	}
 	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) && len(local) > 0 {
-		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
+		// Lines are labelled with their service whenever the read covers
+		// more than one, as docker compose labels its own.
+		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail, NoPrefix: targetCount == 1, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
 		}
@@ -492,37 +532,29 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		close(ch)
 		return ch, nil
 	}
-	out := make(chan string)
 	if follow {
 		// Interleave the backends concurrently so a live stream from one
 		// doesn't wait for the other to drain.
-		var wg sync.WaitGroup
-		for _, ch := range channels {
-			wg.Add(1)
-			go func(ch <-chan string) {
-				defer wg.Done()
-				for line := range ch {
-					select {
-					case out <- line:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}(ch)
-		}
-		go func() {
-			wg.Wait()
-			close(out)
-		}()
-		return out, nil
+		return runtime.MergeStreams(ctx, channels...), nil
 	}
+	out := make(chan string)
 	go func() {
 		defer close(out)
+		if maxBytes <= 0 {
+			for _, ch := range channels {
+				for line := range ch {
+					out <- line
+				}
+			}
+			return
+		}
+		read := runtime.NewLimitedLogRead(maxBytes)
 		for _, ch := range channels {
 			for line := range ch {
-				out <- line
+				read.Add(line)
 			}
 		}
+		out <- read.String()
 	}()
 	return out, nil
 }

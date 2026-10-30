@@ -3,6 +3,36 @@
   "$id": "https://docs.angee.ai/angee.schema.json/stack",
   "$ref": "#/$defs/Stack",
   "$defs": {
+    "BackupCapture": {
+      "properties": {
+        "group": {
+          "type": "string",
+          "enum": [
+            "databases",
+            "service_state"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "exclude_persist": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "group",
+        "name",
+        "output"
+      ]
+    },
     "Ingress": {
       "properties": {
         "type": {
@@ -55,6 +85,16 @@
     },
     "Job": {
       "properties": {
+        "holds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "capture": {
+          "$ref": "#/$defs/BackupCapture"
+        },
         "runtime": {
           "type": "string",
           "enum": [
@@ -135,6 +175,12 @@
     },
     "PersistPath": {
       "properties": {
+        "backup": {
+          "type": "string",
+          "enum": [
+            "exclude"
+          ]
+        },
         "subpath": {
           "type": "string"
         },
@@ -430,6 +476,15 @@
         "stop_grace_period": {
           "type": "string",
           "default": "10s"
+        },
+        "restart": {
+          "type": "string",
+          "enum": [
+            "no",
+            "on_failure",
+            "always"
+          ],
+          "default": "on_failure"
         }
       },
       "additionalProperties": false,
@@ -448,6 +503,40 @@
           ]
         },
         "repo": {
+          "type": "string"
+        },
+        "remotes": {
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "canonical": {
+                    "type": "boolean"
+                  },
+                  "branches": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "url"
+                ]
+              }
+            ]
+          },
+          "type": "object"
+        },
+        "push_default": {
           "type": "string"
         },
         "url": {
@@ -557,6 +646,13 @@
             "$ref": "#/$defs/PersistPath"
           },
           "type": "object"
+        },
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "jj"
+          ]
         },
         "sources": {
           "additionalProperties": {
@@ -718,7 +814,15 @@
           "type": "string",
           "enum": [
             "worktree",
-            "clone"
+            "clone",
+            "jj"
+          ]
+        },
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "jj"
           ]
         },
         "branch": {

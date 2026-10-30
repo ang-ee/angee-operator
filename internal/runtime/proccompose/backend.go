@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
@@ -51,6 +52,10 @@ const defaultSupervisorReadyTimeout = 10 * time.Second
 
 // supervisorPollInterval spaces the liveness probes while Up waits.
 const supervisorPollInterval = 100 * time.Millisecond
+
+// maxJobOutputBytes bounds the output RunJob returns of a run, its newest
+// lines kept (runtime.LimitLogBytes).
+const maxJobOutputBytes = 1 << 20
 
 type Runner interface {
 	Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
@@ -121,13 +126,17 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
-	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, b.upArgs(target, false)...)
+	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, foregroundOptions{prompt: true}, b.upArgs(target, false)...)
 }
 
 // upArgs returns the `process-compose up` arguments for a detached or a
 // foreground supervisor.
 func (b Backend) upArgs(target runtime.Target, detached bool) []string {
 	args := b.baseArgs(target.Root, target.ControlPort)
+	if path, explicit := supervisorLogFile(target); !explicit {
+		// A file, so without the terminal's color codes.
+		args = append(args, "--log-file", path, "--log-no-color")
+	}
 	args = append(args, "up")
 	if detached {
 		// `-D` (`--detached`) daemonises; lowercase `-d` is `--hide-disabled`
@@ -140,9 +149,8 @@ func (b Backend) upArgs(target runtime.Target, detached bool) []string {
 	// the failed job `angee dev` and `angee job list` report; `angee down`
 	// and Ctrl-C still stop it. `--tui=false` prevents the supervisor from
 	// trying to attach a TUI on a process that has no controlling terminal
-	// (which is the normal case for `angee stack up --root ...` against a
-	// workspace's inner stack from a non-interactive shell or under another
-	// supervisor).
+	// (which is the normal case for `angee stack up --root ...` from a
+	// non-interactive shell or under another supervisor).
 	args = append(args, "--keep-project", "--tui=false")
 	return append(args, target.Services...)
 }
@@ -151,10 +159,12 @@ func (b Backend) Down(ctx context.Context, target runtime.Target) error {
 	// `down` is a CLIENT command in process-compose v2 — it connects to
 	// the running supervisor and asks it to terminate. Do NOT pass -f
 	// (config-file flag is for `up`, the server command); doing so makes
-	// process-compose print --help and exit 0.
+	// process-compose print --help and exit 0. Like every client command it
+	// runs with the stack's env file, which may hold the API token the
+	// supervisor requires.
 	args := b.clientArgs(target.ControlPort)
 	args = append(args, "down")
-	_, err := b.run(ctx, target.Root, "", args...)
+	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
@@ -167,11 +177,90 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
+	// An absent supervisor or process is already stopped, including a stack's
+	// first dependency operation before the supervisor has ever started.
+	// Terminal and disabled processes need no stop either (alreadyStopped).
+	serving, err := b.supervisorServing(ctx, target)
+	if err != nil || !serving {
+		return err
+	}
+	if err := b.checkSupervisorProject(ctx, target); err != nil {
+		return err
+	}
+	requested := target.Services
+	if len(target.Services) > 0 {
+		present := make([]string, 0, len(target.Services))
+		for _, name := range target.Services {
+			state, err := b.processState(ctx, target, name)
+			if err != nil {
+				return err
+			}
+			if state == nil || alreadyStopped(state) {
+				continue
+			}
+			present = append(present, name)
+		}
+		if len(present) == 0 {
+			return nil
+		}
+		target.Services = present
+	}
 	args := b.clientArgs(target.ControlPort)
 	args = append(args, "process", "stop")
 	args = append(args, target.Services...)
-	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
+	if _, err = b.run(ctx, target.Root, target.EnvFile, args...); err == nil || len(target.Services) == 0 {
+		return err
+	}
+	// A process can end between the read above and the supervisor's handling
+	// of the stop, which then refuses to stop it ("Failed to stop: 'web'"), and
+	// the supervisor itself can exit once nothing runs. The stop's goal is that
+	// none of the named processes runs, so its failure stands only while one
+	// still does, or while their states cannot be read. Every requested
+	// process is read again, not only those the stop named: one skipped above
+	// as stopped may have started meanwhile.
+	check := target
+	check.Services = requested
+	if stopped, checkErr := b.servicesStopped(ctx, check); checkErr == nil && stopped {
+		return nil
+	}
 	return err
+}
+
+// servicesStopped reports whether none of target's named processes runs or
+// may still launch: each is absent from the supervisor, or alreadyStopped, or
+// the supervisor no longer serves at all. A supervisor that now serves another
+// stack's project is an error, since its process table says nothing of this
+// stack's processes.
+func (b Backend) servicesStopped(ctx context.Context, target runtime.Target) (bool, error) {
+	serving, err := b.supervisorServing(ctx, target)
+	if err != nil {
+		return false, err
+	}
+	if !serving {
+		return true, nil
+	}
+	if err := b.checkSupervisorProject(ctx, target); err != nil {
+		return false, err
+	}
+	for _, name := range target.Services {
+		state, err := b.processState(ctx, target, name)
+		if err != nil {
+			return false, err
+		}
+		if state != nil && !alreadyStopped(state) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// alreadyStopped reports whether a process the supervisor holds needs no
+// stop: it has ended or is disabled, and is not running. A transitional
+// process (pending, scheduled, restarting) may still launch even though
+// is_running is false, so it is not stopped.
+func alreadyStopped(state *processListEntry) bool {
+	status := strings.ToLower(strings.TrimSpace(state.Status))
+	return !state.IsRunning && (isTerminalState(status) || status == "disabled")
 }
 
 func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
@@ -226,7 +315,7 @@ func (b Backend) upThroughSupervisor(ctx context.Context, target runtime.Target)
 		return fmt.Errorf("process-compose supervisor on 127.0.0.1:%d has not loaded %s, which the stack defined after it started; adding processes through its API restarts processes it runs, so restart the supervisor to load them", target.ControlPort, strings.Join(unknown, ", "))
 	}
 	for _, name := range order {
-		updates, err := processUpdates(document.Processes[name])
+		updates, err := processUpdates(document.Processes[name], target.DependenciesSatisfied)
 		if err != nil {
 			return err
 		}
@@ -275,7 +364,9 @@ func upOrder(document File, names []string) ([]string, error) {
 // "restart".
 //
 // A process the supervisor is running, launching or waiting to launch is left
-// alone. One it has never run (Disabled) is started. One that has run and
+// alone, except a named one its restart policy is relaunching (Restarting),
+// which gets its compiled definition. One it has never run (Disabled) is
+// started. One that has run and
 // stopped (Completed, Error, Skipped) is started again only when it was named:
 // as a dependency, or under an `up` that names no process, it has had the single
 // run a fresh `up` gives it, and its result stands.
@@ -285,6 +376,15 @@ func upOrder(document File, names []string) ([]string, error) {
 // except a Disabled process, whose replacement keeps the flag and stays down;
 // otherwise the process is started explicitly, as applyProcess restarts it.
 func (b Backend) upProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any, before *processListEntry, named bool) error {
+	// A named process its restart policy is relaunching gets the compiled
+	// definition, so a manifest fix reaches a crash loop: process-compose
+	// replaces a process whose definition changed and runs the new one at once.
+	// An unchanged one is left to the restart already under way, which
+	// `process start` would refuse anyway.
+	if named && strings.EqualFold(strings.TrimSpace(before.Status), "restarting") {
+		_, err := b.updateProcess(ctx, target, name, updates)
+		return err
+	}
 	if !upStarts(before.Status, named) {
 		return nil
 	}
@@ -334,7 +434,7 @@ func (b Backend) supervisorServing(ctx context.Context, target runtime.Target) (
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -371,7 +471,7 @@ func (b Backend) checkSupervisorProject(ctx context.Context, target runtime.Targ
 	if err != nil {
 		return err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("get supervisor project state: %w", err)
@@ -430,11 +530,8 @@ func (b Backend) awaitSupervisor(ctx context.Context, target runtime.Target) err
 			if err != nil {
 				reason = err.Error()
 			}
-			logHint := "the process-compose log (--log-file, PC_LOG_FILE)"
-			if path := processComposeSetting(target.EnvFile, "PC_LOG_FILE"); path != "" {
-				logHint = "the process-compose log " + path
-			}
-			return fmt.Errorf("process-compose supervisor launched by `up -D` did not answer on 127.0.0.1:%d within %s (%s); see %s for why it did not start", target.ControlPort, timeout, reason, logHint)
+			logFile, _ := supervisorLogFile(target)
+			return fmt.Errorf("process-compose supervisor launched by `up -D` did not answer on 127.0.0.1:%d within %s (%s); see the process-compose log %s for why it did not start", target.ControlPort, timeout, reason, logFile)
 		}
 		select {
 		case <-ctx.Done():
@@ -442,6 +539,14 @@ func (b Backend) awaitSupervisor(ctx context.Context, target runtime.Target) err
 		case <-ticker.C:
 		}
 	}
+}
+
+// ValidateJob reports native platform constraints without starting a workload.
+func (b Backend) ValidateJob(job runtime.JobSpec) error {
+	if job.Transient {
+		return transientJobSupport()
+	}
+	return nil
 }
 
 func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
@@ -453,6 +558,9 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	process, ok := document.Processes[name]
 	if !ok {
 		return nil, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", name)
+	}
+	if job.Transient {
+		return b.runTransientJob(ctx, target, name, process)
 	}
 	target.Services = []string{name}
 	// Snapshot the job's process entry before triggering the re-run. Both the
@@ -469,7 +577,7 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		baselineEnd = baseline.ProcessEndTime
 		baselinePid = baseline.PID
 	}
-	updates, err := processUpdates(process)
+	updates, err := processUpdates(process, target.DependenciesSatisfied)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +611,7 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
-			entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+			entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, EnvFile: target.EnvFile, ControlPort: target.ControlPort})
 			if err != nil {
 				continue
 			}
@@ -540,19 +648,26 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 				if !freshEnd && !newPid && !sawTransitional {
 					continue
 				}
-				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, MaxBytes: 1 << 20, ControlPort: target.ControlPort})
+				// Every line the supervisor's buffer holds of the run (1000 by
+				// default), newest last, within maxJobOutputBytes; the whole
+				// output is in the job's log file.
+				logs, logErr := b.Logs(ctx, runtime.LogsRequest{Root: target.Root, Services: []string{name}, EnvFile: target.EnvFile, NoPrefix: true, ControlPort: target.ControlPort})
 				var captured strings.Builder
 				if logErr == nil {
 					for chunk := range logs {
 						captured.WriteString(chunk)
 					}
 				}
-				out := []byte(captured.String())
+				out := []byte(runtime.LimitLogBytes(captured.String(), maxJobOutputBytes))
+				seeLog := ""
+				if process.LogLocation != "" {
+					seeLog = "; full output in " + process.LogLocation
+				}
 				switch {
 				case entry.ExitCode != 0:
-					return out, fmt.Errorf("process-compose job %s exited with status %d", name, entry.ExitCode)
+					return out, fmt.Errorf("process-compose job %s exited with status %d%s", name, entry.ExitCode, seeLog)
 				case state == "error":
-					return out, fmt.Errorf("process-compose job %s failed to run", name)
+					return out, fmt.Errorf("process-compose job %s failed to run%s", name, seeLog)
 				case state == "skipped":
 					return out, fmt.Errorf("process-compose job %s was skipped without running", name)
 				case logErr != nil:
@@ -671,7 +786,7 @@ func (b Backend) processState(ctx context.Context, target runtime.Target, name s
 	if err != nil {
 		return nil, err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -695,7 +810,7 @@ func (b Backend) processState(ctx context.Context, target runtime.Target, name s
 // supervisor has no process of the requested name.
 func processMissing(status int, body []byte) bool {
 	message := strings.ToLower(string(body))
-	return status == http.StatusNotFound || (status == http.StatusBadRequest && (strings.Contains(message, "no such process") || strings.Contains(message, "not found")))
+	return status == http.StatusNotFound || (status == http.StatusBadRequest && (strings.Contains(message, "no such process") || strings.Contains(message, "not found") || strings.Contains(message, "doesn't exist")))
 }
 
 // updateProcess posts the compiled definition of a process to the supervisor
@@ -708,7 +823,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(req, target.EnvFile)
+	setProcessToken(req, target.Root, target.EnvFile)
 	resp, err := controlPlaneClient.Do(req)
 	if err != nil {
 		return false, err
@@ -754,6 +869,26 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 				normalized = merged
 			}
 		}
+		// The restart policy also carries exit_on_end and exit_on_skipped, which
+		// Angee does not compile; keep them. process-compose omits zero-valued
+		// fields from the policy it reports (it always reports the policy), so
+		// a zero is a deletion, not a change.
+		if key == "restartPolicy" {
+			desired, _ := normalized.(map[string]any)
+			current, _ := config[key].(map[string]any)
+			merged := maps.Clone(current)
+			if merged == nil {
+				merged = map[string]any{}
+			}
+			for nestedKey, nestedValue := range desired {
+				if nestedValue == float64(0) {
+					delete(merged, nestedKey)
+					continue
+				}
+				merged[nestedKey] = nestedValue
+			}
+			normalized = merged
+		}
 		if !reflect.DeepEqual(config[key], normalized) {
 			changed = true
 			config[key] = normalized
@@ -780,7 +915,7 @@ func (b Backend) updateProcess(ctx context.Context, target runtime.Target, name 
 		return false, err
 	}
 	post.Header.Set("Content-Type", "application/json")
-	setProcessToken(post, target.EnvFile)
+	setProcessToken(post, target.Root, target.EnvFile)
 	result, err := controlPlaneClient.Do(post)
 	if err != nil {
 		return false, err
@@ -823,15 +958,26 @@ func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Targe
 }
 
 // addMissingProcess round-trips every current native process configuration
-// before adding the compiled job. POST /project replaces the project set, so a
-// partial payload would remove unrelated processes.
+// before adding the compiled process. POST /project replaces the project set,
+// so a partial payload would remove unrelated processes.
+//
+// Apply and RunJob reach it for a process the stack declared after the
+// supervisor started, as a restart or a chained restart of a new service or
+// job does. On process-compose v1.120.0 the first such post also relaunches the
+// processes the supervisor loaded from its file (see upThroughSupervisor),
+// which is why Up refuses an unknown process instead. A transient job never
+// gets here: RunJob runs it under a private foreground supervisor
+// (runTransientJob) and leaves the shared project untouched.
 func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
+	if target.ProtectStopped {
+		return false, fmt.Errorf("cannot register service %s while services are held: process-compose project replacement can relaunch stopped processes; restart the supervisor to load declared services before retrying", name)
+	}
 	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
 	list, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/processes", nil)
 	if err != nil {
 		return false, err
 	}
-	setProcessToken(list, target.EnvFile)
+	setProcessToken(list, target.Root, target.EnvFile)
 	response, err := controlPlaneClient.Do(list)
 	if err != nil {
 		return false, err
@@ -854,7 +1000,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 		if err != nil {
 			return false, err
 		}
-		setProcessToken(info, target.EnvFile)
+		setProcessToken(info, target.Root, target.EnvFile)
 		current, err := controlPlaneClient.Do(info)
 		if err != nil {
 			return false, err
@@ -902,7 +1048,7 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 		return false, err
 	}
 	post.Header.Set("Content-Type", "application/json")
-	setProcessToken(post, target.EnvFile)
+	setProcessToken(post, target.Root, target.EnvFile)
 	result, err := controlPlaneClient.Do(post)
 	if err != nil {
 		return false, err
@@ -923,19 +1069,69 @@ func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, n
 	}
 	return true, nil
 }
-func setProcessToken(req *http.Request, envFile string) {
-	if token := processComposeSetting(envFile, "PC_API_TOKEN"); token != "" {
+
+// setProcessToken sends the supervisor's API token, when process-compose has
+// one, in the header its API checks (config.TokenHeader).
+func setProcessToken(req *http.Request, root, envFile string) {
+	if token := processComposeToken(req.Context(), root, envFile); token != "" {
 		req.Header.Set("X-PC-Token-Key", token)
 	}
+}
+
+// processComposeToken returns the API token as process-compose reads it, for
+// the supervisor angee starts and for its client commands alike: GetApiToken
+// and getApiTokenPathDefault in src/config/config.go (v1.120.0, commit
+// 0f3a8e6).
+//   - PC_API_TOKEN, when set and not empty, as it is.
+//   - Else the contents of the file PC_API_TOKEN_PATH names, with surrounding
+//     whitespace trimmed (strings.TrimSpace).
+//   - Else none.
+//
+// A file process-compose can't read gives no token: it logs the error and goes
+// on without one, so its supervisor serves the API unauthenticated and its
+// client sends nothing. Here too a file that can't be read sends no token, and
+// the supervisor answers as it will. A relative path is read from the stack
+// root, the directory angee runs the supervisor and its client commands in.
+// process-compose's --token-file flag would take precedence over
+// PC_API_TOKEN_PATH; angee never passes it.
+func processComposeToken(ctx context.Context, root, envFile string) string {
+	if token := processComposeSetting(envFile, "PC_API_TOKEN"); token != "" {
+		return token
+	}
+	path := processComposeSetting(envFile, "PC_API_TOKEN_PATH")
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		logctx.From(ctx).DebugContext(ctx, "process-compose API token file unreadable; sending no token, as process-compose does", "path", path, "error", err)
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// supervisorLogFile returns where target's supervisor logs: PC_LOG_FILE when the
+// stack's env file or the environment sets it (explicit; process-compose reads
+// it itself), else the stack's own run/process-compose.log. Without one,
+// process-compose logs to a file in $TMPDIR that every stack of the user shares.
+func supervisorLogFile(target runtime.Target) (path string, explicit bool) {
+	if path := processComposeSetting(target.EnvFile, "PC_LOG_FILE"); path != "" {
+		return path, true
+	}
+	return filepath.Join(target.Root, "run", "process-compose.log"), false
 }
 
 // processComposeSetting returns a process-compose environment setting as the
 // supervisor sees it: from the stack's env file, which the backend layers over
 // the inherited environment for every process-compose command, or else from
-// that environment.
+// that environment. When the env file sets a key twice the last one counts, as
+// os/exec keeps the last of duplicate entries in the environment it passes.
 func processComposeSetting(envFile string, key string) string {
 	env, _ := runtime.ReadEnvFile(envFile)
-	for _, entry := range env {
+	for _, entry := range slices.Backward(env) {
 		if value, ok := strings.CutPrefix(entry, key+"="); ok {
 			return value
 		}
@@ -964,7 +1160,7 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 		if !ok {
 			return fmt.Errorf("process %s is absent from the generated process-compose config", name)
 		}
-		updates, err := processUpdates(process)
+		updates, err := processUpdates(process, target.DependenciesSatisfied)
 		if err != nil {
 			return err
 		}
@@ -994,7 +1190,27 @@ func compiledFile(target runtime.Target) (File, error) {
 	return document, nil
 }
 
-func processUpdates(process Process) (map[string]any, error) {
+// nativeAvailability returns a process's restart policy as process-compose's
+// HTTP API spells it. No availability is process-compose's default: no restart.
+// The backoff and restart limit go as zero, process-compose's defaults, so a
+// supervisor that holds other values is reset to the compiled policy.
+func nativeAvailability(availability *Availability) (map[string]any, error) {
+	if availability == nil {
+		availability = &Availability{Restart: "no"}
+	}
+	restart, ok := nativeRestartPolicy[availability.Restart]
+	if !ok {
+		return nil, fmt.Errorf("unsupported process-compose restart policy %q", availability.Restart)
+	}
+	return map[string]any{"restart": restart, "backoffSeconds": 0, "maxRestarts": 0}, nil
+}
+
+func processUpdates(process Process, dependenciesSatisfied bool) (map[string]any, error) {
+	// The operation's verified prerequisite results can include isolated job
+	// receipts that supersede stale states in this shared supervisor.
+	if dependenciesSatisfied {
+		process.DependsOn = nil
+	}
 	var dependsOn map[string]any
 	if len(process.DependsOn) > 0 {
 		dependsOn = map[string]any{}
@@ -1022,6 +1238,29 @@ func processUpdates(process Process) (map[string]any, error) {
 	if process.Shutdown != nil {
 		updates["shutDownParams"] = process.Shutdown
 	}
+	if process.LogLocation != "" {
+		updates["logLocation"] = process.LogLocation
+		logger := map[string]any{}
+		if config := process.LogConfig; config != nil {
+			logger["flushEachLine"] = config.FlushEachLine
+			logger["disableJSON"] = config.DisableJSON
+			logger["noColor"] = config.NoColor
+			logger["noMetadata"] = config.NoMetadata
+			logger["addTimestamp"] = config.AddTimestamp
+			if config.TimestampFormat != "" {
+				logger["timestampFormat"] = config.TimestampFormat
+			}
+			if rotation := config.Rotation; rotation != nil {
+				logger["rotation"] = map[string]any{"maxSize": rotation.MaxSizeMB, "maxBackups": rotation.MaxBackups}
+			}
+		}
+		updates["loggerConfig"] = logger
+	}
+	restartPolicy, err := nativeAvailability(process.Availability)
+	if err != nil {
+		return nil, err
+	}
+	updates["restartPolicy"] = restartPolicy
 	if process.ReadinessProbe == nil {
 		updates["readinessProbe"] = nil
 	} else {
@@ -1052,7 +1291,7 @@ func processUpdates(process Process) (map[string]any, error) {
 // tell the re-run's completion (a fresh end time or a fresh pid) apart from a
 // lingering terminal sample of the previous run.
 func (b Backend) processEntry(ctx context.Context, target runtime.Target, name string) (*processListEntry, error) {
-	entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, ControlPort: target.ControlPort})
+	entries, err := b.processList(ctx, runtime.StatusRequest{Root: target.Root, EnvFile: target.EnvFile, ControlPort: target.ControlPort})
 	if err != nil {
 		return nil, err
 	}
@@ -1064,36 +1303,8 @@ func (b Backend) processEntry(ctx context.Context, target runtime.Target, name s
 	return nil, nil
 }
 
-func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
-	args := b.clientArgs(req.ControlPort)
-	args = append(args, "process", "logs")
-	if req.Follow {
-		args = append(args, "--follow")
-	}
-	args = append(args, req.Services...)
-	var (
-		out []byte
-		err error
-	)
-	if req.MaxBytes > 0 {
-		out, err = b.runLimited(ctx, req.Root, req.EnvFile, req.MaxBytes, args...)
-	} else {
-		out, err = b.run(ctx, req.Root, req.EnvFile, args...)
-	}
-	if err != nil {
-		return nil, err
-	}
-	ch := make(chan string, 1)
-	ch <- string(out)
-	close(ch)
-	return ch, nil
-}
-
-// StreamLogs runs `process-compose process logs [--follow]` and streams its
-// combined output one line per channel element, closing on process exit or ctx
-// cancel. Unlike Logs it never buffers, so a `--follow` stream surfaces lines
-// live.
-func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+// logsArgs returns the `process-compose process logs` arguments for one process.
+func (b Backend) logsArgs(req runtime.LogsRequest, process string) []string {
 	args := b.clientArgs(req.ControlPort)
 	args = append(args, "process", "logs")
 	if req.Follow {
@@ -1102,7 +1313,188 @@ func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-cha
 	if req.Tail > 0 {
 		args = append(args, "--tail", strconv.Itoa(req.Tail))
 	}
-	args = append(args, req.Services...)
+	return append(args, process)
+}
+
+// logLabelWidth returns the width a logs request's lines are labelled to, or 0
+// when they go unlabelled. Like docker compose, the backend labels each line
+// with its process unless the request asks for no prefix.
+func logLabelWidth(req runtime.LogsRequest) int {
+	if req.NoPrefix {
+		return 0
+	}
+	width := 0
+	for _, name := range req.Services {
+		width = max(width, len(name))
+	}
+	return width
+}
+
+// Logs reads the last req.Tail lines of each requested process (0: every line
+// the supervisor holds, 1000 by default) through the supervisor's log range
+// endpoint, the processes concurrently, and returns them in request order.
+// `process logs` costs about a second a call and never returns for a process
+// the supervisor has not loaded; the endpoint answers in milliseconds, whole,
+// and refuses an unknown process at once. The lines are labelled unless
+// req.NoPrefix; a caller's byte limit applies to the whole read afterwards.
+func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+	width := logLabelWidth(req)
+	chunks := make([]string, len(req.Services))
+	errs := make([]error, len(req.Services))
+	var wg sync.WaitGroup
+	for i, name := range req.Services {
+		wg.Go(func() {
+			text, err := b.processLogTail(ctx, req, name)
+			if width > 0 {
+				text = runtime.PrefixLines(text, name, width)
+			}
+			chunks[i], errs[i] = text, err
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	ch := make(chan string, len(chunks))
+	for _, chunk := range chunks {
+		ch <- chunk
+	}
+	close(ch)
+	return ch, nil
+}
+
+// processLogTail reads the last req.Tail lines of one process from the
+// supervisor's buffer (GET /process/logs/{name}/0/{tail}), newest last. A
+// caller's byte limit applies to the whole labelled read, not to each process
+// (runtime.LimitLogBytes). A process the supervisor has not loaded is a
+// *runtime.ProcessNotLoadedError. While the supervisor
+// replaces a process with an updated definition, the log endpoint reports it
+// missing for as long as the old one takes to stop, but the process endpoint
+// still serves it; that error is marked Replacing.
+func (b Backend) processLogTail(ctx context.Context, req runtime.LogsRequest, name string) (string, error) {
+	port := effectiveControlPort(req.ControlPort)
+	endpoint := "http://127.0.0.1:" + strconv.Itoa(port) + "/process/logs/" + url.PathEscape(name) + "/0/" + strconv.Itoa(max(req.Tail, 0))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	setProcessToken(httpReq, req.Root, req.EnvFile)
+	resp, err := controlPlaneClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("read logs of process %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if processMissing(resp.StatusCode, body) {
+			state, err := b.processState(ctx, runtime.Target{Root: req.Root, EnvFile: req.EnvFile, ControlPort: port}, name)
+			if err != nil {
+				return "", fmt.Errorf("get state of process %s: %w", name, err)
+			}
+			return "", &runtime.ProcessNotLoadedError{Name: name, ControlPort: port, Replacing: state != nil}
+		}
+		return "", fmt.Errorf("read logs of process %s: %s: %s", name, resp.Status, strings.TrimSpace(string(body)))
+	}
+	var page struct {
+		Logs []string `json:"logs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return "", fmt.Errorf("decode logs of process %s: %w", name, err)
+	}
+	var text strings.Builder
+	for _, line := range page.Logs {
+		text.WriteString(line)
+		text.WriteByte('\n')
+	}
+	return text.String(), nil
+}
+
+// requireLoaded refuses a follow of a process the supervisor has not loaded,
+// which `process logs --follow` would wait on forever.
+func (b Backend) requireLoaded(ctx context.Context, req runtime.LogsRequest) error {
+	target := runtime.Target{Root: req.Root, EnvFile: req.EnvFile, ControlPort: effectiveControlPort(req.ControlPort)}
+	for _, name := range req.Services {
+		state, err := b.processState(ctx, target, name)
+		if err != nil {
+			return fmt.Errorf("get state of process %s: %w", name, err)
+		}
+		if state == nil {
+			return &runtime.ProcessNotLoadedError{Name: name, ControlPort: target.ControlPort}
+		}
+	}
+	return nil
+}
+
+// StreamLogs streams the logs of each requested process, one
+// `process logs [--follow] --tail N` command per process, interleaved as their
+// lines arrive, once the supervisor confirms it has loaded each of them.
+func (b Backend) StreamLogs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+	if len(req.Services) == 0 {
+		ch := make(chan string)
+		close(ch)
+		return ch, nil
+	}
+	if err := b.requireLoaded(ctx, req); err != nil {
+		return nil, err
+	}
+	width := logLabelWidth(req)
+	if len(req.Services) == 1 && width == 0 {
+		return b.streamProcessLogs(ctx, req, req.Services[0])
+	}
+	processes := req.Services
+	// The streams end with the merged channel, or with the first that fails
+	// to start.
+	streamCtx, cancel := context.WithCancel(ctx)
+	streams := make([]<-chan string, 0, len(processes))
+	for _, name := range processes {
+		lines, err := b.streamProcessLogs(streamCtx, req, name)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		if width > 0 {
+			lines = labelLines(streamCtx, lines, name, width)
+		}
+		streams = append(streams, lines)
+	}
+	merged := runtime.MergeStreams(streamCtx, streams...)
+	out := make(chan string)
+	go func() {
+		defer cancel()
+		defer close(out)
+		for line := range merged {
+			select {
+			case out <- line:
+			case <-streamCtx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// labelLines prefixes each line of a stream with its process's label.
+func labelLines(ctx context.Context, lines <-chan string, name string, width int) <-chan string {
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		for line := range lines {
+			select {
+			case out <- runtime.PrefixLines(line, name, width):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
+
+// streamProcessLogs runs `process-compose process logs [--follow]` for one
+// process and streams its combined output one line per channel element, closing
+// on process exit or ctx cancel. Unlike Logs it never buffers, so a `--follow`
+// stream surfaces lines live.
+func (b Backend) streamProcessLogs(ctx context.Context, req runtime.LogsRequest, process string) (<-chan string, error) {
+	args := b.logsArgs(req, process)
 	// A test Runner can't stream a live process, so capture through it and
 	// replay by line. The real ExecRunner streams below.
 	if b.Runner != nil && !isExecRunner(b.Runner) {
@@ -1146,8 +1538,9 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 			State:      strings.ToLower(strings.TrimSpace(entry.Status)),
 			Health:     procHealth(entry),
 			ExitCode:   &entry.ExitCode,
+			Restarts:   entry.Restarts,
 			PID:        entry.PID,
-			Generation: fmt.Sprintf("%d:%v:%v", entry.Restarts, entry.ProcessStartTime, entry.ProcessEndTime),
+			Generation: fmt.Sprintf("%d:%d:%v:%v", entry.PID, entry.Restarts, entry.ProcessStartTime, entry.ProcessEndTime),
 		})
 	}
 	return statuses, nil
@@ -1168,11 +1561,13 @@ type processListEntry struct {
 // processList runs `process-compose list -o json` and returns the decoded native
 // process entries. Status maps these to runtime.ServiceStatus; RunJob consumes
 // the raw entries directly so it can gate job completion on the native end time,
-// which the generation string does not losslessly round-trip.
+// which the generation string does not losslessly round-trip. It runs with the
+// stack's env file, as the supervisor does, so a token set only there reaches
+// the client.
 func (b Backend) processList(ctx context.Context, req runtime.StatusRequest) ([]processListEntry, error) {
 	args := b.clientArgs(req.ControlPort)
 	args = append(args, "list", "-o", "json")
-	out, err := b.run(ctx, req.Root, "", args...)
+	out, err := b.run(ctx, req.Root, req.EnvFile, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1239,38 +1634,14 @@ func (b Backend) run(ctx context.Context, root string, envFile string, args ...s
 	return b.Runner.Run(ctx, root, env, name, args...)
 }
 
-func (b Backend) runLimited(ctx context.Context, root string, envFile string, maxBytes int, args ...string) ([]byte, error) {
-	if b.Runner != nil {
-		if !isExecRunner(b.Runner) {
-			return b.run(ctx, root, envFile, args...)
-		}
-	}
-	name, err := b.processComposeBinary(ctx, nil, nil, nil, false)
-	if err != nil {
-		return nil, err
-	}
-	env, err := runtime.ReadEnvFile(envFile)
-	if err != nil {
-		return nil, err
-	}
-	stdout := &limitedBuffer{remaining: maxBytes}
-	stderr := &limitedBuffer{remaining: 4096}
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = root
-	cmd.Env = runtime.ChildEnviron(env)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	trace := logctx.TraceExec(ctx, name, args, root, slog.Any("env", logctx.EnvKeys(env)))
-	runErr := cmd.Run()
-	trace(stdout.Bytes(), runErr)
-	if runErr != nil {
-		return stdout.Bytes(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), runErr, strings.TrimSpace(string(stderr.Bytes())))
-	}
-	return stdout.Bytes(), nil
+type foregroundOptions struct {
+	prompt    bool
+	isolated  bool
+	waitDelay time.Duration
 }
 
-func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, args ...string) error {
-	name, err := b.processComposeBinary(ctx, b.input(), stdout, stderr, true)
+func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, options foregroundOptions, args ...string) error {
+	name, err := b.processComposeBinary(ctx, b.input(), stdout, stderr, options.prompt)
 	if err != nil {
 		return err
 	}
@@ -1283,6 +1654,12 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 	cmd.Env = runtime.ChildEnviron(env)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.WaitDelay = options.waitDelay
+	if options.isolated {
+		if err := isolateForegroundCommand(cmd); err != nil {
+			return err
+		}
+	}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
@@ -1431,38 +1808,6 @@ func isExecRunner(r Runner) bool {
 	}
 }
 
-type limitedBuffer struct {
-	data      []byte
-	remaining int
-	truncated bool
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	accepted := len(p)
-	if b.remaining <= 0 {
-		b.truncated = true
-		return accepted, nil
-	}
-	if len(p) > b.remaining {
-		b.data = append(b.data, p[:b.remaining]...)
-		b.remaining = 0
-		b.truncated = true
-		return accepted, nil
-	}
-	b.data = append(b.data, p...)
-	b.remaining -= len(p)
-	return accepted, nil
-}
-
-func (b *limitedBuffer) Bytes() []byte {
-	if !b.truncated {
-		return b.data
-	}
-	out := append([]byte{}, b.data...)
-	out = append(out, []byte("\n[truncated]\n")...)
-	return out
-}
-
 func (b Backend) baseArgs(root string, controlPort int) []string {
 	args := []string{"-f", filepath.Join(root, "process-compose.yaml")}
 	return append(args, b.clientArgs(controlPort)...)
@@ -1480,3 +1825,63 @@ func effectiveControlPort(controlPort int) int {
 	}
 	return controlPort
 }
+
+// runTransientJob uses the native foreground workload lifecycle without adding
+// or updating any process in the shared supervisor. Prerequisites were checked
+// by the Platform; native --no-deps prevents a second copy of them being started.
+func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, name string, process Process) ([]byte, error) {
+	if err := b.ValidateJob(runtime.JobSpec{Name: name, Transient: true}); err != nil {
+		return nil, err
+	}
+	process.DependsOn = nil
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{name: process}})
+	if err != nil {
+		return nil, err
+	}
+	directory, err := os.MkdirTemp("", "angee-process-job-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(directory) }()
+	config := filepath.Join(directory, "process-compose.yaml")
+	if err = os.WriteFile(config, document, 0600); err != nil {
+		return nil, err
+	}
+	output := runtime.NewLimitedLogRead(maxJobOutputBytes)
+	shutdown := manifestDefaultJobShutdown
+	if process.Shutdown != nil && process.Shutdown.TimeoutSeconds > 0 {
+		shutdown = time.Duration(process.Shutdown.TimeoutSeconds) * time.Second
+	}
+	args := []string{"--no-server", "--log-file", filepath.Join(directory, "process-compose.log"), "--log-no-color", "run", "--no-deps", "--config", config, name}
+	err = b.runForeground(ctx, target.Root, target.EnvFile, output, output, foregroundOptions{isolated: true, waitDelay: shutdown + time.Second}, args...)
+	// Strip terminal controls (the window title names the host) before redacting,
+	// so a secret an escape sequence splits is masked whole.
+	safeOutput := logctx.RedactText(runtime.StripTerminalControls(output.String()))
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		// Startup/configuration failures may be written only to the native logger.
+		// Retain its bounded tail before removing the private runtime directory.
+		if strings.TrimSpace(safeOutput) == "" {
+			if file, openErr := os.Open(filepath.Join(directory, "process-compose.log")); openErr == nil {
+				if info, statErr := file.Stat(); statErr == nil {
+					keep := int64(maxJobOutputBytes + 1)
+					if info.Size() > keep {
+						_, _ = file.Seek(info.Size()-keep, io.SeekStart)
+					}
+					collector := runtime.NewLimitedLogRead(maxJobOutputBytes)
+					_, _ = io.Copy(collector, io.LimitReader(file, keep))
+					safeOutput = logctx.RedactText(runtime.StripTerminalControls(collector.String()))
+				}
+				_ = file.Close()
+			}
+		}
+		if diagnostics := strings.TrimSpace(runtime.LimitLogBytes(safeOutput, 2<<10)); diagnostics != "" {
+			err = fmt.Errorf("%w; native output: %s", err, diagnostics)
+		}
+	}
+	return []byte(safeOutput), err
+}
+
+const manifestDefaultJobShutdown = 10 * time.Second

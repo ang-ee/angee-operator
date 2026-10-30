@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 )
@@ -13,10 +14,16 @@ import (
 const GracefulWaitDelay = 10 * time.Second
 
 type Target struct {
-	Root     string
-	Services []string
-	Build    bool
-	EnvFile  string
+	// DependenciesSatisfied means the caller has already ordered and checked
+	// the target's prerequisites; applying it must not wait on them again.
+	DependenciesSatisfied bool
+	// ProtectStopped forbids project-wide updates that could relaunch stopped
+	// processes while applying this target.
+	ProtectStopped bool
+	Root           string
+	Services       []string
+	Build          bool
+	EnvFile        string
 	// Attached, when set on a foreground Up, keeps the supervisor in the
 	// foreground streaming logs instead of detaching (`docker compose up`
 	// without `-d`). Used by `angee dev` so container logs interleave with
@@ -29,20 +36,56 @@ type Target struct {
 	Configuration []byte
 }
 
+// DefaultLogTail is the number of last lines a log read returns, or a follow
+// replays, when the request names none, for both runtimes.
+const DefaultLogTail = 200
+
+// MaxLocalFollowTail is the largest backlog a process-compose follow is asked
+// to replay. `process logs --follow` (v1.120.0 to v1.122.0) replays a backlog
+// over a websocket that drops lines and disconnects once a client falls about
+// 256 lines behind, so a longer replay loses the newest lines. A buffered read
+// goes through the supervisor's log range endpoint and has no such limit.
+const MaxLocalFollowTail = 256
+
+// MaxLogTail caps the tail of a log read.
+const MaxLogTail = 10000
+
+// ProcessNotLoadedError reports a process the process-compose supervisor has
+// not loaded, such as a service the stack declared after the supervisor
+// started. Replacing marks a process the supervisor is replacing with an
+// updated definition: it drops the process from its log endpoint until the old
+// one has stopped, so the read is worth retrying and the supervisor needs no
+// restart.
+type ProcessNotLoadedError struct {
+	Name        string
+	ControlPort int
+	Replacing   bool
+}
+
+func (e *ProcessNotLoadedError) Error() string {
+	if e.Replacing {
+		return fmt.Sprintf("process-compose supervisor on 127.0.0.1:%d is replacing %s with its updated definition; retry once it has restarted", e.ControlPort, e.Name)
+	}
+	return fmt.Sprintf("process-compose supervisor on 127.0.0.1:%d has not loaded %s; restart the supervisor to load processes the stack declared after it started", e.ControlPort, e.Name)
+}
+
+// LogsRequest asks a backend for the logs of its services. A backend returns
+// every line the tail asks for; a byte limit applies to the whole read, once
+// its lines are labelled, through LimitLogBytes in the caller.
 type LogsRequest struct {
 	Root     string
 	Services []string
 	Follow   bool
 	EnvFile  string
-	MaxBytes int
 	// NoPrefix asks the backend to omit its per-line service-name prefix
 	// (docker compose `--no-log-prefix`). Used for single-service streams
 	// where the service is already known from the request. Backends without
 	// such a prefix ignore it.
 	NoPrefix bool
-	// Tail, when > 0, limits the initial backlog to the last N lines before a
-	// follow stream continues live (docker compose / process-compose `--tail`).
-	// Zero omits the flag and defers to the backend's default backlog.
+	// Tail, when > 0, limits a read, or the backlog a follow stream replays
+	// before it continues live, to the last N lines (docker compose /
+	// process-compose `--tail`). Zero omits the flag and defers to the
+	// backend's default backlog.
 	Tail        int
 	ControlPort int
 }
@@ -51,7 +94,9 @@ type StatusRequest struct {
 	Root string
 	// EnvFile is the stack env file whose current values the backend exports
 	// to the status command, so `docker compose ps` interpolates the compose
-	// file from the same fresh values as every other compose invocation.
+	// file from the same fresh values as every other compose invocation, and
+	// `process-compose list` reads the same API token settings
+	// (PC_API_TOKEN, PC_API_TOKEN_PATH) as the supervisor.
 	EnvFile       string
 	ControlPort   int
 	Configuration []byte
@@ -68,8 +113,12 @@ type ServiceStatus struct {
 	// Health mirrors docker's healthcheck verdict (`healthy`,
 	// `unhealthy`, `starting`). Empty when the container has no
 	// healthcheck declared or when the backend doesn't expose one.
-	Health     string `json:"health,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
+	Health   string `json:"health,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	// Restarts is how many times the runtime's restart policy has restarted
+	// the process since it was last started. process-compose reports it;
+	// docker compose's status does not.
+	Restarts   int    `json:"restarts,omitempty"`
 	PID        int    `json:"pid,omitempty"`
 	Generation string `json:"generation,omitempty"`
 }
@@ -91,13 +140,25 @@ type Backend interface {
 	Status(ctx context.Context, req StatusRequest) ([]ServiceStatus, error)
 }
 
-// JobBackend executes a declared one-shot workload as a runtime-managed
-// instance, preserving terminal state for native dependency conditions.
+// JobBackend executes a declared one-shot workload. Shared attempts retain
+// native terminal state; transient attempts return evidence to the caller receipt.
 type JobBackend interface {
 	RunJob(ctx context.Context, target Target, job JobSpec) ([]byte, error)
 }
 
+// JobValidator optionally reports platform-specific job constraints before execution.
+// A backend without additional constraints needs only JobBackend.
+type JobValidator interface{ ValidateJob(job JobSpec) error }
+
+// JobCapabilityError is a static public reason a native workload cannot run.
+type JobCapabilityError struct{ Reason string }
+
+func (e *JobCapabilityError) Error() string { return e.Reason }
+
 type JobSpec struct {
+	// Transient jobs retain their attempt in the caller's receipt rather than
+	// installing mutable process state in the shared service supervisor.
+	Transient     bool
 	Name          string
 	Configuration []byte
 }

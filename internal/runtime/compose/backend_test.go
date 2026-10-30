@@ -3,17 +3,45 @@ package compose
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
+
+// A failed command's error carries the last lines of its output, within
+// maxErrorOutputBytes, cut on a line boundary, rather than all of it: a failed
+// `docker compose logs` would otherwise put its whole output into the error.
+func TestExecRunnerErrorKeepsTheOutputsLastLines(t *testing.T) {
+	const script = `i=0; while [ $i -lt 2000 ]; do echo "line-$i"; i=$((i+1)); done; exit 3`
+	out, err := (ExecRunner{}).Run(t.Context(), "", nil, "sh", "-c", script)
+	if err == nil {
+		t.Fatal("Run() error = nil, want exit status 3")
+	}
+	if !strings.Contains(string(out), "line-0\n") {
+		t.Fatalf("Run() output lost its start: %q", out[:min(len(out), 20)])
+	}
+	prefix := "sh -c " + script + ": exit status 3: "
+	detail, ok := strings.CutPrefix(err.Error(), prefix)
+	if !ok {
+		t.Fatalf("error = %q, want it to start %q", err.Error()[:min(len(err.Error()), 200)], prefix)
+	}
+	if len(detail) > maxErrorOutputBytes || !strings.HasPrefix(detail, runtime.LogTruncatedMarker+"line-") || !strings.HasSuffix(detail, "\nline-1999") {
+		t.Fatalf("error detail = %d bytes from %q to %q, want at most %d: the marker, then whole lines ending at line-1999",
+			len(detail), detail[:min(len(detail), 30)], detail[max(len(detail)-30, 0):], maxErrorOutputBytes)
+	}
+}
 
 func TestExecRunnerTracesCommandWithRedactedArgs(t *testing.T) {
 	var logs bytes.Buffer
@@ -101,6 +129,22 @@ func TestBackendStreamLogsTail(t *testing.T) {
 	}
 }
 
+// A buffered read passes the tail as a follow does, so both runtimes return the
+// last lines of a log.
+func TestBackendLogsTail(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if _, err := backend.Logs(context.Background(), runtime.LogsRequest{
+		Root: "/stack", Services: []string{"web"}, Tail: 200,
+	}); err != nil {
+		t.Fatalf("Logs() error = %v", err)
+	}
+	want := []string{"compose", "-f", "/stack/docker-compose.yaml", "logs", "--tail", "200", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
 func TestBackendStreamLogsOmitsNoLogPrefixWhenUnset(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}
@@ -161,6 +205,24 @@ func TestParsePS(t *testing.T) {
 	}
 	if got[2].Name != "worker" || got[2].State != "exited" || got[2].Health != "" {
 		t.Fatalf("worker entry = %#v", got[2])
+	}
+}
+
+// docker compose reports ExitCode 0 for a container in its restart backoff
+// whatever its last exit (its Status reads "Restarting (1) ..."), so the entry
+// carries no exit code rather than a false 0. An exited one keeps its own.
+func TestParsePSLeavesARestartingContainerWithoutAnExitCode(t *testing.T) {
+	got, err := parsePS([]byte(`{"Service":"crasher","State":"restarting","Status":"Restarting (1) 2 seconds ago","ExitCode":0}
+{"Service":"worker","State":"exited","Status":"Exited (3) 1 minute ago","ExitCode":3}
+`))
+	if err != nil {
+		t.Fatalf("parsePS() error = %v", err)
+	}
+	if len(got) != 2 || got[0].State != "restarting" || got[0].ExitCode != nil {
+		t.Fatalf("crasher entry = %#v, want restarting without an exit code", got)
+	}
+	if got[1].ExitCode == nil || *got[1].ExitCode != 3 {
+		t.Fatalf("worker entry = %#v, want exit 3", got[1])
 	}
 }
 
@@ -264,4 +326,279 @@ func argsContainPair(args []string, flag, value string) bool {
 		}
 	}
 	return false
+}
+
+// jobRunner fakes the docker client for RunJob: RunInput answers the compose
+// commands through answer, Run answers `docker rm -f` through remove, and
+// every command is recorded with its input.
+type jobRunner struct {
+	mu       sync.Mutex
+	commands []jobCommand
+	answer   func(ctx context.Context, args []string) ([]byte, error)
+	remove   func(ctx context.Context, args []string) ([]byte, error)
+}
+
+type jobCommand struct {
+	name  string
+	args  []string
+	input []byte
+}
+
+func (r *jobRunner) Run(ctx context.Context, _ string, _ []string, name string, args ...string) ([]byte, error) {
+	r.record(name, args, nil)
+	if r.remove == nil {
+		return nil, nil
+	}
+	return r.remove(ctx, args)
+}
+
+func (r *jobRunner) RunInput(ctx context.Context, _ string, _ []string, input []byte, name string, args ...string) ([]byte, error) {
+	r.record(name, args, input)
+	if r.answer == nil {
+		return nil, nil
+	}
+	return r.answer(ctx, args)
+}
+
+func (r *jobRunner) record(name string, args []string, input []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commands = append(r.commands, jobCommand{name: name, args: slices.Clone(args), input: input})
+}
+
+func (r *jobRunner) recorded() []jobCommand {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.commands)
+}
+
+// captureConfiguration is a compiled compose document with one job service.
+const captureConfiguration = "name: notes-1a2b3c4d\nservices:\n  capture:\n    image: postgres:17-alpine\n"
+
+var oneOffNamePattern = regexp.MustCompile(`^notes-1a2b3c4d-capture-run-[0-9a-f]{12}$`)
+
+// An ordinary job recreates its service container, waits for it and reads its
+// logs, from the in-memory configuration, leaving the container to report its
+// terminal state to native dependency conditions.
+func TestBackendRunJobRecreatesTheServiceOfAnOrdinaryJob(t *testing.T) {
+	runner := &jobRunner{answer: func(_ context.Context, args []string) ([]byte, error) {
+		if slices.Contains(args, "logs") {
+			return []byte("migrated\n"), nil
+		}
+		return nil, nil
+	}}
+	out, err := Backend{Runner: runner}.RunJob(t.Context(), runtime.Target{Root: "/stack", EnvFile: "/stack/.env"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration)})
+	if err != nil || string(out) != "migrated\n" {
+		t.Fatalf("RunJob() = %q, %v; want the job's logs", out, err)
+	}
+	base := []string{"compose", "-f", "-", "--env-file", "/stack/.env"}
+	want := [][]string{
+		append(slices.Clone(base), "up", "-d", "--force-recreate", "--no-deps", "capture"),
+		append(slices.Clone(base), "wait", "capture"),
+		append(slices.Clone(base), "logs", "--no-color", "--no-log-prefix", "capture"),
+	}
+	commands := runner.recorded()
+	if len(commands) != len(want) {
+		t.Fatalf("commands = %+v, want %v", commands, want)
+	}
+	for i, command := range commands {
+		if command.name != "docker" || !reflect.DeepEqual(command.args, want[i]) || string(command.input) != captureConfiguration {
+			t.Fatalf("command %d = %s %v with input %q, want docker %v with the configuration", i, command.name, command.args, command.input, want[i])
+		}
+	}
+}
+
+// A transient job is one `docker compose run --rm` of its service from the
+// in-memory configuration, in a container named for that run: nothing is
+// recreated in the shared project, and nothing is left to remove.
+func TestBackendRunJobRunsATransientJobAsAOneOffContainer(t *testing.T) {
+	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) {
+		return []byte("dumped\n"), nil
+	}}
+	out, err := Backend{Runner: runner}.RunJob(t.Context(), runtime.Target{Root: "/stack", EnvFile: "/stack/.env"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+	if err != nil || string(out) != "dumped\n" {
+		t.Fatalf("RunJob() = %q, %v; want the run's output", out, err)
+	}
+	commands := runner.recorded()
+	if len(commands) != 1 {
+		t.Fatalf("commands = %+v, want the one run", commands)
+	}
+	command := commands[0]
+	want := []string{"compose", "-f", "-", "--env-file", "/stack/.env", "run", "--rm", "--no-deps", "-T", "--name", "", "capture"}
+	if len(command.args) == len(want) {
+		want[10] = command.args[10]
+	}
+	if command.name != "docker" || !reflect.DeepEqual(command.args, want) || string(command.input) != captureConfiguration {
+		t.Fatalf("command = %s %v with input %q, want docker %v with the configuration", command.name, command.args, command.input, want)
+	}
+	if !oneOffNamePattern.MatchString(want[10]) {
+		t.Fatalf("container name = %q, want <project>-<service>-run-<id>", want[10])
+	}
+	if again := oneOffContainerName(runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration)}); again == want[10] {
+		t.Fatalf("two runs share the container name %q", again)
+	}
+}
+
+func TestBackendRunJobReportsATransientJobsFailure(t *testing.T) {
+	exit := errors.New("exit status 3")
+	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) {
+		return []byte("pg_dump: error: connection refused\n"), exit
+	}}
+	out, err := Backend{Runner: runner}.RunJob(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+	if !errors.Is(err, exit) || !strings.Contains(err.Error(), "container job capture failed") {
+		t.Fatalf("RunJob() error = %v, want the run's exit naming the job", err)
+	}
+	if string(out) != "pg_dump: error: connection refused\n" {
+		t.Fatalf("RunJob() output = %q, want the run's output", out)
+	}
+	if commands := runner.recorded(); len(commands) != 1 {
+		t.Fatalf("commands = %+v, want the run alone, nothing removed", commands)
+	}
+}
+
+// A transient job's output, which a backup receipt keeps, carries no terminal
+// controls: a capture's colours and titles are dropped and its text kept.
+func TestBackendRunJobDropsTerminalControlsFromATransientJobsOutput(t *testing.T) {
+	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) {
+		return []byte("\x1b]0;db.internal\apg_dump: \x1b[31merror\x1b[0m: connection refused\n"), errors.New("exit status 1")
+	}}
+	out, err := Backend{Runner: runner}.RunJob(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+	if err == nil {
+		t.Fatal("RunJob() error = nil, want the run's failure")
+	}
+	if string(out) != "pg_dump: error: connection refused\n" {
+		t.Fatalf("RunJob() output = %q, want the run's text alone", out)
+	}
+}
+
+// A transient job's output keeps its last maxJobOutputBytes, redacted before the
+// cut, so the cut cannot leave the tail of a secret it went through.
+func TestBackendRunJobKeepsTheRedactedTailOfATransientJobsOutput(t *testing.T) {
+	run := func(output string) string {
+		t.Helper()
+		runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) { return []byte(output), nil }}
+		out, err := Backend{Runner: runner}.RunJob(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+		if err != nil {
+			t.Fatalf("RunJob() error = %v", err)
+		}
+		return string(out)
+	}
+	filler := strings.Repeat("x", maxJobOutputBytes)
+	if got := run("head\n" + filler); got != filler {
+		t.Fatalf("output = %d bytes starting %q, want the last %d", len(got), got[:min(len(got), 10)], maxJobOutputBytes)
+	}
+	secret := "compose-capture-secret-0123456789abcdefgh"
+	logctx.RegisterSecrets(secret)
+	got := run(secret + "\n" + filler[:maxJobOutputBytes-20])
+	if strings.Contains(got, secret[len(secret)-10:]) || !strings.HasPrefix(got, "***\n") {
+		t.Fatalf("output starts %q, want the secret redacted whole", got[:min(len(got), 50)])
+	}
+}
+
+// Cancelling a transient job kills the docker client, which leaves the
+// container running: RunJob removes the container by its name, with a context
+// of its own, until the client has exited and once more after.
+func TestBackendRunJobRemovesTheContainerOfACanceledTransientJob(t *testing.T) {
+	interval := transientRemoveInterval
+	transientRemoveInterval = 10 * time.Millisecond
+	t.Cleanup(func() { transientRemoveInterval = interval })
+	type removal struct {
+		args      []string
+		ctxErr    error
+		afterExit bool
+	}
+	var (
+		mu       sync.Mutex
+		removals []removal
+		exited   atomic.Bool
+	)
+	started, gone := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	runner := &jobRunner{
+		answer: func(ctx context.Context, _ []string) ([]byte, error) {
+			once.Do(func() { close(started) })
+			<-ctx.Done()
+			// An attached client holds on until its container is gone. One that
+			// nothing removes would hold on for good, so the fake gives up.
+			select {
+			case <-gone:
+			case <-time.After(5 * time.Second):
+			}
+			exited.Store(true)
+			return []byte("partial\n"), errors.New("signal: killed")
+		},
+		remove: func(ctx context.Context, args []string) ([]byte, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			removals = append(removals, removal{args: args, ctxErr: ctx.Err(), afterExit: exited.Load()})
+			// The first removal finds nothing, as when the container is still
+			// being created; the second removes the one the client then started.
+			if len(removals) == 2 {
+				close(gone)
+			}
+			if len(removals) == 1 {
+				return []byte("Error response from daemon: No such container: x"), errors.New("exit status 1")
+			}
+			return nil, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+	out, err := Backend{Runner: runner}.RunJob(ctx, runtime.Target{Root: "/stack"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "container job capture failed") {
+		t.Fatalf("RunJob() error = %v, want the cancellation naming the job", err)
+	}
+	if string(out) != "partial\n" {
+		t.Fatalf("RunJob() output = %q, want what the run printed", out)
+	}
+	run := runner.recorded()[0].args
+	container := run[slices.Index(run, "--name")+1]
+	mu.Lock()
+	defer mu.Unlock()
+	if len(removals) < 3 || !removals[len(removals)-1].afterExit {
+		t.Fatalf("removals = %+v, want removals until the client exited and one after", removals)
+	}
+	for _, removal := range removals {
+		if !reflect.DeepEqual(removal.args, []string{"rm", "-f", container}) || removal.ctxErr != nil {
+			t.Fatalf("removal = %+v, want rm -f %s under a live context", removal, container)
+		}
+	}
+}
+
+// A failed removal of a canceled job's container is reported beside the
+// cancellation, since the container may still run.
+func TestBackendRunJobReportsAFailedRemovalOfACanceledTransientJob(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runner := &jobRunner{
+		answer: func(ctx context.Context, _ []string) ([]byte, error) {
+			cancel()
+			return nil, errors.New("signal: killed")
+		},
+		remove: func(context.Context, []string) ([]byte, error) {
+			return []byte("Cannot connect to the Docker daemon"), errors.New("exit status 1")
+		},
+	}
+	_, err := Backend{Runner: runner}.RunJob(ctx, runtime.Target{Root: "/stack"}, runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "remove container notes-1a2b3c4d-capture-run-") {
+		t.Fatalf("RunJob() error = %v, want the cancellation and the failed removal", err)
+	}
+}
+
+func TestStopUsesPreparedConfigurationWithoutDiskManifest(t *testing.T) {
+	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) { return nil, nil }}
+	configuration := []byte("services:\n  web:\n    image: web\n")
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), Services: []string{"web"}, Configuration: configuration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := runner.recorded()
+	want := []string{"compose", "-f", "-", "stop", "web"}
+	if len(commands) != 1 || !reflect.DeepEqual(commands[0].args, want) || !bytes.Equal(commands[0].input, configuration) {
+		t.Fatalf("commands = %#v, want prepared stop %v", commands, want)
+	}
 }

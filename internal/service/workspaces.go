@@ -1,12 +1,13 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	slashpath "path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/copierx"
-	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 	mountx "github.com/ang-ee/angee-operator/internal/mount"
@@ -24,13 +24,56 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/queryfields"
 	"github.com/ang-ee/angee-operator/internal/substitute"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-const (
-	workspaceSourceStateBranchMismatch = "branch-mismatch"
-	workspaceSyncBaseMerge             = "merge"
-	workspaceSyncBaseRebase            = "rebase"
-)
+const workspaceSourceStateBranchMismatch = "branch-mismatch"
+
+// validateWorkspaceTemplate reads a workspace template's metadata, checking
+// its kind, and refuses one that chains a template (RefuseWorkspaceChain).
+func validateWorkspaceTemplate(templatePath, templateRef string) (copierx.Metadata, error) {
+	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	if err != nil {
+		return copierx.Metadata{}, err
+	}
+	if err := RefuseWorkspaceChain(templateRef, metadata); err != nil {
+		return copierx.Metadata{}, err
+	}
+	return metadata, nil
+}
+
+// RefuseWorkspaceChain refuses a workspace template that declares `chain` or
+// `chain_root` (#110); `angee doctor` reports a template it refuses. A workspace is files: its rendered template and its
+// source slots. A stack is a manifest and a runtime with its own operator, and
+// its services and jobs reach a workspace through workspace:// mounts,
+// workdir and env. A stack template's own `chain:` is unaffected.
+func RefuseWorkspaceChain(templateRef string, metadata copierx.Metadata) error {
+	if metadata.Kind != "workspace" || len(metadata.Chain) == 0 && metadata.ChainRoot == "" {
+		return nil
+	}
+	return &InvalidInputError{
+		Field:  "template",
+		Reason: fmt.Sprintf("workspace template %q declares chain or chain_root, but a workspace no longer renders a stack (ang-ee/angee-operator#110); create the stack as a stack of its own and link its services and jobs to the workspace through workspace:// mounts, workdir or env", templateRef),
+	}
+}
+
+// refuseRecordedWorkspaceChain refuses to update a workspace whose record
+// still carries a chain: one created, before #110, from a template that
+// chained a stack. Its files include what that chain rendered (the stack's
+// answers file among them), which a render of the workspace template alone
+// would overwrite or delete. The record is left as it is; status, logs and
+// destroy still work. A record written before #110 always lists the
+// workspace's own template first, so only a chain root or a second entry
+// marks a chain.
+func refuseRecordedWorkspaceChain(name string, workspace manifest.Workspace) error {
+	if workspace.Resolved.ChainRoot == "" && len(workspace.Resolved.Chain) <= 1 {
+		return nil
+	}
+	return &InvalidInputError{
+		Field:  "workspace",
+		Reason: fmt.Sprintf("workspace %q was created from a template that chained a stack (ang-ee/angee-operator#110); destroy it and create it again", name),
+	}
+}
 
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (result api.WorkspaceRef, retErr error) {
 	ctx, release, err := p.beginMutation(ctx, "workspace")
@@ -68,7 +111,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	metadata, err := validateWorkspaceTemplate(templatePath, templateRef)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -121,8 +164,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	var workspaceSources map[string]manifest.WorkspaceSource
 	var sourceCleanup *workspaceSourceCleanup
 	var rollbackTemplateFiles func() error
-	var rollbackTemplateDocuments func() error
-	var closeTemplateDocuments func() error
 	var rollbackPersistPaths func() error
 	var closePersistPaths func() error
 	statePath := renderPlanStatePath(p.root, "workspaces", name)
@@ -162,7 +203,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		return api.WorkspaceRef{}, err
 	}
 	finishRendering := logctx.Step(ctx, "rendering template")
-	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, inputs, name, allocations, workspaceSources, stack.Sources, statePath)
+	renderPlan, err := p.buildWorkspaceRenderPlan(workspacePath, templatePath, metadata, inputs, name, allocations, workspaceSources, stack.Sources, statePath)
 	if err != nil {
 		finishRendering(err)
 		return api.WorkspaceRef{}, err
@@ -188,31 +229,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 			retErr = joinRollbackErrors(retErr, rollbackTemplateFiles)
 		}
 	}()
-	renderedDocuments := make(map[string][]byte, len(renderPlan.Documents))
-	for _, document := range renderPlan.Documents {
-		data, ok := prepared.RenderedDocument(document.Path)
-		if !ok {
-			return api.WorkspaceRef{}, fmt.Errorf("workspace chain did not render %s", document.Path)
-		}
-		if _, err := decodeStackDocument(data); err != nil {
-			return api.WorkspaceRef{}, fmt.Errorf("load rendered workspace stack %s: %w", document.Path, err)
-		}
-		renderedDocuments[document.Path] = data
-	}
-	documentExpectations, err := captureRenderedDocumentExpectations(ctx, prepared.OpenTargetPath, renderedDocuments)
-	if err != nil {
-		return api.WorkspaceRef{}, err
-	}
-	rollbackTemplateDocuments, closeTemplateDocuments, verifyTemplateDocuments, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, workspacePath, renderedDocuments, nil, nil, documentExpectations, false)
-	if err != nil {
-		return api.WorkspaceRef{}, err
-	}
-	defer func() {
-		if !committed {
-			retErr = joinRollbackErrors(retErr, rollbackTemplateDocuments)
-		}
-		_ = closeTemplateDocuments()
-	}()
 	rollbackPersistPaths, closePersistPaths, verifyPersistPaths, err := materializePersistPaths(ctx, prepared.OpenTargetPath, workspacePath, metadata.Persist, renderPlan.Plan.AllowedSymlinkParents)
 	if err != nil {
 		return api.WorkspaceRef{}, err
@@ -228,8 +244,6 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		Inputs:   map[string]string(inputs),
 		Sources:  workspaceSources,
 		Resolved: manifest.WorkspaceResolved{
-			Chain:        renderPlan.Chain,
-			ChainRoot:    renderPlan.ChainRoot,
 			Allocations:  copyIntMap(allocations),
 			PersistPaths: metadata.Persist,
 		},
@@ -247,7 +261,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		stack.Workspaces = map[string]manifest.Workspace{}
 	}
 	stack.Workspaces[name] = workspace
-	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyTemplateDocuments, verifyPersistPaths); err != nil {
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyPersistPaths); err != nil {
 		return api.WorkspaceRef{}, err
 	}
 	finishSaving := logctx.Step(ctx, "saving stack")
@@ -351,8 +365,7 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 		Template:           workspace.Template,
 		Inputs:             copyStringMap(workspace.Inputs),
 		Sources:            []api.WorkspaceSourceStatus{},
-		Chain:              append([]string{}, workspace.Resolved.Chain...),
-		ChainRoot:          workspace.Resolved.ChainRoot,
+		Chain:              []string{},
 		Allocations:        copyIntMap(workspace.Resolved.Allocations),
 		ProcessComposePort: processComposePort,
 		PlaywrightMCPName:  playwrightMCPName,
@@ -373,25 +386,16 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 			status.State = "discrepancy"
 		}
 	}
-	if workspace.Resolved.ChainRoot != "" {
-		innerRoot := filepath.Join(path, workspace.Resolved.ChainRoot)
-		if _, err := os.Stat(manifest.Path(innerRoot)); err != nil {
-			status.InnerError = err.Error()
-		} else {
-			inner, err := New(innerRoot)
-			if err != nil {
-				status.InnerError = err.Error()
-			} else if innerStatus, err := inner.StackStatus(ctx); err != nil {
-				status.InnerError = err.Error()
-			} else {
-				status.InnerStack = &innerStatus
-			}
-		}
-	}
 	return status
 }
 
+// workspaceSourceStatus reads one slot through its driver: the jj driver for
+// a jj slot, which snapshots its working copy first (plan D7) and is never
+// branch-mismatch, and the git driver for a git one. A local source's link is
+// only ready or missing. Mode is the slot's effective mode.
 func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slot string, wsSource manifest.WorkspaceSource, stack *manifest.Stack) api.WorkspaceSourceStatus {
+	wsSource = withEffectiveMode(stack, wsSource)
+	jjSlot := wsSource.Mode == manifest.WorkspaceSourceModeJJ
 	subpath, path, pathErr := p.workspaceSourcePath(workspaceName, slot, wsSource)
 	status := api.WorkspaceSourceStatus{
 		Slot:    slot,
@@ -408,6 +412,13 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.State = "error"
 		status.Pushed = false
 		status.Error = pathErr.Error()
+		return status
+	}
+	// A migrate that did not finish may have the slot's checkout set aside.
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = reason + ". " + hint
 		return status
 	}
 	source, ok := stack.Sources[wsSource.Source]
@@ -427,87 +438,78 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		return status
 	}
 	status.Exists = true
-	if source.Kind != "git" {
+	if source.Kind != "git" && !jjSlot {
 		status.State = "ready"
 		return status
 	}
-	client := p.gitClient()
-	currentRef, err := client.CurrentRef(ctx, path)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	status.CurrentRef = currentRef
-	dirty, err := client.Dirty(ctx, path)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	status.Dirty = dirty
-	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
-		status.State = workspaceSourceStateBranchMismatch
-		status.Pushed = false
-		status.UnpushedReason = reason
-		return status
-	}
-	if dirty {
-		status.State = "dirty"
-		status.Pushed = false
-		status.UnpushedReason = "uncommitted changes"
-		return status
-	}
-	base, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	if hasUpstream {
-		status.Upstream = base
-	}
-	if base == "" {
-		base = wsSource.Ref
-	}
-	if base == "" {
-		base = source.DefaultRef
-	}
-	if base == "" {
-		status.State = "clean"
-		return status
-	}
-	ahead, behind, err := client.AheadBehind(ctx, path, base)
-	if err != nil {
-		status.State = "error"
-		status.Pushed = false
-		status.Error = err.Error()
-		return status
-	}
-	status.Ahead = ahead
-	status.Behind = behind
-	switch {
-	case ahead > 0 && behind > 0:
-		status.State = "diverged"
-		status.Pushed = false
-		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
-	case ahead > 0:
-		status.State = "ahead"
-		status.Pushed = false
-		if hasUpstream {
-			status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
-		} else {
-			status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base)
+	if jjSlot {
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			status.State = "error"
+			status.Pushed = false
+			status.Error = fmt.Sprintf("%s is a link, not a jj workspace: a jj slot is never linked", path)
+			return status
 		}
-	case behind > 0:
-		status.State = "behind"
-	default:
-		status.State = "clean"
 	}
+	if !jjSlot && wsSource.Mode != manifest.WorkspaceSourceModeWorktree {
+		p.reportCloneSlotRemotes(ctx, workspaceName, slot, path, source, wsSource)
+	}
+	target := workspaceVCSSlot(path, source, wsSource)
+	read, err := p.slotDriver(target).Status(ctx, target)
+	setSlotStatus(&status, read, err)
 	return status
+}
+
+// setSlotStatus fills status with what the slot's driver read, read and err
+// being what vcs.Driver.Status returned. It is the one mapping from a
+// driver's read to the API: every DTO that reports a slot or a source's
+// cache (SourceState, GitOpsLink) is made from the WorkspaceSourceStatus it
+// fills. A read that failed makes the slot an error and not pushed, and
+// keeps what the driver read before it failed, as a jj slot on a missing base
+// keeps its counts. The jj fields are copied as they are, so they are zero
+// for a git slot.
+func setSlotStatus(status *api.WorkspaceSourceStatus, read vcs.Status, err error) {
+	status.CurrentRef = read.CurrentRef
+	status.Dirty = read.Dirty
+	status.Upstream = read.Upstream
+	status.Ahead = read.Ahead
+	status.Behind = read.Behind
+	status.JJSlotState = api.JJSlotState{
+		ChangeID:       read.ChangeID,
+		BaseBehind:     read.BaseBehind,
+		Conflicted:     read.Conflicted,
+		ConflictPaths:  read.ConflictPaths,
+		UntrackedPaths: read.UntrackedPaths,
+	}
+	if err != nil {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = err.Error()
+		return
+	}
+	status.State = workspaceSourceStateOf(read)
+	status.Pushed = read.Pushed
+	status.UnpushedReason = read.UnpushedReason
+}
+
+// workspaceSourceStateOf names the state a slot's driver status puts it in.
+// Ahead and behind describe the slot against its upstream or base; whether
+// the slot holds work of its own is Pushed, which can be true while it is
+// ahead (after sync-base, its new commits are the base's).
+func workspaceSourceStateOf(read vcs.Status) string {
+	switch {
+	case read.MismatchReason != "":
+		return workspaceSourceStateBranchMismatch
+	case read.Dirty:
+		return "dirty"
+	case read.Ahead > 0 && read.Behind > 0:
+		return "diverged"
+	case read.Ahead > 0:
+		return "ahead"
+	case read.Behind > 0:
+		return "behind"
+	default:
+		return "clean"
+	}
 }
 
 func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool) error {
@@ -536,7 +538,7 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 		}
 		defer func() { _ = workspaceGuard.Close() }()
 	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
+	if err := p.requireWorkspaceSlotsReady(ctx, vcs.VerbDestroy, name, workspace, stack); err != nil {
 		return err
 	}
 	if err := p.ensureWorkspaceGitSourcesPushed(ctx, name, workspace, stack); err != nil {
@@ -551,33 +553,45 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 		workspacePath := filepath.Join(p.root, "workspaces", name)
 		// Deregister the worktrees first so purging the directory does not
 		// strand "missing but already registered" entries in the shared caches.
-		p.removeWorkspaceSources(ctx, stack, workspacePath, workspace.Sources)
+		p.removeWorkspaceSources(ctx, stack, name, workspacePath, workspace.Sources)
 		return workspaceGuard.RemoveAll()
 	}
 	return nil
 }
 
-func (p *Platform) ensureWorkspaceGitSourcesOnExpectedBranches(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
+// requireWorkspaceSlotsReady asks the driver of each slot of the workspace
+// whether verb may run on it (requireWorkspaceSlotReady), in slot order.
+func (p *Platform) requireWorkspaceSlotsReady(ctx context.Context, verb vcs.Verb, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
 		source, ok := stack.Sources[wsSource.Source]
 		if !ok {
 			return fmt.Errorf("workspace %q source %q references undeclared source %q", workspaceName, slot, wsSource.Source)
 		}
-		if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
+		if err := p.requireWorkspaceSlotReady(ctx, verb, workspaceName, slot, source, withEffectiveMode(stack, wsSource)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context, workspaceName, slot string, source manifest.Source, wsSource manifest.WorkspaceSource) error {
-	if source.Kind != "git" || !workspaceSourceRequiresBranch(wsSource) {
+// requireWorkspaceSlotReady asks the driver of a workspace slot whether verb
+// may run on it as it stands (vcs.Driver.Ready), in the service's words
+// (requireSlotReady). wsSource's mode is the effective one. Only a
+// version-controlled checkout is asked, a git source's slot or a jj slot, and
+// only once it is on disk.
+func (p *Platform) requireWorkspaceSlotReady(ctx context.Context, verb vcs.Verb, workspaceName, slot string, source manifest.Source, wsSource manifest.WorkspaceSource) error {
+	if source.Kind != "git" && wsSource.Mode != manifest.WorkspaceSourceModeJJ {
 		return nil
 	}
 	_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 	if err != nil {
 		return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+	}
+	// A migrate that did not finish may have the slot's checkout set aside,
+	// which no verb reads, and a purge would delete.
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		return p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason, hint)
 	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -585,52 +599,159 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 		}
 		return err
 	}
-	currentRef, err := p.gitClient().CurrentRef(ctx, path)
-	if err != nil {
-		return err
-	}
-	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
-		hint := fmt.Sprintf("Switch it back with `git -C %s switch %s`, then retry.", path, wsSource.Branch)
-		return &OperationError{
-			Code:      CodePreconditionFailed,
-			Cause:     CauseBranchMismatch,
-			Workspace: workspaceName,
-			Slot:      slot,
-			Source:    wsSource.Source,
-			Paths:     []string{path},
-			Hint:      hint,
-			Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, reason, path, hint),
-		}
-	}
-	return nil
+	driver, target := p.workspaceSlotDriver(path, source, wsSource)
+	return requireSlotReady(ctx, driver, target, verb, workspaceName, slot, wsSource.Source)
 }
 
+// branchMismatch is the branch_mismatch refusal of a workspace slot at path,
+// with the fix its driver names.
+func branchMismatch(workspaceName, slot, source, path string, mismatch *vcs.BranchMismatchError) error {
+	hint := "Put it back on its branch, then retry."
+	if mismatch.Fix != "" {
+		hint = fmt.Sprintf("Switch it back with `%s`, then retry.", mismatch.Fix)
+	}
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseBranchMismatch,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Paths:     []string{path},
+		Hint:      hint,
+		Summary:   fmt.Sprintf("workspace %q source %q has branch mismatch: %s at %s. %s", workspaceName, slot, mismatch.Reason, path, hint),
+	}
+}
+
+// requireSlotReady refuses verb on a workspace slot when its driver says the
+// slot is not ready for it (vcs.Driver.Ready), in the service's words
+// (readinessRefusal).
+func requireSlotReady(ctx context.Context, driver vcs.Driver, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) error {
+	err := driver.Ready(ctx, target, verb)
+	if refusal := readinessRefusal(err, target, verb, workspaceName, slot, source); refusal != nil {
+		return refusal
+	}
+	return err
+}
+
+// readinessRefusal words a driver's answer that verb may not run on the
+// workspace slot target: a branch mismatch or uncommitted changes, each with
+// the fix the driver names, untracked paths only the slot holds, or another
+// reason of the slot's version control. It is nil for any other error.
+func readinessRefusal(err error, target vcs.Slot, verb vcs.Verb, workspaceName, slot, source string) *OperationError {
+	var mismatch *vcs.BranchMismatchError
+	var uncommitted *vcs.UncommittedError
+	var untracked *vcs.UntrackedPathsError
+	var notReady *vcs.NotReadyError
+	var refusal error
+	switch {
+	case errors.As(err, &mismatch):
+		refusal = branchMismatch(workspaceName, slot, source, target.Path, mismatch)
+	case errors.As(err, &uncommitted):
+		refusal = uncommittedChanges(uncommitted.Paths, uncommitted.Fix, fmt.Sprintf("source slot %q", slot), slot, source)
+	case errors.As(err, &untracked):
+		// A rebase could keep them over the base's own; every other verb
+		// that refuses them acts on commits, which leave them out.
+		why := "a rebase could keep over the base's own"
+		if verb != vcs.VerbSyncBase && verb != vcs.VerbRebase {
+			why = fmt.Sprintf("%s leaves out, since no commit holds them", verb)
+		}
+		hint := "Track them (`jj file track`), move them out of the slot, or ignore them, then retry."
+		return &OperationError{
+			Code:      CodePreconditionFailed,
+			Cause:     CauseUntrackedPaths,
+			Workspace: workspaceName,
+			Slot:      slot,
+			Source:    source,
+			Paths:     untracked.Paths[:min(len(untracked.Paths), maxErrorPaths)],
+			Hint:      hint,
+			Summary: fmt.Sprintf("source slot %q holds files jj does not track, only it has, and %s: %s. %s",
+				slot, why, vcs.NamePaths(untracked.Paths, maxMessagePaths), hint),
+			Err: err,
+		}
+	case errors.As(err, &notReady):
+		hint := "Fix the slot, then retry."
+		if notReady.Fix != "" {
+			hint = fmt.Sprintf("Fix it with `%s`, then retry.", notReady.Fix)
+		}
+		return &OperationError{
+			Code:      CodePreconditionFailed,
+			Workspace: workspaceName,
+			Slot:      slot,
+			Source:    source,
+			Paths:     []string{target.Path},
+			Hint:      hint,
+			Summary:   fmt.Sprintf("source slot %q is not ready for %s: %s. %s", slot, verb, notReady.Reason, hint),
+			Err:       err,
+		}
+	default:
+		return nil
+	}
+	var opErr *OperationError
+	errors.As(refusal, &opErr)
+	return opErr
+}
+
+// workspaceSourceRequiresBranch reports whether a slot must stay on its
+// manifest branch: a worktree slot that names one.
 func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
 	return wsSource.Mode == manifest.WorkspaceSourceModeWorktree && wsSource.Branch != ""
 }
 
-func workspaceGitBranchMismatchReason(currentRef string, wsSource manifest.WorkspaceSource) string {
-	if !workspaceSourceRequiresBranch(wsSource) || currentRef == wsSource.Branch {
-		return ""
-	}
-	return fmt.Sprintf("current branch/ref %q, expected workspace branch %q", currentRef, wsSource.Branch)
-}
-
+// ensureWorkspaceGitSourcesPushed refuses to let a workspace go while a slot
+// holds work nothing else does, as its driver's status reports it, or, in a
+// jj slot, while a repository jj does not record is nested in it
+// (nestedRepositories).
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
-	client := p.gitClient()
 	unpushed := []string{}
+	// What a migrate set aside beside a slot, a checkout it kept or could not
+	// move back, sits in the workspace, which a purge deletes. It is no slot
+	// the manifest records, so no status reads it. Beside a slot whose
+	// migrate left its record, the record's steps say what each is (below),
+	// which may be the new checkout, to move back rather than remove.
+	setAside := map[string]bool{}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		if _, path, err := p.workspaceSourcePath(workspaceName, slot, workspace.Sources[slot]); err == nil {
+			if _, _, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+				for _, aside := range asidesBeside(path) {
+					setAside[aside] = true
+				}
+			}
+		}
+	}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		wsSource := workspace.Sources[slot]
+		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+		if err != nil {
+			continue
+		}
+		primary := p.sourcePath(wsSource.Source, stack.Sources[wsSource.Source])
+		for _, aside := range asidesBeside(path) {
+			if setAside[aside] {
+				continue
+			}
+			setAside[aside] = true
+			unpushed = append(unpushed, fmt.Sprintf("%s (a checkout a migrate set aside, which its message or the slot's status describes: take what you need from it, then remove it, and its registration alone, with `git -C %s worktree remove --force --force %s`; if it was a jj slot whose workspace is not forgotten, forget it only while nothing is at its slot's path, since jj removes the git worktree it finds at the path it recorded)", aside, shellQuote(primary), shellQuote(aside)))
+		}
+	}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
 		source, ok := stack.Sources[wsSource.Source]
 		if !ok {
 			return fmt.Errorf("workspace %q source %q references undeclared source %q", workspaceName, slot, wsSource.Source)
 		}
-		if source.Kind != "git" {
+		wsSource = withEffectiveMode(stack, wsSource)
+		if source.Kind != "git" && wsSource.Mode != manifest.WorkspaceSourceModeJJ {
 			continue
 		}
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 		if err != nil {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		// Its checkout may be set aside in the workspace, which a purge
+		// would delete with it.
+		if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+			unpushed = append(unpushed, fmt.Sprintf("%s (%s. %s)", slot, reason, hint))
+			continue
 		}
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
@@ -638,74 +759,58 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 			}
 			return err
 		}
-		reason, err := workspaceGitSourceUnpushedReason(ctx, client, path, source, wsSource)
-		if err != nil {
+		if wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+			// A link at a jj slot's path, left from when the slot linked a
+			// local source, and an empty directory, which repair takes for a
+			// missing slot, hold nothing of their own: destroy removes only
+			// them.
+			info, err := os.Lstat(path)
+			if err != nil {
+				return err
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+			if empty, err := emptyDirectory(path); err != nil {
+				return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+			} else if empty {
+				continue
+			}
+		}
+		// A jj slot's status snapshots its working copy first, so an edit no
+		// jj command has recorded yet counts as uncommitted (plan D7).
+		target := workspaceVCSSlot(path, source, wsSource)
+		read, err := p.slotDriver(target).Status(ctx, target)
+		// A slot whose base no longer resolves, such as a deleted branch, can
+		// still be let go, when the driver decided Pushed without counting.
+		// Any other failure, a jj slot's missing base included until its
+		// driver reports one this way, refuses the destroy.
+		var countErr *vcs.CountError
+		if err != nil && !errors.As(err, &countErr) {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
-		if reason != "" {
-			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, reason))
+		if !read.Pushed {
+			unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, read.UnpushedReason))
+			continue
+		}
+		// jj records no repository nested in a jj slot, such as a clone an
+		// agent made in it, so its status says nothing of their work.
+		if wsSource.Mode == manifest.WorkspaceSourceModeJJ {
+			subpath, _, _ := p.workspaceSourcePath(workspaceName, slot, wsSource)
+			_, colocatedErr := os.Lstat(filepath.Join(p.sourcePath(wsSource.Source, source), ".git"))
+			nested, err := nestedRepositories(path, nestedSlots(subpath, workspace.Sources, slot), colocatedErr == nil)
+			if err != nil {
+				return fmt.Errorf("workspace %q source %q: look for repositories inside it: %w", workspaceName, slot, err)
+			}
+			if len(nested) > 0 {
+				unpushed = append(unpushed, fmt.Sprintf("%s (%s)", slot, nestedRepositoriesReason(nested)))
+			}
 		}
 	}
 	if len(unpushed) > 0 {
-		return fmt.Errorf("workspace %q has git sources that have not been pushed: %s", workspaceName, strings.Join(unpushed, ", "))
+		return fmt.Errorf("workspace %q has sources that have not been pushed: %s", workspaceName, strings.Join(unpushed, ", "))
 	}
 	return nil
-}
-
-func workspaceGitSourceUnpushedReason(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (string, error) {
-	dirty, err := client.Dirty(ctx, path)
-	if err != nil {
-		return "", err
-	}
-	if dirty {
-		return "uncommitted changes", nil
-	}
-	// Commits on a detached HEAD are held only by the worktree, so purging it
-	// loses whatever no branch, remote branch or tag also holds.
-	if _, onBranch, err := client.CurrentBranch(ctx, path); err != nil {
-		return "", err
-	} else if !onBranch {
-		held, err := client.CountNotOnAnyRef(ctx, path)
-		if err != nil {
-			return "", err
-		}
-		if held > 0 {
-			return fmt.Sprintf("%d commit(s) on a detached HEAD that no branch holds", held), nil
-		}
-		return "", nil
-	}
-	base, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil {
-		return "", err
-	}
-	if !hasUpstream {
-		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known {
-			if ahead == 0 {
-				return "", nil
-			}
-			return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
-		}
-	}
-	if base == "" {
-		base = wsSource.Ref
-	}
-	if base == "" {
-		base = source.DefaultRef
-	}
-	if base == "" {
-		return "", nil
-	}
-	ahead, err := client.AheadCount(ctx, path, base)
-	if err != nil {
-		return "", err
-	}
-	if ahead == 0 {
-		return "", nil
-	}
-	if hasUpstream {
-		return fmt.Sprintf("%d commit(s) ahead of %s", ahead, base), nil
-	}
-	return fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base), nil
 }
 
 func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.WorkspaceUpdateRequest) (api.WorkspaceRef, error) {
@@ -726,11 +831,14 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 	if !ok {
 		return api.WorkspaceRef{}, &NotFoundError{Kind: "workspace", Name: name}
 	}
+	if err := refuseRecordedWorkspaceChain(name, workspace); err != nil {
+		return api.WorkspaceRef{}, err
+	}
 	templatePath, templateRef, err := p.resolveTemplate(ctx, workspace.Template, "workspace")
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
+	metadata, err := validateWorkspaceTemplate(templatePath, templateRef)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -762,7 +870,7 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 	}
 	workspacePath := filepath.Join(p.root, "workspaces", name)
 	statePath := renderPlanStatePath(p.root, "workspaces", name)
-	renderPlan, err := p.buildWorkspaceRenderPlan(ctx, workspacePath, templatePath, templateRef, metadata, workspace.Inputs, name, workspace.Resolved.Allocations, workspace.Sources, stack.Sources, statePath)
+	renderPlan, err := p.buildWorkspaceRenderPlan(workspacePath, templatePath, metadata, workspace.Inputs, name, workspace.Resolved.Allocations, workspace.Sources, stack.Sources, statePath)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -784,93 +892,53 @@ func (p *Platform) WorkspaceUpdate(ctx context.Context, name string, req api.Wor
 		}
 		return api.WorkspaceRef{}, &ConflictError{Kind: "workspace-template", Name: name, Reason: fmt.Sprintf("locally modified paths: %s; use --overwrite to replace", strings.Join(paths, ", "))}
 	}
-	mergedDocuments := make(map[string][]byte, len(renderPlan.Documents))
-	documentExpectations := make(map[string]renderedDocumentExpectation, len(renderPlan.Documents))
-	for _, document := range renderPlan.Documents {
-		rendered, ok := prepared.RenderedDocument(document.Path)
-		if !ok {
-			return api.WorkspaceRef{}, fmt.Errorf("workspace chain did not render %s", document.Path)
-		}
-		theirs, err := decodeStackDocument(rendered)
-		if err != nil {
-			return api.WorkspaceRef{}, fmt.Errorf("load rendered workspace stack %s: %w", document.Path, err)
-		}
-		merged := theirs
-		current, documentExpectation, loadErr := readStackDocumentExpectation(prepared.OpenTargetPath, document.Path)
-		if loadErr != nil {
-			return api.WorkspaceRef{}, fmt.Errorf("load workspace stack %s: %w", document.Path, loadErr)
-		}
-		exists := documentExpectation.Exists
-		if exists {
-			merged = mergeStackFromTemplate(current, theirs, true)
-		}
-		documentExpectations[document.Path] = documentExpectation
-		documentMetadata, err := copierx.ReadMetadata(document.Template)
-		if err != nil {
-			return api.WorkspaceRef{}, err
-		}
-		if err := manifest.Ensure(merged, documentMetadata.Ensure); err != nil {
-			return api.WorkspaceRef{}, err
-		}
-		mergedDocuments[document.Path], err = manifest.Marshal(merged)
-		if err != nil {
-			return api.WorkspaceRef{}, err
-		}
-	}
 	rollbackFiles, err := prepared.ApplyFiles(ctx)
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	rollbackDocuments, closeDocuments, verifyDocuments, err := applyRenderedDocuments(ctx, prepared.OpenTargetPath, workspacePath, mergedDocuments, nil, nil, documentExpectations, false)
+	rollbackPersistPaths, closePersistPaths, verifyPersistPaths, err := materializePersistPaths(ctx, prepared.OpenTargetPath, workspacePath, metadata.Persist, renderPlan.Plan.AllowedSymlinkParents)
 	if err != nil {
 		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackFiles)
 	}
-	defer func() { _ = closeDocuments() }()
-	rollbackPersistPaths, closePersistPaths, verifyPersistPaths, err := materializePersistPaths(ctx, prepared.OpenTargetPath, workspacePath, metadata.Persist, renderPlan.Plan.AllowedSymlinkParents)
-	if err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackDocuments, rollbackFiles)
-	}
 	defer func() { _ = closePersistPaths() }()
 	workspace.Template = templateRef
-	workspace.Resolved.Chain = renderPlan.Chain
-	workspace.Resolved.ChainRoot = renderPlan.ChainRoot
 	workspace.Resolved.PersistPaths = metadata.Persist
 	stack.Workspaces[name] = workspace
-	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyDocuments, verifyPersistPaths); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackDocuments, rollbackFiles)
+	if err := joinRollbackErrors(prepared.VerifyTargetRootPath(), verifyPersistPaths); err != nil {
+		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackFiles)
 	}
 	if err := parentTx.Save(stack); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackDocuments, rollbackFiles)
+		return api.WorkspaceRef{}, joinRollbackErrors(err, rollbackPersistPaths, rollbackFiles)
 	}
 	if err := prepared.SaveState(ctx); err != nil {
-		return api.WorkspaceRef{}, joinRollbackErrors(err, parentTx.Rollback, rollbackPersistPaths, rollbackDocuments, rollbackFiles)
+		return api.WorkspaceRef{}, joinRollbackErrors(err, parentTx.Rollback, rollbackPersistPaths, rollbackFiles)
 	}
 	return workspaceRef(name, workspacePath, workspace), nil
 }
 
+// WorkspaceLogs is deprecated (#110): a workspace is files and has no logs of
+// its own. It answers a declared workspace with a closed channel, as it always
+// did for a workspace without a chained stack, and is removed in a later
+// release. A stack's services and jobs have their own logs.
 func (p *Platform) WorkspaceLogs(ctx context.Context, name string, follow bool) (<-chan string, error) {
 	return p.WorkspaceLogsLimited(ctx, name, follow, 0)
 }
 
-func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, follow bool, maxBytes int) (<-chan string, error) {
+// WorkspaceLogsLimited is deprecated with WorkspaceLogs.
+func (p *Platform) WorkspaceLogsLimited(ctx context.Context, name string, _ bool, _ int) (<-chan string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	stack, err := p.LoadStack()
 	if err != nil {
 		return nil, err
 	}
-	workspace, ok := stack.Workspaces[name]
-	if !ok {
+	if _, ok := stack.Workspaces[name]; !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	if workspace.Resolved.ChainRoot == "" {
-		ch := make(chan string)
-		close(ch)
-		return ch, nil
-	}
-	inner, err := New(filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot))
-	if err != nil {
-		return nil, err
-	}
-	return inner.StackLogsLimited(ctx, nil, follow, maxBytes)
+	ch := make(chan string)
+	close(ch)
+	return ch, nil
 }
 
 func releaseWorkspacePorts(stack *manifest.Stack, workspaceName string) {
@@ -1016,7 +1084,6 @@ func workspaceRef(name, path string, ws manifest.Workspace) api.WorkspaceRef {
 		Name:               name,
 		Path:               path,
 		Template:           ws.Template,
-		ChainRoot:          ws.Resolved.ChainRoot,
 		Allocations:        copyIntMap(ws.Resolved.Allocations),
 		ProcessComposePort: processComposePort,
 		PlaywrightMCPName:  playwrightMCPName,
@@ -1175,6 +1242,15 @@ func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.S
 	return states, nil
 }
 
+// WorkspacePush pushes each slot whose manifest names a mode that pushes (a
+// git worktree or clone, a jj slot); a slot with no mode is skipped, even a
+// jj slot under `vcs: jj` (owner, 2026-10-29, plan Q7), and so is a jj slot
+// of a `kind: local` store, the user's, which its own publish reaches. A git slot pushes
+// its branch; a jj slot is published to the remote it pushes to, under ref
+// when one is named, else its manifest branch (vcs.Driver.PlanPush). Every
+// slot must be ready to push (vcs.Driver.Ready) and is planned before any is
+// pushed, so a refusal leaves no slot pushed; a slot with nothing of its own
+// is left alone.
 func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states []api.SourceState, err error) {
 	defer operation{name: "workspace.push", title: fmt.Sprintf("Push workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
@@ -1190,28 +1266,35 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 	if !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	// Check the slots are materialized first: the branch check reads git in
-	// each slot's path and would read an enclosing repository's branch.
-	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeClone)
+	// Check the slots are materialized first: a driver's checks read each
+	// slot's path, and git would read an enclosing repository there.
+	targets, err := p.workspaceGitSlots(name, workspace, stack, false, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeClone, manifest.WorkspaceSourceModeJJ)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
-		return nil, err
-	}
-	client := p.gitClient()
-	plans := make([]workspaceGitPush, len(targets))
+	drivers := make([]vcs.Driver, len(targets))
+	slots := make([]vcs.Slot, len(targets))
 	for i, target := range targets {
-		if err := requireCleanCheckout(ctx, client, target.path, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+		drivers[i], slots[i] = p.workspaceSlotDriver(target.path, target.source, target.wsSource)
+	}
+	// A machine that cannot run jj slots says so before any slot is read.
+	if slices.ContainsFunc(slots, func(s vcs.Slot) bool { return s.Mode == vcs.ModeJJ }) {
+		if err := p.requireJJSlots(ctx); err != nil {
 			return nil, err
 		}
-		if plans[i], err = planWorkspaceGitPush(ctx, client, name, target.slot, target.path, target.source, target.wsSource, ref); err != nil {
+	}
+	plans := make([]workspaceGitPush, len(targets))
+	for i, target := range targets {
+		if err := requireSlotReady(ctx, drivers[i], slots[i], vcs.VerbPush, name, target.slot, target.wsSource.Source); err != nil {
+			return nil, err
+		}
+		if plans[i], err = planWorkspaceGitPush(ctx, drivers[i], slots[i], target.source, name, target.slot, target.wsSource, ref); err != nil {
 			return nil, err
 		}
 	}
 	states = []api.SourceState{}
 	for i, target := range targets {
-		if err := plans[i].run(ctx, client, target.path); err != nil {
+		if err := plans[i].run(ctx); err != nil {
 			return nil, err
 		}
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
@@ -1223,12 +1306,13 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 	return states, nil
 }
 
-// workspaceSlotPath names a workspace source slot, where it lives on disk and
-// the source it materializes.
+// workspaceSlotPath names a workspace source slot, where it lives on disk, the
+// source it materializes, and its effective mode.
 type workspaceSlotPath struct {
 	slot   string
 	path   string
 	source manifest.Source
+	mode   string
 }
 
 // workspaceGitSlot is a git slot an aggregate workspace verb acts on.
@@ -1237,10 +1321,18 @@ type workspaceGitSlot struct {
 	wsSource manifest.WorkspaceSource
 }
 
-// workspaceGitSlots returns the workspace's git slots whose mode is one of
-// modes, in slot order. Every one of them must be materialized: the verb fails
-// before touching any slot when one is not.
-func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Workspace, stack *manifest.Stack, modes ...string) ([]workspaceGitSlot, error) {
+// workspaceGitSlots returns the workspace's slots whose manifest names one of
+// modes, in slot order: the slots an aggregate verb walks. A slot that names
+// no mode is never one of them, whatever its effective mode (owner,
+// 2026-10-29, plan Q7), so a work-state `.work` slot, a jj slot under `vcs:
+// jj`, stays out of every aggregate. A slot of a `kind: git` source is a
+// version-controlled checkout, and, with localStores, so is a jj slot of a
+// `kind: local` store, which sync-base rebases onto its base as the store has
+// it; workspace push leaves one alone, since angee writes nothing to a user's
+// store unasked, and the slot's own publish reaches it. Every one of them
+// must be materialized: the verb fails before touching any slot when one is
+// not.
+func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Workspace, stack *manifest.Stack, localStores bool, modes ...string) ([]workspaceGitSlot, error) {
 	var targets []workspaceGitSlot
 	var paths []workspaceSlotPath
 	for _, slot := range sortedKeys(workspace.Sources) {
@@ -1249,14 +1341,17 @@ func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Wo
 			continue
 		}
 		source, ok := stack.Sources[wsSource.Source]
-		if !ok || source.Kind != "git" {
+		if !ok || source.Kind != "git" && (!localStores || wsSource.Mode != manifest.WorkspaceSourceModeJJ) {
 			continue
 		}
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
-		target := workspaceGitSlot{workspaceSlotPath: workspaceSlotPath{slot: slot, path: path, source: source}, wsSource: wsSource}
+		if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+			return nil, p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason, hint)
+		}
+		target := workspaceGitSlot{workspaceSlotPath: workspaceSlotPath{slot: slot, path: path, source: source, mode: wsSource.Mode}, wsSource: wsSource}
 		targets = append(targets, target)
 		paths = append(paths, target.workspaceSlotPath)
 	}
@@ -1277,14 +1372,15 @@ const (
 	workspaceSlotMaterialized
 	// workspaceSlotDangling: the path is a link whose target is gone.
 	workspaceSlotDangling
-	// workspaceSlotNotCheckout: a git slot's path holds something that is not
-	// its own checkout. Git run there would act on an enclosing repository,
-	// such as the project an ANGEE_ROOT lives in.
+	// workspaceSlotNotCheckout: a git or jj slot's path holds something that
+	// is not its own checkout. Git or jj run there would act on an enclosing
+	// repository, such as the project an ANGEE_ROOT lives in.
 	workspaceSlotNotCheckout
 )
 
-// inspectWorkspaceSlot reports what is at a slot's path.
-func inspectWorkspaceSlot(path string, source manifest.Source) (workspaceSlotDisk, error) {
+// inspectWorkspaceSlot reports what is at a slot's path. mode is the slot's
+// effective mode: a jj slot's checkout has a .jj, and a git one a .git.
+func inspectWorkspaceSlot(path string, source manifest.Source, mode string) (workspaceSlotDisk, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return workspaceSlotAbsent, nil
@@ -1293,6 +1389,11 @@ func inspectWorkspaceSlot(path string, source manifest.Source) (workspaceSlotDis
 		return 0, err
 	}
 	isLink := info.Mode()&os.ModeSymlink != 0
+	if isLink && mode == manifest.WorkspaceSourceModeJJ {
+		// A jj slot is made in place, never linked: a link is what a local
+		// source left from before its slots became jj slots.
+		return workspaceSlotNotCheckout, nil
+	}
 	if isLink {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return workspaceSlotDangling, nil
@@ -1300,10 +1401,14 @@ func inspectWorkspaceSlot(path string, source manifest.Source) (workspaceSlotDis
 			return 0, err
 		}
 	}
-	if source.Kind != "git" {
+	marker := ".git"
+	switch {
+	case mode == manifest.WorkspaceSourceModeJJ:
+		marker = ".jj"
+	case source.Kind != "git":
 		return workspaceSlotMaterialized, nil
 	}
-	if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+	if _, err := os.Lstat(filepath.Join(path, marker)); err == nil {
 		return workspaceSlotMaterialized, nil
 	} else if !os.IsNotExist(err) {
 		return 0, err
@@ -1343,7 +1448,7 @@ func emptyDirectory(path string) (bool, error) {
 func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath) error {
 	var problems, slotNames, paths []string
 	for _, slot := range slots {
-		disk, err := inspectWorkspaceSlot(slot.path, slot.source)
+		disk, err := inspectWorkspaceSlot(slot.path, slot.source, slot.mode)
 		if err != nil {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot.slot, err)
 		}
@@ -1357,7 +1462,11 @@ func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath
 		case workspaceSlotDangling:
 			problems = append(problems, fmt.Sprintf("source slot %q at %s is a link whose target is missing; remove it", slot.slot, slot.path))
 		case workspaceSlotNotCheckout:
-			problems = append(problems, fmt.Sprintf("source slot %q at %s is not a git checkout; move it aside", slot.slot, slot.path))
+			checkout := "a git checkout"
+			if slot.mode == manifest.WorkspaceSourceModeJJ {
+				checkout = "a jj workspace"
+			}
+			problems = append(problems, fmt.Sprintf("source slot %q at %s is not %s; move it aside", slot.slot, slot.path, checkout))
 		}
 	}
 	if len(problems) == 0 {
@@ -1382,64 +1491,117 @@ func requireWorkspaceSlotsOnDisk(workspaceName string, slots []workspaceSlotPath
 	return opErr
 }
 
-// workspaceGitPush is what a push of one clean git slot does. An explicit ref
-// is pushed as given. Otherwise the slot pushes to its upstream, or sets one
-// on its branch; a slot with no upstream and no commits beyond its base is
-// left alone (skip says why), since the push would only create a remote
-// branch with no work on it.
+// workspaceGitPush is a push of one clean slot, as its driver planned it
+// (vcs.Driver.PlanPush): an explicit ref as given, else the slot's branch to
+// its upstream or to a new one, or, for a jj slot, the publish of its commits
+// under a branch. A slot with nothing of its own is left alone (skip says
+// why), since the push would only create a remote branch with no work on it.
 type workspaceGitPush struct {
-	ref      string // an explicit ref, or "" for the upstream
-	upstream string // the branch to push and track, when it has no upstream
-	skip     string
-	step     gitStep
+	driver vcs.Driver
+	target vcs.Slot
+	plan   vcs.PushPlan
+	skip   string
+	step   gitStep
 }
 
 // planWorkspaceGitPush decides a slot's push without pushing, so an
-// aggregate push can refuse before any slot is pushed: a slot on a detached
-// HEAD with commits of its own has no branch to push.
-func planWorkspaceGitPush(ctx context.Context, client git.Client, workspaceName, slot, path string, source manifest.Source, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
-	plan := workspaceGitPush{ref: ref, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: pushRemoteURL(ctx, client, path), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
-	if ref != "" {
-		return plan, nil
-	}
-	current, onBranch, err := client.CurrentBranch(ctx, path)
+// aggregate push can refuse before any slot is pushed: a slot on no branch
+// with commits of its own has no branch to push, and a jj slot's commits jj
+// will not push are refused, naming them. A push that publishes (a jj
+// slot's) is held to the manifest's rules for its remote, as a publish is
+// (publishRulesRefusal).
+func planWorkspaceGitPush(ctx context.Context, driver vcs.Driver, target vcs.Slot, source manifest.Source, workspaceName, slot string, wsSource manifest.WorkspaceSource, ref string) (workspaceGitPush, error) {
+	push := workspaceGitPush{driver: driver, target: target, step: gitStep{action: "pushing", object: fmt.Sprintf("source slot %q", slot), remote: driver.PushURL(ctx, target, ""), cause: CausePushFailed, slot: slot, source: wsSource.Source}}
+	plan, err := driver.PlanPush(ctx, target, ref, wsSource.Branch)
 	if err != nil {
-		return plan, err
+		return push, pushPlanRefusal(err, target, workspaceName, slot, ref, wsSource)
 	}
-	_, hasUpstream, err := client.Upstream(ctx, path)
-	if err != nil || hasUpstream {
-		return plan, err
-	}
-	// The count is of HEAD, so it only speaks for the push when HEAD is what
-	// would be pushed.
-	if !onBranch || wsSource.Branch == "" || current == wsSource.Branch {
-		if ahead, base, known := workspaceGitSourceCommitsBeyondBase(ctx, client, path, source, wsSource); known && ahead == 0 {
-			plan.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, base)
-			return plan, nil
+	push.plan = plan
+	switch {
+	case plan.Skip && plan.Reason != "":
+		push.skip = fmt.Sprintf("workspace %q source %q: %s; not pushing it", workspaceName, slot, plan.Reason)
+	case plan.Skip:
+		push.skip = fmt.Sprintf("workspace %q source %q has no commits beyond %s; not pushing it", workspaceName, slot, target.BaseRef)
+	case plan.Publish != nil:
+		if err := publishRulesRefusal(source, wsSource.Source, *plan.Publish); err != nil {
+			return push, err
 		}
+		push.step.action = fmt.Sprintf("pushing branch %q of", plan.Publish.Branch)
+		push.step.remote = plan.Publish.URL
 	}
-	if !onBranch {
-		return plan, detachedHeadPushError(workspaceName, slot, wsSource)
+	return push, nil
+}
+
+// pushPlanRefusal is a slot's push plan failure in the service's words: no
+// branch to push the slot's commits on, commits jj will not push, a base or
+// push remote that does not resolve. Any other failure is the version
+// control tool's.
+func pushPlanRefusal(err error, target vcs.Slot, workspaceName, slot, ref string, wsSource manifest.WorkspaceSource) error {
+	var unknownRemote *vcs.UnknownRemoteError
+	var noPushRemote *vcs.NoPushRemoteError
+	switch {
+	case errors.Is(err, vcs.ErrDetachedWithWork):
+		return detachedHeadPushError(workspaceName, slot, wsSource, target.Mode)
+	case errors.As(err, &unknownRemote):
+		return &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("source slot %q pushes to remote %q by its own configuration, but has no such remote; fix the slot's push remote, or publish it to a remote", slot, unknownRemote.Remote)}
+	case errors.As(err, &noPushRemote):
+		return &InvalidInputError{Field: "remote", Reason: fmt.Sprintf("source slot %q has no push remote to default to (%s); declare push_default, or publish it to a remote", slot, noPushRemote.Reason)}
+	case errors.Is(err, vcs.ErrBaseNotFound):
+		return baseNotFound(err, slot, wsSource.Source, target.BaseRef)
+	case errors.Is(err, vcs.ErrBranchExists):
+		// Only a push that publishes (a jj slot's) plans a branch to set.
+		return jjBranchExists(slot, cmp.Or(ref, wsSource.Branch), wsSource.Branch)
 	}
-	plan.upstream = wsSource.Branch
-	return plan, nil
+	if refusal := unpushableCommits(err, slot, wsSource.Source); refusal != nil {
+		return refusal
+	}
+	if refusal := branchTaken(err, slot); refusal != nil {
+		return refusal
+	}
+	if refusal := branchMoved(err, workspaceName, slot, wsSource.Source); refusal != nil {
+		return refusal
+	}
+	if refusal := readinessRefusal(err, target, vcs.VerbPush, workspaceName, slot, wsSource.Source); refusal != nil {
+		return refusal
+	}
+	return toolFailure(err, gitStep{action: "planning the push of", object: fmt.Sprintf("source slot %q", slot), slot: slot, source: wsSource.Source})
+}
+
+// baseNotFound is the refusal of a verb on slot whose base ref resolves
+// nowhere (vcs.ErrBaseNotFound).
+func baseNotFound(err error, slot, source, baseRef string) error {
+	hint := fmt.Sprintf("Check the base ref %q of source slot %q.", baseRef, slot)
+	return &OperationError{Code: CodePreconditionFailed, Slot: slot, Source: source, Hint: hint, Summary: fmt.Sprintf("source slot %q: %v. %s", slot, err, hint), Err: err}
 }
 
 // run carries out the push the plan decided.
-func (plan workspaceGitPush) run(ctx context.Context, client git.Client, path string) error {
-	switch {
-	case plan.skip != "":
-		logctx.From(ctx).Warn(plan.skip)
+func (push workspaceGitPush) run(ctx context.Context) error {
+	if push.skip != "" {
+		logctx.From(ctx).Warn(push.skip)
 		return nil
-	case plan.upstream != "":
-		return gitFailure(client.PushSetUpstream(ctx, path, plan.upstream), plan.step)
-	default:
-		return gitFailure(client.Push(ctx, path, plan.ref), plan.step)
 	}
+	err := push.driver.Push(ctx, push.target, push.plan)
+	if refusal := checkoutMoved(err, push.step.slot, push.step.source, "push"); refusal != nil {
+		return refusal
+	}
+	// A push made, but warned of (a jj slot's publish), is logged and done.
+	if warned := (*vcs.Warning)(nil); errors.As(err, &warned) {
+		logctx.From(ctx).Warn(fmt.Sprintf("source slot %q: %s", push.step.slot, warned.Text))
+		return nil
+	}
+	return gitFailure(err, push.step)
 }
 
-func detachedHeadPushError(workspaceName, slot string, wsSource manifest.WorkspaceSource) error {
+// detachedHeadPushError refuses a push of a slot that holds commits of its
+// own on no branch: a git checkout on a detached HEAD, or a jj slot whose
+// manifest names no branch and whose push names no ref, so its commits have
+// no bookmark to go under.
+func detachedHeadPushError(workspaceName, slot string, wsSource manifest.WorkspaceSource, mode string) error {
 	publish := fmt.Sprintf("angee workspace source publish %s %s --branch <name>", workspaceName, slot)
+	summary := fmt.Sprintf("source slot %q is on a detached HEAD, so there is no branch to push; publish it with `%s`", slot, publish)
+	if mode == vcs.ModeJJ {
+		summary = fmt.Sprintf("jj slot %q names no branch, so its commits have no bookmark to be pushed under; publish it with `%s`", slot, publish)
+	}
 	return &OperationError{
 		Code:      CodePreconditionFailed,
 		Cause:     CauseDetachedHead,
@@ -1447,39 +1609,31 @@ func detachedHeadPushError(workspaceName, slot string, wsSource manifest.Workspa
 		Slot:      slot,
 		Source:    wsSource.Source,
 		Hint:      fmt.Sprintf("Publish it with `%s`.", publish),
-		Summary:   fmt.Sprintf("source slot %q is on a detached HEAD, so there is no branch to push; publish it with `%s`", slot, publish),
+		Summary:   summary,
 	}
 }
 
-// workspaceGitSourceCommitsBeyondBase counts the slot's own commits: those
-// reachable from HEAD but from neither its base ref nor that ref's remote
-// counterpart (origin/<ref>). The cache's local base only moves on `source
-// pull`, while sync-base moves a slot to the remote one, so counting against
-// either alone would take the remote's commits for the slot's work. known is
-// false when the slot names no base or the count cannot be read; callers then
-// keep their previous behaviour.
-func workspaceGitSourceCommitsBeyondBase(ctx context.Context, client git.Client, path string, source manifest.Source, wsSource manifest.WorkspaceSource) (ahead int, base string, known bool) {
-	base = workspaceSourceBaseRef(source, wsSource)
-	if base == "" {
-		return 0, "", false
-	}
-	var bases []string
-	if client.RefExists(ctx, path, base) {
-		bases = append(bases, base)
-	}
-	if remote, err := client.SyncBaseRef(ctx, path, base); err == nil && remote != base {
-		bases = append(bases, remote)
-	}
-	if len(bases) == 0 {
-		return 0, base, false
-	}
-	ahead, err := client.CountNotOn(ctx, path, bases...)
-	if err != nil {
-		return 0, base, false
-	}
-	return ahead, base, true
-}
-
+// WorkspaceSyncBase brings each slot's base into it, through the slot's
+// driver: the slots whose manifest names a mode that syncs (a git worktree,
+// a jj slot); a slot with no mode is skipped, even a jj slot under `vcs: jj`
+// (owner, 2026-10-29, plan Q7). With no method each slot is synced its
+// driver's way, a git worktree by merging and a jj slot by rebasing (plan
+// D11); a method a slot's driver cannot sync by, such as a merge of a jj
+// slot, refuses the whole sync before any slot is read.
+//
+// Every slot is checked, fetched, has its base resolved and, when it is to
+// be rebased, what the rebase would rewrite checked (vcs.Driver.CheckRebase,
+// plan D12) before any is synced, so a refusal those checks make leaves no
+// slot changed. A slot's sync can still fail once earlier ones are synced:
+// its rebase checks again just before it runs, and git or jj can fail it.
+// That error names the slots already synced. A jj slot's conflict is recorded
+// in its commits and reported on its state, read from its status
+// (conflicted, conflict_paths), and the sync goes on to the next slot; a git
+// slot that stops on conflicts ends the sync with merge_conflict, as before.
+// What jj warned of while it synced a slot, and a failure to read what the
+// sync left, are on that slot's state (error), and the sync goes on.
+// A local source's jj store is the user's, so angee never fetches it: such a
+// slot is rebased onto its base as the store has it.
 func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (states []api.SourceState, err error) {
 	defer operation{name: "workspace.sync-base", title: fmt.Sprintf("Sync base for workspace %q", name), workspace: name}.annotate(&err)
 	ctx, release, err := p.beginMutation(ctx, "workspace")
@@ -1495,29 +1649,42 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 	if !ok {
 		return nil, &NotFoundError{Kind: "workspace", Name: name}
 	}
-	method = normalizeWorkspaceSyncBaseMethod(method)
-	if method == "" {
-		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", workspaceSyncBaseMerge, workspaceSyncBaseRebase)}
+	method, ok = normalizeWorkspaceSyncBaseMethod(method)
+	if !ok {
+		return nil, &InvalidInputError{Field: "method", Reason: fmt.Sprintf("workspace sync-base method must be %q or %q", vcs.SyncMerge, vcs.SyncRebase)}
 	}
-	// Check the slots are materialized first: the branch check reads git in
-	// each slot's path and would read an enclosing repository's branch.
-	targets, err := p.workspaceGitSlots(name, workspace, stack, manifest.WorkspaceSourceModeWorktree)
+	// Check the slots are materialized first: a driver's checks read each
+	// slot's path, and git would read an enclosing repository there.
+	targets, err := p.workspaceGitSlots(name, workspace, stack, true, manifest.WorkspaceSourceModeWorktree, manifest.WorkspaceSourceModeJJ)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
-		return nil, err
-	}
-	// Every slot must be able to sync before any is touched, so a refusal
-	// never leaves the workspace half-synced.
-	client := p.gitClient()
-	baseRefs := make([]string, len(targets))
+	// Each slot's driver resolves the method for it, before any slot is read.
+	drivers := make([]vcs.Driver, len(targets))
+	slots := make([]vcs.Slot, len(targets))
+	methods := make([]string, len(targets))
+	jjSlots := false
 	for i, target := range targets {
-		if err := requireCleanCheckout(ctx, client, target.path, fmt.Sprintf("source slot %q", target.slot), target.slot, target.wsSource.Source); err != nil {
+		drivers[i], slots[i] = p.workspaceSlotDriver(target.path, target.source, target.wsSource)
+		if methods[i], err = drivers[i].SyncMethod(method); err != nil {
+			return nil, syncMethodRefused(err, name, target.slot, target.wsSource.Source, method)
+		}
+		jjSlots = jjSlots || slots[i].Mode == vcs.ModeJJ
+	}
+	// A machine that cannot run jj slots says so, rather than fail a fetch.
+	if jjSlots {
+		if err := p.requireJJSlots(ctx); err != nil {
 			return nil, err
 		}
-		baseRefs[i] = workspaceSourceBaseRef(target.source, target.wsSource)
-		if baseRefs[i] == "" {
+	}
+	// Every slot must be able to sync before any is touched, so a refusal
+	// never leaves the workspace half-synced. What a slot needs for it is its
+	// driver's to say (vcs.Driver.Ready).
+	for i, target := range targets {
+		if err := requireSlotReady(ctx, drivers[i], slots[i], vcs.VerbSyncBase, name, target.slot, target.wsSource.Source); err != nil {
+			return nil, err
+		}
+		if slots[i].BaseRef == "" {
 			return nil, &OperationError{
 				Code:    CodePreconditionFailed,
 				Slot:    target.slot,
@@ -1527,56 +1694,146 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 			}
 		}
 	}
-	// Fetch every slot and resolve its base before merging any, so a remote
+	// Fetch every slot and resolve its base before syncing any, so a remote
 	// that fails or lacks the base refuses the sync with no slot changed.
 	syncRefs := make([]string, len(targets))
 	for i, target := range targets {
-		fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: originURL(ctx, client, target.path), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
-		if err := client.Fetch(ctx, target.path); err != nil {
-			return nil, gitFailure(err, fetch)
-		}
-		syncRef, err := client.SyncBaseRef(ctx, target.path, baseRefs[i])
-		if err != nil {
-			var command *git.CommandError
-			if errors.As(err, &command) {
-				return nil, gitFailure(err, gitStep{action: "resolving the base of", object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source})
+		if target.source.Kind == "git" {
+			fetch := gitStep{action: "fetching", object: fmt.Sprintf("source %q", target.wsSource.Source), remote: drivers[i].FetchURL(ctx, slots[i]), cause: CauseFetchFailed, slot: target.slot, source: target.wsSource.Source}
+			if err := drivers[i].Fetch(ctx, slots[i]); err != nil {
+				return nil, gitFailure(err, fetch)
 			}
-			hint := fmt.Sprintf("Check the base ref %q of source slot %q.", baseRefs[i], target.slot)
+		}
+		syncRef, err := drivers[i].ResolveBase(ctx, slots[i])
+		if errors.Is(err, vcs.ErrBaseNotFound) {
+			hint := fmt.Sprintf("Check the base ref %q of source slot %q.", slots[i].BaseRef, target.slot)
 			return nil, &OperationError{Code: CodePreconditionFailed, Slot: target.slot, Source: target.wsSource.Source, Hint: hint, Summary: fmt.Sprintf("source slot %q: %v. %s", target.slot, err, hint), Err: err}
+		} else if err != nil {
+			return nil, gitFailure(err, gitStep{action: "resolving the base of", object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source})
 		}
 		syncRefs[i] = syncRef
 	}
-	states = []api.SourceState{}
+	// Check what each rebase would rewrite before rebasing any (plan D12).
+	steps := make([]gitStep, len(targets))
 	for i, target := range targets {
-		step := gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
-		var err error
-		switch method {
-		case workspaceSyncBaseRebase:
-			step.action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
-			err = client.Rebase(ctx, target.path, syncRefs[i])
-		default:
-			err = client.Merge(ctx, target.path, syncRefs[i])
+		steps[i] = gitStep{action: fmt.Sprintf("merging %s into", syncRefs[i]), object: fmt.Sprintf("source slot %q", target.slot), slot: target.slot, source: target.wsSource.Source}
+		if methods[i] != vcs.SyncRebase {
+			continue
 		}
-		if err != nil {
-			return nil, syncConflictOrFailure(ctx, err, target.path, step)
+		steps[i].action = fmt.Sprintf("rebasing onto %s", syncRefs[i])
+		if err := drivers[i].CheckRebase(ctx, slots[i], syncRefs[i]); err != nil {
+			return nil, syncFailure(err, steps[i], name)
 		}
+	}
+	states = []api.SourceState{}
+	var synced []string
+	for i, target := range targets {
+		result, syncErr := drivers[i].SyncBase(ctx, slots[i], syncRefs[i], methods[i])
+		if syncErr != nil && !result.OK {
+			return nil, afterSynced(syncFailure(syncErr, steps[i], name), synced)
+		}
+		if result.Conflicted && !result.OK {
+			// The slot stopped mid-merge or mid-rebase (git).
+			return nil, afterSynced(syncConflict(result, steps[i]), synced)
+		}
+		synced = append(synced, target.slot)
 		state, err := p.workspaceSourceState(ctx, name, target.slot, stack, target.wsSource)
 		if err != nil {
 			return nil, err
+		}
+		// A conflict recorded in the slot's commits (jj) reaches its state
+		// through its status, as conflicted and conflict_paths. The slot
+		// synced, but what jj warned of, or a failure to read what the sync
+		// left, is on its state, and the sync goes on.
+		var warned *vcs.Warning
+		switch {
+		case syncErr == nil:
+		case errors.As(syncErr, &warned):
+			state.Error = joinNonEmpty(state.Error, fmt.Sprintf("synced, but jj warned while %s: %s", steps[i].action, warned.Text))
+		default:
+			state.Error = joinNonEmpty(state.Error, fmt.Sprintf("synced, but reading what %s left failed: %v", steps[i].action, syncErr))
 		}
 		states = append(states, state)
 	}
 	return states, nil
 }
 
-func normalizeWorkspaceSyncBaseMethod(method string) string {
-	switch strings.ToLower(strings.TrimSpace(method)) {
-	case "", workspaceSyncBaseMerge:
-		return workspaceSyncBaseMerge
-	case workspaceSyncBaseRebase:
-		return workspaceSyncBaseRebase
+// joinNonEmpty joins the non-empty of a and b with "; ".
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
+}
+
+// afterSynced makes err, the failure of a slot's sync, name the slots synced
+// before it, which it leaves synced: in the message, before the remedy, and
+// in the detail. err is an *OperationError, as syncFailure and syncConflict
+// return; anything else passes through.
+func afterSynced(err error, synced []string) error {
+	var opErr *OperationError
+	if len(synced) == 0 || !errors.As(err, &opErr) {
+		return err
+	}
+	quoted := make([]string, len(synced))
+	for i, slot := range synced {
+		quoted[i] = fmt.Sprintf("%q", slot)
+	}
+	noun := "source slot"
+	if len(synced) > 1 {
+		noun = "source slots"
+	}
+	note := fmt.Sprintf("%s %s synced before it, and stay synced.", noun, strings.Join(quoted, ", "))
+	if opErr.Summary == "" {
+		opErr.Summary = opErr.Error()
+	}
+	opErr.Summary += " " + note
+	opErr.Detail = joinNonEmpty(note, opErr.Detail)
+	return opErr
+}
+
+// syncFailure is a slot's sync failure in the service's words: a rebase that
+// would rewrite what is not the slot's to rewrite is its refusal
+// (rebaseRefusal), and anything else the failure of step.
+func syncFailure(err error, step gitStep, workspaceName string) error {
+	if refusal := rebaseRefusal(err, workspaceName, step.slot, step.source); refusal != nil {
+		return refusal
+	}
+	return gitFailure(err, step)
+}
+
+// syncMethodRefused is the refusal of a sync-base method a slot's driver
+// cannot sync by (vcs.Driver.SyncMethod), such as a merge of a jj slot (plan
+// D11): rebasing instead of the merge asked for would be worse than
+// refusing, so no slot is touched.
+func syncMethodRefused(err error, workspaceName, slot, source, method string) error {
+	if !errors.Is(err, vcs.ErrUnsupported) {
+		return err
+	}
+	hint := "Sync by rebase, or pass no method: each slot is then synced its own way, a git slot by merging and a jj slot by rebasing."
+	return &OperationError{
+		Code:      CodeInvalidInput,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Hint:      hint,
+		Summary:   fmt.Sprintf("source slot %q cannot be synced by %s (%v). %s", slot, method, err, hint),
+		Err:       err,
+	}
+}
+
+// normalizeWorkspaceSyncBaseMethod reads a requested sync-base method. No
+// method is vcs.SyncDefault, which each slot's driver resolves to its own
+// natural sync (vcs.Driver.SyncMethod; git: a merge).
+func normalizeWorkspaceSyncBaseMethod(method string) (string, bool) {
+	switch method = strings.ToLower(strings.TrimSpace(method)); method {
+	case vcs.SyncDefault, vcs.SyncMerge, vcs.SyncRebase:
+		return method, true
 	default:
-		return ""
+		return "", false
 	}
 }
 
@@ -1609,17 +1866,28 @@ func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.Source
 		Pushed:         status.Pushed,
 		UnpushedReason: status.UnpushedReason,
 		Error:          status.Error,
+		JJSlotState:    status.JJSlotState,
 	}
 }
 
+// workspaceSourceCleanupEntry is one slot a create or repair cut: the guard on
+// its path and, for a git or jj slot, the slot as its driver was handed it,
+// so a rollback removes it through the same driver.
 type workspaceSourceCleanupEntry struct {
-	dest      *copierx.GuardedPath
-	cachePath string
+	dest   *copierx.GuardedPath
+	driver vcs.Driver // nil for a local source's link
+	slot   vcs.Slot
+	// kept marks a jj slot --sync found in place and left as it was, which a
+	// rollback leaves too.
+	kept bool
+	// emptyDir, when set, is the mode of the empty directory that was at the
+	// path before a jj slot was made in it, which a rollback puts back: jj
+	// makes the slot in place, so removing the slot removes that directory.
+	emptyDir fs.FileMode
 }
 
 type workspaceSourceCleanup struct {
-	entries   []workspaceSourceCleanupEntry
-	gitClient git.Client
+	entries []workspaceSourceCleanupEntry
 }
 
 func (c *workspaceSourceCleanup) Close() error {
@@ -1636,26 +1904,26 @@ func (c *workspaceSourceCleanup) Close() error {
 	return result
 }
 
+// Rollback removes the slots in the reverse of the order they were cut, and
+// the parent directories their guards created. A slot that was kept stays,
+// and an empty directory a jj slot was made in is put back.
 func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
 	var result error
-	prune := map[string]struct{}{}
 	for index := len(c.entries) - 1; index >= 0; index-- {
 		entry := c.entries[index]
-		if err := entry.dest.RemoveAll(); err != nil && result == nil {
+		if entry.kept {
+			continue
+		}
+		if err := removeWorkspaceSlot(ctx, entry.driver, entry.slot, entry.dest); err != nil && result == nil {
+			result = err
+		}
+		if err := restoreEmptyDir(entry.dest, entry.emptyDir); err != nil && result == nil {
 			result = err
 		}
 		if err := entry.dest.RemoveMissingParents(); err != nil && result == nil {
-			result = err
-		}
-		if entry.cachePath != "" {
-			prune[entry.cachePath] = struct{}{}
-		}
-	}
-	for cachePath := range prune {
-		if err := c.gitClient.WorktreePrune(ctx, cachePath); err != nil && result == nil {
 			result = err
 		}
 	}
@@ -1665,9 +1933,52 @@ func (c *workspaceSourceCleanup) Rollback(ctx context.Context) error {
 	return result
 }
 
+// removeWorkspaceSlot removes the slot at dest: a git or jj slot through its
+// driver, under its primary's lock when it has one, and a local source's
+// link (no driver) by removing the link.
+//
+// Only what the primary keeps of the slot needs its lock, not the slot's own
+// path. When the lock cannot be taken (another process holds it past the
+// rollback's deadline or ANGEE_LOCK_TIMEOUT), the slot is still removed
+// through dest, and the primary keeps its git registration until its next
+// prune. A jj slot's name is not pruned, so it is forgotten once the
+// directory is gone, which needs no lock (removeJJSlotUnlocked); otherwise
+// the name would stay taken and refuse the next create of the slot.
+func removeWorkspaceSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath) error {
+	switch {
+	case driver == nil:
+		return dest.RemoveAll()
+	case slot.Primary == "":
+		return driver.Remove(ctx, slot, dest)
+	}
+	err := withPrimaryLock(ctx, slot.Primary, func() error { return driver.Remove(ctx, slot, dest) })
+	if !errors.Is(err, errPrimaryLockNotHeld) {
+		return err
+	}
+	logctx.From(ctx).Warn(fmt.Sprintf("removing %s without deregistering it from source cache %s (%v); the cache drops the registration when it is next pruned", slot.Path, slot.Primary, err))
+	if slot.Mode == vcs.ModeJJ {
+		return removeJJSlotUnlocked(ctx, driver, slot, dest)
+	}
+	return dest.RemoveAll()
+}
+
+// slotCleanupTimeout bounds the removal of one slot by a destroy, which runs
+// on a context the request cannot cancel.
+const slotCleanupTimeout = 30 * time.Second
+
+// restoreEmptyDir puts back the empty directory a jj slot was made in, once
+// the slot is removed, with the permissions of mode, the directory's mode as
+// Lstat read it; 0 means there was none.
+func restoreEmptyDir(dest *copierx.GuardedPath, mode fs.FileMode) error {
+	if mode == 0 {
+		return nil
+	}
+	return dest.MkdirAll(mode)
+}
+
 func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int, sync bool) (map[string]manifest.WorkspaceSource, *workspaceSourceCleanup, error) {
 	result := map[string]manifest.WorkspaceSource{}
-	cleanup := &workspaceSourceCleanup{gitClient: p.gitClient()}
+	cleanup := &workspaceSourceCleanup{}
 	items := []workspaceSourceMaterialization{}
 	for _, slot := range sortedKeys(metadata.Sources) {
 		spec := metadata.Sources[slot]
@@ -1689,6 +2000,9 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 				return nil, cleanup, err
 			}
 			if source.Kind != "" {
+				if err := manifest.ValidateSource(sourceName, source); err != nil {
+					return nil, cleanup, fmt.Errorf("workspace source %q: %w", slot, err)
+				}
 				if stack.Sources == nil {
 					stack.Sources = map[string]manifest.Source{}
 				}
@@ -1706,7 +2020,7 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
-		if err := checkWorkspaceSlotBase(workspaceName, slot, source, resolved); err != nil {
+		if err := checkWorkspaceSlotBase(workspaceName, slot, source, resolved, stack.EffectiveSourceMode(resolved)); err != nil {
 			return nil, cleanup, err
 		}
 		if resolved.Subpath == "" {
@@ -1728,13 +2042,20 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	if err != nil {
 		return nil, cleanup, err
 	}
+	jjTargets, err := p.jjSlotTargets(ctx, stack, workspaceName, items)
+	if err != nil {
+		return nil, cleanup, err
+	}
 	for _, item := range orderedItems {
 		dest := filepath.Join(workspacePath, filepath.FromSlash(item.resolved.Subpath))
 		finish := logctx.Step(ctx, "materializing source "+item.sourceName)
-		if err := p.materializeWorkspaceSlot(ctx, cleanup, item.source, item.resolved, dest, sync); err != nil {
+		// The record keeps the mode as written; the slot is cut in the mode
+		// it is checked out in.
+		if err := p.materializeWorkspaceSlot(ctx, cleanup, item.source, withEffectiveMode(stack, item.resolved), dest, sync, jjTargets[item.slot]); err != nil {
 			if item.optional {
 				// An optional source that cannot be materialized is skipped by
 				// design, so the phase completes normally rather than as a failure.
+				logctx.From(ctx).Warn(fmt.Sprintf("skipping optional source slot %q: %v", item.slot, err))
 				finish(nil)
 				continue
 			}
@@ -1745,6 +2066,12 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			return result, cleanup, err
 		}
 		finish(nil)
+		// A slot that names no mode follows a vcs: record the one it was cut
+		// with, so a later change of the stack's vcs does not read it as
+		// another kind of checkout (plan phase 9, the gap phase 6 left).
+		if item.resolved.Mode == "" && item.resolved.VCS == "" {
+			item.resolved.VCS = stack.SlotVCS()
+		}
 		result[item.slot] = item.resolved
 	}
 	return result, cleanup, nil
@@ -1753,9 +2080,15 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 // checkWorkspaceSlotBase rejects a slot that has nothing to start from, before
 // anything is materialized. A worktree without a branch is detached at its
 // base; with no base it would detach at whatever the cache has checked out,
-// and nothing would record where its work starts.
-func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource) error {
-	if source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree && ws.Branch == "" && ws.Ref == "" && source.DefaultRef == "" {
+// and nothing would record where its work starts. A jj slot starts on its
+// branch's bookmark only when that exists, so it always needs a base. mode is
+// the slot's effective mode (manifest.Stack.EffectiveSourceMode).
+func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource, mode string) error {
+	noBase := ws.Ref == "" && source.DefaultRef == ""
+	if mode == manifest.WorkspaceSourceModeJJ && noBase {
+		return fmt.Errorf("workspace %q source %q: a jj slot needs a ref or the source's default_ref to start from", workspaceName, slot)
+	}
+	if source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree && ws.Branch == "" && noBase {
 		return fmt.Errorf("workspace %q source %q: a worktree without a branch needs a ref or the source's default_ref to start from", workspaceName, slot)
 	}
 	return nil
@@ -1764,10 +2097,12 @@ func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, 
 // materializeWorkspaceSlot cuts one source slot at dest and records what it
 // created in cleanup, so the caller can roll it back with the rest of its
 // work. It is the one step that materializes a slot, for WorkspaceCreate and
-// WorkspaceRepair alike. On failure it records nothing; materializeWorkspaceSource
-// removes what it staged or installed at dest before returning.
-func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *workspaceSourceCleanup, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool) error {
-	entry, err := p.materializeWorkspaceSource(ctx, ws.Source, source, ws, dest, sync)
+// WorkspaceRepair alike. ws's mode is the effective one, and jj is the jj
+// workspace a jj slot is made as. On failure it records nothing;
+// materializeWorkspaceSource removes what it staged or installed at dest
+// before returning.
+func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *workspaceSourceCleanup, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool, jj jjSlotTarget) error {
+	entry, err := p.materializeWorkspaceSource(ctx, ws.Source, source, ws, dest, sync, jj)
 	if err != nil {
 		return err
 	}
@@ -1776,10 +2111,24 @@ func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *worksp
 }
 
 // removeWorkspaceSources removes only source destinations materialized for the
-// workspace and prunes registrations for linked worktrees. Every destination
-// is removed through a stack-rooted capability; per-source cleanup is best effort.
-func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspacePath string, sources map[string]manifest.WorkspaceSource) {
-	type materializedSource struct{ cachePath, dest string }
+// workspace: git and jj slots through their drivers, which also deregister
+// linked worktrees from their caches and forget jj workspaces, and local
+// links directly. Every destination is removed through a stack-rooted
+// capability; per-source cleanup is best effort. A jj slot's workspace is
+// forgotten only when the checkout at its path is that workspace
+// (destroyedJJSlot), so a name another checkout now has, such as another
+// stack's of the same name, is never forgotten; otherwise the slot is removed
+// from disk only, with a warning. Destroy calls it once the manifest no
+// longer records the workspace, so each slot is removed on a context of its
+// own, as a rollback's is: a request cancelled now would otherwise fail the
+// read that tells whose a jj slot's name is, and leave the name taken.
+func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, sources map[string]manifest.WorkspaceSource) {
+	ctx = context.WithoutCancel(ctx)
+	type materializedSource struct {
+		dest   string
+		driver vcs.Driver // nil for a local source's link
+		slot   vcs.Slot
+	}
 	var materialized []materializedSource
 	for slot, ws := range sources {
 		subpath := ws.Subpath
@@ -1787,33 +2136,50 @@ func (p *Platform) removeWorkspaceSources(ctx context.Context, stack *manifest.S
 			subpath = slot
 		}
 		item := materializedSource{dest: filepath.Join(workspacePath, filepath.FromSlash(subpath))}
-		if source, ok := stack.Sources[ws.Source]; ok && source.Kind == "git" && ws.Mode == manifest.WorkspaceSourceModeWorktree {
-			item.cachePath = p.sourcePath(ws.Source, source)
+		ws = withEffectiveMode(stack, ws)
+		source, ok := stack.Sources[ws.Source]
+		switch {
+		case !ok:
+		case ws.Mode == manifest.WorkspaceSourceModeJJ:
+			jjSlot := p.workspaceLifecycleSlot(item.dest, source, ws)
+			driver := p.slotDriver(jjSlot)
+			jj, isJJ := driver.(jjLifecycle)
+			if !isJJ {
+				break
+			}
+			slotCtx, cancel := context.WithTimeout(ctx, slotCleanupTimeout)
+			named, held := p.destroyedJJSlot(slotCtx, jj, stack, workspaceName, slot, jjSlot)
+			cancel()
+			if held {
+				item.slot, item.driver = named, driver
+			} else {
+				logctx.From(ctx).Warn(fmt.Sprintf("removing jj slot %s without forgetting a jj workspace: it is no checkout of %s this stack made", item.dest, jjSlot.Primary))
+			}
+		case source.Kind == "git":
+			item.slot = p.workspaceLifecycleSlot(item.dest, source, ws)
+			item.driver = p.slotDriver(item.slot)
 		}
 		materialized = append(materialized, item)
 	}
 	// Remove deepest paths first so a source rooted at the workspace does not
-	// erase nested destinations before their worktree registrations are pruned.
+	// erase nested destinations before their own drivers remove them.
 	sort.Slice(materialized, func(i, j int) bool { return len(materialized[i].dest) > len(materialized[j].dest) })
-	client := p.gitClient()
-	prune := map[string]struct{}{}
 	for _, item := range materialized {
-		if item.cachePath != "" {
-			prune[item.cachePath] = struct{}{}
-		}
 		rel, err := filepath.Rel(p.root, item.dest)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}
 		dest, err := copierx.OpenGuardedPath(p.root, p.root, filepath.ToSlash(rel), nil)
 		if err != nil {
+			logctx.From(ctx).Warn(fmt.Sprintf("leaving source slot %s for the workspace's removal: %v", item.dest, err))
 			continue
 		}
-		_ = dest.RemoveAll()
+		slotCtx, cancel := context.WithTimeout(ctx, slotCleanupTimeout)
+		if err := removeWorkspaceSlot(slotCtx, item.driver, item.slot, dest); err != nil {
+			logctx.From(ctx).Warn(fmt.Sprintf("removing source slot %s: %v", item.dest, err))
+		}
+		cancel()
 		_ = dest.Close()
-	}
-	for cachePath := range prune {
-		_ = client.WorktreePrune(ctx, cachePath)
 	}
 }
 
@@ -1851,15 +2217,37 @@ func resolveWorkspaceTemplateSource(spec copierx.TemplateSource, inputs map[stri
 	if err != nil {
 		return manifest.Source{}, err
 	}
+	pushDefault, err := substitute.Resolve(spec.PushDefault, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	var remotes map[string]manifest.SourceRemote
+	for name, declared := range spec.Remotes {
+		remote := manifest.SourceRemote{Canonical: declared.Canonical}
+		if remote.URL, err = substitute.Resolve(declared.URL, ctx); err != nil {
+			return manifest.Source{}, fmt.Errorf("remote %q url: %w", name, err)
+		}
+		for _, pattern := range declared.Branches {
+			resolved, err := substitute.Resolve(pattern, ctx)
+			if err != nil {
+				return manifest.Source{}, fmt.Errorf("remote %q branches: %w", name, err)
+			}
+			remote.Branches = append(remote.Branches, resolved)
+		}
+		if remotes == nil {
+			remotes = map[string]manifest.SourceRemote{}
+		}
+		remotes[name] = remote
+	}
 	if kind == "" {
 		switch {
-		case repo != "":
+		case repo != "" || len(remotes) > 0:
 			kind = "git"
 		case path != "":
 			kind = "local"
 		}
 	}
-	return manifest.Source{Kind: kind, Repo: repo, URL: url, Path: path, DefaultRef: defaultRef, CachePath: cachePath}, nil
+	return manifest.Source{Kind: kind, Repo: repo, Remotes: remotes, PushDefault: pushDefault, URL: url, Path: path, DefaultRef: defaultRef, CachePath: cachePath}, nil
 }
 
 func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceName string, inputs map[string]string, workspaceName string, alloc map[string]int) (manifest.WorkspaceSource, error) {
@@ -1889,7 +2277,7 @@ func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceNam
 	return manifest.WorkspaceSource{Source: sourceName, Mode: mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
 }
 
-func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool) (*workspaceSourceCleanupEntry, error) {
+func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool, jj jjSlotTarget) (*workspaceSourceCleanupEntry, error) {
 	rel, err := filepath.Rel(p.root, dest)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("workspace source destination %q escapes stack root", dest)
@@ -1904,16 +2292,18 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 			_ = destGuard.Close()
 		}
 	}()
-	complete := func(cachePath string) (*workspaceSourceCleanupEntry, error) {
+	complete := func(driver vcs.Driver, slot vcs.Slot) (*workspaceSourceCleanupEntry, error) {
 		retainGuard = true
-		return &workspaceSourceCleanupEntry{dest: destGuard, cachePath: cachePath}, nil
+		return &workspaceSourceCleanupEntry{dest: destGuard, driver: driver, slot: slot}, nil
 	}
+	jjSlot := ws.Mode == manifest.WorkspaceSourceModeJJ
 	destExists, destEmpty := false, false
+	var destMode fs.FileMode
 	if info, exists, err := destGuard.Lstat(); err != nil {
 		return nil, err
 	} else if exists {
-		destExists = true
-		if source.Kind != "git" || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		destExists, destMode = true, info.Mode()
+		if (source.Kind != "git" && !jjSlot) || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return nil, fmt.Errorf("workspace source destination %s already exists", dest)
 		}
 		empty, err := destGuard.IsEmptyDirectory()
@@ -1922,150 +2312,57 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		}
 		destEmpty = empty
 		// A non-empty leftover only blocks the create when we are not asked to
-		// reconcile it; with sync, a worktree source reclaims the path below.
-		if !empty && (!sync || ws.Mode != manifest.WorkspaceSourceModeWorktree) {
+		// reconcile it; with sync, a worktree source reclaims the path below,
+		// and a jj source keeps its own checkout there.
+		if !empty && (!sync || (ws.Mode != manifest.WorkspaceSourceModeWorktree && !jjSlot)) {
 			return nil, fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
 		}
 	}
-	switch source.Kind {
-	case "git":
-		if ws.Mode == manifest.WorkspaceSourceModeWorktree {
-			cachePath := p.sourcePath(sourceName, source)
-			insideDest, err := sameOrNestedPath(dest, cachePath)
+	switch {
+	case jjSlot:
+		driver, slot, kept, err := p.materializeJJSlot(ctx, destGuard, sourceName, source, ws, dest, jj, destExists && !destEmpty, sync)
+		if !destEmpty {
+			destMode = 0
+		}
+		if err != nil {
+			// jj makes a slot in place, so a failed add removed the empty
+			// directory it was made in; put it back, as a failed git add
+			// leaves it.
+			return nil, errors.Join(err, restoreEmptyDir(destGuard, destMode))
+		}
+		entry, _ := complete(driver, slot)
+		entry.kept, entry.emptyDir = kept, destMode
+		return entry, nil
+	case source.Kind == "git":
+		slot := p.workspaceLifecycleSlot(dest, source, ws)
+		driver := p.slotDriver(slot)
+		if slot.Mode == vcs.ModeWorktree {
+			insideDest, err := sameOrNestedPath(dest, slot.Primary)
 			if err != nil {
 				return nil, err
 			}
 			if insideDest {
-				return nil, fmt.Errorf("workspace source cache path %s cannot be inside destination %s", cachePath, dest)
+				return nil, fmt.Errorf("workspace source cache path %s cannot be inside destination %s", slot.Primary, dest)
 			}
-			if err := p.materializeSource(ctx, sourceName, source, true); err != nil {
+			if err := withPrimaryLock(ctx, slot.Primary, func() error {
+				return p.addWorktreeSlot(ctx, driver, slot, destGuard, sourceName, source, destExists && !destEmpty)
+			}); err != nil {
 				return nil, err
 			}
-			client := p.gitClient()
-			ref := ws.Ref
-			if ref == "" {
-				ref = source.DefaultRef
-			}
-			registered, err := client.WorktreeRegistered(ctx, cachePath, dest)
-			if err != nil {
-				return nil, err
-			}
-			if destExists && !destEmpty {
-				if !registered {
-					return nil, fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
-				}
-				if err := destGuard.RemoveAll(); err != nil {
-					return nil, err
-				}
-				if err := client.WorktreePrune(ctx, cachePath); err != nil {
-					return nil, err
-				}
-				destExists = false
-			} else if registered {
-				if destExists {
-					if err := destGuard.RemoveAll(); err != nil {
-						return nil, err
-					}
-					destExists = false
-				}
-				if err := client.WorktreePrune(ctx, cachePath); err != nil {
-					return nil, err
-				}
-			}
-
-			stageRoot, err := os.MkdirTemp("", "angee-worktree-stage-*")
-			if err != nil {
-				return nil, err
-			}
-			defer func() { _ = os.RemoveAll(stageRoot) }()
-			stage := filepath.Join(stageRoot, "source")
-			installed := false
-			defer func() {
-				if !installed {
-					_ = os.RemoveAll(stage)
-					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-					_ = client.WorktreePrune(cleanupCtx, cachePath)
-					cancel()
-				}
-			}()
-			useExisting := ws.Branch != "" && client.RefExists(ctx, cachePath, "refs/heads/"+ws.Branch)
-			if useExisting {
-				logctx.From(ctx).Warn(fmt.Sprintf("branch %q already exists in %s; checking it out into worktree without creating a new branch", ws.Branch, cachePath))
-			}
-			// The cache is cloned on its default ref only, so another base may
-			// exist only as origin/<ref>. Start from that explicitly: given the
-			// bare name, git creates and checks out a local tracking branch of
-			// that name (even with -b), and --detach refuses it.
-			start, startIsRemote := ref, false
-			if ref != "" && !client.RefExists(ctx, cachePath, ref) {
-				if remote, err := client.SyncBaseRef(ctx, cachePath, ref); err == nil && remote != ref {
-					start, startIsRemote = remote, true
-				}
-			}
-			addWorktree := func() error {
-				switch {
-				case ws.Branch == "":
-					// A slot without a branch starts detached at its base, so an
-					// untouched slot never leaves a branch behind; publish
-					// creates the branch. Without --detach git would check out
-					// ref itself, failing when the cache has it checked out.
-					return client.WorktreeAddDetached(ctx, cachePath, stage, start)
-				case useExisting:
-					return client.WorktreeAdd(ctx, cachePath, stage, ws.Branch)
-				default:
-					// A branch cut from a remote-tracking ref would track it, and
-					// a push would then aim at the base branch.
-					return client.WorktreeAddBranch(ctx, cachePath, stage, ws.Branch, start, !startIsRemote)
-				}
-			}
-			if err := addWorktree(); err != nil {
-				return nil, err
-			}
-			if destExists {
-				if err := destGuard.RemoveAll(); err != nil {
-					return nil, err
-				}
-			}
-			if err := destGuard.ReplaceFrom(ctx, stage); err != nil {
-				return nil, err
-			}
-			if err := destGuard.VerifyPathIdentity(dest); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			if err := repairStagedWorktreeRegistration(stage, dest, cachePath); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			if err := os.RemoveAll(stage); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			if err := destGuard.VerifyPathIdentity(dest); err != nil {
-				_ = destGuard.RemoveAll()
-				return nil, err
-			}
-			installed = true
-			return complete(cachePath)
+			return complete(driver, slot)
 		}
-		ref := ws.Ref
-		if ref == "" {
-			ref = source.DefaultRef
+		// A clone slot is a repository of its own, so it gets the source's
+		// remotes as the cache does, the canonical push block included, before
+		// it is installed. Fresh mode only writes, so the holder needs only the
+		// source for errors.
+		configure := func(ctx context.Context, checkout string) error {
+			return syncSourceRemotes(ctx, p.gitClient(), remoteHolder{source: sourceName}, checkout, source, remoteSyncFresh)
 		}
-		stageRoot, err := os.MkdirTemp("", "angee-clone-stage-*")
-		if err != nil {
+		if err := driver.Add(ctx, slot, destGuard, configure); err != nil {
 			return nil, err
 		}
-		defer func() { _ = os.RemoveAll(stageRoot) }()
-		stage := filepath.Join(stageRoot, "source")
-		if err := p.gitClient().CloneRef(ctx, source.Repo, stage, ref); err != nil {
-			return nil, err
-		}
-		if err := destGuard.ReplaceFrom(ctx, stage); err != nil {
-			return nil, err
-		}
-		return complete("")
-	case "local":
+		return complete(driver, slot)
+	case source.Kind == "local":
 		target, err := workspaceLocalSymlinkTarget(p.sourcePath(sourceName, source), dest)
 		if err != nil {
 			return nil, err
@@ -2073,48 +2370,34 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		if err := destGuard.Symlink(target); err != nil {
 			return nil, err
 		}
-		return complete("")
+		return complete(nil, vcs.Slot{})
 	default:
 		return nil, fmt.Errorf("workspace source kind %q is not implemented", source.Kind)
 	}
 }
 
-func repairStagedWorktreeRegistration(stage, dest, cachePath string) error {
-	pointer, err := os.ReadFile(filepath.Join(stage, ".git"))
-	if err != nil {
-		return fmt.Errorf("read staged worktree gitdir: %w", err)
+// addWorktreeSlot cuts a worktree slot under its cache's primary lock: it
+// refreshes the cache, settles what an earlier create left at the slot path,
+// and has the driver add the worktree. A worktree the cache still lists at
+// the path is a leftover, deregistered with whatever is left of its checkout
+// (populated reaches here only with --sync). A populated directory the cache
+// does not list is not a leftover, and is refused.
+func (p *Platform) addWorktreeSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath, sourceName string, source manifest.Source, populated bool) error {
+	if err := p.materializeSourceLocked(ctx, sourceName, source, true); err != nil {
+		return err
 	}
-	line := strings.TrimSpace(string(pointer))
-	if !strings.HasPrefix(line, "gitdir: ") {
-		return fmt.Errorf("staged worktree .git has invalid gitdir pointer")
-	}
-	adminPath := strings.TrimSpace(strings.TrimPrefix(line, "gitdir: "))
-	if !filepath.IsAbs(adminPath) {
-		adminPath = filepath.Join(stage, adminPath)
-	}
-	adminPath, err = filepath.EvalSymlinks(adminPath)
-	if err != nil {
-		return fmt.Errorf("resolve staged worktree gitdir: %w", err)
-	}
-	worktreesRoot, err := filepath.EvalSymlinks(filepath.Join(cachePath, ".git", "worktrees"))
-	if err != nil {
-		return fmt.Errorf("resolve worktree administration root: %w", err)
-	}
-	contained, err := sameOrNestedPath(worktreesRoot, adminPath)
-	if err != nil || !contained || filepath.Clean(adminPath) == filepath.Clean(worktreesRoot) {
-		return fmt.Errorf("staged worktree gitdir %q escapes administration root %q", adminPath, worktreesRoot)
-	}
-	controlPath := filepath.Join(adminPath, "gitdir")
-	rel, err := filepath.Rel(worktreesRoot, controlPath)
+	registered, err := driver.Exists(ctx, slot)
 	if err != nil {
 		return err
 	}
-	control, err := copierx.OpenGuardedPath(worktreesRoot, worktreesRoot, filepath.ToSlash(rel), nil)
-	if err != nil {
-		return fmt.Errorf("open worktree administration link: %w", err)
+	if registered {
+		if err := driver.Remove(ctx, slot, dest); err != nil {
+			return err
+		}
+	} else if populated {
+		return fmt.Errorf("workspace source destination %s already exists and is not empty", slot.Path)
 	}
-	defer func() { _ = control.Close() }()
-	return control.WriteFile([]byte(filepath.Join(dest, ".git")+"\n"), 0o644)
+	return driver.Add(ctx, slot, dest, nil)
 }
 
 func normalizeWorkspaceSubpath(subpath string) (string, error) {
@@ -2186,182 +2469,6 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 		return "", fmt.Errorf("local source symlink target: %w", err)
 	}
 	return target, nil
-}
-
-// chainTemplateSnapshotRoot returns the workspace-relative directory to
-// snapshot for a chain template ref, plus the template's location inside the
-// snapshot.
-//
-// A template that reaches outside its own directory — typically to include a
-// sibling collection entry, as `stacks/dev` does with
-// `{% include "../_shared/AGENTS.md.jinja" %}` — declares how far it reaches
-// via `_angee.include_root`, and that ancestor is snapshotted instead of the
-// template directory alone so the include still resolves from the pinned copy.
-// The default is the template directory, so a self-contained template pins
-// exactly itself. Angee deliberately does not infer this from directory names:
-// how a template collection is laid out is the collection author's business,
-// not a vocabulary this repo should carry.
-//
-// include_root must name an ancestor of the template and must stay inside the
-// workspace. Escaping the workspace, or resolving to the workspace root itself,
-// is rejected: a chain entry should pin its own template material, not the
-// whole tree it happens to live in. Note that the workspace is the only bound —
-// a template inside a materialized source can legitimately declare a root that
-// pins that whole checkout, which is the author's cost to pay and is called out
-// in docs/guide/templates.md.
-func chainTemplateSnapshotRoot(clean, includeRoot string) (snapshotRoot, templateSubpath string, err error) {
-	// The workspace root is out of bounds however it is reached: normalizing a
-	// ref like `.` or `a/..` lands here too, not just an over-reaching
-	// declaration.
-	if clean == "." {
-		return "", "", fmt.Errorf("chain template ref resolves to the workspace root, which is more than a chain entry may pin")
-	}
-	includeRoot = strings.TrimSpace(includeRoot)
-	if includeRoot == "" || includeRoot == "." {
-		return clean, ".", nil
-	}
-	if slashpath.IsAbs(includeRoot) {
-		return "", "", fmt.Errorf("_angee.include_root %q must be relative to the template", includeRoot)
-	}
-	root := slashpath.Join(clean, includeRoot)
-	if root == ".." || strings.HasPrefix(root, "../") {
-		return "", "", fmt.Errorf("_angee.include_root %q escapes the workspace", includeRoot)
-	}
-	if root == "." {
-		return "", "", fmt.Errorf("_angee.include_root %q resolves to the workspace root, which is more than a chain entry may pin", includeRoot)
-	}
-	if root == clean {
-		return clean, ".", nil
-	}
-	if !strings.HasPrefix(clean, root+"/") {
-		return "", "", fmt.Errorf("_angee.include_root %q is not an ancestor of the template", includeRoot)
-	}
-	return root, strings.TrimPrefix(clean, root+"/"), nil
-}
-
-// verifiedSnapshotTemplatePath resolves a template subpath inside a chain
-// template snapshot. SnapshotDirectory copies symlinks verbatim, so joining
-// the subpath lexically could traverse one and hand copier-go a template root
-// outside the snapshot — copier-go's own containment check is lexical against
-// that root and would not notice. Re-guarding inside the private snapshot
-// directory restores the per-component containment the outer guard covered
-// before the collection root became the snapshot root.
-func verifiedSnapshotTemplatePath(snapshot, templateSubpath string) (string, error) {
-	path := filepath.Join(snapshot, filepath.FromSlash(templateSubpath))
-	if templateSubpath == "." {
-		return path, nil
-	}
-	guard, err := copierx.OpenGuardedPath(snapshot, snapshot, templateSubpath, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = guard.Close() }()
-	info, exists, err := guard.Lstat()
-	if err != nil {
-		return "", err
-	}
-	if !exists || !info.IsDir() {
-		return "", fmt.Errorf("template subpath %q is not a directory", templateSubpath)
-	}
-	if err := guard.VerifyPathIdentity(path); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-// verifySnapshotIncludeRoot checks that a chain template snapshot's own
-// copier.yml declares the include_root the snapshot was taken for. The render
-// reads `_angee.include_root` from the snapshot and widens copier-go's include
-// sandbox to it, so a larger root written into the workspace between the
-// guarded read and SnapshotDirectory would let includes read outside the
-// snapshot. The snapshot is private once taken, so this read is the last one
-// that can differ.
-func verifySnapshotIncludeRoot(snapshot, templateSubpath, includeRoot string) error {
-	config, err := copierx.OpenGuardedPath(snapshot, snapshot, slashpath.Join(templateSubpath, "copier.yml"), nil)
-	if err != nil {
-		return err
-	}
-	data, _, exists, err := config.ReadRegularFile()
-	_ = config.Close()
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("copier.yml changed while the template was being pinned")
-	}
-	metadata, err := copierx.ParseMetadata(data)
-	if err != nil {
-		return err
-	}
-	if cleanIncludeRoot(metadata.IncludeRoot) != cleanIncludeRoot(includeRoot) {
-		return fmt.Errorf("_angee.include_root changed from %q to %q while the template was being pinned", includeRoot, metadata.IncludeRoot)
-	}
-	return nil
-}
-
-func cleanIncludeRoot(includeRoot string) string {
-	includeRoot = strings.TrimSpace(includeRoot)
-	if includeRoot == "" {
-		return "."
-	}
-	return slashpath.Clean(includeRoot)
-}
-
-func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspacePath, ref string, allowedSymlinkParents map[string]*copierx.TrustedRoot) (string, string, func() error, error) {
-	if ref != "" && !filepath.IsAbs(ref) && !isRemoteTemplateRef(ref) {
-		clean, err := normalizeWorkspaceSubpath(ref)
-		if err != nil {
-			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-		}
-		configPath := filepath.ToSlash(filepath.Join(filepath.FromSlash(clean), "copier.yml"))
-		config, err := copierx.OpenGuardedPath(p.root, workspacePath, configPath, allowedSymlinkParents)
-		if err != nil {
-			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-		}
-		configData, _, exists, readErr := config.ReadRegularFile()
-		_ = config.Close()
-		if readErr != nil {
-			return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, readErr)
-		}
-		if exists {
-			// Reuse the bytes the guarded probe already read. Reopening by
-			// pathname (ReadMetadata) would be a plain os.ReadFile, so a
-			// copier.yml swapped for a symlink between the two reads would be
-			// followed anywhere on disk; these bytes came through the retained
-			// root with an entry-identity check. The tree can still change
-			// before SnapshotDirectory runs, so the snapshot's own copier.yml
-			// is checked against the include_root honoured here below.
-			metadata, err := copierx.ParseMetadata(configData)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			snapshotRoot, templateSubpath, err := chainTemplateSnapshotRoot(clean, metadata.IncludeRoot)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			templateDir, err := copierx.OpenGuardedPath(p.root, workspacePath, snapshotRoot, allowedSymlinkParents)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			snapshot, cleanup, err := templateDir.SnapshotDirectory(ctx)
-			_ = templateDir.Close()
-			if err != nil {
-				return "", "", nil, fmt.Errorf("snapshot workspace chain template %q: %w", ref, err)
-			}
-			templatePath, err := verifiedSnapshotTemplatePath(snapshot, templateSubpath)
-			if err != nil {
-				_ = cleanup()
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			if err := verifySnapshotIncludeRoot(snapshot, templateSubpath, metadata.IncludeRoot); err != nil {
-				_ = cleanup()
-				return "", "", nil, fmt.Errorf("workspace chain template %q: %w", ref, err)
-			}
-			return templatePath, ref, cleanup, nil
-		}
-	}
-	path, resolvedRef, err := p.resolveTemplate(ctx, ref, "stack")
-	return path, resolvedRef, nil, err
 }
 
 func (p *Platform) allocateWorkspacePorts(stack *manifest.Stack, workspaceName string) (map[string]int, error) {

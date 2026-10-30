@@ -1,14 +1,20 @@
 package manifest
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
@@ -59,6 +65,7 @@ type Stack struct {
 	Ports             map[string]Port              `yaml:"ports,omitempty" json:"ports,omitempty"`
 	Volumes           map[string]Volume            `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 	Persist           map[string]PersistPath       `yaml:"persist,omitempty" json:"persist,omitempty"`
+	VCS               string                       `yaml:"vcs,omitempty" json:"vcs,omitempty" validate:"omitempty,oneof=git jj" jsonschema:"enum=git,enum=jj"`
 	Sources           map[string]Source            `yaml:"sources,omitempty" json:"sources,omitempty"`
 	WorkspaceDefaults map[string]WorkspaceDefaults `yaml:"workspace_defaults,omitempty" json:"workspace_defaults,omitempty"`
 	Workspaces        map[string]Workspace         `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
@@ -175,15 +182,266 @@ type Volume struct {
 }
 
 type Source struct {
-	Kind       string     `yaml:"kind" json:"kind" validate:"required,oneof=git local" jsonschema:"required,enum=git,enum=local"`
-	Repo       string     `yaml:"repo,omitempty" json:"repo,omitempty"`
-	URL        string     `yaml:"url,omitempty" json:"url,omitempty"`
-	Path       string     `yaml:"path,omitempty" json:"path,omitempty"`
-	DefaultRef string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
-	CachePath  string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
-	Auth       SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
-	Git        SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
-	Checksum   string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+	Kind string `yaml:"kind" json:"kind" validate:"required,oneof=git local" jsonschema:"required,enum=git,enum=local"`
+	// Repo is the one-remote form: it declares the remote `origin`. Remotes
+	// declares several; a source sets one or the other.
+	Repo    string                  `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Remotes map[string]SourceRemote `yaml:"remotes,omitempty" json:"remotes,omitempty"`
+	// PushDefault names the declared remote a push goes to when nothing more
+	// specific (a branch's pushRemote) says otherwise. It becomes the cache's
+	// remote.pushDefault.
+	PushDefault string     `yaml:"push_default,omitempty" json:"push_default,omitempty"`
+	URL         string     `yaml:"url,omitempty" json:"url,omitempty"`
+	Path        string     `yaml:"path,omitempty" json:"path,omitempty"`
+	DefaultRef  string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
+	CachePath   string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
+	Auth        SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Git         SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
+	Checksum    string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+}
+
+// DefaultRemote is the remote a source's `repo:` declares.
+const DefaultRemote = "origin"
+
+// SourceRemote is one remote of a git source. In YAML and JSON a bare string
+// is the URL alone: `origin: git@github.com:me/app.git`.
+type SourceRemote struct {
+	URL string `yaml:"url" json:"url"`
+	// Canonical marks the fetch-only remote: the cache is cloned from it and
+	// can never push to it.
+	Canonical bool `yaml:"canonical,omitempty" json:"canonical,omitempty"`
+	// Branches lists the branch patterns (path.Match syntax) a publish to this
+	// remote may create or update. Empty allows any branch.
+	Branches []string `yaml:"branches,omitempty" json:"branches,omitempty"`
+}
+
+// sourceRemoteFields are the keys the mapping form of a SourceRemote accepts.
+// A custom UnmarshalYAML decodes with a fresh decoder, which does not inherit
+// LoadFile's KnownFields, so the mapping form checks its keys itself.
+var sourceRemoteFields = map[string]bool{"url": true, "canonical": true, "branches": true}
+
+func (r *SourceRemote) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		*r = SourceRemote{URL: value.Value}
+		return nil
+	}
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: a remote is a URL or a mapping with url, canonical and branches", value.Line)
+	}
+	if err := checkSourceRemoteKeys(value); err != nil {
+		return err
+	}
+	type plain SourceRemote
+	var decoded plain
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*r = SourceRemote(decoded)
+	return nil
+}
+
+// checkSourceRemoteKeys refuses a key the mapping form does not have. A `<<`
+// merge key is accepted, as everywhere else in the manifest, and the mappings
+// it merges are checked the same way.
+func checkSourceRemoteKeys(mapping *yaml.Node) error {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		key, value := mapping.Content[i], mapping.Content[i+1]
+		if key.Kind == yaml.ScalarNode && key.Value == "<<" && (key.Tag == "!!merge" || key.Tag == "") {
+			merged := []*yaml.Node{value}
+			if value.Kind == yaml.SequenceNode {
+				merged = value.Content
+			}
+			for _, node := range merged {
+				if node.Kind == yaml.AliasNode {
+					node = node.Alias
+				}
+				if node == nil || node.Kind != yaml.MappingNode {
+					return fmt.Errorf("line %d: a merge key in a remote takes a mapping", key.Line)
+				}
+				if err := checkSourceRemoteKeys(node); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !sourceRemoteFields[key.Value] {
+			return fmt.Errorf("line %d: field %s not found in a remote (url, canonical, branches)", key.Line, key.Value)
+		}
+	}
+	return nil
+}
+
+// MarshalYAML writes a remote that has only a URL in the bare-string form, so
+// a manifest the operator saves keeps the form it was written in.
+func (r SourceRemote) MarshalYAML() (any, error) {
+	if !r.Canonical && len(r.Branches) == 0 {
+		return r.URL, nil
+	}
+	type plain SourceRemote
+	return plain(r), nil
+}
+
+func (r *SourceRemote) UnmarshalJSON(data []byte) error {
+	var url string
+	if err := json.Unmarshal(data, &url); err == nil {
+		*r = SourceRemote{URL: url}
+		return nil
+	}
+	type plain SourceRemote
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var decoded plain
+	if err := dec.Decode(&decoded); err != nil {
+		return err
+	}
+	*r = SourceRemote(decoded)
+	return nil
+}
+
+// DeclaredRemotes returns the remotes the source declares: `remotes:` as
+// written, or `repo:` as the one remote origin. It is nil when neither is set.
+func (s Source) DeclaredRemotes() map[string]SourceRemote {
+	if len(s.Remotes) > 0 {
+		return s.Remotes
+	}
+	if s.Repo != "" {
+		return map[string]SourceRemote{DefaultRemote: {URL: s.Repo}}
+	}
+	return nil
+}
+
+// CloneRemote names the remote a new cache is cloned from: the canonical
+// remote, else origin, else the only remote. ok is false when the source
+// declares no remote, or several of which none qualifies (ValidateSource
+// refuses the latter).
+func (s Source) CloneRemote() (name string, remote SourceRemote, ok bool) {
+	remotes := s.DeclaredRemotes()
+	for name, remote := range remotes {
+		if remote.Canonical {
+			return name, remote, true
+		}
+	}
+	if remote, ok := remotes[DefaultRemote]; ok {
+		return DefaultRemote, remote, true
+	}
+	if len(remotes) == 1 {
+		for name, remote := range remotes {
+			return name, remote, true
+		}
+	}
+	return "", SourceRemote{}, false
+}
+
+// CloneURL returns the URL a new cache is cloned from (CloneRemote), or "" when
+// the source declares no remote.
+func (s Source) CloneURL() string {
+	_, remote, _ := s.CloneRemote()
+	return remote.URL
+}
+
+// IsRelativeURL reports whether a remote URL is a relative filesystem path
+// rather than a URL, an scp-like `host:path`, or an absolute path. git records
+// a clone's source as an absolute path and resolves a relative remote URL
+// against the checkout, so a relative URL means something else in each one.
+func IsRelativeURL(url string) bool {
+	if strings.Contains(url, "://") || filepath.IsAbs(url) {
+		return false
+	}
+	colon := strings.Index(url, ":")
+	slash := strings.Index(url, "/")
+	scpLike := colon > 0 && (slash < 0 || colon < slash)
+	return !scpLike
+}
+
+// remoteNamePattern is a conservative subset of git's remote names: it keeps
+// every name usable as a config section and a ref path component.
+var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// checkRemoteURL refuses a URL git would store differently from what the
+// manifest says: one with a control character (a newline would become a second
+// URL line in the git config) or with surrounding spaces.
+func checkRemoteURL(url string) error {
+	if strings.TrimSpace(url) != url {
+		return errors.New("has leading or trailing spaces")
+	}
+	if strings.ContainsFunc(url, unicode.IsControl) {
+		return errors.New("contains a control character")
+	}
+	return nil
+}
+
+// ValidateSource checks a source's remotes:
+//   - `repo:` and `remotes:` are not both set;
+//   - every URL, `repo:` included, has no control character or surrounding
+//     spaces;
+//   - every remote under `remotes:` has a valid name that differs from the
+//     others by more than case, and an absolute or remote URL;
+//   - at most one is canonical, and a canonical remote has no branches;
+//   - push_default names a declared remote that is not canonical;
+//   - the remote to clone from can be determined (CloneRemote).
+func ValidateSource(name string, s Source) error {
+	if s.Repo != "" && len(s.Remotes) > 0 {
+		return fmt.Errorf("source %q: set repo or remotes, not both (repo declares the remote %s)", name, DefaultRemote)
+	}
+	if (len(s.Remotes) > 0 || s.PushDefault != "") && s.Kind != "git" {
+		return fmt.Errorf("source %q: remotes and push_default require kind: git", name)
+	}
+	if err := checkRemoteURL(s.Repo); err != nil {
+		return fmt.Errorf("source %q: repo %w", name, err)
+	}
+	canonical := ""
+	folded := map[string]string{}
+	for _, remoteName := range slices.Sorted(maps.Keys(s.Remotes)) {
+		remote := s.Remotes[remoteName]
+		if !remoteNamePattern.MatchString(remoteName) || strings.HasSuffix(remoteName, ".lock") || strings.Contains(remoteName, "..") {
+			return fmt.Errorf("source %q: remote name %q must start with a letter or digit and hold only letters, digits, '.', '_' and '-'", name, remoteName)
+		}
+		// Remote-tracking refs live in files, so on a case-insensitive file
+		// system two such remotes would share refs/remotes/<name>.
+		if other, ok := folded[strings.ToLower(remoteName)]; ok {
+			return fmt.Errorf("source %q: remote names %q and %q differ only in case", name, other, remoteName)
+		}
+		folded[strings.ToLower(remoteName)] = remoteName
+		if remote.URL == "" {
+			return fmt.Errorf("source %q remote %q: url is required", name, remoteName)
+		}
+		if err := checkRemoteURL(remote.URL); err != nil {
+			return fmt.Errorf("source %q remote %q: url %w", name, remoteName, err)
+		}
+		if IsRelativeURL(remote.URL) {
+			return fmt.Errorf("source %q remote %q: url %q is a relative path; use an absolute path or a URL", name, remoteName, remote.URL)
+		}
+		if remote.Canonical {
+			if canonical != "" {
+				return fmt.Errorf("source %q: remotes %q and %q are both canonical; mark one", name, canonical, remoteName)
+			}
+			canonical = remoteName
+			if len(remote.Branches) > 0 {
+				return fmt.Errorf("source %q remote %q: a canonical remote is fetch-only, so branches has nothing to allow", name, remoteName)
+			}
+		}
+		for _, pattern := range remote.Branches {
+			if _, err := path.Match(pattern, ""); err != nil || pattern == "" {
+				return fmt.Errorf("source %q remote %q: branches pattern %q is not a valid path.Match pattern", name, remoteName, pattern)
+			}
+		}
+	}
+	remotes := s.DeclaredRemotes()
+	if s.PushDefault != "" {
+		remote, ok := remotes[s.PushDefault]
+		if !ok {
+			return fmt.Errorf("source %q: push_default %q names no declared remote", name, s.PushDefault)
+		}
+		if remote.Canonical {
+			return fmt.Errorf("source %q: push_default %q is the canonical remote, which is fetch-only", name, s.PushDefault)
+		}
+	}
+	if len(remotes) > 0 {
+		if _, _, ok := s.CloneRemote(); !ok {
+			return fmt.Errorf("source %q: cannot tell which remote to clone from; mark one canonical or name one %s", name, DefaultRemote)
+		}
+	}
+	return nil
 }
 
 type SourceAuth struct {
@@ -218,10 +476,20 @@ type Workspace struct {
 
 type WorkspaceSource struct {
 	Source string `yaml:"source" json:"source" validate:"required" jsonschema:"required"`
-	// Mode selects how a git source is materialized: a worktree of the shared
-	// cache or a standalone clone. Omitted, a git source is cloned and a local
-	// source is linked; a local source is linked whatever the mode says.
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone"`
+	// Mode selects how a source is checked out: a worktree of a git source's
+	// shared cache, a standalone clone, or a jj workspace of the cache, or of
+	// a local source that already is a jj repository. Omitted, the stack's vcs
+	// decides (Stack.EffectiveSourceMode). A local source is linked under any
+	// mode but jj.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone,enum=jj"`
+	// VCS, for a slot that names no mode, is the version control the slot
+	// was checked out with: the stack's vcs when angee cut it, which create
+	// records, so that a later change of the stack's vcs does not read an
+	// existing slot as another kind of checkout than the one on disk (a jj
+	// workspace read as a git clone leaks its jj name on destroy). Omitted,
+	// as on a slot cut before angee recorded it, the stack's vcs decides
+	// (Stack.EffectiveSourceMode). A slot that names a mode ignores it.
+	VCS string `yaml:"vcs,omitempty" json:"vcs,omitempty" jsonschema:"enum=git,enum=jj"`
 	// Branch is the branch a worktree slot is cut on. Omitted, the worktree
 	// starts on a detached HEAD at Ref and gets a branch when it is published.
 	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
@@ -229,21 +497,70 @@ type WorkspaceSource struct {
 	Subpath string `yaml:"subpath,omitempty" json:"subpath,omitempty"`
 }
 
-// Workspace source modes. The empty mode is also valid and keeps the source
-// kind's default.
+// Workspace source modes. The empty mode is also valid and leaves the choice
+// to the stack's vcs (Stack.EffectiveSourceMode).
 const (
 	WorkspaceSourceModeWorktree = "worktree"
 	WorkspaceSourceModeClone    = "clone"
+	WorkspaceSourceModeJJ       = "jj"
+)
+
+// The version control systems a stack's vcs can name: the one a workspace
+// slot that names no mode is checked out with (Stack.EffectiveSourceMode).
+// Empty is git.
+const (
+	VCSGit = "git"
+	VCSJJ  = "jj"
 )
 
 // ValidateWorkspaceSourceMode rejects a workspace source mode the operator
 // does not implement, so a typo fails loudly instead of quietly cloning.
 func ValidateWorkspaceSourceMode(mode string) error {
 	switch mode {
-	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone:
+	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone, WorkspaceSourceModeJJ:
 		return nil
 	}
-	return fmt.Errorf("mode %q is not supported; use %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone)
+	return fmt.Errorf("mode %q is not supported; use %q, %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone, WorkspaceSourceModeJJ)
+}
+
+// EffectiveSourceMode is the mode ws is checked out in, which everything that
+// reads a slot's mode asks. A mode the slot names wins. With none, the vcs
+// the slot was cut with (WorkspaceSource.VCS), else the stack's, decides: jj
+// makes the slot a jj workspace, and git leaves the mode empty, keeping each
+// source kind's default: a git source is cloned and a local source linked
+// (plan D3). The manifest keeps the mode as written, so the stack's vcs
+// decides only for a slot that names no mode and records no vcs, as one cut
+// before create recorded it.
+func (s *Stack) EffectiveSourceMode(ws WorkspaceSource) string {
+	vcs := ws.VCS
+	if vcs == "" && s != nil {
+		vcs = s.VCS
+	}
+	switch {
+	case ws.Mode != "":
+		return ws.Mode
+	case vcs == VCSJJ:
+		return WorkspaceSourceModeJJ
+	}
+	return ""
+}
+
+// SlotVCS is the vcs create records on a slot that names no mode
+// (WorkspaceSource.VCS): the stack's, git when it names none.
+func (s *Stack) SlotVCS() string {
+	if s != nil && s.VCS == VCSJJ {
+		return VCSJJ
+	}
+	return VCSGit
+}
+
+// ValidateWorkspaceSourceVCS rejects a slot vcs the operator does not know.
+func ValidateWorkspaceSourceVCS(vcs string) error {
+	switch vcs {
+	case "", VCSGit, VCSJJ:
+		return nil
+	}
+	return fmt.Errorf("vcs %q is not supported; use %q or %q, or omit it", vcs, VCSGit, VCSJJ)
 }
 
 type WorkspaceResolved struct {
@@ -262,6 +579,8 @@ type WorkspaceResolved struct {
 }
 
 type PersistPath struct {
+	// Backup excludes physical database state or other unsafe file-copy resources.
+	Backup  string `yaml:"backup,omitempty" json:"backup,omitempty" validate:"omitempty,oneof=exclude" jsonschema:"enum=exclude"`
 	Subpath string `yaml:"subpath" json:"subpath"`
 	Scope   string `yaml:"scope" json:"scope"`
 }
@@ -283,6 +602,11 @@ type Service struct {
 	// StopGracePeriod bounds graceful shutdown before the runtime force-stops
 	// the service. It uses Go duration syntax (for example, "30s").
 	StopGracePeriod string `yaml:"stop_grace_period,omitempty" json:"stop_grace_period,omitempty" jsonschema:"default=10s"`
+	// Restart is the restart policy the runtime applies when the service
+	// exits: on_failure (the default) after a non-zero exit, always after any
+	// exit, no never. A stop the runtime was asked for (stack down, service
+	// stop or restart) never triggers one.
+	Restart RestartPolicy `yaml:"restart,omitempty" json:"restart,omitempty" validate:"omitempty,oneof=no on_failure always" jsonschema:"enum=no,enum=on_failure,enum=always,default=on_failure"`
 }
 
 const DefaultStopGracePeriod = "10s"
@@ -292,6 +616,33 @@ func (s Service) NormalizedStopGracePeriod() string {
 		return DefaultStopGracePeriod
 	}
 	return s.StopGracePeriod
+}
+
+// RestartPolicy is a service's restart policy. Each runtime backend compiles
+// it into its own policy; the operator never restarts a process itself.
+type RestartPolicy string
+
+const (
+	// RestartNo leaves a service stopped after it exits.
+	RestartNo RestartPolicy = "no"
+	// RestartOnFailure restarts a service after a non-zero exit, a crash or a
+	// kill from outside the runtime.
+	RestartOnFailure RestartPolicy = "on_failure"
+	// RestartAlways restarts a service after any exit, a clean one included.
+	RestartAlways RestartPolicy = "always"
+
+	// DefaultRestartPolicy applies to a service that sets no restart.
+	DefaultRestartPolicy = RestartOnFailure
+)
+
+// NormalizedRestart returns the service's restart policy, or
+// DefaultRestartPolicy when it sets none. It never mutates the manifest, so an
+// omitted restart stays omitted when the manifest is saved again.
+func (s Service) NormalizedRestart() RestartPolicy {
+	if s.Restart == "" {
+		return DefaultRestartPolicy
+	}
+	return s.Restart
 }
 
 type Route struct {
@@ -380,7 +731,23 @@ func (r *Route) HostName(serviceName, domain string) string {
 	return serviceName
 }
 
+// BackupCapture declares a trusted runtime job that emits a logical capture.
+// The command receives operator-selected paths through ${inputs.backup_output}
+// (stack-relative) and ${inputs.backup_output_absolute} (local host absolute).
+// Output names one regular file under that directory. No commands come from API requests.
+type BackupCapture struct {
+	Group          string   `yaml:"group" json:"group" validate:"oneof=databases service_state" jsonschema:"enum=databases,enum=service_state"`
+	Name           string   `yaml:"name" json:"name" validate:"required"`
+	Output         string   `yaml:"output" json:"output" validate:"required"`
+	ExcludePersist []string `yaml:"exclude_persist,omitempty" json:"exclude_persist,omitempty"`
+}
+
 type Job struct {
+	// Holds names services stopped before this operation runs any job.
+	Holds []string `yaml:"holds,omitempty" json:"holds,omitempty" jsonschema:"uniqueItems=true"`
+
+	Capture *BackupCapture `yaml:"capture,omitempty" json:"capture,omitempty"`
+
 	Runtime   Runtime           `yaml:"runtime" json:"runtime" validate:"required,oneof=container local" jsonschema:"required,enum=container,enum=local"`
 	Image     string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Build     any               `yaml:"build,omitempty" json:"build,omitempty"`
@@ -673,8 +1040,51 @@ func (s *Stack) ValidateExtended() error {
 			}
 		}
 	}
-	for name, job := range s.Jobs {
+	captures := map[string]bool{}
+	for name, persist := range s.Persist {
+		if persist.Backup != "" && persist.Backup != "exclude" {
+			return fmt.Errorf("persist %q backup must be exclude or omitted", name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Jobs)) {
+		job := s.Jobs[name]
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
+			return err
+		}
+		seenHolds := map[string]bool{}
+		for _, held := range job.Holds {
+			if _, ok := s.Services[held]; !ok {
+				return fmt.Errorf("job %q holds unknown service %q", name, held)
+			}
+			if seenHolds[held] {
+				return fmt.Errorf("job %q holds service %q more than once", name, held)
+			}
+			seenHolds[held] = true
+		}
+		if capture := job.Capture; capture != nil {
+			if len(job.Holds) > 0 {
+				return fmt.Errorf("capture job %q cannot declare holds", name)
+			}
+			if len(job.RunOn) > 0 {
+				return fmt.Errorf("capture job %q is manual and cannot declare run_on", name)
+			}
+			if !validCaptureName(name) || !validCaptureName(capture.Name) || !validCaptureName(capture.Output) || (capture.Group != "databases" && capture.Group != "service_state") {
+				return fmt.Errorf("invalid capture declaration on job %q", name)
+			}
+			key := capture.Group + ":" + capture.Name
+			if captures[key] {
+				return fmt.Errorf("duplicate backup capture %q", key)
+			}
+			captures[key] = true
+			for _, persist := range capture.ExcludePersist {
+				if _, ok := s.Persist[persist]; !ok {
+					return fmt.Errorf("capture job %q excludes undeclared persist %q", name, persist)
+				}
+			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Sources)) {
+		if err := ValidateSource(name, s.Sources[name]); err != nil {
 			return err
 		}
 	}
@@ -684,6 +1094,9 @@ func (s *Stack) ValidateExtended() error {
 				// Before modes were validated, an unknown mode on a git source
 				// was materialized as a clone, which is what is on disk now.
 				return fmt.Errorf("workspace %q source %q: %w (an existing workspace with this mode was cloned: set mode: clone or remove the line to keep it as it is)", name, slot, err)
+			}
+			if err := ValidateWorkspaceSourceVCS(source.VCS); err != nil {
+				return fmt.Errorf("workspace %q source %q: %w", name, slot, err)
 			}
 		}
 	}
@@ -707,6 +1120,9 @@ func (s *Stack) validateDependencyGraph() error {
 		for _, dependency := range dependencies {
 			if _, ok := deps[dependency]; !ok {
 				return fmt.Errorf("%s %q depends on unknown node %q", nodeKind(s, name), name, dependency)
+			}
+			if job, ok := s.Jobs[dependency]; ok && job.Capture != nil {
+				return fmt.Errorf("%s %q cannot depend on manual capture job %q", nodeKind(s, name), name, dependency)
 			}
 		}
 	}
@@ -753,6 +1169,11 @@ func (s *Stack) validateServiceRuntime() error {
 			if err != nil || duration <= 0 {
 				return fmt.Errorf("service %q: stop_grace_period must be a positive duration", name)
 			}
+		}
+		switch service.Restart {
+		case "", RestartNo, RestartOnFailure, RestartAlways:
+		default:
+			return fmt.Errorf("service %q: restart must be no, on_failure or always, not %q", name, service.Restart)
 		}
 	}
 	return nil
@@ -865,4 +1286,8 @@ func (s *Stack) initMaps() {
 	if s.PortLeases == nil {
 		s.PortLeases = map[string][]PortLease{}
 	}
+}
+
+func validCaptureName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\:")
 }

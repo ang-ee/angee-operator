@@ -121,6 +121,9 @@ func (b *CaddyBackend) Contribute(stack *manifest.Stack, compiled *compose.File)
 		// upstreams; the default network resolves the forward_auth target when
 		// it is a compose service (the docker-mode operator container).
 		Networks: []string{"default", network},
+		// Every route goes through the edge, so it restarts on failure like a
+		// service with the default restart policy.
+		Restart: "on-failure",
 	}
 
 	for name, svc := range compiled.Services {

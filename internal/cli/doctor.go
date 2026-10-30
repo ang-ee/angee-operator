@@ -16,8 +16,11 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/copierx"
+	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
+	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
 	"github.com/spf13/cobra"
 )
 
@@ -134,6 +137,9 @@ type doctorTool struct {
 	// missingHint replaces hint when bin itself is absent, so a plugin check
 	// does not tell you to install a plugin for a binary you do not have.
 	missingHint string
+	// short says how a found version falls short, and what to do about it,
+	// or returns "" when it does not. Nil checks nothing.
+	short func(version string) (detail, hint string)
 }
 
 func (t doctorTool) binary() string {
@@ -145,7 +151,7 @@ func (t doctorTool) binary() string {
 
 func doctorTools() []doctorTool {
 	return []doctorTool{
-		{name: "git", args: []string{"--version"}, hint: "Required for source and workspace commands."},
+		{name: "git", args: []string{"--version"}, hint: "Required for source and workspace commands.", short: gitBelowJJFloor},
 		{name: "go", args: []string{"version"}, hint: "Required to build angee-go and to auto-install process-compose."},
 		{name: "uv", args: []string{"--version"}, hint: "Required by the bundled Django dev stack."},
 		{name: "node", args: []string{"--version"}, hint: "Required by the bundled React/Vite dev stack."},
@@ -183,8 +189,56 @@ func (r *doctorRunner) checkTools(ctx context.Context) {
 		if version == "" {
 			version = path
 		}
+		if tool.short != nil {
+			if detail, hint := tool.short(version); detail != "" {
+				r.add("tool."+tool.name, doctorWarn, detail, hint)
+				continue
+			}
+		}
 		r.add("tool."+tool.name, doctorOK, version, "")
 	}
+	r.checks = append(r.checks, jjDoctorCheck(jjdriver.Probe(ctx)))
+}
+
+// gitBelowJJFloor reports a git older than jjdriver.MinGitVersion, naming
+// the git jj slots need, git.RelativeWorktreesVersion. Only a jj slot needs
+// either, and no manifest can declare one yet, so it is a warning. A git
+// between the two is left to tool.jj, which reports it only once jj can
+// create slots, so a stack that does not use jj gets no new warning.
+func gitBelowJJFloor(version string) (string, string) {
+	if jjdriver.GitSupported(version) {
+		return "", ""
+	}
+	return fmt.Sprintf("%s is older than %s, which jj slots need", version, git.RelativeWorktreesVersion),
+		"Upgrade git to " + git.RelativeWorktreesVersion + " or later before using jj slots."
+}
+
+// jjDoctorCheck reports the jj that jj slots would run, whether it can
+// create them (`jj workspace add --colocate`), and whether git can then open
+// their source's cache, which needs git.RelativeWorktreesVersion. Only a jj
+// slot needs any of it, and no manifest can declare one yet, so a shortfall
+// is a warning.
+func jjDoctorCheck(caps jjdriver.Capabilities) doctorCheck {
+	check := doctorCheck{Name: "tool.jj", Status: doctorWarn}
+	switch {
+	case caps.JJErr != nil:
+		check.Detail = caps.JJErr.Error()
+		check.Hint = jjdriver.InstallHint + " Only jj slots need it."
+	case caps.OSErr != nil:
+		check.Detail = caps.JJ + ": " + caps.OSErr.Error()
+	case !git.VersionAtLeast(caps.Git, git.RelativeWorktreesVersion):
+		if caps.Git == "" {
+			// tool.git says why git did not answer.
+			check.Detail = fmt.Sprintf("%s (workspace add --colocate), but git reported no version, and jj slots need %s or later", caps.JJ, git.RelativeWorktreesVersion)
+		} else {
+			check.Detail = fmt.Sprintf("%s (workspace add --colocate), but %s is older than %s, which jj slots need", caps.JJ, caps.Git, git.RelativeWorktreesVersion)
+		}
+		check.Hint = "Upgrade git to " + git.RelativeWorktreesVersion + " or later before using jj slots: jj adds their git worktrees with relative links, and older git refuses a repository that uses them."
+	default:
+		check.Status = doctorOK
+		check.Detail = caps.JJ + " (workspace add --colocate)"
+	}
+	return check
 }
 
 // commandVersionTimeout bounds a single version probe. Node-based tools
@@ -438,8 +492,13 @@ func (r *doctorRunner) checkTemplates() {
 			r.add("template."+template.name, doctorWarn, "missing copier.yml", "Check out or update angee-examples.")
 			continue
 		}
-		if _, err := copierx.ValidateMetadata(path, template.kind); err != nil {
+		metadata, err := copierx.ValidateMetadata(path, template.kind)
+		if err != nil {
 			r.add("template."+template.name, doctorError, err.Error(), "Fix the template _angee metadata.")
+			continue
+		}
+		if err := service.RefuseWorkspaceChain(template.name, metadata); err != nil {
+			r.add("template."+template.name, doctorError, err.Error(), "Remove chain and chain_root from the workspace template; see ang-ee/angee-operator#110.")
 			continue
 		}
 		r.add("template."+template.name, doctorOK, displayPath(path), "")

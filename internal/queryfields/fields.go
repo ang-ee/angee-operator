@@ -26,6 +26,7 @@ var Service = query.FieldMap[api.ServiceState]{
 	"name":    func(s api.ServiceState) query.Value { return query.Str(s.Name) },
 	"runtime": func(s api.ServiceState) query.Value { return query.Str(s.Runtime) },
 	"status":  func(s api.ServiceState) query.Value { return query.Str(s.Status) },
+	"outcome": func(s api.ServiceState) query.Value { return strOrNull(s.Outcome) },
 	"health":  func(s api.ServiceState) query.Value { return strOrNull(s.Health) },
 }
 

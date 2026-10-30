@@ -35,14 +35,18 @@ const PathInputType = "path"
 //     recorded and a later render elsewhere reuses it
 //   - absolute path → kept absolute (manifest.ResolvePath passes it through)
 //   - relative path → resolved against destDir (the render destination,
-//     i.e. the target stack root for `angee init` or the workspace
-//     dir for a chained workspace render), then re-expressed relative
+//     i.e. the target stack root for `angee init`, or a chained stack
+//     template's root inside it), then re-expressed relative
 //     to <destDir>/<ANGEE_ROOT> via filepath.Rel — yielding the natural
 //     "../..." escape that ANGEE_ROOT introduces.
 //
-// destDir must be the dir copier renders into (the parent of ANGEE_ROOT).
+// destDir must be the dir copier renders into, the one ANGEE_ROOT is relative
+// to (the parent of `.angee`, two levels above `deploy/.angee`).
 // angeeRoot must be the ANGEE_ROOT value as stored in inputs (e.g. ".angee");
 // it can also be an absolute path.
+//
+// Pass only values that are new to this render. An answer copier recorded at
+// an earlier render is already resolved; resolving it again moves it.
 func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot string) (Inputs, error) {
 	if len(inputs) == 0 {
 		return inputs, nil
@@ -51,15 +55,8 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 	if err != nil {
 		return nil, err
 	}
-	defs := mergeInputDefs(cfg)
-	hasPathInput := false
-	for _, def := range defs {
-		if def.Type == PathInputType {
-			hasPathInput = true
-			break
-		}
-	}
-	if !hasPathInput {
+	names := pathInputNames(cfg)
+	if len(names) == 0 {
 		return inputs, nil
 	}
 	absDest, err := filepath.Abs(destDir)
@@ -79,10 +76,7 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 	for key, value := range inputs {
 		out[key] = value
 	}
-	for name, def := range defs {
-		if def.Type != PathInputType {
-			continue
-		}
+	for name := range names {
 		value := out[name]
 		if value == "" {
 			continue
@@ -106,6 +100,27 @@ func ResolvePathInputs(templatePath string, inputs Inputs, destDir, angeeRoot st
 		out[name] = rel
 	}
 	return out, nil
+}
+
+// PathInputNames returns the names of the template's `type: path` inputs:
+// the ones ResolvePathInputs rewrites, and so the ones whose recorded answers
+// a render has already resolved.
+func PathInputNames(templatePath string) (map[string]bool, error) {
+	cfg, err := readConfig(templatePath)
+	if err != nil {
+		return nil, err
+	}
+	return pathInputNames(cfg), nil
+}
+
+func pathInputNames(cfg config) map[string]bool {
+	names := map[string]bool{}
+	for name, def := range mergeInputDefs(cfg) {
+		if def.Type == PathInputType {
+			names[name] = true
+		}
+	}
+	return names
 }
 
 // mergeInputDefs returns the union of top-level copier.yml questions
@@ -301,18 +316,22 @@ func dereferenceYAMLNode(node *yaml.Node) *yaml.Node {
 }
 
 type TemplateSource struct {
-	Source     string `yaml:"source"`
-	Kind       string `yaml:"kind"`
-	Repo       string `yaml:"repo"`
-	URL        string `yaml:"url"`
-	Path       string `yaml:"path"`
-	DefaultRef string `yaml:"default_ref"`
-	CachePath  string `yaml:"cache_path"`
-	Mode       string `yaml:"mode"`
-	Ref        string `yaml:"ref"`
-	Branch     string `yaml:"branch"`
-	Subpath    string `yaml:"subpath"`
-	Optional   bool   `yaml:"optional"`
+	Source string `yaml:"source"`
+	Kind   string `yaml:"kind"`
+	Repo   string `yaml:"repo"`
+	// Remotes and PushDefault declare an inline source's remotes, as in
+	// angee.yaml (manifest.Source); their strings are input-substitutable.
+	Remotes     map[string]manifest.SourceRemote `yaml:"remotes"`
+	PushDefault string                           `yaml:"push_default"`
+	URL         string                           `yaml:"url"`
+	Path        string                           `yaml:"path"`
+	DefaultRef  string                           `yaml:"default_ref"`
+	CachePath   string                           `yaml:"cache_path"`
+	Mode        string                           `yaml:"mode"`
+	Ref         string                           `yaml:"ref"`
+	Branch      string                           `yaml:"branch"`
+	Subpath     string                           `yaml:"subpath"`
+	Optional    bool                             `yaml:"optional"`
 }
 
 type ChainEntry struct {

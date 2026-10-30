@@ -74,7 +74,7 @@ Every failed operation is reported in one shape. GraphQL puts it in
 | `INVALID_INPUT` | The request is malformed or names an invalid value, including a template answer copier refuses (a validator, a choice, a missing required input). | `400` |
 | `CONFLICT` | Another mutation is running, or the object already exists. | `409` |
 | `PRECONDITION_FAILED` | The target's state must change first. | `409` |
-| `GIT_FAILED` | A git command failed. | `500` |
+| `GIT_FAILED` | A git or jj command failed. | `500` |
 | `TIMEOUT` | The operation ran out of time (`ANGEE_GIT_TIMEOUT`, `ANGEE_JOB_TIMEOUT`). | `500` |
 | `JOB_FAILED` | A job run failed. | `500` |
 | `INTERNAL` | Anything else. | `500` |
@@ -92,10 +92,18 @@ their diagnostics, and their words are passed through.
 
 | `cause` | `code` | Meaning |
 |---|---|---|
-| `uncommitted_changes` | `PRECONDITION_FAILED` | A checkout has uncommitted changes; `paths` lists them. |
+| `uncommitted_changes` | `PRECONDITION_FAILED` | A checkout has uncommitted changes; `paths` lists them. For a jj slot's publish, push or merge, the changes in its working-copy commit, and the hint names jj's command that commits them. |
 | `slot_missing` | `PRECONDITION_FAILED` | A declared slot is not on disk; the hint names `angee workspace repair`. |
 | `branch_mismatch` | `PRECONDITION_FAILED` | A slot is not on its workspace branch. |
-| `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push. |
+| `detached_head` | `PRECONDITION_FAILED` | A slot with commits of its own has no branch to push: a git slot on a detached HEAD, or a jj slot whose manifest names no branch and whose push names no `ref`. The hint names publish with a branch. |
+| `jj_unavailable` | `PRECONDITION_FAILED` | A workspace with a jj slot needs jj with `workspace add --colocate`, git 2.48 or later, and not Windows, to create one, sync it or rebase it; the hint says what to install. |
+| `jj_slot_unsupported` | `INVALID_INPUT` | A slot verb angee does not run on a jj slot: `workspace source pull`, since jj takes in a base by rebasing onto it; the hint names `workspace sync-base` and the slot's own fetch and rebase. `slot` and `paths` name the jj slot. |
+| `shared_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot (sync-base, or the slot's rebase) would rewrite commits another checkout holds: another jj workspace's working-copy commit, or a git worktree's checked-out branch; the message names them, and `paths` the worktrees. Nothing is rebased. |
+| `untracked_paths` | `PRECONDITION_FAILED` | A jj slot holds files jj does not track (the untracked paths of `jj status`), which a sync-base or rebase could keep over the base's own, and a publish, push or merge would leave out; `paths` lists them. Nothing is fetched, rebased, pushed or merged. |
+| `conflicted_commits` | `PRECONDITION_FAILED` | A publish or push of a jj slot would send commits with conflicts, which jj will not push; the message names them (and any undescribed ones too). Nothing is pushed or changed. |
+| `undescribed_commits` | `PRECONDITION_FAILED` | A publish or push of a jj slot would send commits with no description, empty or not, which jj will not push; the message names them. Nothing is pushed or changed. |
+| `branch_moved` | `PRECONDITION_FAILED` | A publish or push of a jj slot would move its branch past work the slot does not have: a commit on the remote branch whose change is none of the slot's (a collaborator's, fetched since the slot published), or a bookmark target off the slot's history (a collaborator's new version of one of its commits); the message names them, and the hint names the merge that takes them in. Nothing is pushed or changed. |
+| `immutable_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot would rewrite commits jj holds immutable (a tag's, an untracked remote bookmark's); the message names them. Nothing is rebased. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
 | `template_too_new` | `PRECONDITION_FAILED` | The template's `_min_copier_version` is newer than the Copier angee implements. |
@@ -106,8 +114,9 @@ their diagnostics, and their words are passed through.
 
 Messages read `<operation> for <target>: <what failed>. <remedy>`. A git
 failure ends with git's own words: its first `fatal:` or `error:` line, with
-the line before it, where git relays what ssh or the remote said. A
-not-found, conflict or invalid-input error keeps its own message. For
+the line before it, where git relays what ssh or the remote said. A jj
+failure ends with ` jj: ` and jj's first `Error:` line, with jj's output in
+`detail`. A not-found, conflict or invalid-input error keeps its own message. For
 example, sync-base on a workspace whose slot has uncommitted changes:
 
 ```json
@@ -137,10 +146,13 @@ Sync base for workspace "src": fetching source "angee-arp" (git@github-arpee:ang
 
 Workspace and source verbs check angee's own state before running git, so a
 refusal leaves nothing half done. `workspace sync-base` and `workspace push`
-check every slot before touching any: each must be on disk and on its
-branch, with no uncommitted changes, and (for push) have a branch to push.
-`workspace sync-base` also fetches every slot and resolves its base before
-merging any.
+check every slot before touching any: each must be on disk and, as its
+version control needs, on its branch with no uncommitted changes (a git
+worktree), and (for push) have a branch to push. A jj slot's working-copy
+commit rides along with its rebase, while its push needs a working copy with
+nothing uncommitted and commits jj will push. `workspace sync-base` also fetches every
+slot, resolves its base and checks what each rebase would rewrite before
+syncing any.
 
 A failed job run's receipt (`GET /job-runs/{id}`, GraphQL `jobRun`) carries
 `error_code` (`errorCode`) and `error_cause` (`errorCause`) beside `error`.
@@ -253,6 +265,100 @@ GET   /services/{name}/logs/stream   live per-service log WebSocket
 GET   /services/{name}/endpoint      service endpoint + log-stream descriptor
 ```
 
+### Manual backups
+
+All `/backups` routes require the configured admin bearer; minted connection
+tokens are denied. Django owns plans, authorization, workflow attempts, and
+completed Backup/File records. The operator captures declared stack resources.
+
+```text
+POST /backups/preview
+POST /backups
+GET  /backups/{id}/archive
+```
+
+Preview/start bodies are decoded strictly, unlike other REST bodies: an unknown
+field (such as a misspelled group) or anything after the one JSON object answers
+`400` with code `INVALID_INPUT` before discovery or capture starts, so a typo
+never silently captures less.
+
+Preview/start requests have `version: 1`, a `selection` object, and start also
+requires `request_id` (1–128 letters/digits/underscores/hyphens). Selection groups
+are `databases`, `service_state`, `workspaces`, `sources`, `storage`; every group
+uses `mode: all|selected|none`, `names`, `exclude`. Sources add
+`policy: bundle|fetch_published`. Source names are `stack:<source>` or
+`workspace:<workspace>/<slot>`; workspaces and their sources are independent.
+Preview reports included/excluded/unsupported resources, estimated source bytes,
+and unknown sizes explicitly. A selected unsupported resource prevents start.
+
+Backup preview uses bounded quick discovery: incomplete resource sizes remain
+`null`, included resources remain visible, and `has_unknown_sizes` is true.
+The total sums only known sizes; capture performs complete validation.
+
+Start returns HTTP 202 with the existing `JobRunOperation` receipt; poll
+`GET /job-runs/{id}` or GraphQL `jobRunOperation(id:)`. Its `root_job` is
+`backup` and its nodes, `capture` and `verify`, have kind `backup` (GraphQL
+`BACKUP`). Like the `/backups` routes, a backup receipt answers only the admin
+bearer: its artifact names every archived path and the digest of the captured
+secrets, so to a minted token both routes answer as for an unknown ID (404,
+`NOT_FOUND`). A backup never becomes `GET /job-runs/latest` (`latestJobRun`),
+which stays the latest job run. Equal IDs and selections are idempotent across restarts;
+changed selections conflict. Interrupted receipts fail rather than restarting
+an unknown partial operation. Only success includes `artifact` with `path`,
+`size_bytes`, `sha256`, `manifest_version: 1`, and immutable `manifest` evidence.
+Publication is under `backups/archives/<id>.zip`; staging, runtime directories,
+and unsafe physical database persists are excluded through containing trees.
+
+An interrupted backup's receipt fails when it is next read once the operator
+has restarted. That read also removes the backup's staging directory
+(`state/backups/<id>`) and any `backups/archives/<id>.zip` it published
+without a completed receipt; files it cannot remove, such as a directory a
+root container capture created, are named in the receipt's `error` for an
+operator to remove. Nothing else deletes archives or receipts yet:
+`backups/archives/*.zip` and `state/job-runs/*.json` stay until the caller
+removes them, so retention is the caller's.
+
+A running backup holds the operator's mutation lease and `run/operator.lock`
+until its receipt is final, so every other stack mutation (job runs, restarts,
+applies, file, secret, source and workspace changes, another backup) answers
+`409` (`CONFLICT`) until it ends. A backup cannot be cancelled through the API.
+`ANGEE_JOB_TIMEOUT` (a Go duration, `30m` by default, `0` for none) bounds the
+whole backup, capture, archive and verification together; a backup that runs
+out of it fails.
+
+A backup receipt's `output` keeps every capture's output, each line labelled
+`<group>/<name> | ` after its capture, as the last whole lines within 1 MiB.
+Capture output and errors lose their terminal control sequences (CSI and OSC,
+such as colours and the window title process-compose sets to the host name).
+Like every job run's receipt output and errors, they are redacted: registered
+secret values are masked. A multi-line secret is masked whole, and each of its
+lines on its own when that line can carry secret material: a line that is not
+PEM armour (`-----BEGIN …-----`, `-----END …-----`) and either holds at least
+16 consecutive base64, base64url or hex characters, as key material does, or
+has a value (the line less a leading `"key":` or `key:`) of at least 8 bytes
+with a character other than a letter, a space, `_`, `-` or `.`, as a password
+does. Its other lines, such as `"enabled": true` or `kind: Config`, are masked
+only as part of the whole value.
+
+A file deleted between its directory's listing and its copy is not part of a
+live capture and is left out, except in repository metadata, where a deletion
+(such as a repack removing the pack it replaced) fails the backup.
+
+Container capture jobs write their output into the backup's staging
+directory, which the operator creates with mode `0700`. On Linux a container
+capture must therefore run as root or as the operator's uid.
+
+A job that declares `capture:` runs only inside a backup, which chooses its
+output directory. `POST /jobs/{name}/run`, `GET /jobs/{name}/run-preview` and
+GraphQL `jobRun` and `jobRunPreview` refuse it, with or without inputs, with code
+`INVALID_INPUT` (`400`) naming the `job`, and a chained restart never runs one
+as a dependent.
+
+The [capture/format contract](../proposals/operator-backup-restore.md) documents
+trusted native job declarations, per-entry verification, structured Git/JJ
+recovery identity, original encryption-key preservation, and the per-database
+consistency boundary. ZIP commands are never executable restore input.
+
 ### Per-service live log socket
 
 `GET /services/{name}/logs/stream` is a WebSocket that streams a single
@@ -261,8 +367,33 @@ optional `level`) per frame, as the runtime produces them. Because the socket
 is scoped to one service the attribution is exact and no log prefix is parsed.
 
 Pass `?tail=<n>` (alias `?n=<n>`) to replay the last `n` lines that are still
-available before the live follow begins (maps to the backends' `--tail`); it is
-clamped to `[0, 10000]`, and `0` / omitted means no backlog cap.
+available before the live follow begins (maps to the backends' `--tail`); `0`
+or omitted replays the last 200 lines. A value that is not a number is a `400`.
+
+`GET /stack/logs` and `GET /services/{name}/logs` take `?tail=<n>`, and the
+GraphQL `stackLogs`, `serviceLogs` and `onServiceLogs` take `tail: Int`: the
+lines from the end of each service's or job's log, `0` or omitted for the last
+200, at most 10000 (a larger value is capped).
+
+`stackLogs` and `serviceLogs` also take `limit: Int`, a byte limit on the whole
+read (`0`, omitted or above 1 MiB: 1 MiB). It applies once the lines are
+labelled, and keeps the last whole lines in read order. That order is not time:
+container lines come first, as docker compose orders them, then local lines
+grouped by service in the order the services were requested (by name when none
+is named). So a read of `[worker, api]` with a small limit keeps `api`'s last
+lines and can leave `worker` out. A read the limit shortens starts with a
+`[truncated]` line, which counts toward the limit. A limit of 12 bytes or less
+has room only for that line, so a read it shortens is the marker alone, longer
+than a limit below 12. The REST log endpoints take no byte limit.
+
+A local service or job is read from the process-compose supervisor, which holds
+its last 1000 lines; its full output is in `run/logs/<name>.log` under the stack
+root. A read while process-compose replaces a service with its updated
+definition is `CONFLICT`; retry it once the service has restarted. A follow of one (`onServiceLogs`, the log socket) is refused a tail above
+256 with `INVALID_INPUT`, naming that file: process-compose drops the newest
+lines of a longer replay. The socket refuses it before the upgrade. A local
+service the running supervisor has not loaded, such as one declared after it
+started, is `NOT_FOUND` at once.
 
 Like the `GET /graphql` upgrade it carries no `Authorization` header, so auth
 runs in the handshake: present a per-service route token (`aud=svc:<name>`, see
@@ -346,10 +477,12 @@ GET  /job-runs/latest
 `GET /jobs` returns each job's latest run as the runtime holds it: `status` is
 `never-run`, `pending`, `running`, `completed`, `failed`, `skipped` (a dependency
 failed) or `unknown`, with `exit_code` for a finished run and `reason` for a
-skipped job or a command that could not start. `GET /services` adds a `reason`
-to a skipped service, and `GET /stack/status` counts both under `summary`
-(`total`, `running`, `completed`, `failed`, `skipped` for services and for
-jobs). GraphQL exposes the same fields on `JobState`, `ServiceState` and
+skipped job, a command that could not start, or a pending job waiting on a
+service the runtime keeps restarting. `GET /services` adds a `reason` to a
+skipped or such a pending service, `outcome` `restarting` and `restarts` (local
+services only) to one its restart policy is restarting, and `GET /stack/status`
+counts both under `summary` (`total`, `running`, `completed`, `failed`,
+`restarting`, `skipped` for services and for jobs). GraphQL exposes the same fields on `JobState`, `ServiceState` and
 `StackStatus.summary`, and `jobs(where:, order_by:)` accept `status`.
 `GET /stack/logs?service=` also takes a job name.
 
@@ -358,8 +491,9 @@ jobs). GraphQL exposes the same fields on `JobState`, `ServiceState` and
 the operation continues under the operator daemon after the initiating HTTP
 request disconnects. Poll `GET /job-runs/{id}` for its operation status, current
 step, per-node outcomes, terminal root-job output, and error. The `latest` route
-returns the most recently started receipt or JSON `null` when this daemon has not
-started one.
+returns the most recently started job run's receipt, never a backup's, or JSON
+`null` when this daemon has not started one. A backup capture job is refused
+with `INVALID_INPUT` (see [Manual backups](#manual-backups)).
 
 The preview route returns the jobs and services affected by the requested run
 without starting it. With `chained_restart`, a successful root job is followed by
@@ -367,8 +501,11 @@ its downstream jobs and services in dependency order; failed prerequisites block
 their descendants.
 
 Receipts are retained in bounded daemon memory so clients can reconnect and keep
-polling. They are not written to disk: restarting or stopping the operator loses
-the retained receipts, and stopping the daemon cancels an active operation.
+polling. Job-run receipts are not written to disk: restarting or stopping the
+operator loses the retained receipts, and stopping the daemon cancels an active
+operation. Backup receipts are also written under `state/job-runs/`, so
+`GET /job-runs/{id}` keeps answering for them, to the admin bearer only (see
+Manual backups).
 
 Sources:
 
@@ -405,17 +542,61 @@ POST  /workspaces/{name}/repair
 
 Workspaces are a pure file primitive — `POST /workspaces` renders Copier
 output and materializes sources, but the operator never starts services
-on a workspace's behalf. If a workspace renders an inner stack and you want
-it running, drive it with `POST /stack/up` against the inner root (start a
-second operator with `--root workspaces/<name>/.angee`, or run `angee stack
-up --root workspaces/<name>/.angee` locally).
+on a workspace's behalf, and a workspace renders no stack: a workspace
+template that declares `chain` or `chain_root` is refused with
+`INVALID_INPUT` ([#110](https://github.com/ang-ee/angee-operator/issues/110)),
+and so is `PATCH /workspaces/{name}` of a workspace created from such
+a template before then. A stack's services and jobs reach a workspace
+through `workspace://` mounts, `workdir` and env.
+
+Deprecated, removed in a later release: `GET /workspaces/{name}/logs` answers
+an empty body, since a workspace has no logs of its own. Workspace status
+always sends `"chain": []` and omits `chain_root`, `inner_stack` and
+`inner_error`. The operator no longer reads a stack that sits inside a
+workspace's directory; that stack's own operator reports it.
 
 Workspace status is the authoritative branch-identity surface for managed git
 worktrees. Each status source includes the manifest `branch`, actual
 `current_ref`, and `state`; `state: "branch-mismatch"` means the worktree is not
 on its manifest branch, and the workspace top-level state is `discrepancy`.
 `sync-base` updates each workspace branch from its base ref without switching
-branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
+branches; body: `{"method":"merge"}`, `{"method":"rebase"}`, or no method
+(`{}`), which syncs each slot its own way: a git worktree by merging, a jj
+slot by rebasing. It acts on the slots whose manifest names a mode that syncs
+(`worktree`, `jj`) and skips a slot that names none, even a jj slot under
+`vcs: jj`. `merge` is refused with `INVALID_INPUT`, naming the slot, for a
+workspace with a slot whose manifest names mode `jj`, before any slot is
+read. A jj slot's conflict is a
+result, not an error: the slot's entry in the answer carries `conflicted` and
+`conflict_paths` (`conflictPaths` in GraphQL), read from its status, and the
+slots after it are synced too. What jj warned of while it rebased a slot is on that slot's `error`. A
+git slot that stops on conflicts still fails the sync with `merge_conflict`,
+and any failure after other slots synced names them, in the message and
+`detail`. A rebase rewrites the slot's commits, so a slot published
+before it is force-updated by the next publish.
+
+A jj slot (`mode: jj`, or no mode under `vcs: jj`) is never
+`branch-mismatch`, and its status carries what jj reads beyond git: in
+workspace status `sources[]`, `repair`'s slot status, the topology's
+`links[]` and `workspace git`'s source states, and in what the per-slot
+verbs, `push` and `sync-base` return. The state vocabulary is unchanged; `conflicted`
+is a flag beside it, since jj records a conflict in a commit and goes on, so
+a client that does not know the fields reads the slot as before. For any
+other slot `conflicted` is `false` and the rest are absent (GraphQL: empty,
+`0` or `null`).
+
+| JSON | GraphQL | Meaning |
+| --- | --- | --- |
+| `conflicted` | `conflicted: Boolean!` | A conflicted commit among the slot's own (its base to its working copy). Always present; `false` too for a slot whose base does not resolve (state `error`), whose conflicts are not read. |
+| `conflict_paths` | `conflictPaths` | Those commits' conflicted files, sorted. |
+| `change_id` | `changeId` | The change id of the slot's working-copy commit. |
+| `base_behind` | `baseBehind` | The commits of the slot's base it lacks; `behind` counts against its upstream when it has one, so a moved base shows here. |
+| `untracked_paths` | `untrackedPaths` | New files jj leaves out of the working-copy commit (over its `snapshot.max-new-file-size`, or outside its `snapshot.auto-track`), as jj lists them, a directory ending in `/`. Only the slot holds them, so the slot is `dirty`, and `unpushed_reason` names up to ten. |
+
+```json
+{"slot": "work", "mode": "jj", "state": "ahead", "ahead": 1, "pushed": false,
+ "change_id": "kmvwzlqo...", "conflicted": true, "conflict_paths": ["f.txt"], "...": "..."}
+```
 
 A source slot declared in the manifest but not materialized (one added to an
 existing workspace, a dangling link, or for a git slot a directory that is not
@@ -461,8 +642,8 @@ The operator exposes three "update" operations, distinguished by scope:
 | Scope | Endpoint | Behaviour |
 | --- | --- | --- |
 | **Whole source** | `POST /sources/{name}/pull` | Fetch and fast-forward the cached top-level source's tracking ref. |
-| **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. |
-| **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot's workspace branch against its declared base ref. Stays on the workspace branch — this is "stay current with `main`". |
+| **One workspace slot** | GraphQL `workspaceSourcePull(workspace, slot)` | Fast-forward a single slot's worktree from its tracking ref. The slot lives on the **workspace branch**, not the source's main branch. A jj slot is never pulled (`jj_slot_unsupported`): fetch it and rebase it onto its base instead. |
+| **All slots of a workspace** | `POST /workspaces/{name}/sync-base` | Merge or rebase each slot that names a mode (worktree or jj) against its declared base ref; by default a worktree is merged and a jj slot rebased. Stays on the workspace branch — this is "stay current with `main`". |
 
 GitOps topology (derived view across sources × workspace slots):
 
@@ -473,6 +654,38 @@ GET /gitops/topology[?with_commits=N]
 Returns the full topology snapshot. `with_commits` opts in to populating
 each git source's recent commit history (`sources[].commits`); omit or
 set to 0 to keep the response cheap.
+
+`summary.conflicted` counts the links of conflicted jj slots, beside their
+states, as `unpushed` counts beside them. `summary.worktrees` counts git
+worktree slots only: a colocated jj slot is registered as a git worktree of
+its cache, but it is not counted.
+
+A source whose cache or local store is a jj repository (it has a `.jj`, as a
+cache has once a jj slot was made from it) lists its jj workspaces in
+`sources[].workspaces`, here and in `GET /sources` and `/sources/{name}/status`.
+Each is `{name, owned, path}`. `owned` is true when the checkout at the path
+this stack's manifest gives one of its jj slots of that repository is that
+workspace (named `<stack>--<workspace>`, or with `--<slot>`), and `path` is
+then that path. Any other workspace, the repository's own (`default`), other
+stacks' slots, and a slot of this stack whose checkout is gone or cannot be
+read alike, has `owned: false` and no `path` (GraphQL: an empty one): jj's
+record of a workspace's path goes stale once it moves, and a stack of the
+same name sharing the repository computes the same names. When one checkout
+holds two such names (one workspace `jj edit`ed the other's working-copy
+commit), neither is owned. A source that is not a jj repository, or an
+operator that found no jj on PATH the first time it looked (it looks once per
+process), omits the field and runs no jj. Listing costs one `jj workspace
+list` per jj source and one `jj log` per slot of this stack that names one of
+its workspaces. A listing jj cannot read is logged as a warning and omitted,
+and the source's state is read from git as before.
+
+```json
+{"name": "app", "kind": "git", "state": "clean", "workspaces": [
+  {"name": "default", "owned": false},
+  {"name": "dev--feature-a", "owned": true, "path": "/srv/stack/workspaces/feature-a/app"},
+  {"name": "staging--feature-a", "owned": false}
+], "...": "..."}
+```
 
 Source diffs:
 
@@ -497,13 +710,57 @@ POST /workspaces/{name}/sources/{slot}/merge-abort
 POST /workspaces/{name}/sources/{slot}/rebase-abort
 POST /workspaces/{name}/sources/{slot}/rebase-continue
 POST /workspaces/{name}/sources/{slot}/publish     body: {"remote":"...","branch":"..."}
+POST /workspaces/{name}/sources/{slot}/migrate     body: {"to":"jj"|"worktree"}  (optional)
 ```
 
 The convergence endpoints (`merge`, `rebase`, `merge-abort`,
 `rebase-abort`, `rebase-continue`, `publish`) return a `GitOpResult`
 with `{ok, conflicted, conflictFiles, message}`. On conflict the
 worktree is left in the conflicted state; `conflictFiles` lists the
-affected paths.
+affected paths. A jj slot never stops mid-operation: `rebase` and `merge`
+record a conflict in its commits and answer `ok` and `conflicted` together,
+and `merge-abort`, `rebase-abort` and `rebase-continue` answer `400`
+`INVALID_INPUT`, since there is nothing in progress to abort or continue.
+`pull` of a jj slot answers `400` `INVALID_INPUT`, cause
+`jj_slot_unsupported`: jj takes in a base by rebasing onto it. `fetch` of a
+jj slot of a `kind: local` store answers `400` `INVALID_INPUT`: angee never
+fetches into a user's store.
+
+`migrate` moves a slot of a git source between a git worktree and a jj slot
+of its source's cache, keeping what neither tracks, and records the slot's
+new `mode` in the manifest (see
+[migrating a slot](../guide/commands.md#migrating-a-slot)). `to` omitted
+moves it to the other of the two; its body is decoded strictly, so an
+unknown field is `400`. It answers a `GitOpResult` whose `message` says what
+was done, which untracked files became changes in a jj slot's working-copy
+commit and any clean-up left undone, and whose `source` is the slot's
+status after it. A `to` other than `jj` or `worktree`, a slot that is a
+clone, a link or of a `kind: local` source, one at the workspace's root and
+one other slots lie inside answer `400` `INVALID_INPUT`. A slot that is not
+ready answers `409` `PRECONDITION_FAILED` with the cause of the matching
+verb's refusal: `nested_repositories`, with the repositories in `paths`,
+for a slot that holds a `.git` or `.jj` below its own outside a directory
+the migrate moves whole (one with no tracked file; to jj, one git
+ignores);
+`branch_mismatch` or `uncommitted_changes` (changes to tracked files) for a
+worktree, `detached_head` for one on no branch with commits beyond its
+base; `uncommitted_changes`, `untracked_paths` or `branch_moved` for a jj
+slot, `branch_checked_out` for one whose branch another git worktree has
+checked out, `slot_not_held` for a checkout that is not the jj workspace
+this stack made; and no cause for a worktree with skip-worktree or
+assume-unchanged files or submodules, or a jj slot whose working-copy
+commit is described, has two parents or sits on a conflicted commit. A jj
+name the cache has for another checkout is `409` `CONFLICT`, and so is a
+slot whose commit changed while it was migrated. A failure
+partway rolls the slot back; a rollback that stops is `500` `INTERNAL`,
+cause `migrate_incomplete`, with the slot's path and where its checkout was
+set aside in `paths`, and a `hint` that lists the steps to recover by hand,
+in order. A migrate records them in `run/migrate/<workspace>/<slot>.json`
+as it goes, so one that is killed leaves them too. Until they are followed
+and the record deleted, the slot's status is an `error` naming them, and
+`migrate`, `repair`, `destroy` and the verbs that check each slot refuse it
+with `409` `PRECONDITION_FAILED`, cause `migrate_incomplete`, the steps in
+`hint`.
 
 Workspace preflight:
 
@@ -711,7 +968,7 @@ Available subscription operations:
 | `onGitOpsTopologyChange` | — | `GitOpsTopology` snapshot, emitted when the polled topology hash changes. |
 | `onWorkspaceStatusChange` | `name: String!` | `WorkspaceStatus` snapshot for that workspace, emitted on change. |
 | `onServiceLogs` | `name: String!` | Service log lines, follow-tailed from the runtime backend. |
-| `onWorkspaceLogs` | `name: String!` | Workspace log lines, follow-tailed from the runtime backend. |
+| `onWorkspaceLogs` | `name: String!` | Deprecated: a workspace has no logs, so the stream ends at once. |
 
 `onStackSnapshotChange` is the aggregate the web console reads as one — it
 fans out the same Query-root reads (`stackStatus`, `services`, `jobs`,
@@ -858,7 +1115,10 @@ list mirrors unified-diff output: `{oldStart, oldLines, newStart, newLines,
 header, body}` with `body` carrying the raw `+`/`-`/` ` prefixed lines.
 When `ref` is empty the diff is "working tree vs HEAD" (uncommitted
 changes); when set, it is "HEAD vs ref". Only git sources are
-diffable — local sources fail with code `INVALID_INPUT`.
+diffable — local sources fail with code `INVALID_INPUT`. A jj slot's
+uncommitted changes are its working-copy commit's, and `ref` is in jj's
+spelling (`main@origin` for a remote bookmark, not `origin/main`), diffed
+from the commit under the working copy.
 
 ### Convergence operations
 
@@ -878,17 +1138,20 @@ Operations:
 
 | Mutation | Behaviour |
 | --- | --- |
-| `workspaceSourceMerge(workspace, slot, ref)` | `git merge --no-ff --no-edit ref`. On conflict the worktree is left conflicted and `conflictFiles` lists the affected paths. |
-| `workspaceSourceRebase(workspace, slot, ref)` | `git rebase ref`. Conflict semantics match merge; resolve and call `rebaseContinue`, or call `rebaseAbort`. |
+| `workspaceSourceMerge(workspace, slot, ref)` | `git merge --no-ff --no-edit ref`. On conflict the worktree is left conflicted and `conflictFiles` lists the affected paths. On a jj slot, whose working copy must hold nothing uncommitted (`uncommitted_changes`, `untracked_paths`), `jj new @- ref -m "Merge ref"` then `jj new`, with `ref` in jj's spelling, so the merge is the commit under a fresh working copy and the next publish sends it; a ref the slot already holds makes no merge, and a conflict is recorded in the merge commit and answered as `ok` and `conflicted`. |
+| `workspaceSourceRebase(workspace, slot, ref)` | `git rebase ref`. Conflict semantics match merge; resolve and call `rebaseContinue`, or call `rebaseAbort`. On a jj slot, `jj rebase -b @ --onto ref` with `ref` in jj's spelling (`main@origin`), after the same check as sync-base that it rewrites no other checkout's commits (`shared_commits`); a conflict is recorded in the commits and answered as `ok` and `conflicted`. |
 | `workspaceSourceMergeAbort(workspace, slot)` | `git merge --abort`. |
 | `workspaceSourceRebaseAbort(workspace, slot)` | `git rebase --abort`. |
 | `workspaceSourceRebaseContinue(workspace, slot)` | `git rebase --continue` with `core.editor=true` so it never opens an editor. |
-| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to `origin`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). |
+| `workspaceSourceMigrate(workspace, slot, to)` | Moves the slot between a git worktree and a jj slot of its source's cache, as `POST /workspaces/{name}/sources/{slot}/migrate` does: `to` is `jj` or `worktree`, omitted for the other of the two. Returns the `GitOpResult` with `source`, the slot's status after it. |
+| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to the source's `push_default`, else the remote git pushes the branch to, else `origin`, and a remote the slot doesn't have is refused, as is a branch that matches none of that remote's `branches`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). For a jj slot, `branch` (else the manifest's) is required and the remote is resolved as for git; the slot must hold nothing uncommitted (`uncommitted_changes`, `untracked_paths`), since publish sends the commit under the working copy. The commits since the branch on the remote, else since the base, are sent: none answers `ok` with `nothing to publish`; one the remote lacks that has conflicts or no description is refused (`conflicted_commits`, `undescribed_commits`); a branch a git worktree of the source has checked out, one the remote has that the repository does not track, or one that exists, as a bookmark or on the remote, and is not the slot's (neither its manifest branch nor on its own commits alone), is refused as `INVALID_INPUT` on `branch`; a branch holding commits the slot lacks, a collaborator's on the remote say, is `branch_moved`, whose hint names what to merge first (the remote branch that holds them, which may be another remote than the publish's, else the slot's branch, else, when that is conflicted, each commit by id); a working-copy commit with two parents is `PRECONDITION_FAILED`; otherwise `jj bookmark set <branch> -r @-` and `jj git push --remote <remote> --bookmark <branch>`, which force-updates, with jj's lease, a branch a rebase rewrote. A slot that moved while its publish was checked is a `CONFLICT`, and nothing is pushed. A publish to a remote other than the branch's default push remote records it as the branch's push remote (`branch.<branch>.pushRemote` in the source cache, replacing what it had), as `git push -u` records an upstream, so status and later publishes follow it; a `kind: local` store's git config is never written, and `message` says the remote was not recorded. `workspacePush` leaves a jj slot of a `kind: local` store to its own publish. `message` is jj's account of the push, and any other refusal is `GIT_FAILED`, cause `push_failed`, quoting jj. `workspaceSourcePush` and `workspacePush` publish a jj slot the same way to its default remote, under `ref` when given, else the manifest's branch. |
 
 Conflict files come from `git ls-files -u`, so the list is exact and
 reflects only paths the index reports as conflicted. The
 `message` field carries the combined stdout + stderr from git for
-diagnostic display.
+diagnostic display. On a jj slot, the files are those of the conflicted
+commits the slot holds beyond `ref` (for a merge, of the merge commit), as
+jj records them, and `message` is jj's own account of the rebase or merge.
 
 ### Template introspection
 

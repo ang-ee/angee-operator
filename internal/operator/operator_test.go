@@ -137,7 +137,7 @@ jobs:
 	resp := doGraphQL(t, server, map[string]any{
 		"query": `{ stackStatus {
 			summary { services { total running completed failed skipped } jobs { total running completed failed skipped } }
-			services { name status reason }
+			services { name status outcome exitCode reason }
 			jobs { name status exitCode reason }
 		} }`,
 	})
@@ -156,8 +156,8 @@ jobs:
 	if job["name"] != "migrate" || job["status"] != "never-run" || job["exitCode"] != nil || job["reason"] != "" {
 		t.Fatalf("job = %#v, want migrate never-run", job)
 	}
-	if service := status["services"].([]any)[0].(map[string]any); service["reason"] != "" {
-		t.Fatalf("service = %#v, want no reason", service)
+	if service := status["services"].([]any)[0].(map[string]any); service["reason"] != "" || service["status"] != "declared" || service["outcome"] != "never-run" || service["exitCode"] != nil {
+		t.Fatalf("service = %#v, want declared, never-run, no exit code and no reason", service)
 	}
 }
 
@@ -332,6 +332,12 @@ name: inner
 	if link["workspace"] != workspaceName || link["slot"] != "app" || link["state"] != "ahead" || link["ahead"] != float64(1) || link["pushed"] != false {
 		t.Fatalf("link = %#v, want ahead unpushed app worktree", link)
 	}
+	// The record carries a chain_root from before #110; the deprecated
+	// innerStack still answers, always null.
+	workspaces := topology["workspaces"].([]any)
+	if len(workspaces) != 1 || workspaces[0].(map[string]any)["innerStack"] != nil {
+		t.Fatalf("topology workspaces = %#v, want one workspace with a null innerStack", workspaces)
+	}
 
 	resp = doGraphQL(t, server, map[string]any{
 		"query": `mutation {
@@ -350,6 +356,68 @@ name: inner
 	pushed := resp.Data["workspaceSourcePush"].(map[string]any)
 	if pushed["slot"] != "app" || pushed["state"] != "clean" || pushed["pushed"] != true || pushed["upstream"] != "fork/"+workspaceName {
 		t.Fatalf("workspaceSourcePush = %#v, want clean pushed fork upstream", pushed)
+	}
+}
+
+// The jj fields resolve on every GraphQL type that reports a slot, and on
+// the summary, through the struct the DTOs embed: for a git worktree slot,
+// conflicted is false, the change id empty and the lists null, and a cache
+// that is not a jj repository has no workspaces. REST carries the same flag.
+func TestOperatorReportsTheJJFieldsOfAGitSlot(t *testing.T) {
+	root, workspaceName, _, _ := setupOperatorGitWorkspace(t)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	const jjFields = `changeId baseBehind conflicted conflictPaths untrackedPaths`
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{
+			gitOpsTopology {
+				summary { conflicted }
+				sources { name workspaces { name owned path } ` + jjFields + ` }
+				links { slot ` + jjFields + ` }
+				workspaces { sources { slot ` + jjFields + ` } }
+			}
+			workspaceGit(name: "` + workspaceName + `") { slot ` + jjFields + ` }
+		}`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL errors = %#v", resp.Errors)
+	}
+	topology := resp.Data["gitOpsTopology"].(map[string]any)
+	if summary := topology["summary"].(map[string]any); summary["conflicted"] != float64(0) {
+		t.Errorf("summary = %#v, want conflicted 0", summary)
+	}
+	slots := []any{
+		topology["sources"].([]any)[0],
+		topology["links"].([]any)[0],
+		topology["workspaces"].([]any)[0].(map[string]any)["sources"].([]any)[0],
+		resp.Data["workspaceGit"].([]any)[0],
+	}
+	for i, slot := range slots {
+		fields := slot.(map[string]any)
+		if fields["conflicted"] != false || fields["changeId"] != "" || fields["baseBehind"] != float64(0) {
+			t.Errorf("entry %d = %#v, want conflicted false, an empty change id and no base behind", i, fields)
+		}
+		for _, key := range []string{"conflictPaths", "untrackedPaths"} {
+			if fields[key] != nil {
+				t.Errorf("entry %d %s = %#v, want null", i, key, fields[key])
+			}
+		}
+	}
+	if source := slots[0].(map[string]any); source["workspaces"] != nil {
+		t.Errorf("source workspaces = %#v, want null for a cache that is not a jj repository", source["workspaces"])
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/workspaces/"+workspaceName+"/status", nil)
+	rec := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rec, req)
+	var status map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("REST status = %d %s, %v", rec.Code, rec.Body.String(), err)
+	}
+	if source := status["sources"].([]any)[0].(map[string]any); source["conflicted"] != false {
+		t.Errorf("REST source = %#v, want conflicted false", source)
 	}
 }
 

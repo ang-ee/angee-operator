@@ -336,15 +336,16 @@ func (h *EventHub) SubscribeWorkspaceStatus(ctx context.Context, name string) <-
 	return b.Subscribe(ctx, subscriberBuffer)
 }
 
-// SubscribeServiceLogs returns a follow-tail channel for the named service.
-// The channel is owned by the runtime backend; cancelling ctx tears down
-// the underlying `logs --follow` process.
-func (h *EventHub) SubscribeServiceLogs(ctx context.Context, name string) (<-chan string, error) {
-	return h.platform.StackLogs(ctx, []string{name}, true)
+// SubscribeServiceLogs returns a follow-tail channel for the named service,
+// replaying its last tail lines first (0: runtime.DefaultLogTail). The channel
+// is owned by the runtime backend; cancelling ctx tears down the underlying
+// `logs --follow` process.
+func (h *EventHub) SubscribeServiceLogs(ctx context.Context, name string, tail int) (<-chan string, error) {
+	return h.platform.StackLogs(ctx, []string{name}, true, tail)
 }
 
-// SubscribeWorkspaceLogs returns a follow-tail channel for the named
-// workspace. Same lifecycle semantics as SubscribeServiceLogs.
+// SubscribeWorkspaceLogs serves the deprecated onWorkspaceLogs: a workspace
+// has no logs of its own (#110), so the channel closes at once.
 func (h *EventHub) SubscribeWorkspaceLogs(ctx context.Context, name string) (<-chan string, error) {
 	return h.platform.WorkspaceLogs(ctx, name, true)
 }

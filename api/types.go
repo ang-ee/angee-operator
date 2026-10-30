@@ -76,32 +76,59 @@ type StackSummary struct {
 // StatusCounts counts declared entries by outcome. Total counts every declared
 // entry; pending, stopped, never-run and unobserved entries count only there.
 // Failed counts entries that exited non-zero or could not start; a service
-// stopped by a signal (`angee stop`, Ctrl-C) is stopped, not failed. Skipped
-// counts entries the runtime skipped because a dependency failed.
+// stopped by a signal (`angee stop`, Ctrl-C) is stopped, not failed.
+// Restarting counts services the runtime is restarting after they exited.
+// Skipped counts entries the runtime skipped because a dependency failed.
 type StatusCounts struct {
-	Total     int `json:"total"`
-	Running   int `json:"running"`
-	Completed int `json:"completed"`
-	Failed    int `json:"failed"`
-	Skipped   int `json:"skipped"`
+	Total      int `json:"total"`
+	Running    int `json:"running"`
+	Completed  int `json:"completed"`
+	Failed     int `json:"failed"`
+	Restarting int `json:"restarting"`
+	Skipped    int `json:"skipped"`
 }
 
 type ServiceState struct {
 	Name    string `json:"name"`
 	Runtime string `json:"runtime"`
-	Status  string `json:"status"`
+	// Status is the runtime's own state, such as process-compose's
+	// `Completed` or docker compose's `exited`. Outcome is the verdict.
+	Status string `json:"status"`
+	// Outcome classifies the runtime state as the stack summary counts it:
+	// running, completed (exit 0), failed (a non-zero exit, or the command
+	// could not start), restarting (it exited and the runtime's restart
+	// policy is starting it again), stopped (ended by a stop signal), skipped
+	// (a dependency failed), pending, never-run (the runtime holds no state
+	// for it) or unknown (the runtime could not be queried). Empty when the
+	// runtime was not read, as in a create or update response.
+	//
+	// A local service killed by any signal reads as stopped, not failed:
+	// process-compose reports exit code -1 alike for a crash by signal (such as
+	// SIGSEGV), a SIGKILL from outside (such as the OOM killer) and a
+	// deliberate stop, so the outcome cannot tell them apart.
+	Outcome string `json:"outcome,omitempty"`
+	// ExitCode is the exit status of a service that ended, when the runtime
+	// reports one. A restarting local service reports the exit that ended its
+	// last run; docker compose reports none for a restarting container.
+	ExitCode *int `json:"exit_code,omitempty"`
+	// Restarts is how many times the runtime's restart policy has restarted
+	// the service since it was last started. Only process-compose reports it;
+	// docker compose does not, so a container service leaves it zero.
+	Restarts int `json:"restarts,omitempty"`
 	// Health mirrors the container healthcheck verdict from the
 	// runtime backend: typically `healthy`, `unhealthy`, or `starting`.
 	// Empty when no healthcheck is declared, the service has not been
 	// brought up, or the local-runtime backend doesn't expose one.
 	Health string `json:"health,omitempty"`
 	// Reason explains a skipped service: the failed job or service its
-	// dependency chain stopped at, such as `job deps failed (exit 1)`.
+	// dependency chain stopped at, such as `job deps failed (exit 1)`. For a
+	// failed service whose command could not start, it says so. For a pending
+	// service waiting on a service the runtime keeps restarting, it names
+	// that service.
 	Reason string `json:"reason,omitempty"`
 }
 
-// Job status values. They describe the latest run the runtime backend holds,
-// which lasts as long as its process-compose supervisor or compose container.
+// Job status values describe the latest native run or isolated operation attempt.
 const (
 	// JobNeverRun means the runtime holds no run: the stack is down, or the
 	// job has not run since the runtime came up.
@@ -116,6 +143,14 @@ const (
 	JobSkipped = "skipped"
 	// JobUnknown means the runtime backend could not be queried.
 	JobUnknown = "unknown"
+	// ServiceStopped is a service's outcome when it ended without failing:
+	// it exited after a stop signal, or it is a container that exists without
+	// running. Services otherwise take the Job* outcomes; a job has none.
+	ServiceStopped = "stopped"
+	// ServiceRestarting is a service's outcome while it waits out the
+	// runtime's restart backoff after it exited: process-compose's
+	// `Restarting` or docker compose's `restarting`.
+	ServiceRestarting = "restarting"
 )
 
 type JobState struct {
@@ -127,7 +162,9 @@ type JobState struct {
 	// runtime reports one.
 	ExitCode *int `json:"exit_code,omitempty"`
 	// Reason explains a failed or skipped job, such as `job deps failed (exit
-	// 1)` for a job skipped because deps failed.
+	// 1)` for a job skipped because deps failed, or a pending job waiting on a
+	// service the runtime keeps restarting, such as `waiting for service db:
+	// restarting (exit 1, 3 restarts)`.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -151,19 +188,28 @@ type JobRunNode struct {
 	Kind    string       `json:"kind"`
 	Status  JobRunStatus `json:"status"`
 	Message string       `json:"message,omitempty"`
+	// Isolated attempts are owned by this receipt, not shared supervisor state.
+	Isolated bool `json:"isolated,omitempty"`
+	// RuntimeGeneration is the native job generation before isolated execution.
+	// A different subsequent native generation takes precedence over this attempt.
+	RuntimeGeneration string `json:"runtime_generation,omitempty"`
+	Output            string `json:"output,omitempty"`
+	ExitCode          *int   `json:"exit_code,omitempty"`
 }
 
 type JobRunOperation struct {
-	ID             string       `json:"id"`
-	RootJob        string       `json:"root_job"`
-	ChainedRestart bool         `json:"chained_restart"`
-	Status         JobRunStatus `json:"status"`
-	CurrentStep    string       `json:"current_step,omitempty"`
-	StartedAt      time.Time    `json:"started_at"`
-	EndedAt        *time.Time   `json:"ended_at,omitempty"`
-	Nodes          []JobRunNode `json:"nodes"`
-	Output         string       `json:"output,omitempty"`
-	Error          string       `json:"error,omitempty"`
+	Artifact       *BackupArtifact `json:"artifact,omitempty"`
+	RequestDigest  string          `json:"request_digest,omitempty"`
+	ID             string          `json:"id"`
+	RootJob        string          `json:"root_job"`
+	ChainedRestart bool            `json:"chained_restart"`
+	Status         JobRunStatus    `json:"status"`
+	CurrentStep    string          `json:"current_step,omitempty"`
+	StartedAt      time.Time       `json:"started_at"`
+	EndedAt        *time.Time      `json:"ended_at,omitempty"`
+	Nodes          []JobRunNode    `json:"nodes"`
+	Output         string          `json:"output,omitempty"`
+	Error          string          `json:"error,omitempty"`
 	// ErrorCode and ErrorCause classify a failed run with the error
 	// contract's code (JOB_FAILED or TIMEOUT) and cause.
 	ErrorCode  string `json:"error_code,omitempty"`
@@ -176,9 +222,11 @@ type JobRunPreview struct {
 }
 
 type WorkspaceRef struct {
-	Name               string         `json:"name"`
-	Path               string         `json:"path"`
-	Template           string         `json:"template"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Template string `json:"template"`
+	// Deprecated: a workspace no longer renders a stack (#110), so ChainRoot
+	// is always empty. It is removed in a later release.
 	ChainRoot          string         `json:"chain_root,omitempty"`
 	Allocations        map[string]int `json:"allocations,omitempty"`
 	ProcessComposePort int            `json:"process_compose_port,omitempty"`
@@ -189,15 +237,19 @@ type WorkspaceRef struct {
 }
 
 type WorkspaceStatusResponse struct {
-	Name               string                          `json:"name"`
-	Path               string                          `json:"path"`
-	Exists             bool                            `json:"exists"`
-	State              string                          `json:"state"`
-	Error              string                          `json:"error,omitempty"`
-	Template           string                          `json:"template"`
-	Inputs             map[string]string               `json:"inputs,omitempty"`
-	Sources            []WorkspaceSourceStatus         `json:"sources,omitempty"`
-	Chain              []string                        `json:"chain,omitempty"`
+	Name     string                  `json:"name"`
+	Path     string                  `json:"path"`
+	Exists   bool                    `json:"exists"`
+	State    string                  `json:"state"`
+	Error    string                  `json:"error,omitempty"`
+	Template string                  `json:"template"`
+	Inputs   map[string]string       `json:"inputs,omitempty"`
+	Sources  []WorkspaceSourceStatus `json:"sources,omitempty"`
+	// Deprecated: a workspace no longer renders a stack (#110), so Chain and
+	// ChainRoot are always empty. They are removed in a later release. Chain is
+	// always sent (`"chain": []`), as it was when every workspace listed its
+	// own template there, so REST clients that read it keep a list.
+	Chain              []string                        `json:"chain"`
 	ChainRoot          string                          `json:"chain_root,omitempty"`
 	Allocations        map[string]int                  `json:"allocations,omitempty"`
 	ProcessComposePort int                             `json:"process_compose_port,omitempty"`
@@ -208,10 +260,19 @@ type WorkspaceStatusResponse struct {
 	TTLExpiresAt       *time.Time                      `json:"ttl_expires_at,omitempty"`
 	Expired            bool                            `json:"expired"`
 	MountedBy          []WorkspaceMountRef             `json:"mounted_by,omitempty"`
-	InnerStack         *StackStatusResponse            `json:"inner_stack,omitempty"`
-	InnerError         string                          `json:"inner_error,omitempty"`
+	// Deprecated: the operator no longer reads a stack inside a workspace
+	// (#110); that stack's own operator reports it. InnerStack is always nil
+	// and InnerError always empty. They are removed in a later release.
+	InnerStack *StackStatusResponse `json:"inner_stack,omitempty"`
+	InnerError string               `json:"inner_error,omitempty"`
 }
 
+// WorkspaceSourceStatus is one slot of a workspace as its driver reads it.
+// State is one of missing, ready (a linked local source), clean, dirty,
+// ahead, behind, diverged, branch-mismatch or error. JJSlotState's fields
+// are read from jj slots only: Conflicted is a flag beside State, never a
+// state of its own, so a client that does not know it reads the slot as
+// before.
 type WorkspaceSourceStatus struct {
 	Slot           string `json:"slot"`
 	Source         string `json:"source"`
@@ -231,6 +292,28 @@ type WorkspaceSourceStatus struct {
 	Pushed         bool   `json:"pushed"`
 	UnpushedReason string `json:"unpushed_reason,omitempty"`
 	Error          string `json:"error,omitempty"`
+	JJSlotState
+}
+
+// JJSlotState is what the status of a jj slot reads beyond a git slot's,
+// shared by every DTO that reports a slot. Its fields are zero for any other
+// slot. jj records a conflict in the commit and goes on, so a slot can be
+// conflicted in any state.
+type JJSlotState struct {
+	// ChangeID is the change id of the slot's working-copy commit.
+	ChangeID string `json:"change_id,omitempty"`
+	// BaseBehind counts the commits of the slot's base it lacks, so a moved
+	// base shows even when Behind counts against the slot's upstream.
+	BaseBehind int `json:"base_behind,omitempty"`
+	// Conflicted reports a conflicted commit among the slot's own, and
+	// ConflictPaths lists the conflicted files, sorted.
+	Conflicted    bool     `json:"conflicted"`
+	ConflictPaths []string `json:"conflict_paths,omitempty"`
+	// UntrackedPaths lists the new files jj leaves out of the working-copy
+	// commit (over its snapshot.max-new-file-size, or outside its
+	// snapshot.auto-track), relative to the slot, a directory ending in "/".
+	// Only the slot holds them, so they make it dirty.
+	UntrackedPaths []string `json:"untracked_paths,omitempty"`
 }
 
 type WorkspacePersistPath struct {
@@ -274,8 +357,14 @@ type GitOpsLink struct {
 	Pushed         bool   `json:"pushed"`
 	UnpushedReason string `json:"unpushed_reason,omitempty"`
 	Error          string `json:"error,omitempty"`
+	JJSlotState
 }
 
+// GitOpsSummary counts the topology's sources and links by state. Worktrees
+// counts the links of git worktree slots, so not jj slots, although git
+// lists a colocated jj slot among its primary's worktrees. Unpushed and
+// Conflicted count beside the states: a source or link in any state can be
+// unpushed, and a jj slot in any state conflicted.
 type GitOpsSummary struct {
 	Sources        int `json:"sources"`
 	Workspaces     int `json:"workspaces"`
@@ -289,6 +378,7 @@ type GitOpsSummary struct {
 	Missing        int `json:"missing"`
 	Error          int `json:"error"`
 	Unpushed       int `json:"unpushed"`
+	Conflicted     int `json:"conflicted"`
 }
 
 type ServiceInitRequest struct {
@@ -536,6 +626,13 @@ type WorkspaceSourceGitOpRequest struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// WorkspaceSourceMigrateRequest is the body of `POST
+// /workspaces/{name}/sources/{slot}/migrate`: the mode to move the slot to,
+// "jj" or "worktree"; empty moves it to the other of the two.
+type WorkspaceSourceMigrateRequest struct {
+	To string `json:"to,omitempty"`
+}
+
 // MintConnectionTokenRequest is the body for `POST /tokens/mint`.
 // `Actor` is required and becomes the `sub` claim; `Scope` is the optional
 // capability set carried on the operator-API token; `TTL` is a Go duration
@@ -651,22 +748,44 @@ type WorkspaceRepairSlot struct {
 	Status *WorkspaceSourceStatus `yaml:"status,omitempty" json:"status,omitempty"`
 }
 
+// SourceState is a source's cache or local store, or, with Slot set, one
+// workspace slot of it (workspace git, push and sync-base). Workspaces is
+// set for a source whose cache or store is a jj repository, when the
+// operator found jj on PATH the first time it looked.
 type SourceState struct {
-	Name           string      `json:"name"`
-	Slot           string      `json:"slot,omitempty"`
-	Kind           string      `json:"kind"`
-	Path           string      `json:"path"`
-	Exists         bool        `json:"exists"`
-	State          string      `json:"state,omitempty"`
-	Branch         string      `json:"branch,omitempty"`
-	Ref            string      `json:"ref,omitempty"`
-	CurrentRef     string      `json:"current_ref,omitempty"`
-	Dirty          bool        `json:"dirty,omitempty"`
-	Upstream       string      `json:"upstream,omitempty"`
-	Ahead          int         `json:"ahead,omitempty"`
-	Commits        []CommitRef `json:"commits,omitempty"`
-	Behind         int         `json:"behind,omitempty"`
-	Pushed         bool        `json:"pushed"`
-	UnpushedReason string      `json:"unpushed_reason,omitempty"`
-	Error          string      `json:"error,omitempty"`
+	Name           string            `json:"name"`
+	Slot           string            `json:"slot,omitempty"`
+	Kind           string            `json:"kind"`
+	Path           string            `json:"path"`
+	Exists         bool              `json:"exists"`
+	State          string            `json:"state,omitempty"`
+	Branch         string            `json:"branch,omitempty"`
+	Ref            string            `json:"ref,omitempty"`
+	CurrentRef     string            `json:"current_ref,omitempty"`
+	Dirty          bool              `json:"dirty,omitempty"`
+	Upstream       string            `json:"upstream,omitempty"`
+	Ahead          int               `json:"ahead,omitempty"`
+	Commits        []CommitRef       `json:"commits,omitempty"`
+	Behind         int               `json:"behind,omitempty"`
+	Pushed         bool              `json:"pushed"`
+	UnpushedReason string            `json:"unpushed_reason,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	Workspaces     []SourceWorkspace `json:"workspaces,omitempty"`
+	JJSlotState
+}
+
+// SourceWorkspace is one jj workspace of a source's jj repository, as jj
+// lists it. Owned reports that the checkout at the path this stack's
+// manifest gives one of its jj slots of that repository is that workspace,
+// and Path is then that path. Every other workspace, the repository's own
+// (default), other stacks' slots, and a slot of this stack whose checkout is
+// gone or cannot be read alike, is not owned and has no path: jj's record of
+// a workspace's path goes stale once the workspace moves, so it is not
+// reported. Nor is a workspace owned whose checkout holds another of the
+// names this stack could have given the slot, as when one `jj edit`ed the
+// other's working-copy commit, since which is this stack's cannot be told.
+type SourceWorkspace struct {
+	Name  string `json:"name"`
+	Owned bool   `json:"owned"`
+	Path  string `json:"path,omitempty"`
 }

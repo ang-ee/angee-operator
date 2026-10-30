@@ -124,27 +124,21 @@ func logLimitValue(value *int) int {
 	return *value
 }
 
-func collectLogStream(logs <-chan string, limit int) string {
+// logTailValue returns a logs field's tail argument, 0 (the default tail) when
+// absent. The platform validates it.
+func logTailValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+// collectLogStream joins a logs read. The platform has already kept it within
+// the field's limit (StackLogsLimited), so it is not cut again here.
+func collectLogStream(logs <-chan string) string {
 	var out strings.Builder
-	remaining := limit
-	truncated := false
 	for line := range logs {
-		if remaining <= 0 {
-			if !truncated {
-				out.WriteString("\n[truncated]\n")
-				truncated = true
-			}
-			continue
-		}
-		if len(line) > remaining {
-			out.WriteString(line[:remaining])
-			out.WriteString("\n[truncated]\n")
-			remaining = 0
-			truncated = true
-			continue
-		}
 		out.WriteString(line)
-		remaining -= len(line)
 	}
 	return out.String()
 }

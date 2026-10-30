@@ -6,6 +6,1036 @@ latest tag.
 
 ## Unreleased
 
+## v0.27.2 — 2026-10-30
+
+### Fixed
+
+- **A local service that ends while the operator stops it no longer fails
+  the stop.** v0.27.1 skips a process that has already ended, but one could
+  still end between that check and the supervisor handling the stop, and
+  process-compose then refuses to stop it (`Failed to stop: 'web'`), failing
+  the `deps` job or the chained restart. When the stop fails, the operator
+  reads every requested process again and accepts the failure once none of
+  them runs or may still launch, including when the supervisor itself has
+  exited. A process that still runs, states it cannot read, or a supervisor
+  that now serves another stack's project keep the failure.
+
+## v0.27.1 — 2026-10-30
+
+### Fixed
+
+- **A dependency operation no longer fails stopping a local service that has
+  already stopped.** The process-compose backend asked its supervisor to stop
+  every process it knew, including ones that had completed, failed or were
+  disabled, and the supervisor's refusal failed the `deps` job and the chained
+  restart. Stop now skips a process that is not running and is in a terminal
+  or disabled state, and still stops running and transitional ones (#149).
+- **A job whose prerequisites the operation verified runs even when the shared
+  supervisor still holds an older failed run of one.** After an isolated
+  prerequisite run succeeded, process-compose's own `depends_on` check read
+  the stale failed state in the shared supervisor and skipped the job. A job
+  the operation graph dispatches after its prerequisites passed now runs
+  without that native check. A direct call keeps its declared dependencies,
+  and a failed prerequisite still prevents dispatch (#149).
+
+## v0.27.0 — 2026-10-30
+
+### Added
+
+- Explicit leading `default(...)` filters now allow absent job inputs, without
+  changing empty-string semantics or weakening required inputs and secrets.
+
+- Jobs can declare `holds: [service, ...]` to stop services before any selected
+  job runs. A chained run reapplies held and dependent services once after all
+  selected jobs succeed; a plain run leaves held services stopped. Operation
+  nodes report partial stop failures and held outcomes. Failures and cancellation
+  retain holds, including restoring a hold after a failed service recovery.
+  Local held jobs use isolated native execution, with per-node durable status and
+  output for logs and prerequisites; newer native generations take precedence.
+  Unsafe hot registration of recovery services fails without a project rewrite.
+  The durable root lock protects live job receipts from interrupted-operation
+  recovery by concurrent CLI or daemon readers.
+
+## v0.26.0 — 2026-10-30
+
+### Added
+
+- **`angee workspace source migrate <workspace> <slot> [--to jj|worktree]`
+  moves a slot between a git worktree and a jj slot** of its source's cache
+  (phase 9 of `.agents/plans/jj-native-operator.md`), with REST `POST
+  /workspaces/{name}/sources/{slot}/migrate` (`{"to": ...}`), the GraphQL
+  mutation `workspaceSourceMigrate(workspace, slot, to)` and the remote
+  client. Without `--to` the slot becomes the other of the two.
+  - It keeps the slot's commits and every file it holds that neither
+    tracks, which `git worktree remove` would delete (`node_modules`,
+    `.venv`, `.env`): the slot is renamed aside in its own directory, its
+    git registration pointed at it, the new checkout made at its
+    path on the same commit, and the untracked and ignored entries renamed
+    into it, before the manifest records the new `mode` and the old
+    checkout, and only its own git registration, are removed. A jj slot's
+    workspace is forgotten; a worktree's cache is colocated with jj first.
+  - To jj, the worktree must be on its branch with no changes to tracked
+    files, and the jj slot starts on that branch's bookmark, named as
+    `workspace create` names one. Untracked files git did not ignore become
+    changes in the jj slot's working-copy commit, as jj records every file
+    it does not ignore; the result's message lists them.
+  - To a worktree, the jj slot's working copy must hold nothing (no
+    changes, no files jj does not track, `untracked_paths`) over a commit
+    that is not conflicted. Its branch is set on that commit, created or
+    moved forward, but not past commits the slot does not hold
+    (`branch_moved`), and the worktree is cut on it, or detached at the
+    commit for a slot on no branch.
+  - A failure before the manifest is written rolls back in reverse, leaving
+    the slot the checkout it was; a failure in the clean-up after it is a
+    warning in the message, with the command that finishes it. An old
+    checkout that holds anything written into it after its files were
+    carried across (a shell or server whose working directory was in it
+    follows it aside) is kept, not removed, and the message says where;
+    `workspace destroy` refuses while anything a migrate set aside sits
+    beside a slot.
+  - A rollback that cannot finish stops, so it deletes nothing it could not
+    put back, and fails with `INTERNAL`, cause `migrate_incomplete`, naming
+    where the slot's checkout is. A migrate keeps a record under
+    `run/migrate/` while the slot may be set aside, rewritten at each step
+    with how far it got and the steps that recover from there by hand, in
+    order, each recorded before what it undoes is done: the removal of the
+    new checkout, as far as it got, before it is made, and every entry
+    carried across before the first is moved, each moved back by hand only
+    when it is in the new checkout and no longer in the old one, so a
+    migrate killed at any point leaves nothing out of the record. One left
+    by a migrate that stopped or was killed makes the slot's status an
+    error naming the steps, and its `repair`, `destroy` and slot verbs
+    refuse it (`migrate_incomplete`) until the steps are followed and the
+    record deleted. Removing the old checkout's registration drops its
+    `HEAD` reflog and `refs/worktree/*`, as destroy does.
+  - Refused: a slot that holds a repository of its own below its top (a
+    `.git` or `.jj`; `nested_repositories`, naming them) outside a
+    directory the migrate moves whole: one in a tracked directory, either
+    way, and, to jj, one anywhere git does not ignore, since jj records
+    nothing of it in its working copy. A package's clone under an ignored
+    `node_modules/` or `.venv/` moves with its directory, and, to a
+    worktree, so does one in any directory that holds no tracked file. Also
+    refused: a worktree with skip-worktree or assume-unchanged files, whose
+    local versions git does not report, or with submodules; a branch
+    another worktree has checked out (`branch_checked_out`); a checkout
+    that is not the jj workspace this stack made (`slot_not_held`); a slot
+    at the workspace's root, or with other slots inside it; and a `kind:
+    local` source's slot. The slot's git registration alone is pointed at
+    where it moves, never other worktrees' (`git worktree repair` would
+    rewrite them all).
+
+### Changed
+
+- **A manifest written by this release may not load in v0.25.0 or
+  earlier.** `angee workspace create` now writes `vcs:` on every workspace
+  slot that names no `mode` (below), pure-git stacks included, and the
+  strict manifest decoder of v0.25.0 and earlier refuses that key. An older
+  operator, such as a container image pinned to v0.25.0, then cannot load
+  an `angee.yaml` a newer CLI wrote. Upgrade every angee that reads the
+  stack together. The record stays: it is what makes a later `vcs` change
+  safe for existing slots.
+
+### Fixed
+
+- **A failed git worktree create no longer prunes the source cache.** When
+  a worktree slot's checkout failed after git had added it, the clean-up
+  ran `git worktree prune`, dropping every registration of the cache whose
+  checkout this process cannot see, such as other stacks' slots out of a
+  container's sight. It now drops only that worktree's own registration,
+  as jj slots' removal does; one it cannot drop is left, with a warning,
+  for the next create at that path to drop.
+- **Changing a stack's `vcs` no longer changes what its existing slots
+  are.** A slot that names no `mode` followed the stack's `vcs`, existing
+  ones too, so switching a stack from `vcs: jj` to `git` read its jj slots
+  as git clones: status read them through git, and destroy removed them
+  without forgetting their jj workspaces, whose names then refused the next
+  create of the workspace as a `CONFLICT` (the gap phase 6 of
+  `.agents/plans/jj-native-operator.md` left). `angee workspace create` now
+  records, on each slot that names no mode, the `vcs` it was cut with (`vcs:
+  git` or `vcs: jj` beside `source:`), and that slot follows it rather than
+  the stack's, so a stack's `vcs` decides only for workspaces created after
+  it changes. It is not a mode: `sync-base` and `workspace push` still walk
+  only slots whose manifest names a mode (plan Q7), so a work-state `.work`
+  slot stays out of them. A slot recorded by v0.25.0 or earlier records no
+  `vcs` and follows the stack's as before; give it one by hand before
+  changing the stack's `vcs`. An unknown slot `vcs` is refused when the
+  manifest loads.
+- **`angee stack update --template` applies the template's `vcs`.** The
+  merge kept the manifest's `vcs` whatever the template rendered, so a
+  stack template's `vcs` answer never reached an existing stack. It is now
+  template-origin, as sources are, when the render names one; a render that
+  names none keeps the manifest's. Since slots keep the `vcs` they were
+  created with, the change reaches only workspaces created after it: when
+  the update changes `vcs`, it records the old one on each existing slot
+  that names no mode and records none, which freezes the stack's `vcs` as
+  it was for them (right unless it was edited by hand since they were
+  created), and reports `~ vcs (<old> to <new>)`, `""` to `git` included,
+  and `~ workspaces/<workspace>/sources/<slot>` for each slot it pinned. A `vcs` set by
+  hand in `angee.yaml` is replaced by the template's on the next `stack
+  update --template`, as a hand-edited source is; answer the template's
+  input instead.
+
+- **A jj slot's branch publishes to a second remote.** A branch already
+  published to one remote (origin) could not be published to another: jj
+  refuses to create a remote bookmark for a bookmark that tracks another
+  remote but not that one ("Refusing to create new remote bookmark"), and
+  the publish failed with `push_failed` after setting the bookmark. Publish
+  now tracks the branch on the remote that does not have it yet before it
+  pushes.
+- **A jj publish refused with `branch_moved` names what to merge.** When
+  the branch moved on another remote than the publish's (the slot published
+  to origin, sync-base rebased it, and a collaborator pushed onto the old
+  version, so a publish to a second remote finds the bookmark conflicted),
+  the hint named the bare branch, and `angee workspace source merge … feature`
+  then failed with "Name 'feature' is conflicted". The hint now names a ref
+  that is one commit holding the stray commits: the remote branch that holds
+  them (`feature@origin`), the slot's own branch when it is not conflicted,
+  else the stray commits themselves by id.
+
+## v0.25.0 — 2026-10-29
+
+### Added
+
+- **Status reports a jj slot's conflicts, change id and base, and the
+  topology lists a source's jj workspaces** (phase 7 of
+  `.agents/plans/jj-native-operator.md`). jj records a conflict in a commit
+  and goes on, so a jj slot could be conflicted with nothing saying so.
+  - Workspace status, `repair`'s slot status, the topology's links and
+    `workspace git` now carry, for a jj slot, `conflicted` and
+    `conflict_paths` (the conflicted files of the slot's own commits),
+    `change_id` (its working-copy commit's), `base_behind` (the commits of
+    its base it lacks, even when `behind` counts against its upstream), and
+    `untracked_paths` (the new files jj leaves out of the working-copy
+    commit, which make it dirty), in JSON and GraphQL alike. The per-slot
+    verbs, `push` and `sync-base` return the same fields once phase 8 runs
+    them on jj slots.
+  - The state vocabulary does not change: `conflicted` is a flag beside
+    `state`, so existing clients read a slot as before. It is `false`, and
+    the other fields absent, for every other slot. `summary.conflicted`
+    counts conflicted slots, and `summary.worktrees` still counts git
+    worktree slots only.
+  - A source whose cache or store is a jj repository lists its jj
+    workspaces, in the topology and in source status and list, as
+    `workspaces: [{name, owned, path}]`. A workspace is `owned`, with the
+    slot's `path`, when the checkout at a path this stack's manifest gives
+    one of its jj slots is that workspace; the repository's own, other
+    stacks' slots (a stack of the same name included) and a slot whose
+    checkout is gone or cannot be read are not owned and have no path, since
+    jj's record of a workspace's path goes stale once it moves. A source that
+    is not a jj repository, or an operator that found no jj on PATH, lists
+    none and runs no jj.
+  - `workspace git` and `workspace status` print `conflicted:` and up to ten
+    of a slot's conflicted files after its state.
+
+- **`workspace sync-base` rebases jj slots** (the first half of phase 8 of
+  `.agents/plans/jj-native-operator.md`). With no method, each slot is now
+  synced its own way: a git worktree slot is merged, as before, and a jj slot
+  is rebased onto its base (`jj git fetch --all-remotes`, then `jj rebase -b
+  @ --onto <base>` in the slot), its working-copy commit with any
+  uncommitted changes riding along. The CLI sends no method unless
+  `--merge` or `--rebase` is given; `--merge` over a workspace with a slot
+  whose manifest names mode `jj` is refused (`INVALID_INPUT`, naming the
+  slot) before anything is fetched.
+  - **A rebase rewrites commits that were already published, so the next
+    publish of such a slot force-updates its remote branch** (jj does so with
+    a lease). The default merge of a git slot never rewrites.
+  - A jj slot's conflict is recorded in its commits and reported on its state
+    (`conflicted`, `conflict_paths`, and `conflicted: <paths>` after the
+    state in the CLI's output), and the sync goes on to the next slot; a git slot that
+    stops on conflicts still fails the sync with `merge_conflict`. A failure
+    that is not a conflict quotes jj (`... failed. jj: Error: ...`).
+  - A rebase that would rewrite another checkout's commits is refused
+    before any slot is rebased (`PRECONDITION_FAILED`, cause
+    `shared_commits`, naming them): another jj workspace's working-copy
+    commit stacked on the slot's commits, or a branch a git worktree of the
+    same cache has checked out at one of them. So is one that would rewrite
+    a commit jj holds immutable, such as a tagged one (cause
+    `immutable_commits`), and sync-base or rebase of a jj slot on a machine
+    that cannot run jj slots (cause `jj_unavailable`).
+  - A jj slot that holds files jj does not track is refused, naming them
+    (cause `untracked_paths`), before anything is fetched: a base that adds
+    the same path would have the local file kept over its own. When jj warns
+    while it rebases a slot (it skipped updating a file the working copy
+    held, such as an ignored one), the warning is on that slot's `error` in
+    sync-base and in the rebase's `message`.
+  - A bookmark on the rebased commits that nothing has checked out moves
+    with them, as jj moves it, and a pushed one force-updates, with a lease,
+    on its next publish.
+  - A slot's sync that fails after others synced names those slots, which
+    stay synced.
+  - A `kind: local` store's jj slot is rebased onto its base as the store has
+    it; angee fetches nothing into a user's store.
+  - `workspace source rebase` runs on a jj slot (`ref` in jj's spelling, such
+    as `main@origin`), with the same check, and answers a recorded conflict
+    as `ok` and `conflicted`. `merge-abort`, `rebase-abort` and
+    `rebase-continue` on a jj slot answer `INVALID_INPUT`: a jj slot never
+    has a merge or rebase in progress.
+
+- **jj slots publish, push, merge, fetch and diff** (the second half of
+  phase 8 of `.agents/plans/jj-native-operator.md`). A jj slot now does
+  everything a git slot does but `workspace source pull`.
+  - `workspace source publish` publishes a jj slot's commits under a branch
+    (`--branch`, else the slot's manifest `branch`) to `--remote`, else the
+    remote git pushes that branch to from the slot, the order a git slot's
+    publish follows, so the source's `push_default` decides for both. A
+    publish to another remote records it as the branch's push remote
+    (`branch.<branch>.pushRemote` in the source cache), as `git push -u`
+    records an upstream, so status, later publishes and destroy follow it;
+    a `kind: local` store's git config is never written, and the result
+    says the remote was not recorded. It
+    sends the commits since the branch on the remote, else since the base,
+    as `jj bookmark set <branch> -r @-` and `jj git push --remote <remote>
+    --bookmark <branch>`, and returns `ok` with `nothing to publish` when
+    there are none. The manifest's rules for the remote (canonical,
+    `branches`) apply as for git slots.
+  - **A publish after a rebase-based sync force-updates the remote branch,
+    with jj's lease**: `sync-base` rewrote the commits it published, so jj
+    moves the remote branch sideways, and refuses if the remote branch moved
+    since the slot last fetched it.
+  - Publish sends the commit under the working copy, so a slot with changes
+    in its working-copy commit is refused (`uncommitted_changes`, with the
+    `jj commit` that records them), and so is one with untracked paths
+    (`untracked_paths`). A commit the remote lacks that has conflicts or no
+    description, which jj will not push, is refused before anything changes,
+    naming each (`PRECONDITION_FAILED`, cause `conflicted_commits` or
+    `undescribed_commits`). So is a branch that is not the slot's to set
+    (`INVALID_INPUT`): one a git worktree of the source has checked out, and
+    one the remote has that the repository does not track, and one that
+    exists, here or on the remote, and is not the slot's, which publish
+    would move onto the slot's commits. A branch that holds work the slot
+    lacks, such as a collaborator's commit pushed onto it, or their new
+    version of one of the slot's commits, fetched since, is refused naming
+    them (`PRECONDITION_FAILED`, cause `branch_moved`): jj's lease passes
+    once they are fetched, and the push would drop them. Any other refusal of the
+    push quotes jj (`GIT_FAILED`, cause `push_failed`).
+  - `workspace source push` and `workspace push` publish a jj slot to its
+    default remote, under `--ref` when given, else its branch, and leave a
+    slot with nothing to send alone. `workspace push` now reaches the jj
+    slots whose manifest names mode `jj`, checks and plans every slot before
+    it pushes any, and still skips a slot that names no mode, and a jj slot
+    of a `kind: local` store, which its own publish reaches.
+  - `workspace source merge` merges a ref, in jj's spelling, into a jj slot
+    as the commit under a fresh working copy (`jj new @- <ref> -m "Merge
+    <ref>"`, then `jj new`), so the next publish sends it; a ref the slot
+    already holds makes no merge, and a conflict is answered as `ok` and
+    `conflicted`. It refuses what the working copy holds, as publish does,
+    and a described working-copy commit with no changes, which it would
+    leave behind.
+  - `workspace source fetch` and `diff` run on a jj slot; a diff's `--ref` is
+    in jj's spelling (`main@origin`). A jj slot of a `kind: local` store is
+    never fetched into (`INVALID_INPUT`).
+  - `workspace source pull` of a jj slot is refused (`INVALID_INPUT`, cause
+    `jj_slot_unsupported`), with a hint naming `workspace sync-base` and the
+    slot's own fetch and rebase: jj takes in a base by rebasing onto it.
+    That is the cause's only use now.
+
+### Changed
+
+- **Go API: `api.WorkspaceSourceStatus` and `api.GitOpsLink` are no longer
+  comparable with `==`**, since the embedded `api.JJSlotState` holds slices
+  (`api.SourceState` already held some). Its fields are promoted, so they
+  read as before, but a composite literal sets them through `JJSlotState:`.
+- **A file name in a jj slot's `unpushed_reason` that holds `", "` is
+  quoted**, as one that does not print already was, so it does not read as
+  two names.
+
+- **`sync-base` and `workspace push` walk only the slots whose manifest names
+  a mode** (owner's answer to Q7 of the jj plan). A slot that names none is
+  skipped by both, even a jj slot under `vcs: jj`, so a work-state `.work`
+  slot is left to its own workflow, and `workspace push` no longer refuses a
+  workspace for one. The `workspace source` verbs still reach such a slot.
+- **jj slots commit as git's identity when the operator's jj has none.** A
+  jj command angee runs that may record a commit (a snapshot, a slot's
+  creation) reads `user.name` and `user.email` from jj's config, and sets
+  `JJ_USER` or `JJ_EMAIL` only for one that is empty: from git's configured
+  identity, else angee's placeholder when git has none either, as merges and
+  rebases of git slots do. jj recorded an empty author and committer before,
+  which `jj git push` refuses.
+- **sync-base checks each git slot's branch and its uncommitted changes
+  together, slot by slot.** It checked every slot's branch first before.
+  With slot `a` dirty and slot `b` off its branch, the refusal now names
+  `a`'s uncommitted changes rather than `b`'s branch; nothing is touched
+  either way.
+- A failure's message names the tool it quotes: ` jj: <line>` for a jj
+  command, ` git: <line>` for git as before. A step that fails with neither
+  tool's words, such as resolving a base, now ends with the error itself
+  (`resolving the base of source slot "app" failed: <error>.`).
+
+- **`workspace push` checks each git slot's branch and its uncommitted
+  changes together, slot by slot**, as sync-base now does. It checked every
+  slot's branch first before. The slot verbs ask the slot's driver whether
+  they may run, so their refusals word the fix in the slot's own tool; a git
+  slot's codes, causes and messages are unchanged.
+- A jj command that fails outside a verb's own steps, such as a diff onto a
+  ref jj does not know, is `GIT_FAILED` quoting jj, as a git command's
+  failure is; it was `INTERNAL`.
+- A failure to plan a publish or a push, or to create a publish's branch,
+  names the step (`planning the publish of source slot "app" failed. git:
+  ...`, `creating branch "x" in source slot "app" failed. git: ...`) where it
+  named the git command before.
+
+## v0.24.0 — 2026-10-29
+
+### Added
+
+- **A workspace slot can be a jj workspace** (phase 6 of
+  `.agents/plans/jj-native-operator.md`). `mode: jj` makes a slot a jj
+  workspace of its source's cache, which angee colocates with jj the first
+  time, or of a `kind: local` store that already is a jj repository; a
+  stack's new `vcs: jj` (default `git`) makes every slot that names no mode
+  one. The manifest keeps a slot's mode as written, so `vcs` decides for
+  existing slots without one too. One stack can mix git and jj slots of one
+  source.
+  - `workspace create`, `status`, `git`, `repair` and `destroy` handle jj
+    slots. A slot is created in place on its branch's bookmark when that
+    exists, else at its base, colocated with git when the primary is, and
+    named `<stack>--<workspace>` (plus `--<slot>` for several jj slots of
+    one primary) in the primary; no stack, workspace or slot name in such a
+    name may be empty, hold `--` or start or end with `-`. A name the
+    primary already has for a slot this stack's manifest does not record, or
+    that is checked out anywhere else, is a `CONFLICT` naming it, and is
+    never forgotten; destroy forgets only the workspace the slot's own
+    checkout is.
+  - A create first checks that this machine can run jj slots (jj with
+    `workspace add --colocate`, git 2.48 or later, not Windows;
+    `PRECONDITION_FAILED`, cause `jj_unavailable`) and that each primary is
+    where the manifest says: a cache outside the stack root must already
+    exist, so a container must mount it at the same path.
+  - `--sync` keeps a jj slot that is still its workspace's checkout, with
+    its uncommitted work; a slot whose directory is gone, or empty, is added
+    again by repair, under the name it had. Rollback and `destroy --purge`
+    forget the slot's jj workspace and drop its git worktree registration,
+    and no other, without pruning the cache, also when the cache's lock
+    cannot be taken, and a rollback puts back an empty directory a slot was
+    made in. `destroy` lets a jj slot whose directory is empty go.
+  - Status reads a jj slot through jj, which snapshots it first, so an edit
+    no jj command has recorded yet is `dirty`; a jj slot is never
+    `branch-mismatch`. `destroy` refuses a jj slot with work of its own, and
+    one that holds a nested `.git` or `.jj`, which jj does not record,
+    naming them.
+  - Every other slot verb (`workspace source fetch`, `pull`, `push`,
+    `diff`, `merge`, `rebase`, `merge-abort`, `rebase-abort`,
+    `rebase-continue`, `publish`) refuses a jj slot, and `workspace push`
+    and `sync-base` refuse a workspace that has one, before touching any
+    slot: `INVALID_INPUT` (HTTP 400), cause `jj_slot_unsupported`. They
+    come with phase 8.
+
+- **`angee doctor` says that jj slots need git 2.48.** Adding a jj slot
+  (`jj workspace add --colocate`) links its git worktree with relative paths,
+  so git sets `extensions.relativeWorktrees` and
+  `core.repositoryformatversion = 1` on the source's cache, and git before
+  2.48 refuses that cache and every worktree slot of it. `tool.jj` now warns
+  when jj can create slots but git is older than 2.48. `tool.git` still warns
+  only below 2.42, now naming 2.48, so a stack that does not use jj gets no
+  new warning.
+
+### Changed
+
+- **`workspace destroy`'s refusal says "sources that have not been
+  pushed"** rather than "git sources", since it now names jj slots too.
+
+- **The jj driver counts files jj will not snapshot as uncommitted, and
+  keeps a pushed verdict when a slot's base is gone** (the prerequisites of
+  phase 6 step 5 in `.agents/plans/jj-native-operator.md`, settling its
+  Q10). Both ship with phase 6, so a jj slot's status and destroy guard
+  have them from the start.
+  - A new file over jj's `snapshot.max-new-file-size`, or outside its
+    `snapshot.auto-track`, never reaches the slot's working-copy commit, so
+    the slot read as clean and pushed while only it held the file. Status
+    now takes its snapshot through `jj status`, without asking git, and
+    counts the untracked paths it lists as uncommitted. Its other reads are
+    pinned to the operation that snapshot recorded; when another jj command
+    records one around it, Status snapshots again, up to three times, then
+    fails. A `jj status` report it does not recognize (a heading out of
+    place, or a report cut short) fails the read, rather than passing for
+    one with no untracked paths. What jj neither records nor lists still
+    reads as clean: a nested repository, which destroy refuses instead (see
+    Added), and a new file outside the slot's sparse patterns, which jj
+    slots do not support.
+  - With a base that exists nowhere, the jj driver returned no verdict at
+    all. Like the git driver, it now keeps the verdict wherever one needs no
+    base: a dirty slot is not pushed, and one with an upstream is pushed when
+    nothing is ahead of it. Unlike git, which reads no base there, it returns
+    that verdict with the base's error as a `*vcs.CountError`, since the
+    conflicts it reads are bounded by the base. A clean slot with no
+    upstream still gets the base's error alone, so a destroy refuses it.
+
+### Fixed
+
+- **The GitOps topology lists the commits of a cache that go-git cannot
+  open.** `angee gitops topology --with-commits N` (REST `with_commits`,
+  GraphQL `withCommits`) returned no commits, and no error, for a source
+  whose cache has `extensions.relativeWorktrees`, which go-git refuses: a
+  cache a jj slot is added to, or one a worktree slot was added to under
+  `worktree.useRelativePaths` before v0.22.0. Such a cache is now read with
+  the git CLI, which returns the same commits, refs, times and authors as
+  go-git does for any other, though commits with the same committer time
+  may come in another order. A cache whose commits cannot be read is logged
+  as a warning instead of being left out silently. The other git reads of a
+  cache or slot already fell back to the git CLI.
+
+## v0.23.0 — 2026-10-28
+
+### Added
+
+- Manual backup preview and capture REST APIs, restricted to the operator admin
+  bearer. Completed backups publish a verified ZIP and versioned manifest with
+  original recovery secrets, exact per-database dumps, selected persistence,
+  workspaces, and Git/JJ source history bundled into the archive (`bundle`) or
+  verified published revisions (`fetch_published`).
+  Backup attempts retain idempotent native JobRun receipts across restarts, with
+  bounded redacted native diagnostics on capture failure.
+  Configuration-only archives are supported; schedules and cold restore remain deferred.
+  Quick discovery bounds filesystem enumeration and reports incomplete sizes
+  as unknown while preserving the full selected inventory.
+- A running backup holds the operator's mutation lease and `run/operator.lock`
+  until its receipt is final, so other stack mutations (job runs, restarts,
+  applies, and the rest) answer `409` until it ends. It cannot be cancelled
+  through the API. `ANGEE_JOB_TIMEOUT` (30 minutes by default, `0` for none)
+  bounds the whole backup: capture, archive and verify.
+- An interrupted backup's receipt fails when it is next read after a restart,
+  and that read removes the backup's staging directory, which may hold a
+  plaintext dump, and any archive it published without a completed receipt;
+  the receipt's error names any of them it cannot remove.
+  Nothing deletes `backups/archives/*.zip` or `state/job-runs/*.json` yet;
+  retention is the caller's.
+- A backup receipt's `output` keeps every capture's output, each line labelled
+  `<group>/<name> | `, as the last whole lines within 1 MiB. Capture output
+  and errors lose their terminal control sequences (CSI and OSC), such as the
+  window title naming the host that process-compose sets. A file deleted
+  between a directory's listing and its copy is left out of the capture
+  instead of failing it, except in repository metadata, where it still fails
+  the backup.
+- Container capture jobs write into the backup's staging directory, which the
+  operator owns with mode 0700, so on Linux they must run as root or as the
+  operator's uid.
+- Trusted job `capture` declarations and persist `backup: exclude` policy.
+  Local captures use isolated native process-compose foreground jobs without
+  modifying or restarting the shared supervisor project. Container captures run
+  as one-off `docker compose run --rm` containers, removed with `docker rm -f`
+  when a capture times out or is cancelled while the operator runs; stopping
+  the operator mid-capture is best-effort, and the container may run on until
+  it finishes. Local transient capture
+  is explicitly unavailable on Windows until native process-tree cancellation
+  is verified; discovery reports that limitation before capture starts.
+- Capture jobs run only through `POST /backups`. They are manual, cannot
+  declare `run_on` or be a dependency, are left out of chained restarts, and
+  `POST /jobs/{name}/run`, `GET /jobs/{name}/run-preview` and the GraphQL
+  `jobRun` and `jobRunPreview` refuse them with `INVALID_INPUT` (HTTP 400),
+  whatever inputs they are given.
+- Backup receipts are `JobRunOperation`s read through `GET /job-runs/{id}` and
+  GraphQL `jobRunOperation(id)`; their nodes have the new `JobRunNodeKind`
+  `BACKUP`. Only the admin bearer sees them; a minted token gets the same
+  404 / `NOT_FOUND` as for an unknown ID. A backup never becomes
+  `latestJobRun` (REST `/job-runs/latest`), and backup receipts never evict
+  the latest job run.
+- The `/backups` request bodies are decoded strictly: an unknown field, nested
+  or not, or anything after the one JSON value is a 400. Every other endpoint
+  decodes as before.
+- `fetch_published` source capture works on a jj-colocated source: jj's own
+  `.jj/` tree and `refs/jj/` refs are exempt only once the jj layer has
+  verified them against the declared store, and jj then refuses any visible
+  commit no remote bookmark or tag holds, and a working-copy commit that is
+  not empty and undescribed. Branch and HEAD reflogs still count, so history
+  jj rewrote within git's reflog expiry is still refused there; use the
+  `bundle` policy for those sources.
+- **The jj driver makes and removes a slot** (phase 5 step 6 of
+  `.agents/plans/jj-native-operator.md`). It colocates a source's cache with
+  jj, creates a jj workspace of it in place, refusing a taken name or an
+  occupied path and rolling back a failed create, and forgets and removes
+  one. Like the rest of the driver, it is not reachable from a manifest until
+  phase 6.
+
+### Changed
+
+- Receipt output and errors are redacted for every job run, not only for
+  backups. A multi-line secret is registered whole and, so that a cut log tail
+  cannot expose a key, each of its lines that can carry secret material: one
+  that is not PEM armour (`-----BEGIN …-----`, `-----END …-----`) and either
+  holds at least 16 consecutive base64, base64url or hex characters, or has a
+  value (less a leading `"key":` or `key:`) of at least 8 bytes with a
+  character other than a letter, a space, `_`, `-` or `.`. Its other lines,
+  such as `"enabled": true` or `kind: Config`, are common text, masked only as
+  part of the whole value.
+
+### Fixed
+
+- **Workspace merges and rebases commit as you, not as
+  `angee <angee@example.invalid>`.** `ws source merge` set angee's
+  placeholder as the merge commit's author and committer, and `rebase` and
+  `rebase --continue` as the committer of every replayed commit, even when
+  git had your identity configured.
+  - They now commit with the identity git resolves for the slot, as
+    `sync-base` does: repository, global and system config, `author.*` and
+    `committer.*`, `EMAIL` for an email no config gives, and the operator's
+    own `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_CONFIG_GLOBAL`,
+    `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM` and the `user`, `author` and
+    `committer` entries of `GIT_CONFIG_COUNT` (its other entries, which can
+    carry tokens, stay out), so a container can name its identity in its
+    environment. The identity resolved is passed to the operation, so it
+    commits as exactly that. A rebase still keeps each replayed commit's
+    author.
+  - Only a role git reports no identity for, as for an operator in a
+    container whose user never set one, falls back to the placeholder;
+    `user.useConfigOnly` keeps git from guessing one from the host name. An
+    identity git refuses, such as a configured name of only `<>`, fails the
+    operation with git's message instead of being replaced.
+  - Publish's push and the aborts set no identity, since they commit nothing.
+  - The jj driver no longer sets `JJ_USER` and `JJ_EMAIL` to angee's: it
+    passes the operator's own `JJ_USER`, `JJ_EMAIL` and `JJ_CONFIG` through,
+    so jj records your identity from those or your jj config. It has no
+    placeholder yet for a user with no jj identity; no stack can select the
+    jj driver, and the fallback comes before any jj verb pushes.
+
+### Security
+
+- **Built with Go 1.26.10.** This release's binaries and images are built
+  with Go 1.26.10. v0.22.0's were built with Go 1.26.9, whose `crypto/x509`
+  has a vulnerability fixed in 1.26.10 (GO-2026-6809). govulncheck reports
+  none on this release.
+
+## v0.22.0 — 2026-10-13
+
+### Added
+
+- **Git sources can declare several remotes** (`remotes:`), with one
+  `push_default` and one `canonical` remote (phase 2 of
+  `.agents/plans/jj-native-operator.md`, steps 1-4). A remote is a bare URL or
+  a mapping with `url`, `canonical` and `branches`; `repo:` still declares the
+  one remote `origin`.
+  - A new cache, or `clone`-mode slot, is cloned from the canonical remote
+    (else `origin`, else the only remote) under that remote's name, whatever
+    git's `clone.defaultRemoteName` says. It gets the other remotes,
+    `remote.pushDefault`, and a push URL on the canonical remote that makes
+    every push to it fail (`angee-fetch-only://<name>`). A cache is
+    configured in a staging directory beside its path and moved into place
+    only then, with a plain clone's permissions. A symlinked `cache_path` is
+    cloned into its target, and an existing empty directory (a mount point,
+    say) in place, configured right after. A path that holds anything else
+    is refused.
+  - `angee source fetch` and `source pull` reconcile an existing cache's
+    declared remotes, push block and push default, warning for each change.
+    Under `remotes:` they also make `default_ref` track the clone remote, so
+    a cache cloned under `repo:`, whose origin `remotes:` now names a fork,
+    pulls from the canonical remote. Bring-up and workspace provisioning only
+    warn about differences, as they already did for `origin`. Undeclared
+    remotes are never touched, and a `repo:` source never reads or writes
+    push URLs or tracking.
+  - `workspace status` and `workspace repair` warn when a clone slot's
+    (`mode: clone`, or a git slot with no mode) remotes differ from the
+    manifest's, such as a remote marked canonical after the slot was
+    created. They change nothing.
+  - The manifest refuses `repo` and `remotes` together, a `push_default`
+    that is undeclared or canonical, two canonical remotes, `branches` on the
+    canonical remote, invalid remote names or names differing only in case,
+    relative URLs under `remotes`, URLs (`repo` included) with control
+    characters or surrounding spaces, invalid `branches` patterns, and
+    several remotes with no clone remote. A workspace template's inline
+    source is checked the same way before anything is cloned. The mapping
+    form accepts `<<` merge keys, as the rest of the manifest does.
+  - `angee workspace source publish` keeps to the remotes (step 5): see
+    Changed.
+- **`angee doctor` checks for what jj slots will need** (phase 5 of
+  `.agents/plans/jj-native-operator.md`). A new `tool.jj` check reports
+  `jj --version` and whether `jj workspace add --colocate` exists, and
+  `tool.git` warns when git is older than 2.42. Both are warnings, never
+  errors, since no stack can declare a jj slot yet. The jj driver behind
+  them (`internal/vcs/jjdriver`) reads a slot's status and diff, is tested
+  in CI against the jj commit in `.github/jj-rev`, and is not reachable from
+  a manifest.
+
+### Changed
+
+- **Publish picks its remote from the source and keeps to its rules**
+  (phase 2 step 5 of `.agents/plans/jj-native-operator.md`).
+  - Without `--remote` (REST and GraphQL: no `remote`), publish goes where
+    git itself would push the branch: its `pushRemote`, else
+    `remote.pushDefault` (which `push_default` sets in the cache and in clone
+    slots), else the remote it tracks, else `origin`, else the only remote.
+    It used to go to `origin` whatever the source declared. When git names
+    no remote, as with several remotes and no push default, publish is
+    refused with git's reason (`INVALID_INPUT`, field `remote`) instead of
+    guessing.
+  - A remote the slot doesn't have is refused (`INVALID_INPUT`, field
+    `remote`); when the slot's own push configuration named it, the error
+    says so.
+  - A publish to the canonical remote is refused (`INVALID_INPUT`, field
+    `remote`). It used to fail at the remote's push block, after creating a
+    detached slot's branch, which a retry then tripped over.
+  - A branch that matches none of the target remote's `branches` patterns is
+    refused (`INVALID_INPUT`, field `branch`).
+  - All of these are checked before a detached slot's branch is created or
+    anything is pushed.
+- **The base ref is read from the source's clone remote.** A slot's base
+  (its `ref`, else `default_ref`) was read from `origin/<ref>` first and then
+  from the other remotes in an unspecified order, which varied between
+  calls. It now comes from the remote branch git has the local branch track,
+  then the clone remote's, then the other remotes' by name. This decides a
+  new worktree slot's start, status counts and `sync-base`. A `repo:`
+  source resolves as before unless its local branch tracks another remote.
+- The workspace slot verbs (fetch, pull, push, `workspace push`, sync-base,
+  publish, merge, rebase, and abort and continue) go through the slot driver
+  (phase 4b of `.agents/plans/jj-native-operator.md`), with no change in
+  behaviour, except that a failed fetch (in a slot fetch, pull or sync-base)
+  names the source's clone remote rather than `origin` when the source
+  declares `remotes:`. The slot driver also decides what a push and a
+  publish do (phase 4d), with no change in behaviour. It also creates and
+  removes slots (phase 4c): a worktree's staging, install and registration
+  repair, a clone, and removal with `git worktree prune`. The git commands
+  are the same, except that a workspace with several worktree slots of one
+  source prunes once per slot rather than once per source.
+- **A workspace no longer renders a stack (#110).** A workspace and a stack
+  are separate concerns: a workspace is files (its rendered template and its
+  source slots), and a stack's services and jobs reach it through
+  `workspace://` mounts, `workdir` and env.
+  - A workspace template that declares `chain` or `chain_root` is refused
+    with `INVALID_INPUT`, naming #110, before anything is materialized: on
+    `workspace create`, `workspace update`, create preflight and `template`.
+    `templates` leaves such a template out. A stack template's own `chain:`
+    is unchanged.
+  - The operator no longer reads a stack inside a workspace: workspace
+    status, the topology and the snapshot stop querying its Docker and
+    process-compose. That stack's own operator reports it.
+  - A stack inside a workspace no longer reads its parent: `stack update
+    --template` takes its ports from its own answers file, like any stack,
+    where it used to override them with the parent's workspace allocations.
+  - A workspace created from a chaining template keeps its files, the stack
+    inside included, now an ordinary stack at that path. Its status reports
+    no inner stack and `workspace destroy` works as before, but `workspace
+    update` refuses it with `INVALID_INPUT` naming #110: a render of the
+    workspace template alone would overwrite or delete what the chain
+    rendered, and an update cannot switch the recorded template. Destroy it
+    and create it again. The record is left as it is.
+  - `angee doctor` reports a chaining workspace template as an error.
+  - `workspace destroy --purge` deletes a workspace's directory without
+    stopping a stack that lives inside it, which the operator does not know
+    about; stop such a stack first. The guide now says so.
+
+### Deprecated
+
+- **Workspace inner-stack fields and workspace logs (#110)**, removed in a
+  later release once the consoles in use stop selecting them:
+  - `innerStack` (REST `inner_stack`) is always null, and `innerError`,
+    `chain` and `chainRoot` (REST `inner_error`, `chain`, `chain_root`) are
+    always empty, on workspace status and refs. REST and `--json` keep
+    sending `"chain": []` until the fields are removed; before, every
+    workspace sent its own template there;
+  - `workspaceLogs`, `onWorkspaceLogs`, `GET /workspaces/{name}/logs` and
+    `angee workspace logs` return nothing, since a workspace has no logs of
+    its own; the CLI command prints a deprecation note on stderr.
+  - `angee workspace status` no longer prints `chain_root`, `inner_stack` or
+    `inner_error` lines.
+
+### Fixed
+
+- **`stack update --template` finds the answers file of a stack whose
+  `ANGEE_ROOT` has more than one segment (#128).** copier writes the answers
+  file in the directory `ANGEE_ROOT` is relative to, two levels above the
+  stack root for `deploy/.angee`. The update looked only in the stack root and
+  its parent, so it refused such a stack with "missing answers file".
+  - It now walks up from the stack root, nearest first, and takes the first
+    answers file whose recorded `ANGEE_ROOT` puts the stack at the stack root
+    by the rule `stack init` places it with. No `ANGEE_ROOT` means the file's
+    own directory, an absolute one names the stack root itself, and a
+    relative one is joined to the file's directory, `./deploy/.angee` and
+    `deploy/.angee/` included. A relative one that climbs out with `..`,
+    which `stack init` refuses, never matches. `stack update --template -i`
+    reads the answers the same way.
+  - Any other answers file on the way is skipped, such as an unrelated
+    project's further up, or one in the stack root that names another root.
+    The update used to take a file in the stack root whatever it recorded.
+    Only a skipped file's `ANGEE_ROOT` is read, so its other answers can
+    hold anything, and files above the stack's own are never read.
+  - A file on the way that can't be read as a YAML mapping stops the update
+    with `INVALID_INPUT` on `template`, naming the file, since it might be the
+    stack's own answers, damaged. So does an answer in the stack's own file
+    that is neither a scalar nor a list, which used to be an internal error.
+  - This covers templates that declare `ANGEE_ROOT` as a copier question, and
+    templates that leave it out of the questions with the default `.`, as
+    angee-django's stack templates do: copier records no `ANGEE_ROOT` for
+    them, and the stack sits beside the answers file. A template that
+    declares `ANGEE_ROOT` only under `_angee.inputs` with another default,
+    such as `.angee`, records none either, and its answers still can't be
+    found, as before.
+  - Paths are compared cleaned, without resolving symlinks, as the parent
+    check did. A `--root` that runs through a symlink to a directory between
+    the stack root and the answers file does not find them. A stack root or
+    render directory that is itself a symlink is refused when the render opens
+    it, as before.
+- **`stack update --template` no longer moves path inputs (#121).** It read a
+  `type: path` answer from the stack's answers file, where copier recorded it
+  already relative to `ANGEE_ROOT`, and resolved it again as if it were new
+  input relative to the directory copier renders into. On a stack whose
+  `ANGEE_ROOT` is not `.`, every update moved the path up by the depth of
+  `ANGEE_ROOT`: under `.angee/`, `PROJECT_PATH: ..` became `../..`, then
+  `../../..`. Stacks with `ANGEE_ROOT=.`, as the angee-django templates use,
+  were not affected.
+  - A recorded answer is now replayed as it is, and so is a value passed on
+    the update that equals the recorded string, as the `-i` form and the
+    immutability check already take it. Any other value passed on the update
+    (`--input`, `--answers`, or a field changed in `-i`) is resolved once, as
+    `stack init` resolves it: relative to the directory holding the answers
+    file. So is the default of a path question the template gained since the
+    last render.
+  - The `-i` form shows a recorded path relative to `ANGEE_ROOT`, but reads an
+    edited one relative to the directory holding the answers file.
+  - A chained template that inherits one of the stack template's own path
+    inputs unchanged takes the recorded answer as it is too. Any other input
+    it inherits, such as one the stack declares `type: str`, and any input
+    its chain entry sets are resolved for that layer, as at init.
+  - Known limits: two chain layouts still move a chained template's path
+    input once, on the first update, and keep it there (before, they moved on
+    every update). One is a chain entry that sets its own `ANGEE_ROOT`: with
+    `ANGEE_ROOT: "."`, `app` becomes `../app`. The other is a chain entry
+    that forwards the stack's path input: with
+    `PROJECT_PATH: "${inputs.PROJECT_PATH}"`, `../app` becomes `../../app`.
+    No shipped chained template declares a path input.
+  - A stack that has already been updated keeps the moved value in its
+    answers file. Pass the right one once with
+    `angee stack update --template --input PROJECT_PATH=<path>`, relative to
+    the directory holding the answers file. An `immutable` path input refuses
+    a new value: edit the answers file by hand. A question that changed from
+    `type: str` to `type: path` is replayed as recorded, the raw value, and
+    the same `--input` repair fixes it; spell the value differently from the
+    recorded string (`./app` for `app`), since an equal value is kept as
+    recorded.
+- **A log read's byte limit keeps the newest whole lines of the whole read
+  (#118).** `stackLogs(services: [api, worker], limit: 60)`
+  returned `api    | api-1495 … api   \n[truncated]`: cut mid-line, with
+  nothing from `worker`. The process-compose backend capped each process
+  before labelling it, the GraphQL field then kept the start of the joined
+  text, and the container backend kept the oldest bytes of its output.
+  - The limit now applies once, to the labelled read of both runtimes, in the
+    platform: the runtimes return every line the tail asks for. It keeps the
+    last whole lines, cut at a line boundary. A read it shortens starts with
+    a `[truncated]` line, which counts toward the limit. The marker used to
+    come last, after the limit. A limit of 12 bytes or less has room only for
+    the marker, so a read it shortens is the marker alone, longer than a
+    limit below 12.
+  - "Newest" means last in read order, not in time. Container lines come
+    first, as docker compose orders them, then local lines grouped by service
+    in the order requested. So with `[worker, api]` and a small limit, `api`'s
+    last lines are kept and `worker` can be left out.
+  - `angee job run` keeps a local job's output within 1 MiB by the same rule.
+    The remote client's limited read, served by `/stack/logs`, does too.
+  - The platform holds only the last `limit + 1` bytes of a read while it
+    collects it, and a failed docker command's error carries the last 4 KiB
+    of its output, cut on a line boundary, instead of all of it.
+  - The CLI and the REST log endpoints take no byte limit, as before.
+- **The process-compose API token is also read from `PC_API_TOKEN_PATH`
+  (#118).** Only `PC_API_TOKEN` was read, so a supervisor given its token
+  through a file answered 401 to log reads, to process updates and to
+  `GET /live`, and the stack could not be brought up. angee now reads the
+  token as process-compose v1.120.0 does (`GetApiToken` in
+  `src/config/config.go`): `PC_API_TOKEN` when it is set and not empty, as it
+  is; else the contents of the file `PC_API_TOKEN_PATH` names, with
+  surrounding whitespace trimmed. A file that can't be read gives no token,
+  as in process-compose, and the supervisor answers as it will. A relative
+  path is read from the stack root, where angee runs the supervisor. When the
+  env file sets a key twice, the last one counts, as it does for the
+  supervisor.
+- **`process-compose down` and `list` get the stack's env file.** They ran
+  with angee's inherited environment alone, so a token set only in the
+  stack's env file never reached them. `angee status` showed local services
+  as unknown, a local `job run` failed, `angee down` failed, and `angee dev`
+  waited for the supervisor forever. A missing env file behaves as before.
+
+- **Stacks and the CLI take turns on a shared source cache** (decision D9 of
+  `.agents/plans/jj-native-operator.md`). The operator holds a lock file
+  beside a git source's cache, `.<name>.angee.lock` (beside a symlinked
+  `cache_path`'s target), while it changes the cache's worktree
+  registrations or talks to its remotes: cloning or fetching the cache
+  (bring-up, `source fetch`), `source pull`, `source push`, and adding or
+  pruning workspace worktrees (`workspace create`, `repair`,
+  `destroy --purge`, and a failed create's rollback). Two stacks sharing a
+  cache, or a stack's operator and the CLI, could run these at the same
+  time, so one could prune a worktree the other was still installing, or
+  remove the other's clone staging directory.
+  - One now waits for the other, with a warning that another angee process
+    holds the cache, and gives up after `ANGEE_LOCK_TIMEOUT` when that is
+    set, with a `CONFLICT` error. A rollback that cannot get the lock still
+    removes what it created and leaves the prune to the next change.
+  - The verbs on a slot (fetch, pull, push, sync-base, merge, rebase,
+    publish) take no lock: git keeps each ref update whole, and they never
+    prune registrations.
+  - The directory holding the cache must be writable, for the lock file. A
+    `cache_path` bind-mounted on its own, whose parent the operator cannot
+    write, now fails with an error saying to mount the parent directory
+    instead.
+- **Worktree slots work when the user's git writes relative worktree
+  paths.** With `worktree.useRelativePaths = true` in git's config (git
+  2.48+), a `mode: worktree` slot got a `.git` file pointing relative to the
+  temporary directory it was staged in, so once installed at its path every
+  git command in it failed with "not a git repository". The add also set
+  `extensions.relativeWorktrees` and `core.repositoryformatversion = 1` on
+  the cache, and git before 2.48 and go-git refuse to open a repository with
+  that extension, the cache and every slot of it.
+  - Worktrees are now added with absolute links
+    (`git -c worktree.useRelativePaths=false worktree add`; older git ignores
+    the key), so the slot works and the cache's repository format is left as
+    it was.
+  - A cache hit before this fix keeps the extension, and its slots stay
+    broken: this release changes neither. To return the cache and its slots
+    to absolute links, run, in this order:
+
+    ```sh
+    git -c worktree.useRelativePaths=false -C <cache> worktree repair <slot>...
+    git -C <cache> config --unset extensions.relativeWorktrees
+    ```
+
+    Name each slot by its absolute path: with `-C`, git reads a relative
+    path from the cache's directory. Whichever slots it is given, the repair
+    checks every worktree registered in the cache and fixes each broken one.
+
+## v0.21.3 — 2026-10-11
+
+### Changed
+
+- **Services restart on failure by default (#111).** A service that exited
+  stayed down until someone restarted it, because neither generated file
+  carried a restart policy. Services now take `restart: on_failure | always |
+  no`, and **the default is `on_failure`**, so on upgrade every service that
+  sets nothing restarts after a non-zero exit, a crash or an outside kill.
+  - Each runtime applies its own policy, with its own backoff. process-compose
+    gets an `availability` block and waits its default second before each
+    restart. Docker Compose gets `restart: on-failure`, or `unless-stopped`
+    for `always`, and doubles its own wait up to a minute.
+  - Neither limits the number of restarts. process-compose counts every
+    restart since the process was last started, so a limit would eventually
+    leave a long-running service down for good. A crash loop's output stays
+    bounded by each local service's rotated `run/logs/<name>.log` (#113).
+  - A stop either runtime was asked for (`angee down`, `service stop`,
+    `service restart`) never triggers a restart.
+  - Jobs take no `restart`; it is refused on a job.
+  - The edge container restarts on failure too.
+  - process-compose now restarts a local service whose readiness probe fails,
+    where it used to leave it stopped.
+  - Set `restart: no` to keep the old behaviour for a service.
+  - On upgrade, the first `angee up` recreates container services, because
+    Compose sees a changed definition. A running process-compose supervisor
+    applies the policy when Angee next starts or restarts a process, or after
+    `angee down`.
+- **A crash loop is visible.**
+  - A service waiting out its restart backoff has the outcome `restarting`,
+    counted under `summary` as `restarting` (REST and GraphQL). A local
+    service also reports the exit that ended its last run and `restarts`,
+    process-compose's restart count; Docker's status reports neither for a
+    container.
+  - `angee status` lists restarting services under the counts, and
+    `angee service list` shows `restarting (exit 1, 3 restarts)` or
+    `running (3 restarts)`.
+  - A pending job or service waiting on a service the runtime keeps
+    restarting has a `reason` naming it. A running service counts only when
+    it has a readiness probe, the only case in which process-compose holds
+    its dependents back.
+  - `angee dev` and `angee dev -d` print that reason once while they wait
+    for jobs, and a service still restarting when they finish may be in the
+    summary line: it is, when the last status read finds it in its backoff.
+  - To apply a fix to `angee.yaml` to a crash loop, run
+    `angee service restart <name>`. `angee service up <name>` now also passes
+    a changed definition to a local service caught in its restart backoff,
+    where it used to leave it alone; once the service has relaunched, `up`
+    sees it running and leaves it. A job waiting on the service is skipped
+    when process-compose replaces it.
+
+- **Workspace and source status agree with `workspace destroy` on whether a
+  source is pushed.** They computed it separately. Status now uses destroy's
+  rule from v0.16.0: a source on a detached HEAD counts only commits that no
+  branch, remote branch or tag holds, and a source without an upstream
+  counts only commits that neither its base ref nor its remote counterpart
+  (`<remote>/<ref>`, origin's first) holds.
+  - After `sync-base`, a source reads `ahead` of its local base but
+    `pushed`, where it used to read unpushed while push and destroy had
+    nothing to do.
+  - The unpushed reason follows the same rule. A diverged source without an
+    upstream says "N commit(s) ahead of base ref main with no upstream", and
+    a detached one "N commit(s) on a detached HEAD that no branch holds".
+  - The topology's unpushed count and `workspace repair` go by `pushed`, so
+    a `clean` detached source with commits of its own is counted and named.
+    Repair describes an ahead-but-pushed source as "ahead by N commit(s)".
+  - The `ahead`, `behind` and `diverged` states are unchanged.
+- Slot reads go through a driver interface (`internal/vcs`, with a git
+  driver), the first step towards jj-backed slots (phase 4a of
+  `.agents/plans/jj-native-operator.md`, now committed). Source caches are
+  read through the same git driver.
+- A failing source diff is reported as `GIT_FAILED` with git's message,
+  where it was `INTERNAL`; the HTTP status is unchanged.
+
+### Fixed
+
+- **A service that exits non-zero reads as failed (#112).** process-compose
+  reports a process that exited as `Completed` whatever its exit status, and
+  the service state passed that through, so a service that exited 1 looked
+  finished while the summary counted it as failed.
+  - Service states keep the runtime's `status` and add `outcome`, the verdict
+    the summary counts (`running`, `completed`, `failed`, `stopped`,
+    `skipped`, `pending`, `never-run` or `unknown`), and `exit_code`. This is
+    additive in REST and GraphQL (`outcome`, `exitCode`). `outcome` can be
+    filtered, ordered and grouped on like `status`.
+  - A failed service whose command could not start has the reason
+    `could not start`.
+  - `angee status` lists each failed service under the counts, and
+    `angee service list` shows `failed (exit 1)` in place of the runtime's
+    status.
+  - A local service killed by a signal still reads as `stopped`:
+    process-compose reports exit code -1 for a crash by signal, a `SIGKILL`
+    (the OOM killer's included) and a deliberate stop alike.
+- **`angee logs` shows the newest lines (#113).** With no `--tail`,
+  `process-compose process logs` replays the supervisor's whole 1000-line
+  buffer over a websocket that drops lines once a client falls about 256 lines
+  behind. The read returned the oldest ~256 lines and missed the newest.
+  - A local service or job is read through the supervisor's log range
+    endpoint (`GET /process/logs/{name}/0/{n}`), which returns the newest
+    lines whole in milliseconds; `process logs` took about a second per
+    process. Several local services are read at once. A follow still runs
+    `process logs --follow --tail N`.
+  - Log reads and follows, from the CLI and the operator, ask both runtimes
+    for the last 200 lines by default. Container logs used to return the
+    whole history. The log stream endpoint's default backlog is 200 lines too.
+  - `angee logs`, `service logs` and `job logs` take `-n`/`--tail`, the REST
+    `/stack/logs` and `/services/{name}/logs` take `?tail=`, and the GraphQL
+    `stackLogs`, `serviceLogs` and `onServiceLogs` take `tail`, up to 10000.
+    A local service holds its last 1000 lines. Following a local service or
+    job replays at most 256 lines; a larger tail is refused with an error
+    naming its log file. The log socket refuses a `tail` that is not a number
+    instead of reading it as the default.
+  - A local service the running supervisor has not loaded (declared after it
+    started) is reported at once as not found (`NOT_FOUND`, REST 404), where
+    `process logs` waited on it forever. A read while process-compose
+    replaces a service with its updated definition is a `CONFLICT` that asks
+    for a retry.
+  - `angee job run` shows every line the supervisor holds of a local job's
+    run (the last 1000), where it showed the oldest 256, and a failure names
+    the job's log file.
+  - Logs of several local services show every one of them. Only the first
+    was shown, because `process-compose process logs` reads one process.
+    When a read covers more than one service, every local line is labelled
+    with its service as docker compose labels its own.
+  - Each stack's process-compose supervisor logs to `run/process-compose.log`
+    under the stack root, without color codes, unless `PC_LOG_FILE` names
+    another file. Before, every stack logged to one shared file in `$TMPDIR`.
+  - Each local service and job also writes its output to
+    `run/logs/<name>.log` through process-compose's `log_location`: one
+    plain text line per output line with its time and level, flushed as it
+    arrives and rotated by process-compose at 10 MB with three rotated files
+    kept. Output past the 1000-line buffer, or after the supervisor exits, is
+    no longer lost.
+- **`workspace destroy` let a `clone` source go while commits only its own
+  branches held**, on a detached HEAD or without an upstream. A clone is a
+  repository of its own, so its branches go with it. Destroy and status now
+  count, for a clone, every commit that no remote branch or tag holds ("N
+  commit(s) on a detached HEAD that no remote branch or tag holds", "N
+  commit(s) that no remote branch or tag holds, with no upstream"). Tags
+  count because git keeps fetched tags with local ones, so a clone pinned
+  at a release tag still reads pushed. Source cache status uses the same
+  rule. Worktree sources keep the rule above: their branches stay in the
+  source cache. A clone without an upstream whose base branch was deleted
+  can now be destroyed when every commit is on a remote branch; it used to
+  be refused.
+- `workspace status` reported a source whose base exists only on a remote
+  (`origin/<ref>`) in the cache as an error; it now counts against that
+  remote ref.
+
 ## v0.21.2 — 2026-10-09
 
 ### Security
