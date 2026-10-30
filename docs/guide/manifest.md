@@ -555,11 +555,16 @@ TTL values are stored and surfaced by status commands.
 Each entry under a workspace's `sources` records how one source was
 materialized into the workspace. `mode` is `worktree` (a git worktree of the
 source's shared cache), `clone` (a standalone clone) or `jj` (a jj workspace
-of the cache, see [jj slots](#jj-slots)). Omitted, the stack's `vcs` decides:
-under `vcs: jj` the slot is a jj slot; otherwise a git source is cloned and a
-local source is linked. A local source is linked under any mode but `jj`.
-Any other value is rejected when the manifest is loaded. A worktree source is
-cut on `branch`. Without a branch it starts on a detached HEAD at `ref` and
+of the cache, see [jj slots](#jj-slots)). Omitted, the slot's `vcs` decides,
+else the stack's: under `jj` the slot is a jj slot; under `git` a git source
+is cloned and a local source is linked. A local source is linked under any
+mode but `jj`. Any other value of either is rejected when the manifest is
+loaded. `angee workspace create` records `vcs` on every slot that names no
+mode, set to the stack's `vcs` (`git` when it names none), so changing the
+stack's `vcs` later changes only the slots of workspaces created after it.
+angee v0.25.0 and earlier refuse a manifest that holds a slot's `vcs`, so
+every angee that reads the stack must be newer. A worktree source is cut on
+`branch`. Without a branch it starts on a detached HEAD at `ref` and
 gets its branch when it is published (see
 [workspace commands](./commands.md)).
 
@@ -581,6 +586,7 @@ workspaces:
     sources:
       app:
         source: app   # no mode: a jj slot under vcs: jj
+        vcs: jj       # recorded by create, so the slot stays a jj slot
         ref: main
       tree:
         source: app
@@ -634,7 +640,8 @@ workspaces:
   remote git pushes that branch to (the source's `push_default` decides, as
   for git slots, unless a publish to another remote recorded that one for
   the branch, which it does in a source cache and never in a `kind: local`
-  store); `merge`, `fetch` and `diff` run on it too. `workspace push`
+  store); `merge`, `fetch` and `diff` run on it too, and `workspace source
+  migrate` makes a git worktree of it, or of a worktree a jj slot. `workspace push`
   leaves a jj slot of a `kind: local` store to its own publish. Only `workspace
   source pull` is refused: jj takes in a base by rebasing onto it (see
   [workspace commands](./commands.md#jj-slots)). The verbs that walk a whole
@@ -646,9 +653,15 @@ workspaces:
   in a slot (a `git clone` into it, say), so status reads such a slot clean;
   `workspace destroy` refuses it until the nested repository is gone.
 
-`vcs` applies to every slot that names no mode, existing ones included: the
-manifest keeps a slot's mode as written. Set it before creating workspaces,
-or give existing slots an explicit `mode`.
+A slot that names no mode keeps the `vcs` create recorded on it, whatever
+the stack's `vcs` says later: a jj slot stays one, read through jj, and its
+destroy forgets its jj workspace; a clone stays a clone. To move an existing
+slot between a git worktree and a jj slot, use
+[`angee workspace source migrate`](./commands.md#migrating-a-slot), which
+records the slot's new `mode`. A slot recorded before angee recorded `vcs` on
+it (a workspace created with v0.25.0 or earlier) follows the stack's `vcs`,
+existing ones included: before changing the stack's `vcs`, give such a slot
+the `vcs` or `mode` it was created with.
 
 ### Workspace defaults
 

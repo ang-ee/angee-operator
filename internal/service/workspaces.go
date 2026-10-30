@@ -414,6 +414,13 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		status.Error = pathErr.Error()
 		return status
 	}
+	// A migrate that did not finish may have the slot's checkout set aside.
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = reason + ". " + hint
+		return status
+	}
 	source, ok := stack.Sources[wsSource.Source]
 	if !ok {
 		status.State = "error"
@@ -581,6 +588,11 @@ func (p *Platform) requireWorkspaceSlotReady(ctx context.Context, verb vcs.Verb,
 	if err != nil {
 		return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 	}
+	// A migrate that did not finish may have the slot's checkout set aside,
+	// which no verb reads, and a purge would delete.
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		return p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason, hint)
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -691,6 +703,36 @@ func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
 // (nestedRepositories).
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
 	unpushed := []string{}
+	// What a migrate set aside beside a slot, a checkout it kept or could not
+	// move back, sits in the workspace, which a purge deletes. It is no slot
+	// the manifest records, so no status reads it. Beside a slot whose
+	// migrate left its record, the record's steps say what each is (below),
+	// which may be the new checkout, to move back rather than remove.
+	setAside := map[string]bool{}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		if _, path, err := p.workspaceSourcePath(workspaceName, slot, workspace.Sources[slot]); err == nil {
+			if _, _, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+				for _, aside := range asidesBeside(path) {
+					setAside[aside] = true
+				}
+			}
+		}
+	}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		wsSource := workspace.Sources[slot]
+		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+		if err != nil {
+			continue
+		}
+		primary := p.sourcePath(wsSource.Source, stack.Sources[wsSource.Source])
+		for _, aside := range asidesBeside(path) {
+			if setAside[aside] {
+				continue
+			}
+			setAside[aside] = true
+			unpushed = append(unpushed, fmt.Sprintf("%s (a checkout a migrate set aside, which its message or the slot's status describes: take what you need from it, then remove it, and its registration alone, with `git -C %s worktree remove --force --force %s`; if it was a jj slot whose workspace is not forgotten, forget it only while nothing is at its slot's path, since jj removes the git worktree it finds at the path it recorded)", aside, shellQuote(primary), shellQuote(aside)))
+		}
+	}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
 		source, ok := stack.Sources[wsSource.Source]
@@ -704,6 +746,12 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 		if err != nil {
 			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		// Its checkout may be set aside in the workspace, which a purge
+		// would delete with it.
+		if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+			unpushed = append(unpushed, fmt.Sprintf("%s (%s. %s)", slot, reason, hint))
+			continue
 		}
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
@@ -1299,6 +1347,9 @@ func (p *Platform) workspaceGitSlots(workspaceName string, workspace manifest.Wo
 		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
 		if err != nil {
 			return nil, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
+		if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+			return nil, p.migrateIncomplete(workspaceName, slot, wsSource.Source, path, reason, hint)
 		}
 		target := workspaceGitSlot{workspaceSlotPath: workspaceSlotPath{slot: slot, path: path, source: source, mode: wsSource.Mode}, wsSource: wsSource}
 		targets = append(targets, target)
@@ -2015,6 +2066,12 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			return result, cleanup, err
 		}
 		finish(nil)
+		// A slot that names no mode follows a vcs: record the one it was cut
+		// with, so a later change of the stack's vcs does not read it as
+		// another kind of checkout (plan phase 9, the gap phase 6 left).
+		if item.resolved.Mode == "" && item.resolved.VCS == "" {
+			item.resolved.VCS = stack.SlotVCS()
+		}
 		result[item.slot] = item.resolved
 	}
 	return result, cleanup, nil

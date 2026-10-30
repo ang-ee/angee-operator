@@ -684,6 +684,14 @@ func (p *RemoteClient) WorkspaceSourcePublish(ctx context.Context, workspace, sl
 	return p.gitOp(ctx, workspace, slot, "publish", api.WorkspaceSourceGitOpRequest{Remote: remote, Branch: branch})
 }
 
+func (p *RemoteClient) WorkspaceSourceMigrate(ctx context.Context, workspace, slot, to string) (api.GitOpResult, error) {
+	var result api.GitOpResult
+	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, "migrate"), nil, api.WorkspaceSourceMigrateRequest{To: to}, &result); err != nil {
+		return api.GitOpResult{}, err
+	}
+	return result, nil
+}
+
 func (p *RemoteClient) gitOp(ctx context.Context, workspace, slot, op string, body api.WorkspaceSourceGitOpRequest) (api.GitOpResult, error) {
 	var result api.GitOpResult
 	if err := p.doJSON(ctx, http.MethodPost, slotPath(workspace, slot, op), nil, body, &result); err != nil {

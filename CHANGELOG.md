@@ -6,6 +6,140 @@ latest tag.
 
 ## Unreleased
 
+### Changed
+
+- **A manifest written by this release may not load in v0.25.0 or
+  earlier.** `angee workspace create` now writes `vcs:` on every workspace
+  slot that names no `mode` (below), pure-git stacks included, and the
+  strict manifest decoder of v0.25.0 and earlier refuses that key. An older
+  operator, such as a container image pinned to v0.25.0, then cannot load
+  an `angee.yaml` a newer CLI wrote. Upgrade every angee that reads the
+  stack together. The record stays: it is what makes a later `vcs` change
+  safe for existing slots.
+
+### Added
+
+- **`angee workspace source migrate <workspace> <slot> [--to jj|worktree]`
+  moves a slot between a git worktree and a jj slot** of its source's cache
+  (phase 9 of `.agents/plans/jj-native-operator.md`), with REST `POST
+  /workspaces/{name}/sources/{slot}/migrate` (`{"to": ...}`), the GraphQL
+  mutation `workspaceSourceMigrate(workspace, slot, to)` and the remote
+  client. Without `--to` the slot becomes the other of the two.
+  - It keeps the slot's commits and every file it holds that neither
+    tracks, which `git worktree remove` would delete (`node_modules`,
+    `.venv`, `.env`): the slot is renamed aside in its own directory, its
+    git registration pointed at it, the new checkout made at its
+    path on the same commit, and the untracked and ignored entries renamed
+    into it, before the manifest records the new `mode` and the old
+    checkout, and only its own git registration, are removed. A jj slot's
+    workspace is forgotten; a worktree's cache is colocated with jj first.
+  - To jj, the worktree must be on its branch with no changes to tracked
+    files, and the jj slot starts on that branch's bookmark, named as
+    `workspace create` names one. Untracked files git did not ignore become
+    changes in the jj slot's working-copy commit, as jj records every file
+    it does not ignore; the result's message lists them.
+  - To a worktree, the jj slot's working copy must hold nothing (no
+    changes, no files jj does not track, `untracked_paths`) over a commit
+    that is not conflicted. Its branch is set on that commit, created or
+    moved forward, but not past commits the slot does not hold
+    (`branch_moved`), and the worktree is cut on it, or detached at the
+    commit for a slot on no branch.
+  - A failure before the manifest is written rolls back in reverse, leaving
+    the slot the checkout it was; a failure in the clean-up after it is a
+    warning in the message, with the command that finishes it. An old
+    checkout that holds anything written into it after its files were
+    carried across (a shell or server whose working directory was in it
+    follows it aside) is kept, not removed, and the message says where;
+    `workspace destroy` refuses while anything a migrate set aside sits
+    beside a slot.
+  - A rollback that cannot finish stops, so it deletes nothing it could not
+    put back, and fails with `INTERNAL`, cause `migrate_incomplete`, naming
+    where the slot's checkout is. A migrate keeps a record under
+    `run/migrate/` while the slot may be set aside, rewritten at each step
+    with how far it got and the steps that recover from there by hand, in
+    order, each recorded before what it undoes is done: the removal of the
+    new checkout, as far as it got, before it is made, and every entry
+    carried across before the first is moved, each moved back by hand only
+    when it is in the new checkout and no longer in the old one, so a
+    migrate killed at any point leaves nothing out of the record. One left
+    by a migrate that stopped or was killed makes the slot's status an
+    error naming the steps, and its `repair`, `destroy` and slot verbs
+    refuse it (`migrate_incomplete`) until the steps are followed and the
+    record deleted. Removing the old checkout's registration drops its
+    `HEAD` reflog and `refs/worktree/*`, as destroy does.
+  - Refused: a slot that holds a repository of its own below its top (a
+    `.git` or `.jj`; `nested_repositories`, naming them) outside a
+    directory the migrate moves whole: one in a tracked directory, either
+    way, and, to jj, one anywhere git does not ignore, since jj records
+    nothing of it in its working copy. A package's clone under an ignored
+    `node_modules/` or `.venv/` moves with its directory, and, to a
+    worktree, so does one in any directory that holds no tracked file. Also
+    refused: a worktree with skip-worktree or assume-unchanged files, whose
+    local versions git does not report, or with submodules; a branch
+    another worktree has checked out (`branch_checked_out`); a checkout
+    that is not the jj workspace this stack made (`slot_not_held`); a slot
+    at the workspace's root, or with other slots inside it; and a `kind:
+    local` source's slot. The slot's git registration alone is pointed at
+    where it moves, never other worktrees' (`git worktree repair` would
+    rewrite them all).
+
+### Fixed
+
+- **A failed git worktree create no longer prunes the source cache.** When
+  a worktree slot's checkout failed after git had added it, the clean-up
+  ran `git worktree prune`, dropping every registration of the cache whose
+  checkout this process cannot see, such as other stacks' slots out of a
+  container's sight. It now drops only that worktree's own registration,
+  as jj slots' removal does; one it cannot drop is left, with a warning,
+  for the next create at that path to drop.
+- **Changing a stack's `vcs` no longer changes what its existing slots
+  are.** A slot that names no `mode` followed the stack's `vcs`, existing
+  ones too, so switching a stack from `vcs: jj` to `git` read its jj slots
+  as git clones: status read them through git, and destroy removed them
+  without forgetting their jj workspaces, whose names then refused the next
+  create of the workspace as a `CONFLICT` (the gap phase 6 of
+  `.agents/plans/jj-native-operator.md` left). `angee workspace create` now
+  records, on each slot that names no mode, the `vcs` it was cut with (`vcs:
+  git` or `vcs: jj` beside `source:`), and that slot follows it rather than
+  the stack's, so a stack's `vcs` decides only for workspaces created after
+  it changes. It is not a mode: `sync-base` and `workspace push` still walk
+  only slots whose manifest names a mode (plan Q7), so a work-state `.work`
+  slot stays out of them. A slot recorded by v0.25.0 or earlier records no
+  `vcs` and follows the stack's as before; give it one by hand before
+  changing the stack's `vcs`. An unknown slot `vcs` is refused when the
+  manifest loads.
+- **`angee stack update --template` applies the template's `vcs`.** The
+  merge kept the manifest's `vcs` whatever the template rendered, so a
+  stack template's `vcs` answer never reached an existing stack. It is now
+  template-origin, as sources are, when the render names one; a render that
+  names none keeps the manifest's. Since slots keep the `vcs` they were
+  created with, the change reaches only workspaces created after it: when
+  the update changes `vcs`, it records the old one on each existing slot
+  that names no mode and records none, which freezes the stack's `vcs` as
+  it was for them (right unless it was edited by hand since they were
+  created), and reports `~ vcs (<old> to <new>)`, `""` to `git` included,
+  and `~ workspaces/<workspace>/sources/<slot>` for each slot it pinned. A `vcs` set by
+  hand in `angee.yaml` is replaced by the template's on the next `stack
+  update --template`, as a hand-edited source is; answer the template's
+  input instead.
+
+- **A jj slot's branch publishes to a second remote.** A branch already
+  published to one remote (origin) could not be published to another: jj
+  refuses to create a remote bookmark for a bookmark that tracks another
+  remote but not that one ("Refusing to create new remote bookmark"), and
+  the publish failed with `push_failed` after setting the bookmark. Publish
+  now tracks the branch on the remote that does not have it yet before it
+  pushes.
+- **A jj publish refused with `branch_moved` names what to merge.** When
+  the branch moved on another remote than the publish's (the slot published
+  to origin, sync-base rebased it, and a collaborator pushed onto the old
+  version, so a publish to a second remote finds the bookmark conflicted),
+  the hint named the bare branch, and `angee workspace source merge … feature`
+  then failed with "Name 'feature' is conflicted". The hint now names a ref
+  that is one commit holding the stray commits: the remote branch that holds
+  them (`feature@origin`), the slot's own branch when it is not conflicted,
+  else the stray commits themselves by id.
+
 ## v0.25.0 — 2026-10-29
 
 ### Added

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -172,7 +173,113 @@ func (e *CommandError) Unwrap() error { return e.Err }
 // DirtyPaths lists the paths `git status` reports as changed, staged or
 // untracked in the checkout at dir, in its order. A rename lists its new path.
 func (c Client) DirtyPaths(ctx context.Context, dir string) ([]string, error) {
-	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	return c.statusPaths(ctx, dir, "--untracked-files=all")
+}
+
+// ChangedPaths lists the paths `git status` reports as changed or staged in
+// the checkout at dir, leaving out untracked and ignored files, in its order.
+// A rename lists its new path.
+func (c Client) ChangedPaths(ctx context.Context, dir string) ([]string, error) {
+	return c.statusPaths(ctx, dir, "--untracked-files=no")
+}
+
+// OtherPaths lists what the checkout at dir holds that git does not track:
+// with ignored, every untracked and ignored entry, else the untracked ones
+// that are not ignored. A directory git tracks nothing in is one entry,
+// ending in "/", as `git ls-files --others --directory` lists it, so the
+// entries are the tops of what git does not track. An empty directory is
+// listed too.
+func (c Client) OtherPaths(ctx context.Context, dir string, ignored bool) ([]string, error) {
+	args := []string{"ls-files", "--others", "--directory", "-z"}
+	if !ignored {
+		args = append(args, "--exclude-standard")
+	}
+	out, err := c.runStdout(ctx, dir, stdoutLimit, args...)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// HiddenPaths lists the tracked files of the checkout at dir that git is told
+// not to look at, and that are on disk: those flagged skip-worktree (`git
+// update-index --skip-worktree`) or assume-unchanged. git status reports no
+// change to them, so a local edit there is invisible to ChangedPaths. A
+// sparse checkout's skip-worktree entries are not on disk, and are left out.
+func (c Client) HiddenPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "-v", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		tag, path, ok := strings.Cut(entry, " ")
+		if !ok || path == "" || tag != "S" && (tag == "" || tag[0] < 'a' || tag[0] > 'z') {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(path))); err == nil {
+			paths = append(paths, path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return paths, nil
+}
+
+// Submodules lists the paths the index of the checkout at dir records as
+// submodules (gitlinks, mode 160000).
+func (c Client) Submodules(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "-s", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(meta, "160000 ") {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// DeregisterWorktree drops repoDir's registration of a worktree at path once
+// nothing is there, and no other: `git worktree remove --force --force`,
+// which with nothing at the path removes only git's record of it (probed on
+// git 2.50), never pruning the registrations of other checkouts this process
+// cannot see. It refuses while anything is at path, which git would delete,
+// and does nothing when repoDir registers nothing there.
+func (c Client) DeregisterWorktree(ctx context.Context, repoDir, path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("deregister the git worktree at %s: it still exists", path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	registered, err := c.WorktreeRegistered(ctx, repoDir, path)
+	if err != nil || !registered {
+		return err
+	}
+	canonical, err := canonicalWorktreePath(path)
+	if err != nil {
+		return err
+	}
+	return c.WorktreeRemove(ctx, repoDir, canonical)
+}
+
+// Commit returns the full id of the commit ref names in the repository at
+// dir.
+func (c Client) Commit(ctx context.Context, dir, ref string) (string, error) {
+	return c.runText(ctx, dir, "rev-parse", "--verify", EndOfOptions, ref+"^{commit}")
+}
+
+func (c Client) statusPaths(ctx context.Context, dir, untracked string) ([]string, error) {
+	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", untracked)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +613,7 @@ func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, re
 // recovery in materializeWorkspaceSource still routes through WorktreePrune, the
 // portable recovery for older git that refuses to remove a missing working tree.
 func (c Client) WorktreeRemove(ctx context.Context, repoDir, dest string) error {
-	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", dest)
+	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", EndOfOptions, dest)
 	return err
 }
 

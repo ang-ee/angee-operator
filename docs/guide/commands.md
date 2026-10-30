@@ -204,7 +204,14 @@ including files such as `AGENTS.md`, then structurally merges `angee.yaml` and
 regenerates runtime files. User-added manifest keys and operator-managed state
 (`operator`, `workspaces`, `port_leases`, and allocated port values) survive.
 A source declared by hand survives, while a source the template also renders
-takes the template's definition, replacing local edits to it.
+takes the template's definition, replacing local edits to it. So does `vcs`,
+when the template renders one: it is the default for slots created after it,
+since every existing slot that names no mode keeps the `vcs` it was created
+with, and one recorded before angee recorded that is given the stack's old
+`vcs` by the update, which freezes the stack's old `vcs` for it (right
+unless it was edited by hand since the slot was created). The update reports
+`~ vcs (<old> to <new>)`, and `~ workspaces/<workspace>/sources/<slot>` for
+each slot it pinned.
 Rendered files are tracked: unchanged template files update or delete
 automatically, while locally edited or ambiguous legacy files are preserved and
 reported as conflicts. Use `--overwrite` to replace conflicts. `--dry-run`
@@ -685,6 +692,7 @@ angee workspace source merge-abort <workspace> <slot>
 angee workspace source rebase-abort <workspace> <slot>
 angee workspace source rebase-continue <workspace> <slot>
 angee workspace source publish <workspace> <slot> [--remote name] [--branch name]
+angee workspace source migrate <workspace> <slot> [--to jj|worktree]
 ```
 
 Convergence ops (`merge`/`rebase`/aborts/continue/publish) return a
@@ -812,9 +820,14 @@ workspace of its source's cache or local store; see
   since. The push would drop them, though jj's lease passes once they are
   fetched. The remote branch may hold the old versions of the slot's own
   commits that a rebase leaves behind; the slot's own bookmark may point
-  only into the slot's history. Merge
-  the remote branch into the slot (`workspace source merge <workspace>
-  <slot> <branch>@<remote>`), then publish. A working-copy commit with
+  only into the slot's history. Merge what the refusal's hint names into
+  the slot (`workspace source merge <workspace> <slot> <ref>`), then
+  publish: the remote branch that holds the commits (`<branch>@<remote>`,
+  which may be another remote than the publish's), else the slot's own
+  branch, else, when that is conflicted and no remote's holds them, each
+  commit by id. A branch already on one remote publishes to another that
+  does not have it yet: publish tracks it there first, as jj requires. A
+  working-copy commit with
   two parents has no one commit to publish (`PRECONDITION_FAILED`), and a
   slot that moved while its publish was checked is a `CONFLICT` to retry.
   Any other refusal (jj's lease, a remote's hook) fails with jj's own words,
@@ -846,6 +859,95 @@ workspace of its source's cache or local store; see
 - `workspace source pull` is refused for a jj slot with `INVALID_INPUT` and
   cause `jj_slot_unsupported`: jj takes in a base by rebasing onto it, so
   the hint names `workspace sync-base`, and the slot's own fetch and rebase.
+
+### Migrating a slot
+
+```sh
+angee workspace source migrate <workspace> <slot> [--to jj|worktree]
+```
+
+`migrate` moves a slot of a git source between a git worktree and a jj slot
+of the source's cache, keeping its commits and every file it holds that
+neither tracks (`node_modules`, `.venv`, `.env` and the like, which `git
+worktree remove` would delete), and records the slot's new `mode` in
+`angee.yaml`. Without `--to` the slot becomes the other of the two; a slot
+already in the mode asked for is left as it is. It answers a
+`GitOpResult` whose `message` says what it did and whose `source` is the
+slot's status after it.
+
+1. The slot is checked: a repository of its own below its top (a `.git`
+   or `.jj`, such as a clone made in it) must be inside a directory the
+   migrate moves whole, else it is refused (`nested_repositories`, naming
+   them): to a worktree, a directory that holds no tracked file; to jj, a
+   directory git ignores, since jj records nothing of a repository in its
+   working copy. So a package's clone under an ignored `node_modules/` or
+   `.venv/` moves with it, either way, and one in a tracked directory is
+   refused, either way. A worktree must be on its branch with no changes
+   to tracked files (`branch_mismatch`, `uncommitted_changes`), including
+   files git is told not to look at (skip-worktree, assume-unchanged), and
+   no submodules; one that names no branch must hold no commits beyond its
+   base (`detached_head`), since a jj slot on no branch starts at the base.
+   A jj slot must hold nothing in its working copy: no changes
+   (`uncommitted_changes`), no files jj does not track (`untracked_paths`),
+   no description on an empty working-copy commit, and no conflicted commit
+   under it.
+2. For a jj slot, the slot's `branch` is set on the commit under its working
+   copy: created there, or moved forward, but never past commits the slot
+   does not hold (`branch_moved`, with the merge that takes them in), and
+   never while another git worktree has it checked out
+   (`branch_checked_out`). The slot must be the jj workspace this stack made
+   at its path (`slot_not_held`).
+3. The migrate is recorded under `run/migrate/`, and the slot renamed aside
+   in its own directory (`.angee-migrate-…`), which keeps its `.git` and
+   `.jj` links working, and its git registration alone pointed at it (no
+   other worktree of the cache is touched). It is checked again there, all
+   of step 1, and its untracked and ignored entries recorded.
+4. The new checkout is made at the slot's path, of the same commit: a jj
+   workspace named as `workspace create` names one (the source's cache is
+   colocated with jj first), on the slot's branch; or a git worktree on that
+   branch, or detached at the commit for a slot on no branch.
+5. The recorded entries are renamed into it, each whole, and the manifest
+   records the new mode.
+6. The old checkout is read again, and removed, and only its own git
+   registration dropped, which drops its `HEAD` reflog and its
+   `refs/worktree/*` with it, as `workspace destroy` does; a jj slot's
+   workspace is forgotten. One that holds anything written into it since
+   its files were carried across (by a
+   shell or a server whose working directory was in it) is kept instead,
+   with its jj workspace, and the message says where and what to do;
+   `workspace destroy` refuses while it is there, as it refuses while
+   anything a migrate set aside (`.angee-migrate-…`) sits beside a slot.
+
+Untracked files that git did not ignore become changes in the jj slot's
+working-copy commit, since jj records every file it does not ignore; the
+message lists them. A failure before the manifest is written rolls back
+what was done, in reverse, so the slot is the checkout it was, with its
+files and branch. A rollback that cannot finish stops (since what comes
+after would delete what it could not put back) and fails with `INTERNAL`,
+cause `migrate_incomplete`, naming where the slot's checkout is. The record
+of the migrate, `run/migrate/<workspace>/<slot>.json`, is rewritten at each
+step with how far it got and the steps that recover from there by hand, in
+order: before the new checkout is made, move the slot's checkout back;
+from then, first move back each entry that is in the new checkout and no
+longer in the old one (every entry is recorded before the first is moved),
+then remove what was made of the new checkout, as far as it got, then move
+the slot's checkout back; once the
+manifest records the new mode, only clean-up is left (removing the old
+checkout, and forgetting a jj slot's workspace only while nothing is at its
+path, since jj removes the git worktree it finds at the path it recorded).
+A migrate that stops, or is killed, leaves the record: until the steps are
+followed and the record deleted, `workspace status` reports the slot as an
+error with the steps, and `repair`, `destroy`, every slot verb, `sync-base`
+and `workspace push` refuse it with cause `migrate_incomplete`. Recovery is
+by hand; nothing runs the steps for you. A failure after the manifest is written leaves the slot
+migrated, and the message warns of what was not cleaned up, with the
+command that does it. A slot that named no mode names one afterwards, so
+`sync-base` and `workspace push` walk it too.
+
+`migrate` refuses a slot at the workspace's root, or one other slots lie
+inside, since setting it aside would move them, and a slot of a `kind:
+local` source. Stop what writes into the slot (its services) first: a write
+during the migrate may land in either checkout.
 
 ### Workspace preflight
 

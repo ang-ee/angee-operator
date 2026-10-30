@@ -710,6 +710,7 @@ POST /workspaces/{name}/sources/{slot}/merge-abort
 POST /workspaces/{name}/sources/{slot}/rebase-abort
 POST /workspaces/{name}/sources/{slot}/rebase-continue
 POST /workspaces/{name}/sources/{slot}/publish     body: {"remote":"...","branch":"..."}
+POST /workspaces/{name}/sources/{slot}/migrate     body: {"to":"jj"|"worktree"}  (optional)
 ```
 
 The convergence endpoints (`merge`, `rebase`, `merge-abort`,
@@ -724,6 +725,42 @@ and `merge-abort`, `rebase-abort` and `rebase-continue` answer `400`
 `jj_slot_unsupported`: jj takes in a base by rebasing onto it. `fetch` of a
 jj slot of a `kind: local` store answers `400` `INVALID_INPUT`: angee never
 fetches into a user's store.
+
+`migrate` moves a slot of a git source between a git worktree and a jj slot
+of its source's cache, keeping what neither tracks, and records the slot's
+new `mode` in the manifest (see
+[migrating a slot](../guide/commands.md#migrating-a-slot)). `to` omitted
+moves it to the other of the two; its body is decoded strictly, so an
+unknown field is `400`. It answers a `GitOpResult` whose `message` says what
+was done, which untracked files became changes in a jj slot's working-copy
+commit and any clean-up left undone, and whose `source` is the slot's
+status after it. A `to` other than `jj` or `worktree`, a slot that is a
+clone, a link or of a `kind: local` source, one at the workspace's root and
+one other slots lie inside answer `400` `INVALID_INPUT`. A slot that is not
+ready answers `409` `PRECONDITION_FAILED` with the cause of the matching
+verb's refusal: `nested_repositories`, with the repositories in `paths`,
+for a slot that holds a `.git` or `.jj` below its own outside a directory
+the migrate moves whole (one with no tracked file; to jj, one git
+ignores);
+`branch_mismatch` or `uncommitted_changes` (changes to tracked files) for a
+worktree, `detached_head` for one on no branch with commits beyond its
+base; `uncommitted_changes`, `untracked_paths` or `branch_moved` for a jj
+slot, `branch_checked_out` for one whose branch another git worktree has
+checked out, `slot_not_held` for a checkout that is not the jj workspace
+this stack made; and no cause for a worktree with skip-worktree or
+assume-unchanged files or submodules, or a jj slot whose working-copy
+commit is described, has two parents or sits on a conflicted commit. A jj
+name the cache has for another checkout is `409` `CONFLICT`, and so is a
+slot whose commit changed while it was migrated. A failure
+partway rolls the slot back; a rollback that stops is `500` `INTERNAL`,
+cause `migrate_incomplete`, with the slot's path and where its checkout was
+set aside in `paths`, and a `hint` that lists the steps to recover by hand,
+in order. A migrate records them in `run/migrate/<workspace>/<slot>.json`
+as it goes, so one that is killed leaves them too. Until they are followed
+and the record deleted, the slot's status is an `error` naming them, and
+`migrate`, `repair`, `destroy` and the verbs that check each slot refuse it
+with `409` `PRECONDITION_FAILED`, cause `migrate_incomplete`, the steps in
+`hint`.
 
 Workspace preflight:
 
@@ -1106,7 +1143,8 @@ Operations:
 | `workspaceSourceMergeAbort(workspace, slot)` | `git merge --abort`. |
 | `workspaceSourceRebaseAbort(workspace, slot)` | `git rebase --abort`. |
 | `workspaceSourceRebaseContinue(workspace, slot)` | `git rebase --continue` with `core.editor=true` so it never opens an editor. |
-| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to the source's `push_default`, else the remote git pushes the branch to, else `origin`, and a remote the slot doesn't have is refused, as is a branch that matches none of that remote's `branches`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). For a jj slot, `branch` (else the manifest's) is required and the remote is resolved as for git; the slot must hold nothing uncommitted (`uncommitted_changes`, `untracked_paths`), since publish sends the commit under the working copy. The commits since the branch on the remote, else since the base, are sent: none answers `ok` with `nothing to publish`; one the remote lacks that has conflicts or no description is refused (`conflicted_commits`, `undescribed_commits`); a branch a git worktree of the source has checked out, one the remote has that the repository does not track, or one that exists, as a bookmark or on the remote, and is not the slot's (neither its manifest branch nor on its own commits alone), is refused as `INVALID_INPUT` on `branch`; a branch holding commits the slot lacks, a collaborator's on the remote say, is `branch_moved`; a working-copy commit with two parents is `PRECONDITION_FAILED`; otherwise `jj bookmark set <branch> -r @-` and `jj git push --remote <remote> --bookmark <branch>`, which force-updates, with jj's lease, a branch a rebase rewrote. A slot that moved while its publish was checked is a `CONFLICT`, and nothing is pushed. A publish to a remote other than the branch's default push remote records it as the branch's push remote (`branch.<branch>.pushRemote` in the source cache, replacing what it had), as `git push -u` records an upstream, so status and later publishes follow it; a `kind: local` store's git config is never written, and `message` says the remote was not recorded. `workspacePush` leaves a jj slot of a `kind: local` store to its own publish. `message` is jj's account of the push, and any other refusal is `GIT_FAILED`, cause `push_failed`, quoting jj. `workspaceSourcePush` and `workspacePush` publish a jj slot the same way to its default remote, under `ref` when given, else the manifest's branch. |
+| `workspaceSourceMigrate(workspace, slot, to)` | Moves the slot between a git worktree and a jj slot of its source's cache, as `POST /workspaces/{name}/sources/{slot}/migrate` does: `to` is `jj` or `worktree`, omitted for the other of the two. Returns the `GitOpResult` with `source`, the slot's status after it. |
+| `workspaceSourcePublish(workspace, slot, remote, branch)` | `git push --set-upstream <remote> <branch>`. `remote` defaults to the source's `push_default`, else the remote git pushes the branch to, else `origin`, and a remote the slot doesn't have is refused, as is a branch that matches none of that remote's `branches`; `branch` defaults to the workspace source's manifest branch, then the current branch. Useful for publishing a workspace branch to the remote for the first time so a PR can be opened. For a git source: without `branch`, a source with no upstream and no commits beyond its base returns `ok` with a `nothing to publish` message and pushes nothing; on a detached HEAD, `branch` is required and is created at the current commit before the push (an existing local branch of that name is refused). For a jj slot, `branch` (else the manifest's) is required and the remote is resolved as for git; the slot must hold nothing uncommitted (`uncommitted_changes`, `untracked_paths`), since publish sends the commit under the working copy. The commits since the branch on the remote, else since the base, are sent: none answers `ok` with `nothing to publish`; one the remote lacks that has conflicts or no description is refused (`conflicted_commits`, `undescribed_commits`); a branch a git worktree of the source has checked out, one the remote has that the repository does not track, or one that exists, as a bookmark or on the remote, and is not the slot's (neither its manifest branch nor on its own commits alone), is refused as `INVALID_INPUT` on `branch`; a branch holding commits the slot lacks, a collaborator's on the remote say, is `branch_moved`, whose hint names what to merge first (the remote branch that holds them, which may be another remote than the publish's, else the slot's branch, else, when that is conflicted, each commit by id); a working-copy commit with two parents is `PRECONDITION_FAILED`; otherwise `jj bookmark set <branch> -r @-` and `jj git push --remote <remote> --bookmark <branch>`, which force-updates, with jj's lease, a branch a rebase rewrote. A slot that moved while its publish was checked is a `CONFLICT`, and nothing is pushed. A publish to a remote other than the branch's default push remote records it as the branch's push remote (`branch.<branch>.pushRemote` in the source cache, replacing what it had), as `git push -u` records an upstream, so status and later publishes follow it; a `kind: local` store's git config is never written, and `message` says the remote was not recorded. `workspacePush` leaves a jj slot of a `kind: local` store to its own publish. `message` is jj's account of the push, and any other refusal is `GIT_FAILED`, cause `push_failed`, quoting jj. `workspaceSourcePush` and `workspacePush` publish a jj slot the same way to its default remote, under `ref` when given, else the manifest's branch. |
 
 Conflict files come from `git ls-files -u`, so the list is exact and
 reflects only paths the index reports as conflicted. The

@@ -403,6 +403,84 @@ func TestVCSJJMakesASlotWithNoModeAJJSlot(t *testing.T) {
 	}
 }
 
+// setStackVCS rewrites the stack's vcs by hand, as a user editing angee.yaml
+// does, and returns the stack as saved.
+func (f *jjFixture) setStackVCS(vcsName string) *manifest.Stack {
+	f.t.Helper()
+	stack, err := manifest.LoadFile(manifest.Path(f.root))
+	if err != nil {
+		f.t.Fatalf("LoadFile() error = %v", err)
+	}
+	stack.VCS = vcsName
+	if err := manifest.SaveFile(manifest.Path(f.root), stack); err != nil {
+		f.t.Fatalf("SaveFile() error = %v", err)
+	}
+	return stack
+}
+
+// Create records, on a slot that names no mode, the vcs it was cut with, so
+// changing the stack's vcs afterwards changes only what new workspaces get
+// (plan phase 9, the gap phase 6 left): an existing jj slot with no mode
+// stays a jj slot, read through jj, and its destroy forgets its jj
+// workspace, leaving no name to refuse the next create; a new workspace's
+// slot is a clone under the new vcs, and stays one when vcs goes back to jj.
+func TestASlotWithNoModeKeepsTheVCSItWasCutWith(t *testing.T) {
+	f := newJJFixture(t, manifest.VCSJJ)
+	ctx := context.Background()
+	template := f.template("plain", map[string]string{"work": f.app("ref: main\nsubpath: work")})
+	if err := f.create(template, "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	stack := f.setStackVCS("")
+	if got := stack.Workspaces["ws"].Sources["work"]; got.Mode != "" || got.VCS != manifest.VCSJJ {
+		t.Fatalf("recorded slot = %+v, want no mode and vcs jj", got)
+	}
+	if got := f.slotStatus("ws", "work"); got.Mode != manifest.WorkspaceSourceModeJJ || got.State != "clean" || got.Error != "" {
+		t.Fatalf("status after vcs went back to git = %+v, want the slot still read as a clean jj slot", got)
+	}
+	if err := f.create(template, "clone", false); err != nil {
+		t.Fatalf("WorkspaceCreate(clone) under vcs git error = %v", err)
+	}
+	if pathExists(t, filepath.Join(f.workspace("clone"), "work", ".jj")) || !pathExists(t, filepath.Join(f.workspace("clone"), "work", ".git")) {
+		t.Fatalf("the slot created under vcs git is not a git clone")
+	}
+	stack = f.setStackVCS(manifest.VCSJJ)
+	if got := stack.Workspaces["clone"].Sources["work"].VCS; got != manifest.VCSGit {
+		t.Fatalf("recorded vcs of the clone = %q, want git", got)
+	}
+	if got := f.slotStatus("clone", "work"); got.Mode != "" || got.State != "clean" || got.Error != "" {
+		t.Fatalf("clone status after vcs went to jj = %+v, want it still read as a clean clone", got)
+	}
+
+	if err := f.platform.WorkspaceDestroy(ctx, "ws", true); err != nil {
+		t.Fatalf("WorkspaceDestroy(ws) error = %v", err)
+	}
+	if names := f.jjWorkspaces(f.cache()); slices.Contains(sortedKeys(names), "dev--ws") {
+		t.Fatalf("jj workspaces after the destroy = %q, want dev--ws forgotten", sortedKeys(names))
+	}
+	if err := f.create(template, "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate(ws) again error = %v, want its name free", err)
+	}
+	if err := f.platform.WorkspaceDestroy(ctx, "clone", true); err != nil {
+		t.Fatalf("WorkspaceDestroy(clone) error = %v", err)
+	}
+}
+
+// A slot that names a mode records no vcs.
+func TestASlotVCSIsRecordedOnlyWithoutAMode(t *testing.T) {
+	f := newJJFixture(t, "")
+	if err := f.create(f.template("tree", map[string]string{"tree": f.app("mode: worktree\nbranch: \"${inputs.branch}\"\nref: main\nsubpath: tree")}), "ws", false); err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	stack, err := manifest.LoadFile(manifest.Path(f.root))
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	if got := stack.Workspaces["ws"].Sources["tree"]; got.VCS != "" {
+		t.Fatalf("recorded slot = %+v, want no vcs beside its mode", got)
+	}
+}
+
 // A create that fails rolls its jj slot back: the workspace is forgotten, its
 // directory removed and no git worktree registration is left, whether a
 // later slot failed or the jj slot itself did. An empty directory that was at
@@ -1061,9 +1139,11 @@ func TestJJSlotDestroyForgetsOnlyItsOwnName(t *testing.T) {
 	}
 }
 
-// A local source's slot linked before the stack switched to vcs: jj is a
-// link at a jj slot's path: status reports it as no jj workspace rather than
-// reading the store through it, and destroy removes the link alone.
+// A local source's slot linked before the stack switched to vcs: jj stays a
+// link, since create recorded the vcs it was cut with. One recorded before
+// create did so is a link at a jj slot's path: status reports it as no jj
+// workspace rather than reading the store through it, and destroy removes the
+// link alone.
 func TestJJSlotThatIsALink(t *testing.T) {
 	f := newJJFixture(t, "")
 	ctx := context.Background()
@@ -1082,6 +1162,17 @@ func TestJJSlotThatIsALink(t *testing.T) {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
 	stack.VCS = manifest.VCSJJ
+	if err := manifest.SaveFile(manifest.Path(f.root), stack); err != nil {
+		t.Fatalf("SaveFile() error = %v", err)
+	}
+	// The slot records the vcs it was cut with, so it stays a link.
+	if got := f.slotStatus("ws", "notes"); got.State != "ready" || got.Mode != "" {
+		t.Errorf("status of the link after vcs: jj = %+v, want it still read as a link", got)
+	}
+	// A slot recorded before create recorded its vcs follows the stack's.
+	notes := stack.Workspaces["ws"].Sources["notes"]
+	notes.VCS = ""
+	stack.Workspaces["ws"].Sources["notes"] = notes
 	if err := manifest.SaveFile(manifest.Path(f.root), stack); err != nil {
 		t.Fatalf("SaveFile() error = %v", err)
 	}

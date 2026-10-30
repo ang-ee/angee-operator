@@ -159,6 +159,11 @@ const (
 	// VerbRepair is repair's check of a checkout it has just made: that the
 	// verbs after it can run there.
 	VerbRepair Verb = "repair"
+	// VerbMigrate is migrate: making the checkout another kind of checkout of
+	// the same primary (a git worktree a jj slot, or back), carrying across
+	// what it does not track. Only what its commits hold is checked out
+	// again, so the work in it must be committed.
+	VerbMigrate Verb = "migrate"
 )
 
 // BranchMismatchError is returned by Driver.Ready when the checkout is not on
@@ -306,15 +311,23 @@ func (e *BranchTakenError) Error() string {
 
 // BranchMovedError is returned by Driver.PlanPublish, and by Driver.PlanPush
 // where a push publishes, when the branch holds work the checkout does not:
-// commits that are not versions of the checkout's own, on the remote
-// (Remote set) or on the repository's own branch (Remote empty), as a
+// commits that are not versions of the checkout's own, on a remote (Remote
+// set: the one publishing goes to, or another whose branch holds them) or
+// on the repository's own branch (Remote empty), as a
 // collaborator's push leaves it once fetched. Publishing would move the
 // branch past them and drop them from the remote. Commits lists them by
 // short id. Nothing is changed.
+//
+// Remote, when set, also says that the branch on that remote holds every one
+// of Commits, so merging it takes them in. Heads is set instead when no one
+// branch names a commit that holds them all (the repository's own branch is
+// conflicted, and no remote's holds them): the commits of Commits no other
+// descends from, by short id, each of which the checkout merges in turn.
 type BranchMovedError struct {
 	Branch  string
 	Remote  string
 	Commits []string
+	Heads   []string
 }
 
 func (e *BranchMovedError) Error() string {

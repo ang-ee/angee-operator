@@ -27,7 +27,7 @@ func TestVerbsAJJSlotDoesNotRun(t *testing.T) {
 		"RebaseContinue": func() error { _, err := d.RebaseContinue(ctx, s); return err },
 		"SyncBase merge": func() error { _, err := d.SyncBase(ctx, s, "main", vcs.SyncMerge); return err },
 		"SyncMethod":     func() error { _, err := d.SyncMethod(vcs.SyncMerge); return err },
-		"Ready migrate":  func() error { return d.Ready(ctx, s, "migrate") },
+		"Ready squash":   func() error { return d.Ready(ctx, s, "squash") },
 	} {
 		if err := call(); !errors.Is(err, vcs.ErrUnsupported) {
 			t.Errorf("%s() error = %v, want vcs.ErrUnsupported", name, err)

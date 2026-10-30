@@ -165,6 +165,22 @@ func (s *Server) workspaceSourcePublish(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+// workspaceSourceMigrate decodes its body strictly: a misspelled `to` must
+// not read as the default direction.
+func (s *Server) workspaceSourceMigrate(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeStrict[api.WorkspaceSourceMigrateRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	result, err := s.platform.WorkspaceSourceMigrate(r.Context(), r.PathValue("name"), r.PathValue("slot"), req.To)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) stackTemplateInputs(w http.ResponseWriter, r *http.Request) {
 	result, err := s.platform.StackTemplateInputs(r.Context())
 	if err != nil {

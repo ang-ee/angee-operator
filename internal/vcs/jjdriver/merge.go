@@ -52,7 +52,7 @@ func (d Driver) Merge(ctx context.Context, s vcs.Slot, ref string) (api.GitOpRes
 		return result, severalParents(s.Path, len(wc.Commit.Parents), "merge into")
 	}
 	if wc.Commit.Description != "" {
-		return result, describedEmpty(s.Path)
+		return result, describedEmpty(s.Path, string(vcs.VerbMerge))
 	}
 	head := commitOf(wc.Commit.Parents[0]).single()
 	held, err := d.count(ctx, s.Path, op, other.and(head.ancestors()))

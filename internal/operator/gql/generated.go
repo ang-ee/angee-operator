@@ -257,6 +257,7 @@ type ComplexityRoot struct {
 		WorkspaceSourceFetch          func(childComplexity int, workspace string, slot string) int
 		WorkspaceSourceMerge          func(childComplexity int, workspace string, slot string, ref string) int
 		WorkspaceSourceMergeAbort     func(childComplexity int, workspace string, slot string) int
+		WorkspaceSourceMigrate        func(childComplexity int, workspace string, slot string, to *string) int
 		WorkspaceSourcePublish        func(childComplexity int, workspace string, slot string, remote *string, branch *string) int
 		WorkspaceSourcePull           func(childComplexity int, workspace string, slot string) int
 		WorkspaceSourcePush           func(childComplexity int, workspace string, slot string, ref *string) int
@@ -756,6 +757,7 @@ type MutationResolver interface {
 	WorkspaceSourceRebaseAbort(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error)
 	WorkspaceSourceRebaseContinue(ctx context.Context, workspace string, slot string) (*api.GitOpResult, error)
 	WorkspaceSourcePublish(ctx context.Context, workspace string, slot string, remote *string, branch *string) (*api.GitOpResult, error)
+	WorkspaceSourceMigrate(ctx context.Context, workspace string, slot string, to *string) (*api.GitOpResult, error)
 	InsertSecretsOne(ctx context.Context, object model.SecretsInsertInput) (*api.SecretRef, error)
 	UpdateSecretsByPk(ctx context.Context, pkColumns model.SecretsPkColumnsInput, set model.SecretsSetInput) (*api.SecretRef, error)
 	DeleteSecretsByPk(ctx context.Context, id string) (*api.SecretRef, error)
@@ -1959,6 +1961,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.WorkspaceSourceMergeAbort(childComplexity, args["workspace"].(string), args["slot"].(string)), true
+	case "Mutation.workspaceSourceMigrate":
+		if e.ComplexityRoot.Mutation.WorkspaceSourceMigrate == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_workspaceSourceMigrate_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.WorkspaceSourceMigrate(childComplexity, args["workspace"].(string), args["slot"].(string), args["to"].(*string)), true
 	case "Mutation.workspaceSourcePublish":
 		if e.ComplexityRoot.Mutation.WorkspaceSourcePublish == nil {
 			break
@@ -5302,6 +5315,12 @@ type Mutation {
   workspaceSourceRebaseAbort(workspace: String!, slot: String!): GitOpResult!
   workspaceSourceRebaseContinue(workspace: String!, slot: String!): GitOpResult!
   workspaceSourcePublish(workspace: String!, slot: String!, remote: String, branch: String): GitOpResult!
+  """
+  Move a slot between a git worktree and a jj slot of its source's cache,
+  carrying across what neither tracks. ` + "`" + `to` + "`" + ` is "jj" or "worktree"; omitted,
+  the other of the two. The result's ` + "`" + `source` + "`" + ` is the slot after it.
+  """
+  workspaceSourceMigrate(workspace: String!, slot: String!, to: String): GitOpResult!
 
   insert_secrets_one(object: secrets_insert_input!): SecretRef
   update_secrets_by_pk(pk_columns: secrets_pk_columns_input!, _set: secrets_set_input!): SecretRef
@@ -7269,6 +7288,36 @@ func (ec *executionContext) field_Mutation_workspaceSourceMerge_args(ctx context
 		return nil, err
 	}
 	args["ref"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_workspaceSourceMigrate_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "slot",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["slot"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "to",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["to"] = arg2
 	return args, nil
 }
 
@@ -13196,6 +13245,50 @@ func (ec *executionContext) fieldContext_Mutation_workspaceSourcePublish(ctx con
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_workspaceSourcePublish_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_workspaceSourceMigrate(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_workspaceSourceMigrate(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().WorkspaceSourceMigrate(ctx, fc.Args["workspace"].(string), fc.Args["slot"].(string), fc.Args["to"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *api.GitOpResult) graphql.Marshaler {
+			return ec.marshalNGitOpResult2ᚖgithubᚗcomᚋangᚑeeᚋangeeᚑoperatorᚋapiᚐGitOpResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_workspaceSourceMigrate(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GitOpResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_workspaceSourceMigrate_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -26605,6 +26698,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "workspaceSourcePublish":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_workspaceSourcePublish(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "workspaceSourceMigrate":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_workspaceSourceMigrate(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++

@@ -195,9 +195,11 @@ func severalParents(dir string, parents int, verb string) error {
 //     slot's own change, fetched beside the rebased one, which leaves X
 //     conflicted between them, or another workspace's. Setting X would drop
 //     it, jj's lease passing since it was fetched; that is a
-//     *vcs.BranchMovedError too, of X@R when the targets are the remote's,
-//     so the merge its hint names is of one commit. After a merge of X@R,
-//     both targets are in the slot's history, and the publish goes on.
+//     *vcs.BranchMovedError too, naming what the slot can merge to take the
+//     targets in as one commit (mergeableStray): X@R when they are R's, X
+//     when it is not conflicted, X on another remote that holds them, else
+//     the stray heads. After a merge of it, both targets are in the slot's
+//     history, and the publish goes on.
 func (d Driver) ownBranch(ctx context.Context, s vcs.Slot, p pending, remote, branch string) error {
 	if !p.local && !p.upstream {
 		return nil
@@ -270,18 +272,76 @@ func (d Driver) ownBranch(ctx context.Context, s vcs.Slot, p pending, remote, br
 		}
 		if len(stray) > 0 {
 			moved := &vcs.BranchMovedError{Branch: branch, Commits: shortIDs(commitIDs(stray))}
-			if p.upstream {
-				remotes, err := d.count(ctx, s.Path, p.op, off.and(remoteHead.ancestors()))
-				if err != nil {
-					return err
-				}
-				if remotes == len(stray) {
-					moved.Remote = remote
-				}
+			if err := d.mergeableStray(ctx, s.Path, p, off, remote, len(stray), moved); err != nil {
+				return err
 			}
 			return moved
 		}
 	}
+	return nil
+}
+
+// mergeableStray names, in moved, what the slot can merge to take in the
+// stray commits of bookmark X (off, `X ~ ::@-`, holding strays of them), so
+// the refusal's hint names a ref that is one commit holding them all:
+//   - X@R, the remote the publish goes to, when its branch holds them all;
+//   - else X itself, when it is not conflicted (Remote stays empty);
+//   - else X on another remote whose branch holds them all and nothing else
+//     the slot lacks, as when the slot publishes to a second remote and X
+//     moved on the first: X is then conflicted between the slot's version
+//     and the collaborator's, and names no one commit to merge (jj: "Name
+//     'X' is conflicted"). A remote branch with more on it is not named,
+//     since the publish after the merge would push that too;
+//   - else the stray commits no other stray descends from (Heads), by
+//     commit id, each of which the slot merges in turn.
+func (d Driver) mergeableStray(ctx context.Context, dir string, p pending, off revset, remote string, strays int, moved *vcs.BranchMovedError) error {
+	holds := func(r string) (bool, error) {
+		held, err := d.count(ctx, dir, p.op, off.and(remoteBookmark(moved.Branch, r).ancestors()))
+		return held == strays, err
+	}
+	// Another remote's branch is named only when merging it takes in the
+	// strays and nothing else the slot lacks: what it holds beyond the
+	// slot's history is the strays and their ancestors, or the publish after
+	// the merge would push its other commits too.
+	holdsOnly := func(r string) (bool, error) {
+		if ok, err := holds(r); err != nil || !ok {
+			return false, err
+		}
+		extra, err := d.count(ctx, dir, p.op, remoteBookmark(moved.Branch, r).ancestors().minus(workingCopy.parents().ancestors()).minus(off.ancestors()))
+		return extra == 0, err
+	}
+	if p.upstream {
+		if ok, err := holds(remote); err != nil || ok {
+			if ok {
+				moved.Remote = remote
+			}
+			return err
+		}
+	}
+	var others []string
+	for _, m := range p.marks {
+		switch {
+		case m.Name != moved.Branch || !m.present():
+		case m.Remote == "" && len(m.Target) == 1:
+			return nil
+		case m.Remote != "" && m.Remote != remote && m.Remote != gitRemote && len(m.Target) == 1 && !slices.Contains(others, m.Remote):
+			others = append(others, m.Remote)
+		}
+	}
+	slices.Sort(others)
+	for _, other := range others {
+		if ok, err := holdsOnly(other); err != nil || ok {
+			if ok {
+				moved.Remote = other
+			}
+			return err
+		}
+	}
+	heads, err := d.changes(ctx, dir, p.op, off.heads())
+	if err != nil {
+		return err
+	}
+	moved.Heads = shortIDs(commitIDs(heads))
 	return nil
 }
 
@@ -460,6 +520,29 @@ func (d Driver) PreparePublish(ctx context.Context, s vcs.Slot, plan vcs.Publish
 	}
 	if _, err := d.jj.snapshot(ctx, s.Path, "bookmark", "set", "-r", commitOf(plan.Commit).String(), "--", quote(plan.Branch)); err != nil {
 		return fmt.Errorf("set bookmark %q in %s: %w", plan.Branch, s.Path, err)
+	}
+	return d.trackNew(ctx, s.Path, op, plan)
+}
+
+// trackNew tracks the plan's branch on the plan's remote when that remote
+// does not have it yet, as jj's push needs once the bookmark tracks another
+// remote: jj creates a remote bookmark only for a bookmark tracked there, or
+// one that tracks no remote at all, and otherwise refuses ("Refusing to
+// create new remote bookmark X@R"; probed with jj 0.45), so a branch
+// published to origin could not be published to a second remote. op is the
+// operation the plan's commit was checked at, which the bookmark set did not
+// change on any remote. A remote bookmark X@R that exists is left as it is:
+// PlanPublish refuses one the repository does not track.
+func (d Driver) trackNew(ctx context.Context, dir, op string, plan vcs.PublishPlan) error {
+	marks, err := d.bookmarks(ctx, dir, op, plan.Branch)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(marks, func(m bookmark) bool { return m.Name == plan.Branch && m.Remote == plan.Remote }) {
+		return nil
+	}
+	if _, err := d.jj.store(ctx, dir, "bookmark", "track", "--remote="+exact(plan.Remote), "--", exact(plan.Branch)); err != nil {
+		return fmt.Errorf("track bookmark %q on %s in %s: %w", plan.Branch, plan.Remote, dir, err)
 	}
 	return nil
 }

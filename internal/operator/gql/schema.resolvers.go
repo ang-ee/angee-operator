@@ -377,6 +377,12 @@ func (r *mutationResolver) WorkspaceSourcePublish(ctx context.Context, workspace
 	return &res, err
 }
 
+// WorkspaceSourceMigrate is the resolver for the workspaceSourceMigrate field.
+func (r *mutationResolver) WorkspaceSourceMigrate(ctx context.Context, workspace string, slot string, to *string) (*api.GitOpResult, error) {
+	res, err := r.Platform.WorkspaceSourceMigrate(ctx, workspace, slot, stringPtrValue(to))
+	return &res, err
+}
+
 // InsertSecretsOne is the resolver for the insert_secrets_one field.
 func (r *mutationResolver) InsertSecretsOne(ctx context.Context, object model.SecretsInsertInput) (*api.SecretRef, error) {
 	ref, err := r.Platform.SecretSet(ctx, object.Name, object.Value)

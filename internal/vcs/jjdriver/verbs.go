@@ -44,6 +44,10 @@ func neverPulled() error {
 //     working-copy commit with a description and no changes (describedEmpty):
 //     the merge would leave it behind, off the slot's history, where the
 //     destroy guard counts it.
+//   - migrate: as merge. The git worktree it becomes is cut from `@-`, so
+//     what the working-copy commit holds, its description included, would be
+//     left behind, and files jj does not track would be neither committed
+//     nor, not being ignored, carried across as ignored files are.
 //   - destroy, and repair's check of a slot it made: none, and nothing runs.
 //     The destroy guard reads the slot's own work from Status, and a jj slot
 //     keeps no branch checked out.
@@ -59,7 +63,7 @@ func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 			return &vcs.UntrackedPathsError{Paths: untracked}
 		}
 		return nil
-	case vcs.VerbPublish, vcs.VerbPush, vcs.VerbMerge:
+	case vcs.VerbPublish, vcs.VerbPush, vcs.VerbMerge, vcs.VerbMigrate:
 		w, err := d.uncommitted(ctx, s.Path)
 		switch {
 		case err != nil:
@@ -70,8 +74,8 @@ func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
 			return &vcs.UntrackedPathsError{Paths: w.untracked}
 		case w.parents != 1:
 			return severalParents(s.Path, w.parents, string(verb))
-		case verb == vcs.VerbMerge && w.described:
-			return describedEmpty(s.Path)
+		case (verb == vcs.VerbMerge || verb == vcs.VerbMigrate) && w.described:
+			return describedEmpty(s.Path, string(verb))
 		}
 		return nil
 	case vcs.VerbDestroy, vcs.VerbRepair:
@@ -114,14 +118,15 @@ func (d Driver) DirtyPaths(ctx context.Context, s vcs.Slot) ([]string, error) {
 	return append(w.changed, w.untracked...), nil
 }
 
-// describedEmpty is a *vcs.NotReadyError for a merge into a slot whose
-// working-copy commit has a description and no changes: `jj new` would move
-// off it and leave it behind, since jj keeps a described commit. `jj new`
-// first makes it the commit under the working copy, which the merge then
+// describedEmpty is a *vcs.NotReadyError for a merge into, or a migrate of,
+// a slot whose working-copy commit has a description and no changes: `jj
+// new` would move off it and leave it behind, since jj keeps a described
+// commit, and so would the git worktree a migrate cuts from `@-`. `jj new`
+// first makes it the commit under the working copy, which the verb then
 // builds on.
-func describedEmpty(dir string) error {
+func describedEmpty(dir, verb string) error {
 	return &vcs.NotReadyError{
-		Reason: "its working-copy commit has a description and no changes, which the merge would leave behind off the slot's history",
+		Reason: fmt.Sprintf("its working-copy commit has a description and no changes, which the %s would leave behind off the slot's history", verb),
 		Fix:    fmt.Sprintf("jj -R %s new", dir),
 	}
 }
