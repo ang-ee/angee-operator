@@ -6,6 +6,24 @@ latest tag.
 
 ## Unreleased
 
+## v0.27.1 — 2026-10-30
+
+### Fixed
+
+- **A dependency operation no longer fails stopping a local service that has
+  already stopped.** The process-compose backend asked its supervisor to stop
+  every process it knew, including ones that had completed, failed or were
+  disabled, and the supervisor's refusal failed the `deps` job and the chained
+  restart. Stop now skips a process that is not running and is in a terminal
+  or disabled state, and still stops running and transitional ones (#149).
+- **A job whose prerequisites the operation verified runs even when the shared
+  supervisor still holds an older failed run of one.** After an isolated
+  prerequisite run succeeded, process-compose's own `depends_on` check read
+  the stale failed state in the shared supervisor and skipped the job. A job
+  the operation graph dispatches after its prerequisites passed now runs
+  without that native check. A direct call keeps its declared dependencies,
+  and a failed prerequisite still prevents dispatch (#149).
+
 ## v0.27.0 — 2026-10-30
 
 ### Added
