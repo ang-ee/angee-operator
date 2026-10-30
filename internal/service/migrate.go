@@ -80,9 +80,18 @@ const migrateRollbackTimeout = 2 * time.Minute
 // the slot's own parent directory.
 const asidePrefix = ".angee-migrate-"
 
-// keptSuffix ends the name an entry carried into the new checkout is moved
-// back under, beside the one the old checkout holds again (carry).
-const keptSuffix = ".migrated"
+// keptSuffix ends the name of the directory an undo of a migrate keeps a
+// carried copy in when the old checkout holds that entry again (carry): the
+// aside's name, so beside the slot and outside both checkouts, and reported
+// by asidesBeside and the destroy guard. It holds the copies under the
+// slot's own name, and, at its top, a .gitignore of keptIgnore, so neither
+// git nor jj records them when the slot's parent is itself a checkout (a
+// slot at the workspace's root, with this one inside it).
+const keptSuffix = "-kept"
+
+// keptIgnore is the .gitignore at the top of the kept directory: everything
+// in it, itself included.
+const keptIgnore = "/*\n"
 
 // WorkspaceSourceMigrate moves a workspace slot between a git worktree and a
 // jj slot of its source's cache, keeping what neither tracks (plan phase 9).
@@ -117,8 +126,8 @@ const keptSuffix = ".migrated"
 //     for a slot on no branch.
 //
 // Before the manifest is written, any failure rolls back what was done, in
-// reverse: the entries carried across go back (beside what the old checkout
-// holds again, written into it meanwhile, under a .migrated name), the new
+// reverse: the entries carried across go back (beside the slot, when the old
+// checkout holds one again, written into it meanwhile: keptDir), the new
 // checkout is removed, once it holds none of them, the slot is renamed back
 // and its registration repaired, and a bookmark set is put back, so the slot
 // is as it was. A rollback step that fails stops the rollback, since the
@@ -227,8 +236,8 @@ type migration struct {
 	// saved, that the manifest records the new mode; stranded, that the new
 	// checkout was left set aside (forgetBeside), so the record stays.
 	marked, saved, stranded bool
-	// kept are the entries the rollback moved back beside what the old
-	// checkout held again, under keptSuffix names, relative to it.
+	// kept are the entries whose carried copies the rollback kept in
+	// keptDir, the old checkout holding them again, relative to both.
 	kept []string
 }
 
@@ -460,9 +469,9 @@ func (m *migration) toJJ(ctx context.Context, client git.Client, gitDriver vcs.D
 	// once Add made it: Add removes what it made when it fails, and forgets
 	// no name it found taken.
 	added := false
-	if err := m.push(fmt.Sprintf("remove what the migrate made of the jj slot at %[1]s, as far as it got: its directory, unless it still holds an entry carried into it, `%[2]s`, then, with nothing there, its jj workspace, `jj -R %[3]s workspace forget %[4]s`, then git's registration of it alone, if git lists one, `%[5]s`", shellQuote(m.path), m.removeNewCommand(entries), shellQuote(m.primary), shellQuote(jjSlot.Name), deregisterCommand(m.primary, m.path)), func(ctx context.Context) error {
+	if err := m.push(fmt.Sprintf("remove what the migrate made of the jj slot at %[1]s, as far as it got, unless it still holds an entry carried into it: its directory, then, with nothing there, its jj workspace, then git's registration of it alone, if git lists one: `%[2]s && jj -R %[3]s workspace forget %[4]s && %[5]s`", shellQuote(m.path), m.removeNewCommand(entries), shellQuote(m.primary), shellQuote(jjSlot.Name), deregisterCommand(m.primary, m.path)), func(ctx context.Context) error {
 		if !added {
-			return m.nothingMade()
+			return m.nothingMade(deregisterCommand(m.primary, m.path))
 		}
 		if err := m.refuseCarriedLeft(entries); err != nil {
 			return err
@@ -730,14 +739,14 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	}
 	stage := gitdriver.StagePath(stageRoot)
 	added := false
-	if err := m.push(fmt.Sprintf("remove what the migrate made of the git worktree at %[1]s, as far as it got: its directory, unless it still holds an entry carried into it, `%[2]s`, then git's registration of it alone, if git lists one, `%[3]s`, then the worktree git staged it in, with its registration, if git lists one there, `%[4]s`, and the staging directory, `rm -rf %[5]s`", shellQuote(m.path), m.removeNewCommand(entries), deregisterCommand(m.primary, m.path), deregisterCommand(m.primary, stage), shellQuote(stageRoot)), func(ctx context.Context) error {
+	if err := m.push(fmt.Sprintf("remove what the migrate made of the git worktree at %[1]s, as far as it got, unless it still holds an entry carried into it: its directory, then git's registration of it alone, if git lists one, then the worktree git staged it in, with its registration, if git lists one there, and the staging directory: `%[2]s && %[3]s && %[4]s && rm -rf %[5]s`", shellQuote(m.path), m.removeNewCommand(entries), deregisterCommand(m.primary, m.path), deregisterCommand(m.primary, stage), shellQuote(stageRoot)), func(ctx context.Context) error {
 		if !added {
 			// AddStaged removes the stage root however it ends, unless it
 			// never ran.
 			if err := os.RemoveAll(stageRoot); err != nil {
 				logctx.From(ctx).Warn(fmt.Sprintf("left the staging directory %s: %v", stageRoot, err))
 			}
-			return m.nothingMade()
+			return m.nothingMade(deregisterCommand(m.primary, m.path))
 		}
 		if err := m.refuseCarriedLeft(entries); err != nil {
 			return err
@@ -889,12 +898,14 @@ func (m *migration) gitEntries(ctx context.Context, client git.Client, dir strin
 // ignoredEntries are what a migrate to jj moves whole that git ignores
 // whole, so jj ignores all of it too: of entries (what a worktree holds that
 // git does not track, the tops of it), those none of untracked (what git
-// does not ignore) is or lies in, and the directories of ignored (what git
-// ignores of it, as git.Client.IgnoredPaths lists it) inside an entry, so
-// moved with it, of which the same holds. git lists such a directory, as
-// one, when it ignores it beside a sibling it re-includes: with `/vendor/*`
-// and `!/vendor/keep/`, the entry is vendor/, which holds what git does not
-// ignore, and vendor/other/ is ignored whole.
+// does not ignore) is or lies in; and the directories of ignored (what git
+// ignores of it, as git.Client.IgnoredPaths lists it) inside a directory
+// entry, so moved with it. git lists a directory there only when it ignores
+// all of it, a repository in it included, which is the guarantee: with
+// `/vendor/*` and `!/vendor/keep/`, the entry is vendor/, which holds what
+// git does not ignore, and vendor/other/ is ignored whole. untracked, which
+// git collapses to the entry, rarely names anything in such a directory; it
+// is checked for it all the same.
 func ignoredEntries(entries, untracked, ignored []string) []string {
 	holdsUntracked := func(entry string) bool {
 		dir := strings.HasSuffix(entry, "/")
@@ -907,8 +918,10 @@ func ignoredEntries(entries, untracked, ignored []string) []string {
 		}
 	}
 	for _, dir := range ignored {
-		inEntry := slices.ContainsFunc(entries, func(entry string) bool { return strings.HasSuffix(entry, "/") && strings.HasPrefix(dir, entry) })
-		if strings.HasSuffix(dir, "/") && inEntry && !slices.Contains(whole, dir) && !holdsUntracked(dir) {
+		if !strings.HasSuffix(dir, "/") || slices.Contains(whole, dir) || holdsUntracked(dir) {
+			continue
+		}
+		if slices.ContainsFunc(entries, func(entry string) bool { return strings.HasSuffix(entry, "/") && strings.HasPrefix(dir, entry) }) {
 			whole = append(whole, dir)
 		}
 	}
@@ -991,14 +1004,39 @@ func (m *migration) refuseNestedRepositories(dir string, whole []string) error {
 // the tool removes what it made when it fails (jjdriver.Driver.Add,
 // gitdriver's addWorktree), so anything at the slot's path is what it could
 // not remove, or what another process wrote there, and the rollback stops
-// at it rather than move the old checkout back on top.
-func (m *migration) nothingMade() error {
+// at it rather than move the old checkout back on top. The record then
+// keeps a step that removes nothing there (restepped): what is left is for
+// a person to look at, and then deregister, the command that drops git's
+// registration at the path alone, runs once nothing is there.
+func (m *migration) nothingMade(deregister string) error {
 	if _, err := os.Lstat(m.path); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	return fmt.Errorf("%s holds what was left there while the new checkout was being made", m.path)
+	return &restepped{
+		err:  fmt.Errorf("%s holds what was left there while the new checkout was being made", m.path),
+		step: fmt.Sprintf("look at what %[1]s holds, left there while the new checkout was being made (what its tool could not remove, or what another process wrote there): move out what you need, and remove it; then drop git's registration of it alone, if git lists one: `%[2]s`", shellQuote(m.path), vacantCommand(m.path, deregister)),
+	}
+}
+
+// restepped is the failure of an undo after which the step that does by
+// hand what is left is step, not the undo's own.
+type restepped struct {
+	err  error
+	step string
+}
+
+func (e *restepped) Error() string { return e.err.Error() }
+func (e *restepped) Unwrap() error { return e.err }
+
+// vacantCommand is the shell command that refuses, naming path, while
+// something is at it, a link included, and then runs then: a step that
+// moves something to path, or lets git remove what is there, runs only
+// once nothing a person may need is in the way.
+func vacantCommand(path, then string) string {
+	refusal := shellQuote("%s is in the way: move out what you need, and remove it, then run this again\n")
+	return fmt.Sprintf("( if %[1]s; then printf %[2]s %[3]s >&2; exit 1; fi ) && %[4]s", existsTest(path), refusal, shellQuote(path), then)
 }
 
 // deregisterCommand is the shell command that drops primary's registration
@@ -1037,7 +1075,7 @@ func (m *migration) forgetBeside(ctx context.Context, jj jjMigrator, named vcs.S
 		return
 	}
 	m.recordCleanup(migratePhaseForgetting, []string{
-		fmt.Sprintf("if nothing is at %[2]s, move the new worktree back from where it was set aside for the forget: `mv %[1]s %[2]s`", shellQuote(moved.Path()), shellQuote(m.path)),
+		fmt.Sprintf("once nothing is at %[1]s, move the new worktree back from where it was set aside for the forget: `%[2]s`", shellQuote(m.path), vacantCommand(m.path, fmt.Sprintf("mv %s %s", shellQuote(moved.Path()), shellQuote(m.path)))),
 		fmt.Sprintf("if `jj -R %s workspace list` still lists %s, %s", shellQuote(m.primary), named.Name, m.forgetStep(named.Name)),
 		m.removeAsideStep(),
 	})
@@ -1057,7 +1095,7 @@ func (m *migration) forgetBeside(ctx context.Context, jj jjMigrator, named vcs.S
 		m.recordCleanup(migratePhaseSaved, steps)
 	} else {
 		m.stranded = true
-		m.strandedSteps = []string{fmt.Sprintf("once nothing is at %[2]s, move the new worktree back from where it was set aside for the forget: `mv %[1]s %[2]s`", shellQuote(moved.Path()), shellQuote(m.path))}
+		m.strandedSteps = []string{fmt.Sprintf("once nothing is at %[1]s, move the new worktree back from where it was set aside for the forget: `%[2]s`", shellQuote(m.path), vacantCommand(m.path, fmt.Sprintf("mv %s %s", shellQuote(moved.Path()), shellQuote(m.path))))}
 		if !m.forgotten {
 			m.strandedSteps = append(m.strandedSteps, m.forgetStep(named.Name))
 		}
@@ -1104,8 +1142,15 @@ func (m *migration) rollback(ctx context.Context, cause error) error {
 	defer cancel()
 	for i := len(m.undo) - 1; i >= 0; i-- {
 		if err := m.undo[i].run(ctx); err != nil {
+			var instead *restepped
+			if errors.As(err, &instead) {
+				m.undo[i].what = instead.step
+			}
 			m.undo = m.undo[:i+1]
 			left := m.undoSteps()
+			if note := m.keptNote(); note != "" {
+				left = append(left, note)
+			}
 			if recordErr := m.record(migratePhaseRollbackStopped, left); recordErr != nil {
 				logctx.From(ctx).Warn(recordErr.Error())
 			}
@@ -1114,9 +1159,6 @@ func (m *migration) rollback(ctx context.Context, cause error) error {
 				paths = append(paths, m.aside.Path())
 			}
 			hint := recoverySteps(left, m.p.migrateMarkerPath(m.workspaceName, m.slot))
-			if note := m.keptNote(); note != "" {
-				hint += " " + note
-			}
 			return &OperationError{
 				Code:    CodeInternal,
 				Cause:   CauseMigrateIncomplete,
@@ -1194,7 +1236,7 @@ func (m *migration) setAside(ctx context.Context, client git.Client) error {
 		return err
 	}
 	m.aside = aside
-	if err := m.push(fmt.Sprintf("once nothing is at %[2]s, move the slot's checkout back: `mv %[1]s %[2]s && %[3]s`", shellQuote(aside.Path()), shellQuote(m.path), repairCommand(m.primary, m.path)), func(ctx context.Context) error {
+	if err := m.push(fmt.Sprintf("once nothing is at %[1]s, move the slot's checkout back: `%[2]s`", shellQuote(m.path), vacantCommand(m.path, fmt.Sprintf("mv %s %s && %s", shellQuote(aside.Path()), shellQuote(m.path), repairCommand(m.primary, m.path)))), func(ctx context.Context) error {
 		if err := m.dest.RestoreAside(aside); err != nil {
 			return err
 		}
@@ -1235,16 +1277,18 @@ func repointRegistration(ctx context.Context, client git.Client, primary, path s
 // carry renames each entry of the checkout set aside into the new one.
 //
 // Every entry's undo is recorded before the first is renamed, so no rename
-// is ever left out of the record, wherever the migrate is killed: by hand,
-// each moves an entry back when it is in the new checkout, as one not
-// renamed yet is not; the rollback moves back those it renamed (carryBack).
-// An entry the old checkout holds again by then, written into it meanwhile
-// (a watcher rebuilding node_modules), is not deleted with the new checkout:
-// the copy in the new one goes beside it in the old one, under keptSuffix,
-// and if even that name is taken it stays where it is, and the removal of
-// the new checkout refuses (removeNewCommand, refuseCarriedLeft). A .git or
-// .jj at the top is never carried, since the new checkout has its own, and
-// gets no undo, which would move that one instead.
+// is ever left out of the record, wherever the migrate is killed. By hand,
+// each step acts on what is there, since nothing says what was renamed: an
+// entry in the new checkout goes back into the old one, or, when the old
+// one holds it again (written into it meanwhile, as a watcher rebuilding
+// node_modules does) or still does (never renamed, but written into the new
+// checkout by its path), into keptDir, beside both (carryBackStep). The
+// rollback moves back only what it renamed, into keptDir the same way
+// (carryBack), and stops at anything else left in the new checkout. Either
+// way the new checkout is removed only once it holds none of the entries
+// (removeNewCommand, refuseCarriedLeft), so nothing written into it is
+// deleted with it. A .git or .jj at the top gets no undo: the new checkout
+// has its own, so carrying one fails, and its undo would move that one.
 func (m *migration) carry(entries []string) error {
 	moved := make([]bool, len(entries))
 	undos := make([]migrationUndo, 0, len(entries))
@@ -1253,9 +1297,8 @@ func (m *migration) carry(entries []string) error {
 			continue
 		}
 		rel := strings.TrimSuffix(entry, "/")
-		carried, back, kept := filepath.Join(m.path, rel), filepath.Join(m.aside.Path(), rel), filepath.Join(m.aside.Path(), rel+keptSuffix)
 		undos = append(undos, migrationUndo{
-			what: fmt.Sprintf("if %[1]s is in the new checkout, move it back into the old one, or, if the old one holds it again, written into it meanwhile, beside it there as %[2]s: `if %[3]s; then if %[4]s; then %[5]s || mv %[6]s %[7]s; else mv %[6]s %[8]s; fi; fi`", entry, rel+keptSuffix, existsTest(carried), existsTest(back), existsTest(kept), shellQuote(carried), shellQuote(kept), shellQuote(back)),
+			what: m.carryBackStep(entry),
 			run: func(context.Context) error {
 				if !moved[i] {
 					return nil
@@ -1282,20 +1325,66 @@ func (m *migration) carry(entries []string) error {
 	return nil
 }
 
+// carryBackStep is the step that undoes the carry of entry by hand: if the
+// new checkout holds it, it goes back into the old one, or, when the old one
+// holds it too, into keptDir, which is given its .gitignore first; with
+// something there as well, it is left, and the removal of the new checkout
+// refuses.
+func (m *migration) carryBackStep(entry string) string {
+	rel := strings.TrimSuffix(entry, "/")
+	carried, back, kept, ignore := filepath.Join(m.path, rel), filepath.Join(m.aside.Path(), rel), m.keptPath(rel), filepath.Join(m.keptDir(), ".gitignore")
+	keep := fmt.Sprintf("mkdir -p %s && { %s || echo %s > %s; } && mv %s %s", shellQuote(filepath.Dir(kept)), existsTest(ignore), shellQuote(strings.TrimSuffix(keptIgnore, "\n")), shellQuote(ignore), shellQuote(carried), shellQuote(kept))
+	return fmt.Sprintf("if %[1]s is in the new checkout, move it back into the old one, or, if the old one holds it too, written into it meanwhile, to %[2]s: `if %[3]s; then if %[4]s; then %[5]s || { %[6]s; }; else mv %[7]s %[8]s; fi; fi`", entry, shellQuote(kept), existsTest(carried), existsTest(back), existsTest(kept), keep, shellQuote(carried), shellQuote(back))
+}
+
 // carryBack moves the entry rel, renamed into the new checkout, back into
-// the old one, as its recorded step does by hand (carry): beside rel there,
-// as rel+keptSuffix, when the old checkout holds rel again, written into it
+// the old one, as its recorded step does by hand (carryBackStep): into
+// keptDir, when the old checkout holds rel again, written into it
 // meanwhile, so neither copy is lost.
 func (m *migration) carryBack(rel string) error {
 	err := m.dest.MoveToAside(m.aside, rel)
 	if !errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	if err := m.dest.MoveToAsideAs(m.aside, rel, rel+keptSuffix); err != nil {
-		return fmt.Errorf("the old checkout holds %s again, written into it meanwhile, and keeping the copy carried across beside it, as %s, failed: %w", rel, rel+keptSuffix, err)
+	if err := m.keep(rel); err != nil {
+		return fmt.Errorf("the old checkout holds %s again, written into it meanwhile, and keeping the copy carried across in %s failed: %w", rel, m.keptDir(), err)
 	}
-	m.kept = append(m.kept, rel+keptSuffix)
+	m.kept = append(m.kept, rel)
 	return nil
+}
+
+// keep moves the entry rel of the new checkout into keptDir, at keptPath,
+// writing the directory's .gitignore first, through a guard on the stack
+// root, when it keeps nothing yet.
+func (m *migration) keep(rel string) error {
+	if len(m.kept) == 0 {
+		ignore, err := filepath.Rel(m.p.root, filepath.Join(m.keptDir(), ".gitignore"))
+		if err != nil {
+			return err
+		}
+		guard, err := copierx.OpenGuardedPath(m.p.root, m.p.root, filepath.ToSlash(ignore), nil)
+		if err != nil {
+			return err
+		}
+		err = guard.WriteFile([]byte(keptIgnore), 0o644)
+		_ = guard.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return m.dest.MoveBeside(filepath.Join(filepath.Base(m.keptDir()), filepath.Base(m.path)), rel)
+}
+
+// keptDir is where an undo of the migrate keeps the carried copy of an entry
+// the old checkout holds again (keptSuffix).
+func (m *migration) keptDir() string {
+	return m.aside.Path() + keptSuffix
+}
+
+// keptPath is where in keptDir the carried copy of the entry rel is kept:
+// under the slot's name, as rel is in the slot.
+func (m *migration) keptPath(rel string) string {
+	return filepath.Join(m.keptDir(), filepath.Base(m.path), filepath.FromSlash(rel))
 }
 
 // ownEntry reports whether entry, of what a checkout holds beyond its
@@ -1313,8 +1402,8 @@ func existsTest(path string) string {
 // removeNewCommand is the shell command that removes the new checkout, at
 // the slot's path, by hand: it refuses, naming one, while the checkout holds
 // an entry of entries, what the migrate carries across, since by then the
-// steps before it have moved back, or kept beside, every one they could
-// (carry), and `rm -rf` would delete the rest.
+// steps before it have moved back, or kept, every one they could
+// (carryBackStep), and `rm -rf` would delete the rest.
 func (m *migration) removeNewCommand(entries []string) string {
 	remove := "rm -rf " + shellQuote(m.path)
 	var rels []string
@@ -1326,7 +1415,8 @@ func (m *migration) removeNewCommand(entries []string) string {
 	if len(rels) == 0 {
 		return remove
 	}
-	return fmt.Sprintf(`(for e in %[1]s; do if [ -e %[2]s/"$e" ] || [ -L %[2]s/"$e" ]; then printf '%%s still holds %%s, which the migrate carries across: move it into the old checkout, or out of the way, then run this again\n' %[2]s "$e" >&2; exit 1; fi; done) && %[3]s`, strings.Join(rels, " "), shellQuote(m.path), remove)
+	refusal := shellQuote("%s still holds %s, which the migrate carries across: move it to %s/%s if nothing is there, or out of the way, then run this again\n")
+	return fmt.Sprintf(`( for e in %[1]s; do if [ -e %[2]s/"$e" ] || [ -L %[2]s/"$e" ]; then printf %[3]s %[2]s "$e" %[4]s "$e" >&2; exit 1; fi; done ) && %[5]s`, strings.Join(rels, " "), shellQuote(m.path), refusal, shellQuote(m.keptPath("")), remove)
 }
 
 // refuseCarriedLeft refuses to remove the new checkout while it holds an
@@ -1348,24 +1438,23 @@ func (m *migration) refuseCarriedLeft(entries []string) error {
 	if len(left) == 0 {
 		return nil
 	}
-	return fmt.Errorf("the new checkout at %s holds %s, which the migrate carries across, so removing it would delete them; move them into the old checkout, or out of the way", m.path, vcs.NamePaths(left, maxMessagePaths))
+	return fmt.Errorf("the new checkout at %s holds %s, which the migrate carries across, so removing it would delete them; move each to the same path in %s if nothing is there, or out of the way", m.path, vcs.NamePaths(left, maxMessagePaths), m.keptPath(""))
 }
 
-// keptNote says which copies the rollback kept beside what the old checkout
-// held again (carryBack), by their names in it; empty when it kept none.
+// keptNote says which carried copies the rollback kept in keptDir, the old
+// checkout holding those entries again (carryBack); empty when it kept none.
 func (m *migration) keptNote() string {
 	if len(m.kept) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("The old checkout held entries carried across again when they were moved back, as a process writing into it makes them (stop the slot's services before a migrate), so the copies that were carried across are kept beside them in it: %s. Keep what you need of each pair, and remove the rest.", vcs.NamePaths(m.kept, maxMessagePaths))
+	return fmt.Sprintf("the old checkout held %s again when they were moved back, written into it by something still running there (stop the slot's services before a migrate), so the copies that were carried across are kept beside it, in %s: keep what you need of each, and remove the rest", vcs.NamePaths(m.kept, maxMessagePaths), m.keptPath(""))
 }
 
 // keptBeside is cause, the failure a migrate rolled back from, with its code
-// and cause, also saying what the rollback kept beside what the old
-// checkout, the slot's again, held again (keptNote).
+// and cause, also saying which carried copies the rollback kept (keptNote).
 func (m *migration) keptBeside(cause error) error {
 	kept := *AsOperationError(cause)
-	note := m.keptNote()
+	note := "Rolled back, but " + m.keptNote() + "."
 	if kept.Summary == "" {
 		kept.Summary = cause.Error()
 	}
@@ -1373,7 +1462,7 @@ func (m *migration) keptBeside(cause error) error {
 	kept.Hint = strings.TrimSpace(kept.Hint + " " + note)
 	kept.Paths = slices.Clone(kept.Paths)
 	for _, rel := range m.kept {
-		kept.Paths = append(kept.Paths, filepath.Join(m.path, filepath.FromSlash(rel)))
+		kept.Paths = append(kept.Paths, m.keptPath(rel))
 	}
 	kept.Err = cause
 	return &kept

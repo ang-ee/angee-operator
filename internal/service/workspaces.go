@@ -730,6 +730,10 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 				continue
 			}
 			setAside[aside] = true
+			if strings.HasSuffix(aside, keptSuffix) {
+				unpushed = append(unpushed, fmt.Sprintf("%s (copies of entries a migrate carried across, kept when it was undone, since the old checkout held them again: take what you need from it, then remove it)", aside))
+				continue
+			}
 			unpushed = append(unpushed, fmt.Sprintf("%s (a checkout a migrate set aside, which its message or the slot's status describes: take what you need from it, then remove it, and its registration alone, with `git -C %s worktree remove --force --force %s`; if it was a jj slot whose workspace is not forgotten, forget it only while nothing is at its slot's path, since jj removes the git worktree it finds at the path it recorded)", aside, shellQuote(primary), shellQuote(aside)))
 		}
 	}

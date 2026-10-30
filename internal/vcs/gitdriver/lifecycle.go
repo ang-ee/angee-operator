@@ -42,8 +42,18 @@ func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure fu
 
 // StageRoot makes a directory of its own, in the system's temporary one, for
 // a worktree add to stage its checkout in (AddStaged), at StagePath of it.
+// The path is absolute, so a command that names it means it from anywhere.
 func StageRoot() (string, error) {
-	return os.MkdirTemp("", "angee-worktree-stage-*")
+	root, err := os.MkdirTemp("", "angee-worktree-stage-*")
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return "", err
+	}
+	return abs, nil
 }
 
 // StagePath is where git makes a worktree staged in stageRoot.

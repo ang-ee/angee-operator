@@ -881,10 +881,11 @@ slot's status after it.
    them): to a worktree, a directory that holds no tracked file; to jj, a
    directory git ignores whole, even beside a sibling it re-includes
    (`vendor/other/` under `/vendor/*` with `!/vendor/keep/`), since jj
-   records nothing of a repository in its working copy. So a package's clone under an ignored `node_modules/` or
-   `.venv/` moves with it, either way, and one in a tracked directory is
-   refused, either way. A worktree must be on its branch with no changes
-   to tracked files (`branch_mismatch`, `uncommitted_changes`), including
+   records nothing of a repository in its working copy. So a package's
+   clone under an ignored `node_modules/` or `.venv/` moves with it, either
+   way, and one in a tracked directory is refused, either way. A worktree
+   must be on its branch with no changes to tracked files
+   (`branch_mismatch`, `uncommitted_changes`), including
    files git is told not to look at (skip-worktree, assume-unchanged), and
    no submodules; one that names no branch must hold no commits beyond its
    base (`detached_head`), since a jj slot on no branch starts at the base.
@@ -925,9 +926,11 @@ message lists them. A failure before the manifest is written rolls back
 what was done, in reverse, so the slot is the checkout it was, with its
 files and branch. An entry carried across that the old checkout holds
 again by then, written into it meanwhile (a watcher rebuilding
-`node_modules/`), is not deleted: the carried copy goes back beside it, as
-`<entry>.migrated`, and the error names it; the new checkout is removed
-only once it holds none of the entries the migrate carries across. A
+`node_modules/`), is not deleted: the carried copy is kept beside the slot,
+outside both checkouts, in `.angee-migrate-<id>-kept/<slot>/`, whose
+`.gitignore` hides it from a checkout around it, and the error names it;
+the new checkout is removed only once it holds none of the entries the
+migrate carries across. A
 rollback that cannot finish stops (since what comes after would delete
 what it could not put back) and fails with `INTERNAL`, cause
 `migrate_incomplete`, naming where the slot's checkout is. The record of
@@ -935,12 +938,13 @@ the migrate, `run/migrate/<workspace>/<slot>.json`, is rewritten at each
 step with how far it got and the steps that recover from there by hand, in
 order: before the new checkout is made, move the slot's checkout back;
 from then, first move back each entry that is in the new checkout (every
-entry is recorded before the first is moved), beside its namesake as
-`<entry>.migrated` when the old checkout holds it again, then remove what
-was made of the new checkout, as far as it got (for a worktree, the
-staging directory git made it in too, by its path), which refuses, naming
-one, while it still holds any of those entries, then move the slot's
-checkout back; once the
+entry is recorded before the first is moved), or into the
+`.angee-migrate-<id>-kept/<slot>/` directory when the old checkout holds it too,
+then remove what was made of the new checkout, as far as it got (for a
+worktree, the staging directory git made it in too, by its path), which
+refuses, naming one, while it still holds any of those entries, then move
+the slot's checkout back, which refuses while something is at its path;
+each step is one command, which stops at its refusal; once the
 manifest records the new mode, only clean-up is left (removing the old
 checkout, and forgetting a jj slot's workspace only while nothing is at its
 path, since jj removes the git worktree it finds at the path it recorded).

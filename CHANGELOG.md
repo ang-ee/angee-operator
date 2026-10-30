@@ -21,12 +21,20 @@ latest tag.
   rebuilding `node_modules/`) could make an entry there again once it was
   carried across. The record's step then left the carried copy in the new
   checkout, and the next one, `rm -rf` of the new checkout, deleted it.
-  Now, by hand and in the rollback alike, the carried copy goes back
-  beside its namesake, as `<entry>.migrated`, and the new checkout is
-  removed only once it holds none of the entries the migrate carries
-  across: the record's command refuses, naming one, and the rollback
-  stops. A rollback that kept a copy says so in its error. Stop the slot's
-  services before a migrate, as before.
+  Now, by hand and in the rollback alike, the carried copy is kept beside
+  the slot, in `.angee-migrate-<id>-kept/<slot>/`, outside both checkouts
+  and with a `.gitignore` that hides it from a checkout around it, so
+  neither git nor jj picks it up, and the new checkout is removed only once
+  it holds none of the entries the migrate carries across: the record's
+  command refuses, naming one and where to move it, and the rollback stops. A rollback that kept
+  a copy names it in its error, and `workspace destroy` refuses while the
+  directory is there. Each recorded step is now one command, so following
+  the steps cannot run past a refusal into the removal of the checkout,
+  and a step that moves a checkout back to the slot's path refuses while
+  something is there instead of moving it inside. A rollback stopped by
+  something that appeared at the slot's path before the new checkout was
+  made records a step that removes nothing there. Stop the slot's services
+  before a migrate, as before.
 - **A repository in a directory git ignores beside one it re-includes
   migrates to jj.** With `/vendor/*` and `!/vendor/keep/` in `.gitignore`,
   a repository in `vendor/other/` was refused (`nested_repositories`),
