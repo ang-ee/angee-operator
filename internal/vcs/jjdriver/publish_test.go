@@ -980,3 +980,47 @@ func TestPublishNamesTheStrayHeadOfAConflictedBookmark(t *testing.T) {
 	}
 	f.publish(s, vcs.PublishIntent{Branch: "feature"})
 }
+
+// Another remote's branch that holds the stray commits of a conflicted
+// bookmark is named only when it holds nothing else the slot lacks: merging
+// it would take in the rest, which the publish after would push. One with a
+// commit beyond the stray leaves the stray head named instead.
+func TestPublishNamesAnotherRemoteOnlyWhenItHoldsTheStraysAlone(t *testing.T) {
+	ctx := context.Background()
+	for _, beyond := range []bool{false, true} {
+		f := newFixture(t)
+		d := driver()
+		s := f.slotAt("feature")
+		other := filepath.Join(f.root, "other.git")
+		f.git(f.root, "init", "-q", "--bare", "-b", "main", other)
+		f.git(f.primary, "remote", "add", "other", other)
+		f.jj(f.primary, "new", f.base().String(), "-m", "elsewhere")
+		elsewhere := f.commitID(f.primary, workingCopy)
+		pushed := elsewhere
+		if beyond {
+			f.jj(f.primary, "new", "-m", "beyond")
+			pushed = f.commitID(f.primary, workingCopy)
+		}
+		f.jj(f.primary, "new")
+		f.git(f.primary, "push", "-q", "other", pushed+":refs/heads/feature")
+		f.jj(f.slot, "git", "fetch", "--remote", "other")
+		f.commit(f.slot, "g.txt", "mine\n", "slot change")
+		f.jj(f.slot, "bookmark", "create", "feature", "-r", "@-")
+		created := f.latestOp(f.slot)
+		f.commit(f.slot, "h.txt", "more\n", "more")
+		f.jj(f.slot, "bookmark", "set", "feature", "-r", "@-")
+		f.jj(f.slot, "--at-op", created, "bookmark", "set", "feature", "--allow-backwards", "-r", commitOf(elsewhere).String())
+
+		_, err := d.PlanPublish(ctx, s, vcs.PublishIntent{Branch: "feature"})
+		var moved *vcs.BranchMovedError
+		if !errors.As(err, &moved) {
+			t.Fatalf("beyond %v: PlanPublish() error = %v, want a moved branch", beyond, err)
+		}
+		if beyond && (moved.Remote != "" || !slices.Equal(moved.Heads, []string{shortID(elsewhere)})) {
+			t.Errorf("PlanPublish() with more on other's branch = %+v, want the stray head %s named, not other", moved, shortID(elsewhere))
+		}
+		if !beyond && moved.Remote != "other" {
+			t.Errorf("PlanPublish() with the stray alone on other's branch = %+v, want other named", moved)
+		}
+	}
+}

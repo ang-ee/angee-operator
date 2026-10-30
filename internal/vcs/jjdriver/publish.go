@@ -286,16 +286,29 @@ func (d Driver) ownBranch(ctx context.Context, s vcs.Slot, p pending, remote, br
 // the refusal's hint names a ref that is one commit holding them all:
 //   - X@R, the remote the publish goes to, when its branch holds them all;
 //   - else X itself, when it is not conflicted (Remote stays empty);
-//   - else X on another remote whose branch holds them all, as when the slot
-//     publishes to a second remote and X moved on the first: X is then
-//     conflicted between the slot's version and the collaborator's, and
-//     names no one commit to merge (jj: "Name 'X' is conflicted");
+//   - else X on another remote whose branch holds them all and nothing else
+//     the slot lacks, as when the slot publishes to a second remote and X
+//     moved on the first: X is then conflicted between the slot's version
+//     and the collaborator's, and names no one commit to merge (jj: "Name
+//     'X' is conflicted"). A remote branch with more on it is not named,
+//     since the publish after the merge would push that too;
 //   - else the stray commits no other stray descends from (Heads), by
 //     commit id, each of which the slot merges in turn.
 func (d Driver) mergeableStray(ctx context.Context, dir string, p pending, off revset, remote string, strays int, moved *vcs.BranchMovedError) error {
 	holds := func(r string) (bool, error) {
 		held, err := d.count(ctx, dir, p.op, off.and(remoteBookmark(moved.Branch, r).ancestors()))
 		return held == strays, err
+	}
+	// Another remote's branch is named only when merging it takes in the
+	// strays and nothing else the slot lacks: what it holds beyond the
+	// slot's history is the strays and their ancestors, or the publish after
+	// the merge would push its other commits too.
+	holdsOnly := func(r string) (bool, error) {
+		if ok, err := holds(r); err != nil || !ok {
+			return false, err
+		}
+		extra, err := d.count(ctx, dir, p.op, remoteBookmark(moved.Branch, r).ancestors().minus(workingCopy.parents().ancestors()).minus(off.ancestors()))
+		return extra == 0, err
 	}
 	if p.upstream {
 		if ok, err := holds(remote); err != nil || ok {
@@ -317,7 +330,7 @@ func (d Driver) mergeableStray(ctx context.Context, dir string, p pending, off r
 	}
 	slices.Sort(others)
 	for _, other := range others {
-		if ok, err := holds(other); err != nil || ok {
+		if ok, err := holdsOnly(other); err != nil || ok {
 			if ok {
 				moved.Remote = other
 			}
