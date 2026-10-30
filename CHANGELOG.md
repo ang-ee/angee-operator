@@ -6,16 +6,7 @@ latest tag.
 
 ## Unreleased
 
-### Changed
-
-- **A manifest written by this release may not load in v0.25.0 or
-  earlier.** `angee workspace create` now writes `vcs:` on every workspace
-  slot that names no `mode` (below), pure-git stacks included, and the
-  strict manifest decoder of v0.25.0 and earlier refuses that key. An older
-  operator, such as a container image pinned to v0.25.0, then cannot load
-  an `angee.yaml` a newer CLI wrote. Upgrade every angee that reads the
-  stack together. The record stays: it is what makes a later `vcs` change
-  safe for existing slots.
+## v0.26.0 — 2026-10-30
 
 ### Added
 
@@ -82,6 +73,17 @@ latest tag.
     local` source's slot. The slot's git registration alone is pointed at
     where it moves, never other worktrees' (`git worktree repair` would
     rewrite them all).
+
+### Changed
+
+- **A manifest written by this release may not load in v0.25.0 or
+  earlier.** `angee workspace create` now writes `vcs:` on every workspace
+  slot that names no `mode` (below), pure-git stacks included, and the
+  strict manifest decoder of v0.25.0 and earlier refuses that key. An older
+  operator, such as a container image pinned to v0.25.0, then cannot load
+  an `angee.yaml` a newer CLI wrote. Upgrade every angee that reads the
+  stack together. The record stays: it is what makes a later `vcs` change
+  safe for existing slots.
 
 ### Fixed
 
