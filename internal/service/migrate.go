@@ -865,9 +865,10 @@ func (m *migration) forgetStep(name string) string {
 // not track (entries, as git.Client.OtherPaths lists them, the tops of it),
 // and, of that, what git does not ignore (untracked), which a jj slot
 // records as changes. It refuses a repository nested in the worktree outside
-// the entries git ignores whole (refuseNestedRepositories): one in a tracked
-// directory is no entry to carry, and jj records nothing of one in its
-// working copy, where an untracked one would land.
+// the directories git ignores whole (refuseNestedRepositories, of
+// ignoredEntries): one in a tracked directory is no entry to carry, and jj
+// records nothing of one in its working copy, where an untracked one would
+// land.
 func (m *migration) gitEntries(ctx context.Context, client git.Client, dir string) (entries, untracked []string, err error) {
 	if entries, err = client.OtherPaths(ctx, dir, true); err != nil {
 		return nil, nil, err
@@ -875,24 +876,43 @@ func (m *migration) gitEntries(ctx context.Context, client git.Client, dir strin
 	if untracked, err = client.OtherPaths(ctx, dir, false); err != nil {
 		return nil, nil, err
 	}
-	if err := m.refuseNestedRepositories(dir, ignoredEntries(entries, untracked)); err != nil {
+	ignored, err := client.IgnoredPaths(ctx, dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := m.refuseNestedRepositories(dir, ignoredEntries(entries, untracked, ignored)); err != nil {
 		return nil, nil, err
 	}
 	return entries, untracked, nil
 }
 
-// ignoredEntries are the entries of entries (what a worktree holds that git
-// does not track) that git ignores whole: none of untracked (what it does
-// not ignore) is the entry or, for a directory, lies in it.
-func ignoredEntries(entries, untracked []string) []string {
-	var ignored []string
-	for _, entry := range entries {
+// ignoredEntries are what a migrate to jj moves whole that git ignores
+// whole, so jj ignores all of it too: of entries (what a worktree holds that
+// git does not track, the tops of it), those none of untracked (what git
+// does not ignore) is or lies in, and the directories of ignored (what git
+// ignores of it, as git.Client.IgnoredPaths lists it) inside an entry, so
+// moved with it, of which the same holds. git lists such a directory, as
+// one, when it ignores it beside a sibling it re-includes: with `/vendor/*`
+// and `!/vendor/keep/`, the entry is vendor/, which holds what git does not
+// ignore, and vendor/other/ is ignored whole.
+func ignoredEntries(entries, untracked, ignored []string) []string {
+	holdsUntracked := func(entry string) bool {
 		dir := strings.HasSuffix(entry, "/")
-		if !slices.ContainsFunc(untracked, func(u string) bool { return u == entry || dir && strings.HasPrefix(u, entry) }) {
-			ignored = append(ignored, entry)
+		return slices.ContainsFunc(untracked, func(u string) bool { return u == entry || dir && strings.HasPrefix(u, entry) })
+	}
+	var whole []string
+	for _, entry := range entries {
+		if !holdsUntracked(entry) {
+			whole = append(whole, entry)
 		}
 	}
-	return ignored
+	for _, dir := range ignored {
+		inEntry := slices.ContainsFunc(entries, func(entry string) bool { return strings.HasSuffix(entry, "/") && strings.HasPrefix(dir, entry) })
+		if strings.HasSuffix(dir, "/") && inEntry && !slices.Contains(whole, dir) && !holdsUntracked(dir) {
+			whole = append(whole, dir)
+		}
+	}
+	return whole
 }
 
 // jjEntries lists, for the jj slot s checked out at dir, the paths commit

@@ -879,8 +879,9 @@ slot's status after it.
    or `.jj`, such as a clone made in it) must be inside a directory the
    migrate moves whole, else it is refused (`nested_repositories`, naming
    them): to a worktree, a directory that holds no tracked file; to jj, a
-   directory git ignores, since jj records nothing of a repository in its
-   working copy. So a package's clone under an ignored `node_modules/` or
+   directory git ignores whole, even beside a sibling it re-includes
+   (`vendor/other/` under `/vendor/*` with `!/vendor/keep/`), since jj
+   records nothing of a repository in its working copy. So a package's clone under an ignored `node_modules/` or
    `.venv/` moves with it, either way, and one in a tracked directory is
    refused, either way. A worktree must be on its branch with no changes
    to tracked files (`branch_mismatch`, `uncommitted_changes`), including

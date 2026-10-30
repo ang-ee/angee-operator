@@ -27,6 +27,13 @@ latest tag.
   across: the record's command refuses, naming one, and the rollback
   stops. A rollback that kept a copy says so in its error. Stop the slot's
   services before a migrate, as before.
+- **A repository in a directory git ignores beside one it re-includes
+  migrates to jj.** With `/vendor/*` and `!/vendor/keep/` in `.gitignore`,
+  a repository in `vendor/other/` was refused (`nested_repositories`),
+  though git ignores that directory whole and the migrate moves `vendor/`
+  whole. A directory git's own listing (`git ls-files --others --ignored
+  --exclude-standard --directory`) reports as ignored whole now counts as
+  moved whole; a repository in `vendor/keep/` is still refused.
 
 ## v0.26.0 — 2026-10-30
 

@@ -609,6 +609,46 @@ func TestMigrateCarriesRepositoriesItMovesWhole(t *testing.T) {
 	}
 }
 
+// A repository in a directory git ignores whole beside one it re-includes
+// (`/vendor/*` with `!/vendor/keep/`) migrates to jj inside vendor/, which
+// the migrate renames whole, its commit with it: git lists vendor/other/ as
+// ignored whole (`ls-files --others --ignored --directory`), though vendor/
+// holds what git does not ignore. One in the re-included directory is still
+// refused, naming it alone, since jj records nothing of it in its working
+// copy.
+func TestMigrateCarriesARepositoryGitIgnoresBesideAReincludedOne(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	ctx := context.Background()
+	mustWriteFile(t, filepath.Join(f.slot, ".gitignore"), "node_modules/\n.env\n*.log\n/vendor/*\n!/vendor/keep/\n")
+	runGit(t, f.slot, "commit", "-q", "-am", "vendor")
+	mustWriteFileAll(t, filepath.Join(f.slot, "vendor", "keep", "k.txt"), "kept\n")
+	other := filepath.Join(f.slot, "vendor", "other")
+	runGit(t, f.slot, "init", "-q", "-b", "main", "vendor/other")
+	mustWriteFile(t, filepath.Join(other, "own.txt"), "own\n")
+	runGit(t, other, "add", "own.txt")
+	runGit(t, other, "commit", "-q", "-m", "unpushed")
+	commit := strings.TrimSpace(runGitOutput(t, other, "rev-parse", "HEAD"))
+	runGit(t, f.slot, "init", "-q", "vendor/keep/lib")
+	_, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ)
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause != CauseNestedRepositories || !slices.Equal(opErr.Paths, []string{filepath.Join("vendor", "keep", "lib", ".git")}) {
+		t.Fatalf("WorkspaceSourceMigrate(jj) error = %v, want nested_repositories naming vendor/keep/lib/.git alone", err)
+	}
+	if err := os.RemoveAll(filepath.Join(f.slot, "vendor", "keep", "lib")); err != nil {
+		t.Fatal(err)
+	}
+	files := f.files()
+	if result, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceMigrate(jj) = %+v, %v", result, err)
+	}
+	if got := f.files(); !maps.Equal(got, files) {
+		t.Errorf("files after the migrate to jj = %v, want %v", got, files)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, other, "rev-parse", "HEAD")); got != commit {
+		t.Errorf("the repository in vendor/other is at %s, want %s", got, commit)
+	}
+	f.noAside()
+}
+
 // A slot on no branch whose HEAD holds commits beyond its base is refused,
 // since a jj slot on no branch starts at the base; one at its base migrates.
 func TestMigrateAWorktreeOnNoBranch(t *testing.T) {
