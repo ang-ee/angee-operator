@@ -875,14 +875,18 @@ already in the mode asked for is left as it is. It answers a
 `GitOpResult` whose `message` says what it did and whose `source` is the
 slot's status after it.
 
-1. The slot is checked: it must hold no repository of its own below its
-   top (a `.git` or `.jj`, such as a clone made in it; `nested_repositories`,
-   naming them), which a migrate does not carry across; a worktree must be on
-   its branch with no changes to tracked files (`branch_mismatch`,
-   `uncommitted_changes`), including files git is told not to look at
-   (skip-worktree, assume-unchanged), and no submodules; one that names no
-   branch must hold no commits beyond its base (`detached_head`), since a
-   jj slot on no branch starts at the base.
+1. The slot is checked: a repository of its own below its top (a `.git`
+   or `.jj`, such as a clone made in it) must be inside a directory the
+   migrate moves whole, else it is refused (`nested_repositories`, naming
+   them): to a worktree, a directory that holds no tracked file; to jj, a
+   directory git ignores, since jj records nothing of a repository in its
+   working copy. So a package's clone under an ignored `node_modules/` or
+   `.venv/` moves with it, either way, and one in a tracked directory is
+   refused, either way. A worktree must be on its branch with no changes
+   to tracked files (`branch_mismatch`, `uncommitted_changes`), including
+   files git is told not to look at (skip-worktree, assume-unchanged), and
+   no submodules; one that names no branch must hold no commits beyond its
+   base (`detached_head`), since a jj slot on no branch starts at the base.
    A jj slot must hold nothing in its working copy: no changes
    (`uncommitted_changes`), no files jj does not track (`untracked_paths`),
    no description on an empty working-copy commit, and no conflicted commit
@@ -902,8 +906,8 @@ slot's status after it.
    workspace named as `workspace create` names one (the source's cache is
    colocated with jj first), on the slot's branch; or a git worktree on that
    branch, or detached at the commit for a slot on no branch.
-5. The recorded entries are renamed into it, and the manifest records the
-   new mode.
+5. The recorded entries are renamed into it, each whole, and the manifest
+   records the new mode.
 6. The old checkout is read again, and removed, and only its own git
    registration dropped, which drops its `HEAD` reflog and its
    `refs/worktree/*` with it, as `workspace destroy` does; a jj slot's
@@ -923,9 +927,11 @@ after would delete what it could not put back) and fails with `INTERNAL`,
 cause `migrate_incomplete`, naming where the slot's checkout is. The record
 of the migrate, `run/migrate/<workspace>/<slot>.json`, is rewritten at each
 step with how far it got and the steps that recover from there by hand, in
-order: before the new checkout exists, move the slot's checkout back;
-after, first move the entries carried into the new checkout back, then
-remove the new checkout, then move the slot's checkout back; once the
+order: before the new checkout is made, move the slot's checkout back;
+from then, first move back each entry that is in the new checkout and no
+longer in the old one (every entry is recorded before the first is moved),
+then remove what was made of the new checkout, as far as it got, then move
+the slot's checkout back; once the
 manifest records the new mode, only clean-up is left (removing the old
 checkout, and forgetting a jj slot's workspace only while nothing is at its
 path, since jj removes the git worktree it finds at the path it recorded).

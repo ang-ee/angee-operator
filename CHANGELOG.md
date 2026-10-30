@@ -57,16 +57,24 @@ latest tag.
     where the slot's checkout is. A migrate keeps a record under
     `run/migrate/` while the slot may be set aside, rewritten at each step
     with how far it got and the steps that recover from there by hand, in
-    order. One left by a migrate that stopped or was killed makes the
-    slot's status an error naming the steps, and its `repair`, `destroy`
-    and slot verbs refuse it (`migrate_incomplete`) until the steps are
-    followed and the record deleted. Removing the old checkout's
-    registration drops its `HEAD` reflog and `refs/worktree/*`, as destroy
-    does.
+    order, each recorded before what it undoes is done: the removal of the
+    new checkout, as far as it got, before it is made, and every entry
+    carried across before the first is moved, each moved back by hand only
+    when it is in the new checkout and no longer in the old one, so a
+    migrate killed at any point leaves nothing out of the record. One left
+    by a migrate that stopped or was killed makes the slot's status an
+    error naming the steps, and its `repair`, `destroy` and slot verbs
+    refuse it (`migrate_incomplete`) until the steps are followed and the
+    record deleted. Removing the old checkout's registration drops its
+    `HEAD` reflog and `refs/worktree/*`, as destroy does.
   - Refused: a slot that holds a repository of its own below its top (a
-    `.git` or `.jj`; `nested_repositories`, naming them), which git does not
-    list in a tracked directory, so it would not be carried, and jj does not
-    record; a worktree with skip-worktree or assume-unchanged files, whose
+    `.git` or `.jj`; `nested_repositories`, naming them) outside a
+    directory the migrate moves whole: one in a tracked directory, either
+    way, and, to jj, one anywhere git does not ignore, since jj records
+    nothing of it in its working copy. A package's clone under an ignored
+    `node_modules/` or `.venv/` moves with its directory, and, to a
+    worktree, so does one in any directory that holds no tracked file. Also
+    refused: a worktree with skip-worktree or assume-unchanged files, whose
     local versions git does not report, or with submodules; a branch
     another worktree has checked out (`branch_checked_out`); a checkout
     that is not the jj workspace this stack made (`slot_not_held`); a slot

@@ -2846,6 +2846,58 @@ its review (below).
   - The docs say removing the old worktree's registration drops its `HEAD`
     reflog and `refs/worktree/*`, as destroy does; the command's help has
     examples.
+- **Second review of #146 (2026-10-29), on top of 4c196ab9b.** The
+  reviewer confirmed the nested-repository blocker closed, with real jj and
+  git, and found three gaps:
+  - *A kill between renaming an entry and recording it lost the entry.*
+    `carry` renamed, then rewrote the record; the reviewer's probe, killed
+    right after the first rename, followed the record into the `rm -rf` of
+    the new checkout with `.env` in it. Now every entry's undo is recorded
+    before the first rename (`pushAll`, one write), each a conditional step
+    (if the entry is in the new checkout, and no longer in the old one,
+    `mv` it back), and the rollback moves back only those it renamed. The
+    kill point `carried` fires right after the first rename, and the kill
+    test checks that `.env` was renamed and the record names
+    `node_modules/`, not renamed yet; the probe passes.
+  - *A kill while the new checkout was being made left no step for it.*
+    Its removal is now recorded before `Add` (kill point `adding`), worded
+    as far as it got: `rm -rf` the path, then, with nothing there, `jj
+    workspace forget` (which changes nothing for a name jj lacks), then the
+    git registration at the path alone, if git lists one by either spelling
+    of the path (`deregisterCommand`); the git direction's step also names
+    the staging directory gitdriver adds a worktree in, where a kill
+    mid-add leaves it registered. In process, the rollback removes the
+    checkout only once `Add` returned, since `Add` removes what it made
+    when it fails and forgets no name it found taken; otherwise it stops if
+    anything is at the path (`nothingMade`). Kill tests: once jj had made
+    the whole slot (name and registration), and once a worktree's directory
+    was there but not registered.
+  - *Repositories in wholly ignored directories were refused:*
+    `.venv/src/<pkg>/.git` from `pip install -e git+…` and
+    `node_modules/<pkg>/.git`, which would block most Python and JS slots.
+    *Decided (coordinator):* refuse only a repository that does not move
+    inside an entry the migrate renames whole. `refuseNestedRepositories`
+    takes those entries, and the walk skips them: to jj, the entries git
+    ignores whole (`ignoredEntries`: no entry git does not ignore is, or
+    lies in, one), since an untracked one lands in the jj slot's working
+    copy, where jj records nothing of a repository; to a worktree, every
+    entry `untrackedEntries` lists (jj reads a directory holding a
+    repository as empty, so one with no tracked file is an entry). An
+    entry that is itself a `.git` or `.jj` does not count: its
+    repository's files are in the tracked directory above. The checks read
+    the entries first (git's `ls-files --others`, or jj's `TrackedPaths`
+    of the tip without a snapshot, before `Ready`, as before). Tested: a
+    repository in ignored `node_modules/` migrated to jj, then, in the jj
+    slot, ones in `vendor/lib` and `src/lib` (no tracked file, beside and
+    below tracked ones) migrated to a worktree, each keeping its commit and
+    files, then refused back to jj naming those two alone; the refusal
+    table keeps a repository in a tracked directory, either way, and one
+    git does not ignore, to jj. Known: a jj slot holding such a repository
+    is still kept by a destroy without `--force` (phase 6's guard), as one
+    cloned into a fresh jj slot is.
+  - Runtime: the kill matrix grew from six cases to eight (`adding`, each
+    way). With jj required and `-race`, the service package ran in 267s
+    (load average near 9; the last round's 405s was at a load above 40).
 - **Tests** (`service/migrate_test.go`, real jj under `ANGEE_REQUIRE_JJ=1`):
   both directions on one slot holding a commit, a `.gitignore`, ignored
   files at its top and below a tracked directory, an empty directory, a

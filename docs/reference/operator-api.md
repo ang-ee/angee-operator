@@ -739,7 +739,9 @@ clone, a link or of a `kind: local` source, one at the workspace's root and
 one other slots lie inside answer `400` `INVALID_INPUT`. A slot that is not
 ready answers `409` `PRECONDITION_FAILED` with the cause of the matching
 verb's refusal: `nested_repositories`, with the repositories in `paths`,
-for a slot that holds a `.git` or `.jj` below its own, either way;
+for a slot that holds a `.git` or `.jj` below its own outside a directory
+the migrate moves whole (one with no tracked file; to jj, one git
+ignores);
 `branch_mismatch` or `uncommitted_changes` (changes to tracked files) for a
 worktree, `detached_head` for one on no branch with commits beyond its
 base; `uncommitted_changes`, `untracked_paths` or `branch_moved` for a jj
