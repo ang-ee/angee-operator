@@ -26,15 +26,15 @@ latest tag.
   and with a `.gitignore` that hides it from a checkout around it, so
   neither git nor jj picks it up, and the new checkout is removed only once
   it holds none of the entries the migrate carries across: the record's
-  command refuses, naming one and where to move it, and the rollback stops. A rollback that kept
-  a copy names it in its error, and `workspace destroy` refuses while the
-  directory is there. Each recorded step is now one command, so following
-  the steps cannot run past a refusal into the removal of the checkout,
-  and a step that moves a checkout back to the slot's path refuses while
-  something is there instead of moving it inside. A rollback stopped by
-  something that appeared at the slot's path before the new checkout was
-  made records a step that removes nothing there. Stop the slot's services
-  before a migrate, as before.
+  command refuses, naming one and where to move it, and the rollback
+  stops. A rollback that kept a copy names it in its error, and `workspace
+  destroy` refuses while the directory is there. Each recorded step is now
+  one command, so following the steps cannot run past a refusal into the
+  removal of the checkout, and a step that moves a checkout back to the
+  slot's path refuses while something is there instead of moving it
+  inside. A rollback stopped by something that appeared at the slot's path
+  before the new checkout was made records a step that removes nothing
+  there. Stop the slot's services before a migrate, as before.
 - **A repository in a directory git ignores beside one it re-includes
   migrates to jj.** With `/vendor/*` and `!/vendor/keep/` in `.gitignore`,
   a repository in `vendor/other/` was refused (`nested_repositories`),
@@ -42,6 +42,24 @@ latest tag.
   whole. A directory git's own listing (`git ls-files --others --ignored
   --exclude-standard --directory`) reports as ignored whole now counts as
   moved whole; a repository in `vendor/keep/` is still refused.
+
+## v0.27.0 — 2026-10-30
+
+### Added
+
+- Explicit leading `default(...)` filters now allow absent job inputs, without
+  changing empty-string semantics or weakening required inputs and secrets.
+
+- Jobs can declare `holds: [service, ...]` to stop services before any selected
+  job runs. A chained run reapplies held and dependent services once after all
+  selected jobs succeed; a plain run leaves held services stopped. Operation
+  nodes report partial stop failures and held outcomes. Failures and cancellation
+  retain holds, including restoring a hold after a failed service recovery.
+  Local held jobs use isolated native execution, with per-node durable status and
+  output for logs and prerequisites; newer native generations take precedence.
+  Unsafe hot registration of recovery services fails without a project rewrite.
+  The durable root lock protects live job receipts from interrupted-operation
+  recovery by concurrent CLI or daemon readers.
 
 ## v0.26.0 — 2026-10-30
 

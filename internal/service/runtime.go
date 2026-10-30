@@ -488,6 +488,29 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		return backend.Logs(ctx, req)
 	}
 	var channels []<-chan string
+	targetCount := len(container) + len(local)
+	if len(services) > 0 && len(local) > 0 {
+		attempts, err := p.latestJobAttempts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		observed := p.runtimeServiceStates(ctx, stack)
+		remaining := make([]string, 0, len(local))
+		width := 0
+		if targetCount > 1 {
+			for _, name := range services {
+				width = max(width, len(name))
+			}
+		}
+		for _, name := range local {
+			if attempt, exists := attempts[name]; exists && attempt.owns(observed[name]) {
+				channels = append(channels, p.isolatedJobLogs(ctx, name, attempt, tail, follow, width))
+			} else {
+				remaining = append(remaining, name)
+			}
+		}
+		local = remaining
+	}
 	if statusArtifactExists(filepath.Join(p.root, "docker-compose.yaml")) && len(container) > 0 {
 		ch, err := logsFor(p.composeBackend, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail})
 		if err != nil {
@@ -498,7 +521,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 	if statusArtifactExists(filepath.Join(p.root, "process-compose.yaml")) && len(local) > 0 {
 		// Lines are labelled with their service whenever the read covers
 		// more than one, as docker compose labels its own.
-		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail, NoPrefix: len(container)+len(local) == 1, ControlPort: processComposeControlPort(stack)})
+		ch, err := logsFor(p.procBackend, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), Tail: tail, NoPrefix: targetCount == 1, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
 		}

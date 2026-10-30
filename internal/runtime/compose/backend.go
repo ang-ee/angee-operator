@@ -119,8 +119,23 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	args := b.baseArgs(target.Root, target.EnvFile)
+	if len(target.Configuration) != 0 {
+		args = configurationArgs(target.EnvFile)
+	}
 	args = append(args, "stop")
 	args = append(args, target.Services...)
+	if len(target.Configuration) != 0 {
+		runner, ok := b.inputRunner()
+		if !ok {
+			return fmt.Errorf("compose backend does not support in-memory runtime configuration")
+		}
+		env, err := runtime.ReadEnvFile(target.EnvFile)
+		if err != nil {
+			return err
+		}
+		_, err = runner.RunInput(ctx, target.Root, env, target.Configuration, "docker", args...)
+		return err
+	}
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }

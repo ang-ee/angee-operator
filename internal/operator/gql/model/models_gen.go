@@ -33,10 +33,13 @@ type IntComparisonExp struct {
 }
 
 type JobRunNode struct {
-	Name    string         `json:"name"`
-	Kind    JobRunNodeKind `json:"kind"`
-	Status  JobRunStatus   `json:"status"`
-	Message *string        `json:"message,omitempty"`
+	Name     string         `json:"name"`
+	Kind     JobRunNodeKind `json:"kind"`
+	Status   JobRunStatus   `json:"status"`
+	Message  *string        `json:"message,omitempty"`
+	Isolated bool           `json:"isolated"`
+	Output   *string        `json:"output,omitempty"`
+	ExitCode *int           `json:"exitCode,omitempty"`
 }
 
 type JobRunOperation struct {
