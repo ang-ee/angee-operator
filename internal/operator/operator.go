@@ -221,6 +221,7 @@ func NewServer(config Config) (*Server, error) {
 	// upgrader's origin allowlist is the cross-site guard. Not wrapped in s.auth.
 	mux.Handle("GET /services/{name}/logs/stream", http.HandlerFunc(s.serviceLogsStream))
 	mux.Handle("GET /services/{name}/endpoint", s.auth(http.HandlerFunc(s.serviceEndpoint)))
+	mux.Handle("POST /source-checkouts", s.adminAuth(http.HandlerFunc(s.sourceCheckout)))
 	mux.Handle("GET /sources", s.auth(http.HandlerFunc(s.sourceList)))
 	mux.Handle("GET /sources/{name}/status", s.auth(http.HandlerFunc(s.sourceStatus)))
 	mux.Handle("POST /sources/{name}/fetch", s.auth(http.HandlerFunc(s.sourceFetch)))
@@ -274,6 +275,8 @@ func NewServer(config Config) (*Server, error) {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	// Request-scoped streams must end before Shutdown waits for handlers.
+	s.server.RegisterOnShutdown(s.lifecycleCancel)
 	return s, nil
 }
 
@@ -281,6 +284,9 @@ func NewServer(config Config) (*Server, error) {
 // ListenAndServe on shutdown; tests that construct a Server without serving
 // can call Close directly to tear down background goroutines.
 func (s *Server) Close() {
+	if s.lifecycleCancel != nil {
+		s.lifecycleCancel()
+	}
 	if s.eventHub != nil {
 		s.eventHub.Stop()
 	}

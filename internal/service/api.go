@@ -138,6 +138,7 @@ type WorkspaceAPI interface {
 
 // SourceAPI covers top-level source materialization and git inspection.
 type SourceAPI interface {
+	WithSourceCheckout(context.Context, api.SourceCheckoutRequest, func(context.Context, api.SourceCheckout) error) error
 	SourceList(ctx context.Context, q query.Args) ([]api.SourceState, int, error)
 	SourceStatus(ctx context.Context, name string) (api.SourceState, error)
 	SourceFetch(ctx context.Context, name string) (api.SourceState, error)

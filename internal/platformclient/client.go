@@ -44,6 +44,7 @@ func listQueryValues(q query.Args) url.Values {
 
 // RemoteClient implements service.API against a remote operator over HTTP.
 type RemoteClient struct {
+	bearerToken  string
 	baseURL      string
 	client       *http.Client
 	streamClient *http.Client
@@ -87,14 +88,27 @@ type RemoteInvalidInput struct {
 	RemoteError
 }
 
+// Option configures a RemoteClient before it is used.
+type Option func(*RemoteClient)
+
+// WithBearerToken configures authentication for ordinary and scoped requests.
+// The credential is sent only in the Authorization header, never in the URL.
+func WithBearerToken(token string) Option {
+	return func(client *RemoteClient) { client.bearerToken = token }
+}
+
 // New constructs a RemoteClient for the operator at baseURL.
-func New(baseURL string) *RemoteClient {
+func New(baseURL string, options ...Option) *RemoteClient {
 	timeout := operatorTimeout()
-	return &RemoteClient{
+	client := &RemoteClient{
 		baseURL:      strings.TrimRight(baseURL, "/"),
 		client:       &http.Client{Timeout: timeout},
 		streamClient: &http.Client{},
 	}
+	for _, option := range options {
+		option(client)
+	}
+	return client
 }
 
 func operatorTimeout() time.Duration {
@@ -129,6 +143,19 @@ func (p *RemoteClient) streamingHTTPClient() *http.Client {
 	return &client
 }
 
+// newRequest is the shared authentication boundary for finite and streaming
+// transports. Callers retain their existing body, timeout and error owners.
+func (p *RemoteClient) newRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	if p.bearerToken != "" {
+		request.Header.Set("Authorization", "Bearer "+p.bearerToken)
+	}
+	return request, nil
+}
+
 func (p *RemoteClient) requestError(ctx context.Context, method, path string, err error) error {
 	timeout := p.requestClient().Timeout
 	if timeout > 0 && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
@@ -148,7 +175,7 @@ func (p *RemoteClient) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	endpoint := p.endpoint("/healthz", nil)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := p.newRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -796,7 +823,7 @@ func (p *RemoteClient) doJSON(ctx context.Context, method, path string, query ur
 		return err
 	}
 	endpoint := p.endpoint(path, query)
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	req, err := p.newRequest(ctx, method, endpoint, body)
 	if err != nil {
 		return err
 	}
@@ -833,7 +860,7 @@ func (p *RemoteClient) doJSON(ctx context.Context, method, path string, query ur
 
 func (p *RemoteClient) stream(ctx context.Context, path string, query url.Values) (<-chan string, error) {
 	endpoint := p.endpoint(path, query)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := p.newRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +908,7 @@ func (p *RemoteClient) stream(ctx context.Context, path string, query url.Values
 // unblocks the copy.
 func (p *RemoteClient) streamTo(ctx context.Context, path string, query url.Values, w io.Writer) error {
 	endpoint := p.endpoint(path, query)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := p.newRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,45 @@ opening a prompt.
 Surface parity between `service.Platform`, CLI, REST, and GraphQL is tracked in
 [Surface parity](/operator/surfaces).
 
+## Scoped repository checkouts
+
+`POST /source-checkouts` makes a complete Git checkout available for a caller's
+metadata build. It requires the configured **admin bearer**; minted actor tokens
+and unauthenticated development mode cannot acquire a checkout. Its strict JSON
+request selects a repository and a branch, tag or commit:
+
+```json
+{"repository":"https://github.com/example/packages.git","revision":"main"}
+```
+
+After preparation, the `application/x-ndjson` response emits one record:
+
+```json
+{"path":"run/source-checkouts/<opaque>/repository","revision":"<full-commit-id>"}
+```
+
+The response remains open while the consumer uses that directory. Keep its body
+open throughout the build and close it in the caller's cleanup block; disconnect,
+request cancellation or operator shutdown removes the checkout. Preparation
+failures use the ordinary REST error shape before the stream begins. The active
+response has no server write deadline or remote-client operation timeout.
+
+`path` is relative to the owning stack root. The build process and operator must
+share that filesystem; each resolves it against its own mount of the same root.
+The checkout contains full history and tags, all files and recursively pinned
+submodules, even when Git's active-submodule defaults exclude them. Native Git
+retains credential helpers, SSH configuration and relative submodule URLs. A
+shallow source or unsupported repository/revision fails; it is never exported as
+an incomplete source archive. Builds execute in the consumer, not the operator.
+
+This scope creates no manifest source, workspace, persistent checkout registry or
+source cache. Local catalogue sources continue to use their existing working
+trees directly, including uncommitted files. The native Go API and remote client
+expose the same lifetime as `WithSourceCheckout(ctx, request, callback)`; the
+callback receives the scope's cancellation context and the checkout record. Configure native remote callers with
+`platformclient.New(url, platformclient.WithBearerToken(adminToken))`; the same
+constructor option authenticates finite, archive and streaming requests.
+
 ## Logging and verbosity
 
 The operator writes structured `slog` text records to stderr. Its default

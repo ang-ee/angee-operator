@@ -46,6 +46,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `JobRunPreview` | No | Yes | Yes | Returns the manifest-derived affected jobs and services before a chained run. |
 | `JobRunGet` | Internal | Yes | Yes | CLI polls internally; remote clients query progress and terminal node outcomes by receipt ID. |
 | `LatestJobRun` | No | Yes | Yes | Returns the most recent daemon-owned receipt across client reconnects. |
+| `WithSourceCheckout` | No | Yes | No | Admin-only response-lifetime repository scope; REST `POST /source-checkouts` and the native/remote callback API share a root-relative path. |
 | `SourceList` | Yes | Yes | Yes | - |
 | `SourceFetch` | Yes | Yes | Yes | - |
 | `SourceStatus` | Yes | Yes | Yes | - |

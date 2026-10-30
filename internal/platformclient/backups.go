@@ -27,7 +27,7 @@ func (p *RemoteClient) BackupArchive(ctx context.Context, id string) (io.ReadClo
 	if op.Artifact == nil {
 		return nil, api.BackupArtifact{}, &RemoteError{Status: http.StatusConflict}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint("/backups/"+url.PathEscape(id)+"/archive", nil), nil)
+	request, err := p.newRequest(ctx, http.MethodGet, p.endpoint("/backups/"+url.PathEscape(id)+"/archive", nil), nil)
 	if err != nil {
 		return nil, api.BackupArtifact{}, err
 	}
