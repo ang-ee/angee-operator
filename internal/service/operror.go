@@ -66,7 +66,8 @@ const (
 	// checkout may be set aside under a private name.
 	CauseMigrateIncomplete = "migrate_incomplete"
 	// CauseNestedRepositories: a slot holds a repository of its own (a .git
-	// or .jj below its own), which a migrate does not carry across.
+	// or .jj below its own) that a migrate would not move whole, inside an
+	// entry it carries across.
 	CauseNestedRepositories = "nested_repositories"
 )
 

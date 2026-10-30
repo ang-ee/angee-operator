@@ -30,8 +30,9 @@ type migrateFixture struct {
 // it (a .gitignore, g.txt and src/a.txt), and what the slot holds beyond its
 // commits: ignored files at its top (.env, node_modules/) and below a tracked
 // directory (src/debug.log), an empty directory, and, in a worktree, an
-// untracked file and an untracked link, which a jj slot would snapshot. A
-// repository nested in the slot is refused (TestMigrateRefusesASlotThatIsNotReady).
+// untracked file and an untracked link, which a jj slot would snapshot. For
+// repositories nested in the slot, see TestMigrateCarriesRepositoriesItMovesWhole
+// and TestMigrateRefusesASlotThatIsNotReady.
 func newMigrateFixture(t *testing.T, mode string) *migrateFixture {
 	t.Helper()
 	f := &migrateFixture{jjFixture: newJJFixture(t, "")}
@@ -444,11 +445,14 @@ func TestMigrateRollsBackAFailureAtEachStep(t *testing.T) {
 
 // A migrate a slot is not ready for is refused before anything changes, in
 // the error contract's terms, either way: changes to tracked files, a
-// worktree off its branch, one on no branch with commits beyond its base, a
-// jj name another checkout has; a jj slot's uncommitted changes, files jj
-// does not track (untracked_paths), a described empty working copy, a
-// conflicted commit under it, a bookmark off its history (branch_moved),
-// and a branch another worktree has checked out.
+// worktree off its branch, one on no branch with commits beyond its base,
+// files git is told not to look at, a submodule, a repository nested in a
+// tracked directory or, to jj, in one git does not ignore, a jj name another
+// checkout has; a jj slot's repository nested in a tracked directory, its
+// uncommitted changes, files jj does not track (untracked_paths), a
+// described empty working copy, a conflicted commit under it, a bookmark
+// off its history (branch_moved), and a branch another worktree has checked
+// out.
 func TestMigrateRefusesASlotThatIsNotReady(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode string
@@ -475,20 +479,18 @@ func TestMigrateRefusesASlotThatIsNotReady(t *testing.T) {
 				runGit(f.t, f.slot, "update-index", "--add", "--cacheinfo", "160000,"+base+",vendor/lib")
 				runGit(f.t, f.slot, "commit", "-q", "-m", "a submodule")
 			}},
-		{name: "repository in a tracked directory", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "holds repositories inside it, which a migrate does not carry across: src/.git",
+		{name: "repository in a tracked directory", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "holds repositories outside the directories git ignores: src/.git. A migrate carries a repository across only inside a directory git ignores",
 			prepare: func(f *migrateFixture) {
 				runGit(f.t, filepath.Join(f.slot, "src"), "init", "-q", "-b", "gh-pages")
 				mustWriteFile(f.t, filepath.Join(f.slot, "src", "page.html"), "page\n")
 				runGit(f.t, filepath.Join(f.slot, "src"), "add", "page.html")
 				runGit(f.t, filepath.Join(f.slot, "src"), "commit", "-q", "-m", "unpushed")
 			}},
-		{name: "repository in an untracked directory", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "carry across: vendor/lib/.git",
+		{name: "repository in a directory git does not ignore", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "outside the directories git ignores: vendor/lib/.git",
 			prepare: func(f *migrateFixture) { runGit(f.t, f.slot, "init", "-q", "vendor/lib") }},
-		{name: "nested jj repository", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "carry across: src/.jj",
+		{name: "nested jj repository", mode: manifest.WorkspaceSourceModeWorktree, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "outside the directories git ignores: src/.jj",
 			prepare: func(f *migrateFixture) { mustMkdirAll(f.t, filepath.Join(f.slot, "src", ".jj")) }},
-		{name: "jj repository in an ignored directory", mode: manifest.WorkspaceSourceModeJJ, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "carry across: node_modules/pkg/.git",
-			prepare: func(f *migrateFixture) { runGit(f.t, filepath.Join(f.slot, "node_modules", "pkg"), "init", "-q") }},
-		{name: "jj repository in a tracked directory", mode: manifest.WorkspaceSourceModeJJ, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "carry across: src/.git",
+		{name: "jj repository in a tracked directory", mode: manifest.WorkspaceSourceModeJJ, code: CodePreconditionFailed, cause: CauseNestedRepositories, says: "holds repositories in directories that hold tracked files: src/.git. A migrate carries a repository across only inside a directory that holds no tracked file",
 			prepare: func(f *migrateFixture) {
 				runGit(f.t, filepath.Join(f.slot, "src"), "init", "-q", "-b", "gh-pages")
 				mustWriteFile(f.t, filepath.Join(f.slot, "src", ".git", "info", "exclude"), "*\n")
@@ -553,6 +555,56 @@ func TestMigrateRefusesASlotThatIsNotReady(t *testing.T) {
 			}
 			f.noAside()
 		})
+	}
+}
+
+// A repository nested in a directory a migrate renames whole moves with it,
+// either way, its commits and files with it: to jj, one in a directory git
+// ignores (a package's clone under node_modules); to a worktree, one in a
+// directory that holds no tracked file, at the slot's top or below a
+// tracked directory, which jj reads as empty. The worktree then holds the
+// latter two outside what git ignores, which a migrate to jj refuses,
+// naming them alone.
+func TestMigrateCarriesRepositoriesItMovesWhole(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	ctx := context.Background()
+	nested := func(rel string) string {
+		dir := filepath.Join(f.slot, filepath.FromSlash(rel))
+		runGit(t, f.slot, "init", "-q", "-b", "main", rel)
+		mustWriteFile(t, filepath.Join(dir, "own.txt"), rel+"\n")
+		runGit(t, dir, "add", "own.txt")
+		runGit(t, dir, "commit", "-q", "-m", "unpushed")
+		return strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
+	}
+	commits := map[string]string{"node_modules/pkg": nested("node_modules/pkg")}
+	files := f.files()
+	if result, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceMigrate(jj) = %+v, %v", result, err)
+	}
+	if got := f.files(); !maps.Equal(got, files) {
+		t.Errorf("files after the migrate to jj = %v, want %v", got, files)
+	}
+	f.noAside()
+
+	f.jj(f.slot, "commit", "-m", "untracked files")
+	commits["vendor/lib"], commits["src/lib"] = nested("vendor/lib"), nested("src/lib")
+	files = f.files()
+	if result, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeWorktree); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceMigrate(worktree) = %+v, %v", result, err)
+	}
+	if got := f.files(); !maps.Equal(got, files) {
+		t.Errorf("files after the migrate to a worktree = %v, want %v", got, files)
+	}
+	for rel, commit := range commits {
+		if got := strings.TrimSpace(runGitOutput(t, filepath.Join(f.slot, filepath.FromSlash(rel)), "rev-parse", "HEAD")); got != commit {
+			t.Errorf("the repository in %s is at %s, want %s", rel, got, commit)
+		}
+	}
+	f.noAside()
+
+	_, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ)
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause != CauseNestedRepositories || !slices.Equal(opErr.Paths, []string{filepath.Join("src", "lib", ".git"), filepath.Join("vendor", "lib", ".git")}) {
+		t.Fatalf("WorkspaceSourceMigrate(jj) again error = %v, want nested_repositories naming src/lib/.git and vendor/lib/.git", err)
 	}
 }
 
@@ -914,11 +966,16 @@ func TestMigrateLeavesOtherWorktreesAlone(t *testing.T) {
 // after a step stops: nothing after it runs, no rollback included.
 type killedMigrate struct{}
 
-// killAt runs a migrate of slot app to to that stops dead after step.
-func (f *migrateFixture) killAt(step, to string) {
+// killAt runs a migrate of slot app to to that stops dead after step, once
+// before, when given, has run there: what the next action had done of its
+// work when the kill came.
+func (f *migrateFixture) killAt(step, to string, before func()) {
 	f.t.Helper()
 	f.platform.migrateFault = func(at string) error {
 		if at == step {
+			if before != nil {
+				before()
+			}
 			panic(killedMigrate{})
 		}
 		return nil
@@ -973,23 +1030,34 @@ func (f *migrateFixture) followRecord() string {
 // path, when the new worktree was set aside for that), leaving nothing
 // behind. Until then, the slot's status names the steps.
 //
-// A kill after the first entry is carried leaves every kind of undo step in
-// the record, either way (the bookmark, the slot set aside, the new checkout,
-// the entries), so the later kills before the write (all carried) and the
-// earlier ones once the new checkout exists record nothing more; a kill
-// before the new checkout exists is tested once, as is each phase after the
-// write. (The suite runs under -race in CI's jj job, within go test's ten
-// minutes.)
+// The kills before the write are: before the new checkout exists; while it
+// is being made (adding, with what the tool had made by then: a whole jj
+// slot, jj's name and git's registration included, or a worktree's
+// directory, which git had not registered there yet); and right after the
+// first entry is renamed into it (carried), before anything else, when the
+// record holds every kind of undo step (the bookmark, the slot set aside,
+// the new checkout, the entries) and names every entry, renamed or not.
+// Each phase after the write is killed once. Killing it after every step
+// was trimmed: the suite runs under -race in CI's jj job, within go test's
+// ten minutes.
 func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 	for _, tc := range []struct {
 		mode, step, phase string
+		// before is what the action after step had done when it was killed.
+		before func(f *migrateFixture)
 	}{
-		{manifest.WorkspaceSourceModeWorktree, migrateStepAside, migratePhaseMigrating},
-		{manifest.WorkspaceSourceModeWorktree, migrateStepCarried, migratePhaseMigrating},
-		{manifest.WorkspaceSourceModeWorktree, migrateStepSaved, migratePhaseSaved},
-		{manifest.WorkspaceSourceModeJJ, migrateStepCarried, migratePhaseMigrating},
-		{manifest.WorkspaceSourceModeJJ, migrateStepSaved, migratePhaseSaved},
-		{manifest.WorkspaceSourceModeJJ, migrateStepForgotten, migratePhaseForgetting},
+		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepAside, phase: migratePhaseMigrating},
+		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepAdding, phase: migratePhaseMigrating, before: func(f *migrateFixture) {
+			f.jj(f.cache(), "workspace", "add", "--colocate", "--name", "dev--ws", "-r", "main", f.slot)
+		}},
+		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepCarried, phase: migratePhaseMigrating},
+		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepSaved, phase: migratePhaseSaved},
+		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepAdding, phase: migratePhaseMigrating, before: func(f *migrateFixture) {
+			mustWriteFileAll(f.t, filepath.Join(f.slot, "src", "a.txt"), "a\n")
+		}},
+		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepCarried, phase: migratePhaseMigrating},
+		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepSaved, phase: migratePhaseSaved},
+		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepForgotten, phase: migratePhaseForgetting},
 	} {
 		t.Run(tc.mode+"/"+tc.step, func(t *testing.T) {
 			f := newMigrateFixture(t, tc.mode)
@@ -999,9 +1067,24 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 				to, commit = manifest.WorkspaceSourceModeWorktree, f.tip()
 				f.jj(f.slot, "bookmark", "set", "ws", "--allow-backwards", "-r", "@--")
 			}
-			f.killAt(tc.step, to)
+			var before func()
+			if tc.before != nil {
+				before = func() { tc.before(f) }
+			}
+			f.killAt(tc.step, to, before)
 			if got := f.slotStatus("ws", "app"); got.State != "error" || !strings.Contains(got.Error, "Recover by hand, in this order: 1. ") {
 				t.Fatalf("status after the kill = %+v, want the steps to recover", got)
+			}
+			if tc.step == migrateStepCarried {
+				// .env, the first entry either way, is renamed, and the
+				// record names node_modules/, which is not yet.
+				aside := f.asideOf()
+				if !pathExists(t, filepath.Join(f.slot, ".env")) || pathExists(t, filepath.Join(aside, ".env")) || !pathExists(t, filepath.Join(aside, "node_modules")) {
+					t.Fatalf("the kill did not come right after .env was renamed into the new checkout")
+				}
+				if data, err := os.ReadFile(f.platform.migrateMarkerPath("ws", "app")); err != nil || !strings.Contains(string(data), "if node_modules/ is in the new checkout") {
+					t.Fatalf("the record = %s, %v, want it to name every entry", data, err)
+				}
 			}
 			if phase := f.followRecord(); phase != tc.phase {
 				t.Fatalf("the record's phase = %q, want %q", phase, tc.phase)

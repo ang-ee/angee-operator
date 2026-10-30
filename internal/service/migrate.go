@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,10 +41,14 @@ var _ jjMigrator = jjdriver.Driver{}
 const (
 	// migrateStepAside: the slot is set aside, its git registration repaired.
 	migrateStepAside = "aside"
+	// migrateStepAdding: the step that removes the new checkout is recorded,
+	// and the checkout is made next.
+	migrateStepAdding = "adding"
 	// migrateStepAdded: the new checkout is at the slot's path.
 	migrateStepAdded = "added"
-	// migrateStepCarried: the first recorded entry is carried across, when
-	// there is one.
+	// migrateStepCarried: the first entry is renamed into the new checkout,
+	// when there is one, and nothing more is done: the record names it, and
+	// every other entry, before the first rename (carry).
 	migrateStepCarried = "carried"
 	// migrateStepSave: every entry is carried across, and the manifest is
 	// written next.
@@ -106,7 +111,10 @@ const asidePrefix = ".angee-migrate-"
 // is written leaves the slot migrated, and the result's message warns of it.
 //
 // A slot at the workspace's root, or one other slots lie inside, is refused:
-// setting it aside would move them too. Anything that writes the slot by
+// setting it aside would move them too. So is one that holds a repository
+// the migrate would not move whole, inside an entry it carries across
+// (refuseNestedRepositories): one in a tracked directory, or, to jj, one
+// outside what git ignores. Anything that writes the slot by
 // path during the migrate (a running service) may write into either
 // checkout; stop it first.
 func (p *Platform) WorkspaceSourceMigrate(ctx context.Context, workspaceName, slot, to string) (result api.GitOpResult, err error) {
@@ -280,10 +288,10 @@ func (p *Platform) migrateToJJ(ctx context.Context, m *migration) (string, error
 	client := p.gitClient()
 	worktree := withEffectiveMode(m.stack, m.wsSource)
 	gitDriver, gitSlot := p.workspaceSlotDriver(m.path, m.source, worktree)
-	if err := m.refuseNestedRepositories(m.path); err != nil {
+	if err := requireSlotReady(ctx, gitDriver, gitSlot, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); err != nil {
 		return "", err
 	}
-	if err := requireSlotReady(ctx, gitDriver, gitSlot, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); err != nil {
+	if _, _, err := m.gitEntries(ctx, client, m.path); err != nil {
 		return "", err
 	}
 	if err := p.checkJJPrimary(m.sourceName, m.source, m.primary); err != nil {
@@ -418,19 +426,30 @@ func (m *migration) toJJ(ctx context.Context, client git.Client, gitDriver vcs.D
 	if err := requireSlotReady(ctx, gitDriver, aside, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); err != nil {
 		return err
 	}
-	if err := m.refuseNestedRepositories(aside.Path); err != nil {
+	entries, untracked, err := m.gitEntries(ctx, client, aside.Path)
+	if err != nil {
 		return err
 	}
+	m.untracked = untracked
 	if now, err := client.Commit(ctx, m.aside.Path(), "HEAD"); err != nil {
 		return err
 	} else if now != head {
 		return m.movedMeanwhile(head, now)
 	}
-	entries, err := client.OtherPaths(ctx, m.aside.Path(), true)
-	if err != nil {
+	// Recorded before jj makes anything, so a migrate killed while it does
+	// says how to remove what it made. The rollback removes the slot only
+	// once Add made it: Add removes what it made when it fails, and forgets
+	// no name it found taken.
+	added := false
+	if err := m.push(fmt.Sprintf("remove what the migrate made of the jj slot at %[1]s, as far as it got: its directory, `rm -rf %[1]s`, then, with nothing there, its jj workspace, `jj -R %[2]s workspace forget %[3]s`, then git's registration of it alone, if git lists one, `%[4]s`", shellQuote(m.path), shellQuote(m.primary), shellQuote(jjSlot.Name), deregisterCommand(m.primary, m.path)), func(ctx context.Context) error {
+		if !added {
+			return m.nothingMade()
+		}
+		return jj.Remove(ctx, jjSlot, m.dest)
+	}); err != nil {
 		return err
 	}
-	if m.untracked, err = client.OtherPaths(ctx, m.aside.Path(), false); err != nil {
+	if err := m.step(migrateStepAdding); err != nil {
 		return err
 	}
 	if err := jj.Add(ctx, jjSlot, m.dest, nil); err != nil {
@@ -439,11 +458,7 @@ func (m *migration) toJJ(ctx context.Context, client git.Client, gitDriver vcs.D
 		}
 		return err
 	}
-	if err := m.push(fmt.Sprintf("remove the jj slot made at %[1]s, then its jj workspace and its git registration alone: `rm -rf %[1]s && jj -R %[2]s workspace forget %[3]s && git -C %[2]s worktree remove --force --force %[1]s`", shellQuote(m.path), shellQuote(m.primary), shellQuote(jjSlot.Name)), func(ctx context.Context) error {
-		return jj.Remove(ctx, jjSlot, m.dest)
-	}); err != nil {
-		return err
-	}
+	added = true
 	if err := m.step(migrateStepAdded); err != nil {
 		return err
 	}
@@ -519,9 +534,10 @@ func (p *Platform) migrateToWorktree(ctx context.Context, m *migration) (string,
 	if !ok {
 		return "", fmt.Errorf("the driver of jj slot %s cannot migrate it", m.path)
 	}
-	// First: jj reads a tracked directory that holds a repository as its
-	// files deleted, which Ready would report as uncommitted changes.
-	if err := m.refuseNestedRepositories(m.path); err != nil {
+	// First, read without a snapshot: jj reads a directory that holds a
+	// repository as empty, so one in a tracked directory would make Ready
+	// report its files as deleted.
+	if _, _, err := m.jjEntries(ctx, jj, jjSlot, m.path, ""); err != nil {
 		return "", err
 	}
 	if err := requireSlotReady(ctx, jj, jjSlot, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); err != nil {
@@ -659,9 +675,15 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	// checked again, and its entries listed, there.
 	aside := named
 	aside.Path = m.aside.Path()
-	if err := m.refuseNestedRepositories(aside.Path); err != nil {
+	if err := m.aside.Verify(); err != nil {
 		return err
 	}
+	// Before jj snapshots the aside (Ready), as before the migrate.
+	tracked, entries, err := m.jjEntries(ctx, jj, named, aside.Path, handoff.Tip)
+	if err != nil {
+		return err
+	}
+	m.head, m.tracked = handoff.Tip, tracked
 	if err := jj.Ready(ctx, aside, vcs.VerbMigrate); err != nil {
 		if refusal := readinessRefusal(err, named, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); refusal != nil {
 			return refusal
@@ -673,22 +695,14 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	} else if tip != handoff.Tip {
 		return m.movedMeanwhile(handoff.Tip, tip)
 	}
-	tracked, err := jj.TrackedPaths(ctx, aside.Path, handoff.Tip)
-	if err != nil {
-		return err
-	}
-	m.head, m.tracked = handoff.Tip, tracked
-	if err := m.aside.Verify(); err != nil {
-		return err
-	}
-	entries, err := untrackedEntries(aside.Path, tracked)
-	if err != nil {
-		return err
-	}
-	if err := gitDriver.Add(ctx, gitSlot, m.dest, nil); err != nil {
-		return err
-	}
-	if err := m.push(fmt.Sprintf("remove the git worktree made at %[1]s, and its registration alone: `git -C %[2]s worktree remove --force --force %[1]s`", shellQuote(m.path), shellQuote(m.primary)), func(ctx context.Context) error {
+	// Recorded before git makes anything, as in toJJ. git adds the worktree
+	// in a staging directory first (gitdriver), where a migrate killed then
+	// leaves it registered.
+	added := false
+	if err := m.push(fmt.Sprintf("remove what the migrate made of the git worktree at %[1]s, as far as it got: its directory, `rm -rf %[1]s`, then git's registration of it alone, if git lists one, `%[2]s`; a migrate stopped while git made it may leave it registered in a staging directory instead, named angee-worktree-stage-…, which `git -C %[3]s worktree list` lists: remove that one with git's worktree remove --force --force", shellQuote(m.path), deregisterCommand(m.primary, m.path), shellQuote(m.primary)), func(ctx context.Context) error {
+		if !added {
+			return m.nothingMade()
+		}
 		if err := m.dest.RemoveAll(); err != nil {
 			return err
 		}
@@ -696,6 +710,13 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	}); err != nil {
 		return err
 	}
+	if err := m.step(migrateStepAdding); err != nil {
+		return err
+	}
+	if err := gitDriver.Add(ctx, gitSlot, m.dest, nil); err != nil {
+		return err
+	}
+	added = true
 	if err := m.step(migrateStepAdded); err != nil {
 		return err
 	}
@@ -801,21 +822,99 @@ func (m *migration) forgetStep(name string) string {
 	return m.forgetHint(name)
 }
 
+// gitEntries lists what the worktree checked out at dir holds that git does
+// not track (entries, as git.Client.OtherPaths lists them, the tops of it),
+// and, of that, what git does not ignore (untracked), which a jj slot
+// records as changes. It refuses a repository nested in the worktree outside
+// the entries git ignores whole (refuseNestedRepositories): one in a tracked
+// directory is no entry to carry, and jj records nothing of one in its
+// working copy, where an untracked one would land.
+func (m *migration) gitEntries(ctx context.Context, client git.Client, dir string) (entries, untracked []string, err error) {
+	if entries, err = client.OtherPaths(ctx, dir, true); err != nil {
+		return nil, nil, err
+	}
+	if untracked, err = client.OtherPaths(ctx, dir, false); err != nil {
+		return nil, nil, err
+	}
+	if err := m.refuseNestedRepositories(dir, ignoredEntries(entries, untracked)); err != nil {
+		return nil, nil, err
+	}
+	return entries, untracked, nil
+}
+
+// ignoredEntries are the entries of entries (what a worktree holds that git
+// does not track) that git ignores whole: none of untracked (what it does
+// not ignore) is the entry or, for a directory, lies in it.
+func ignoredEntries(entries, untracked []string) []string {
+	var ignored []string
+	for _, entry := range entries {
+		dir := strings.HasSuffix(entry, "/")
+		if !slices.ContainsFunc(untracked, func(u string) bool { return u == entry || dir && strings.HasPrefix(u, entry) }) {
+			ignored = append(ignored, entry)
+		}
+	}
+	return ignored
+}
+
+// jjEntries lists, for the jj slot s checked out at dir, the paths commit
+// tracks (commit "": the one under its working copy, Tip), without a
+// snapshot, and the tops of what the slot holds beyond them
+// (untrackedEntries), which a migrate carries across. It refuses a
+// repository nested in the slot outside those entries
+// (refuseNestedRepositories): it is in a directory that holds tracked
+// files, which jj, reading a directory that holds a repository as empty,
+// would take for deleted, and is no entry to carry.
+func (m *migration) jjEntries(ctx context.Context, jj jjMigrator, s vcs.Slot, dir, commit string) (tracked, entries []string, err error) {
+	if commit == "" {
+		if commit, err = jj.Tip(ctx, dir); err != nil {
+			if refusal := readinessRefusal(err, s, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); refusal != nil {
+				return nil, nil, refusal
+			}
+			return nil, nil, err
+		}
+	}
+	if tracked, err = jj.TrackedPaths(ctx, dir, commit); err != nil {
+		return nil, nil, err
+	}
+	if entries, err = untrackedEntries(dir, tracked); err != nil {
+		return nil, nil, err
+	}
+	if err := m.refuseNestedRepositories(dir, entries); err != nil {
+		return nil, nil, err
+	}
+	return tracked, entries, nil
+}
+
 // refuseNestedRepositories refuses a migrate of the slot checked out at dir
-// while a repository is nested in it (nestedRepositories, which walks dir
-// through os.Root, following no link): a .git or .jj below the slot's own,
-// such as a clone made in it. git does not list one nested in a tracked
-// directory among what it does not track, so it would not be carried across,
-// and jj records none, so a migrate refuses them all, either way, as destroy
-// refuses a jj slot that holds one. PRECONDITION_FAILED, cause
-// nested_repositories, naming them.
-func (m *migration) refuseNestedRepositories(dir string) error {
-	nested, err := nestedRepositories(dir, nil, true)
+// while it holds a repository (a .git or .jj below its own, such as a clone
+// made in it; nestedRepositories, which walks dir through os.Root, following
+// no link) outside the directories of whole: entries the migrate renames
+// into the new checkout whole, so a repository inside one moves with it,
+// such as an editable install's clone under .venv or a package's under
+// node_modules. Any other is in a directory that holds tracked files, which
+// a migrate cannot carry across, or, to jj, in what would be the jj slot's
+// working copy, where jj records nothing of it, so whole is then only what
+// git ignores. An entry that is itself a .git or .jj is no such directory:
+// its repository's files are in the directory above. PRECONDITION_FAILED,
+// cause nested_repositories, naming them.
+func (m *migration) refuseNestedRepositories(dir string, whole []string) error {
+	var carried []string
+	for _, entry := range whole {
+		name, isDir := strings.CutSuffix(entry, "/")
+		if base := path.Base(name); isDir && base != ".git" && base != ".jj" {
+			carried = append(carried, name)
+		}
+	}
+	nested, err := nestedRepositories(dir, carried, true)
 	if err != nil {
 		return fmt.Errorf("source slot %q: look for repositories inside it: %w", m.slot, err)
 	}
 	if len(nested) == 0 {
 		return nil
+	}
+	where, inside := "in directories that hold tracked files", "a directory that holds no tracked file"
+	if m.to == manifest.WorkspaceSourceModeJJ {
+		where, inside = "outside the directories git ignores", "a directory git ignores, since jj records nothing of a repository in its working copy"
 	}
 	hint := "Move them out of the slot, or remove them, then retry."
 	return &OperationError{
@@ -825,8 +924,36 @@ func (m *migration) refuseNestedRepositories(dir string) error {
 		Source:  m.sourceName,
 		Paths:   nested[:min(len(nested), maxErrorPaths)],
 		Hint:    hint,
-		Summary: fmt.Sprintf("source slot %q holds repositories inside it, which a migrate does not carry across: %s. %s", m.slot, vcs.NamePaths(nested, maxMessagePaths), hint),
+		Summary: fmt.Sprintf("source slot %q holds repositories %s: %s. A migrate carries a repository across only inside %s, which it moves whole. %s", m.slot, where, vcs.NamePaths(nested, maxMessagePaths), inside, hint),
 	}
+}
+
+// nothingMade is the rollback of a new checkout its tool failed to make:
+// the tool removes what it made when it fails (jjdriver.Driver.Add,
+// gitdriver's addWorktree), so anything at the slot's path is what it could
+// not remove, or what another process wrote there, and the rollback stops
+// at it rather than move the old checkout back on top.
+func (m *migration) nothingMade() error {
+	if _, err := os.Lstat(m.path); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return fmt.Errorf("%s holds what was left there while the new checkout was being made", m.path)
+}
+
+// deregisterCommand is the shell command that drops primary's registration
+// of a worktree at path, and no other, if git lists one: with nothing at
+// path, `git worktree remove` removes only git's record of it. git lists a
+// worktree by the path it was added at, or that path resolved, so either is
+// looked for.
+func deregisterCommand(primary, path string) string {
+	canonical := vcs.CanonicalPath(path)
+	match := "-e " + shellQuote("worktree "+canonical)
+	if canonical != path {
+		match += " -e " + shellQuote("worktree "+path)
+	}
+	return fmt.Sprintf("if git -C %[1]s worktree list --porcelain | grep -qxF %[2]s; then git -C %[1]s worktree remove --force --force %[3]s; fi", shellQuote(primary), match, shellQuote(canonical))
 }
 
 // forgetHint says how to forget jj workspace name safely by hand while the
@@ -952,8 +1079,14 @@ func (m *migration) rollback(ctx context.Context, cause error) error {
 // point says how to undo what it did (unfinishedMigrate). A record that
 // cannot be written fails the migrate, which then rolls back.
 func (m *migration) push(what string, run func(context.Context) error) error {
-	m.undo = append(m.undo, migrationUndo{what: what, run: run})
-	if !m.marked {
+	return m.pushAll(migrationUndo{what: what, run: run})
+}
+
+// pushAll records several undos as push records one, rewriting the record
+// once.
+func (m *migration) pushAll(undos ...migrationUndo) error {
+	m.undo = append(m.undo, undos...)
+	if !m.marked || len(undos) == 0 {
 		return nil
 	}
 	return m.record(migratePhaseMigrating, m.undoSteps())
@@ -1031,25 +1164,43 @@ func repointRegistration(ctx context.Context, client git.Client, primary, path s
 	return nil
 }
 
-// carry renames each recorded entry of the checkout set aside into the new
-// one, recording each for the rollback, which puts it back.
+// carry renames each entry of the checkout set aside into the new one.
+//
+// Every entry's undo is recorded before the first is renamed, so no rename
+// is ever left out of the record, wherever the migrate is killed: by hand,
+// each moves an entry back only when it is in the new checkout and no longer
+// in the old one, as one not renamed yet is not; the rollback moves back
+// those it renamed.
 func (m *migration) carry(entries []string) error {
+	moved := make([]bool, len(entries))
+	undos := make([]migrationUndo, 0, len(entries))
 	for i, entry := range entries {
 		rel := strings.TrimSuffix(entry, "/")
-		if err := m.dest.MoveFromAside(m.aside, rel); err != nil {
+		carried, back := shellQuote(filepath.Join(m.path, rel)), shellQuote(filepath.Join(m.aside.Path(), rel))
+		undos = append(undos, migrationUndo{
+			what: fmt.Sprintf("if %[1]s is in the new checkout, and no longer in the old one, move it back: `if [ -e %[2]s ] || [ -L %[2]s ]; then [ -e %[3]s ] || [ -L %[3]s ] || mv %[2]s %[3]s; fi`", entry, carried, back),
+			run: func(context.Context) error {
+				if !moved[i] {
+					return nil
+				}
+				return m.dest.MoveToAside(m.aside, rel)
+			},
+		})
+	}
+	if err := m.pushAll(undos...); err != nil {
+		return err
+	}
+	for i, entry := range entries {
+		if err := m.dest.MoveFromAside(m.aside, strings.TrimSuffix(entry, "/")); err != nil {
 			return fmt.Errorf("carry %s across from %s: %w", entry, m.aside.Path(), err)
 		}
-		if err := m.push(fmt.Sprintf("move %s, carried into the new checkout, back: `mv %s %s`", entry, shellQuote(filepath.Join(m.path, rel)), shellQuote(filepath.Join(m.aside.Path(), rel))), func(context.Context) error {
-			return m.dest.MoveToAside(m.aside, rel)
-		}); err != nil {
-			return err
-		}
-		m.carried = append(m.carried, entry)
+		moved[i] = true
 		if i == 0 {
 			if err := m.step(migrateStepCarried); err != nil {
 				return err
 			}
 		}
+		m.carried = append(m.carried, entry)
 	}
 	return nil
 }
@@ -1154,10 +1305,10 @@ func (m *migration) describe(message string) string {
 // commit tracks, does not: a directory none of whose files are tracked is one
 // entry, ending in "/", as `git ls-files --others --directory` lists one. The
 // slot's own .jj and .git are left out. It walks the slot through os.Root,
-// following no link, so a link is an entry of its own. jj refused the
-// untracked files it would not snapshot, and the migrate a repository nested
-// in the slot (refuseNestedRepositories), before this runs, so what it finds
-// are the files jj ignores and empty directories.
+// following no link, so a link is an entry of its own. Once jj has found
+// nothing to snapshot in the slot (Ready), what it finds are the files jj
+// ignores, empty directories, and directories that hold a repository, which
+// jj reads as empty (refuseNestedRepositories).
 func untrackedEntries(dir string, tracked []string) ([]string, error) {
 	files := map[string]bool{}
 	dirs := map[string]bool{}
