@@ -2898,6 +2898,127 @@ its review (below).
   - Runtime: the kill matrix grew from six cases to eight (`adding`, each
     way). With jj required and `-race`, the service package ran in 267s
     (load average near 9; the last round's 405s was at a load above 40).
+- **Follow-ups from the final review of #146 (2026-10-29, after the
+  v0.26.0 cut), on top of f57d596c9.** The three minor gaps the PR's body
+  listed, a commit each:
+  - *A kill inside git's own add left the staging checkout.* The git
+    driver makes a worktree in `$TMPDIR/angee-worktree-stage-…/source` and
+    installs a copy at the slot's path; a migrate killed before the stage
+    is removed leaves a full checkout registered there, which the recorded
+    step named in words only. The driver now takes the stage root from its
+    caller (`gitdriver.StageRoot`, `StagePath`, `Driver.AddStaged`; `Add`
+    makes its own, as before), so the migrate makes it before git runs and
+    records its guarded removal by path: `deregisterCommand` of the stage,
+    which removes the checkout there too, then `rm -rf` of the root. The
+    rollback removes a root `AddStaged` never ran on. The kill test at
+    `adding` (jj to worktree) has git make and register the worktree at
+    the recorded stage, with a copy at the slot's path, follows the record,
+    and checks that no registration names a stage and `TMPDIR` holds none;
+    `noAside` flags a stage's registration in every migrate test.
+  - *A writer in the old checkout defeated the guarded undo.* A process
+    still in the old checkout (a watcher rebuilding `node_modules/`) can
+    make an entry there again once it is carried; the recorded step's `[ -e
+    <aside>/<rel> ] || mv …` then skipped the move back, and the next, `rm
+    -rf <slot>`, deleted the carried copy. Each carry step now moves the new
+    checkout's copy, when the old one holds the entry too, into a directory
+    beside the slot, `<aside>-kept/<slot>/<rel>` (`keptDir`, `keptPath`; its
+    name starts with the aside prefix, so `asidesBeside` names it and the
+    destroy guard refuses while it is there, and a `.gitignore` of `/*` at
+    its top hides it from a checkout around it), and leaves it when even
+    that is taken; the
+    recorded removal of the new checkout is a subshell loop that refuses,
+    naming one, while any planned entry is still there (`removeNewCommand`).
+    In process, the same: `carryBack` moves an entry it renamed into
+    `keptDir` when the old checkout holds it again
+    (`copierx.GuardedPath.MoveBeside`), and the removal's undo refuses
+    while the new checkout holds a planned entry (`refuseCarriedLeft`),
+    which stops the rollback. A rollback that finishes having kept copies
+    returns its cause, code and cause kept, naming them (`keptBeside`); a
+    stopped one appends them to the record's steps (`keptNote`). By hand
+    each step acts on what is there, since nothing says what was renamed;
+    the rollback moves back only what it renamed and stops at anything
+    else, both without loss. A `.git` or `.jj` at the top gets no carry undo
+    and no check, since the new checkout has its own (a worktree with an
+    untracked top-level `.jj/` fails the carry and rolls back, as before).
+    "Stop the slot's services first" stays the advice: an undo now loses
+    no copy, but the writes still land in either checkout, and the
+    clean-up after the manifest is written keeps its one-read window (known
+    limits). Tests: killed at `save` with `node_modules/` rebuilt in the old
+    checkout, either way, the record followed; the same rolled back in
+    process, either way, the error naming the kept copy; each checking the
+    kept directory and an old checkout as it was but for the rebuilt entry
+    (`intact` now also wants a jj slot's working copy empty); a rollback
+    stopped by an entry written into the new checkout, whose record names
+    a copy kept before it stopped and whose removal step refuses until the
+    entry is moved by hand.
+  - *The first design kept the copy inside the old checkout, as
+    `<rel>.migrated`, as the review's brief suggested;* the
+    `go-code-reviewer` pass found that no ignore rule matches the new name,
+    so in a jj slot (jj to worktree, undone) the next jj command
+    snapshotted `.env.migrated` into the working-copy commit, and a
+    worktree showed it to `git add -A`. Hence `keptDir`, outside both
+    checkouts. The same pass found, all fixed: a person running a step's
+    commands one by one could go past the removal's refusal into
+    `deregisterCommand`, whose `git worktree remove --force --force`
+    deletes a registered checkout with its files, so each step is now one
+    command chained with `&&` (jj's forget of a name it lacks exits 0,
+    probed); moving a checkout back to the slot's path (the slot's own, and
+    the new worktree's after the forget) was an unguarded `mv`, which nests
+    it inside whatever is there, so it refuses while something is
+    (`vacantCommand`); a rollback stopped at `nothingMade` (something
+    appeared at the slot's path before the new checkout was made) left a
+    step whose `rm -rf` deleted what the rollback had kept, so it now
+    records a step that removes nothing there (`restepped`); a relative
+    `TMPDIR` gave a relative stage root (`StageRoot` is now absolute). Also
+    added: a table test of `ignoredEntries`, and `sh -c` tests of the
+    steps' commands on names with spaces, a quote, `$` and a leading `-`,
+    in a slot path holding a quote. Not taken: `RENAME_NOREPLACE` for the
+    renames (known limits). A second pass of the agent on the fixes was
+    slow to report; a check of them by hand meanwhile found two more, both
+    fixed: the removal's refusal put the kept path in printf's format, where
+    a `%` in the workspace's path would be read as a directive (now an
+    argument; the quoting test's workspace path holds `%s`), and the
+    destroy guard advised `git worktree remove` for a kept directory, which
+    is no checkout (it now names kept copies).
+  - *Second pass, on the fixes.* No way found for a recorded or in-process
+    undo to delete, overwrite or nest a carried entry, either way, but for
+    the check-then-rename window above. One warning, fixed: when the slot's
+    parent is itself a checkout (a slot at the workspace's root, with this
+    one inside it), the kept directory lay in it, where jj recorded its
+    copies (the reviewer's probe, jj 0.45.1), though the aside, holding a
+    `.git` or `.jj`, is skipped. The kept directory now gets a `.gitignore`
+    of `/*` at its top before anything goes in (`keptIgnore`, through a
+    guard on the stack root in process, `echo` by hand), and keeps the
+    copies under the slot's name, so a carried `.gitignore` cannot clash;
+    the quoting test checks that a git checkout around it lists nothing of
+    it. Suggestions taken: the refusals name the exact target,
+    `<kept>/<slot>/<entry>`, "if nothing is there"; the record's first step
+    is guarded (`vacantCommand`) and excludes kept directories. Not taken:
+    status naming asides beside a slot without a record (the error and the
+    destroy guard do); the empty directories `MoveBeside` leaves when its
+    rename fails; and a migrate killed while something unrelated appeared
+    at the slot's path still records the chained removal, whose `rm -rf`
+    would delete it, since the record cannot tell that case apart.
+  - *A repository in an ignored sibling of a re-included directory was
+    refused.* Probed first (git 2.50.1): with `/vendor/*` and
+    `!/vendor/keep/`, `git ls-files --others --directory` lists `vendor/`
+    alone, with `--exclude-standard` `vendor/` too (it holds
+    `vendor/keep/`), and `--others --ignored --exclude-standard
+    --directory` lists `vendor/other/` as one entry. That listing also
+    names, as one, a directory whose files are all ignored though it is
+    not (and its files one by one), but never one that holds a file or a
+    repository git does not ignore, nor one that holds a tracked file. So
+    it is fixed: `ignoredEntries` adds the directories
+    `git.Client.IgnoredPaths` lists inside a carried directory that hold
+    nothing the untracked listing names. Tested: a repository in
+    `vendor/other/` migrates to jj with its commit, after one in
+    `vendor/keep/lib` is refused, named alone.
+  - Runtime: with jj required and `-race`, the service package ran in
+    274s before the review's tests, 288s after.
+  - Not taken: a kill while the git driver copies the stage into the
+    slot's parent (`GuardedPath.ReplaceFrom`, under a random
+    `.angee-stage-…` name) leaves that partial copy, which no step names;
+    it holds nothing but the fresh checkout, and no registration names it.
 - **Tests** (`service/migrate_test.go`, real jj under `ANGEE_REQUIRE_JJ=1`):
   both directions on one slot holding a commit, a `.gitignore`, ignored
   files at its top and below a tracked directory, an empty directory, a
