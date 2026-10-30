@@ -3,7 +3,10 @@ package gitdriver
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -170,6 +173,79 @@ func TestSyncBaseByDefaultMerges(t *testing.T) {
 	}
 	if gitOutput(t, dir, "rev-parse", "HEAD^1") != mine {
 		t.Fatal("SyncBase(SyncDefault) rewrote the branch's own commit, want it merged onto")
+	}
+}
+
+// A git sync-base, pull or push needs the checkout on the branch it must be
+// on, with no uncommitted changes: Ready refuses a checkout on another branch
+// with git's own fix, and one with changes listing them. Destroy and repair
+// need only the branch; a slot's rebase, publish and merge need neither; a
+// verb Ready does not know is unsupported. The default sync method is a
+// merge.
+func TestReadyForEachVerb(t *testing.T) {
+	ctx := context.Background()
+	d := New(git.New())
+	dir, _ := clone(t)
+	run(t, dir, "switch", "-q", "-c", "feature")
+	onBranch := vcs.Slot{Path: dir, Branch: "feature"}
+	offBranch := vcs.Slot{Path: dir, Branch: "other"}
+	all := []vcs.Verb{vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush, vcs.VerbDestroy, vcs.VerbRepair, vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge, vcs.VerbMigrate}
+	for _, verb := range all {
+		if err := d.Ready(ctx, onBranch, verb); err != nil {
+			t.Errorf("Ready(%s) of a clean checkout on its branch error = %v", verb, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("wip\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	for _, verb := range all {
+		var uncommitted *vcs.UncommittedError
+		err := d.Ready(ctx, onBranch, verb)
+		switch verb {
+		case vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush:
+			if !errors.As(err, &uncommitted) || !slices.Equal(uncommitted.Paths, []string{"scratch.txt"}) || uncommitted.Fix != "" {
+				t.Errorf("Ready(%s) of a dirty checkout error = %v, want its uncommitted paths", verb, err)
+			}
+		default:
+			if err != nil {
+				t.Errorf("Ready(%s) of a dirty checkout error = %v, want none", verb, err)
+			}
+		}
+	}
+	for _, verb := range all {
+		var mismatch *vcs.BranchMismatchError
+		err := d.Ready(ctx, offBranch, verb)
+		switch verb {
+		case vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge:
+			if err != nil {
+				t.Errorf("Ready(%s) off its branch error = %v, want none", verb, err)
+			}
+		default:
+			if !errors.As(err, &mismatch) || mismatch.Fix != "git -C "+dir+" switch other" || !strings.Contains(mismatch.Reason, `"feature"`) {
+				t.Errorf("Ready(%s) off its branch error = %v, want a branch mismatch with git's fix", verb, err)
+			}
+		}
+	}
+	// Migrate carries untracked files across, so only a tracked change
+	// refuses it.
+	tracked := gitOutput(t, dir, "ls-files")
+	if err := os.WriteFile(filepath.Join(dir, strings.Fields(tracked)[0]), []byte("changed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var uncommitted *vcs.UncommittedError
+	if err := d.Ready(ctx, onBranch, vcs.VerbMigrate); !errors.As(err, &uncommitted) || slices.Contains(uncommitted.Paths, "scratch.txt") || len(uncommitted.Paths) != 1 {
+		t.Errorf("Ready(migrate) with a tracked change error = %v, want that change alone", err)
+	}
+	if err := d.Ready(ctx, onBranch, "squash"); !errors.Is(err, vcs.ErrUnsupported) {
+		t.Errorf("Ready(squash) error = %v, want vcs.ErrUnsupported", err)
+	}
+	for method, want := range map[string]string{vcs.SyncDefault: vcs.SyncMerge, vcs.SyncMerge: vcs.SyncMerge, vcs.SyncRebase: vcs.SyncRebase} {
+		if got, err := d.SyncMethod(method); err != nil || got != want {
+			t.Errorf("SyncMethod(%q) = %q, %v, want %q", method, got, err, want)
+		}
+	}
+	if _, err := d.SyncMethod("squash"); !errors.Is(err, vcs.ErrUnsupported) {
+		t.Errorf("SyncMethod(squash) error = %v, want vcs.ErrUnsupported", err)
 	}
 }
 

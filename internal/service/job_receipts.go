@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/fslock"
 	"github.com/ang-ee/angee-operator/internal/logctx"
+	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/runtime"
 )
 
 var operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -127,4 +131,228 @@ func (p *Platform) readJobReceipt(ctx context.Context, id string, rootLocked boo
 		}
 	}
 	return op, nil
+}
+
+// jobOperations reads the existing receipt owner plus its in-memory front. It
+// does not retain another index; atomic receipts remain authoritative after a
+// daemon restart, and JobRunGet owns interrupted-operation recovery.
+func (p *Platform) jobOperations(ctx context.Context) ([]api.JobRunOperation, error) {
+	ids := map[string]bool{}
+	p.jobRunsMu.RLock()
+	for id := range p.jobRuns {
+		ids[id] = true
+	}
+	p.jobRunsMu.RUnlock()
+	root, err := os.OpenRoot(p.root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	directory, err := root.Open("state/job-runs")
+	if err == nil {
+		entries, readErr := directory.ReadDir(-1)
+		_ = directory.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, entry := range entries {
+			if id, ok := strings.CutSuffix(entry.Name(), ".json"); ok && !entry.IsDir() && operationIDPattern.MatchString(id) {
+				ids[id] = true
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	operations := make([]api.JobRunOperation, 0, len(ids))
+	for _, id := range sortedKeys(ids) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		op, err := p.JobRunGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if !IsBackupReceipt(op) {
+			operations = append(operations, op)
+		}
+	}
+	return operations, nil
+}
+
+type jobAttempt struct {
+	operation string
+	started   time.Time
+	node      api.JobRunNode
+}
+
+func (attempt jobAttempt) owns(observed runtime.ServiceStatus) bool {
+	return attempt.node.Isolated && observed.State != "unknown" && (observed.Generation == "" || observed.Generation == attempt.node.RuntimeGeneration)
+}
+
+func (attempt jobAttempt) runtimeState(name, backend string) runtime.ServiceStatus {
+	state := runtime.ServiceStatus{Name: name, Runtime: backend, ExitCode: attempt.node.ExitCode, Generation: attempt.node.RuntimeGeneration}
+	switch attempt.node.Status {
+	case api.JobRunPending:
+		state.State = "pending"
+	case api.JobRunRunning:
+		state.State = "running"
+	case api.JobRunSucceeded:
+		state.State = "completed"
+	case api.JobRunBlocked:
+		state.State = "skipped"
+	case api.JobRunFailed:
+		state.State = "error"
+		if state.ExitCode != nil {
+			state.State = "completed"
+		}
+	}
+	return state
+}
+
+func (p *Platform) latestJobAttempts(ctx context.Context) (map[string]jobAttempt, error) {
+	operations, err := p.jobOperations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	attempts := map[string]jobAttempt{}
+	for _, op := range operations {
+		for _, node := range op.Nodes {
+			if node.Kind != "job" {
+				continue
+			}
+			previous, exists := attempts[node.Name]
+			if exists && (op.StartedAt.Before(previous.started) || op.StartedAt.Equal(previous.started) && op.ID < previous.operation) {
+				continue
+			}
+			if node.Status == api.JobRunFailed && node.Message == "" {
+				node.Message = op.Error
+			}
+			attempts[node.Name] = jobAttempt{operation: op.ID, started: op.StartedAt, node: node}
+		}
+	}
+	return attempts, nil
+}
+
+func (p *Platform) persistJobRun(id string) error {
+	op, err := p.JobRunGet(context.Background(), id)
+	if err != nil {
+		return err
+	}
+	if err := p.persistJobReceipt(op); err != nil {
+		return fmt.Errorf("persist job operation: %w", err)
+	}
+	return nil
+}
+
+func (p *Platform) prepareIsolatedJobAttempts(ctx context.Context, id string, stack *manifest.Stack, compiled *CompiledStack, nodes []api.JobRunNode) error {
+	isolated := false
+	for _, node := range nodes {
+		if !node.Isolated {
+			continue
+		}
+		isolated = true
+		if validator, ok := p.procBackend.(runtime.JobValidator); ok {
+			if err := validator.ValidateJob(runtime.JobSpec{Name: node.Name, Transient: true}); err != nil {
+				return err
+			}
+		}
+	}
+	if !isolated {
+		return nil
+	}
+	backend, request, err := p.operationRuntime(stack, compiled, manifest.RuntimeLocal)
+	if err != nil {
+		return err
+	}
+	statuses, err := backend.Status(ctx, request)
+	if err != nil && !processComposeNotRunning(err) {
+		return err
+	}
+	generations := map[string]string{}
+	for _, status := range statuses {
+		generations[status.Name] = status.Generation
+	}
+	p.updateJobRun(id, func(op *api.JobRunOperation) {
+		for i := range op.Nodes {
+			if op.Nodes[i].Isolated {
+				op.Nodes[i].RuntimeGeneration = generations[op.Nodes[i].Name]
+			}
+		}
+	})
+	return nil
+}
+
+func (p *Platform) restoreJobHolds(ctx context.Context, id string, stack *manifest.Stack, compiled *CompiledStack, targets map[string]bool) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtime.GracefulWaitDelay)
+	defer cancel()
+	op, err := p.JobRunGet(cleanup, id)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for i, node := range op.Nodes {
+		if !targets[node.Name] {
+			continue
+		}
+		if err := p.stopJobHeldService(cleanup, stack, compiled, node.Name); err != nil {
+			p.setNode(id, i, api.JobRunFailed, "recovery failed; hold stop failed: "+err.Error())
+			failures = append(failures, fmt.Errorf("restore hold on service %q: %w", node.Name, err))
+		} else {
+			p.setNode(id, i, api.JobRunBlocked, "held stopped; service recovery failed")
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// isolatedJobLogs follows the selected attempt, never an unrelated later run.
+// Native foreground output is buffered and redacted before receipt publication.
+func (p *Platform) isolatedJobLogs(ctx context.Context, name string, attempt jobAttempt, tail int, follow bool, width int) <-chan string {
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		node := attempt.node
+		if follow {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for node.Status == api.JobRunPending || node.Status == api.JobRunRunning {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					op, err := p.JobRunGet(ctx, attempt.operation)
+					if err != nil {
+						logctx.From(ctx).Warn("read isolated job logs", "error", err)
+						return
+					}
+					for _, current := range op.Nodes {
+						if current.Kind == "job" && current.Name == name {
+							node = current
+							break
+						}
+					}
+				}
+			}
+		}
+		text := node.Output
+		lines := strings.SplitAfter(text, "\n")
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		if tail > 0 && len(lines) > tail {
+			text = strings.Join(lines[len(lines)-tail:], "")
+		}
+		if width > 0 {
+			text = runtime.PrefixLines(text, name, width)
+		}
+		if text != "" {
+			select {
+			case out <- text:
+			case <-ctx.Done():
+			}
+		}
+	}()
+	return out
 }

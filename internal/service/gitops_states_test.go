@@ -191,23 +191,31 @@ func cacheDirFromWorktree(worktree string) string {
 
 // The topology counts a source as unpushed whenever it holds commits of its
 // own, whatever its state is named; a source that could not be read is
-// counted as an error only.
+// counted as an error only. A conflicted jj slot is counted as conflicted
+// beside its state, whichever it is.
 func TestCountGitOpsStateCountsUnpushedByPushed(t *testing.T) {
 	for _, tc := range []struct {
-		state        string
-		pushed       bool
-		wantUnpushed int
+		state          string
+		pushed         bool
+		conflicted     bool
+		wantUnpushed   int
+		wantConflicted int
 	}{
 		{state: "clean", pushed: false, wantUnpushed: 1},
 		{state: "behind", pushed: false, wantUnpushed: 1},
 		{state: "ahead", pushed: true, wantUnpushed: 0},
 		{state: "ahead", pushed: false, wantUnpushed: 1},
 		{state: "error", pushed: false, wantUnpushed: 0},
+		{state: "ahead", pushed: false, conflicted: true, wantUnpushed: 1, wantConflicted: 1},
+		{state: "dirty", pushed: false, conflicted: true, wantUnpushed: 1, wantConflicted: 1},
 	} {
 		var summary api.GitOpsSummary
-		countGitOpsState(&summary, tc.state, tc.pushed)
-		if summary.Unpushed != tc.wantUnpushed {
-			t.Fatalf("countGitOpsState(%q, pushed=%v) unpushed = %d, want %d", tc.state, tc.pushed, summary.Unpushed, tc.wantUnpushed)
+		countGitOpsState(&summary, tc.state, tc.pushed, tc.conflicted)
+		if summary.Unpushed != tc.wantUnpushed || summary.Conflicted != tc.wantConflicted {
+			t.Fatalf("countGitOpsState(%q, pushed=%v, conflicted=%v) unpushed = %d, conflicted = %d; want %d, %d", tc.state, tc.pushed, tc.conflicted, summary.Unpushed, summary.Conflicted, tc.wantUnpushed, tc.wantConflicted)
+		}
+		if tc.conflicted && summary.Ahead+summary.Dirty != 1 {
+			t.Fatalf("countGitOpsState(%q, conflicted) = %+v, want the state counted too", tc.state, summary)
 		}
 	}
 }

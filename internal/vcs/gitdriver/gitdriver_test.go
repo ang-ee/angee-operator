@@ -79,6 +79,27 @@ func TestStatus(t *testing.T) {
 			readErr: true,
 		},
 		{
+			// A dirty checkout, and one counted against its upstream, keep
+			// their verdict on a deleted base: git reads no base for them.
+			// The jj driver keeps the same verdicts, with a *vcs.CountError,
+			// since it reads its conflicts from the base.
+			name:    "dirty on a deleted base",
+			slot:    vcs.Slot{BaseRef: "gone"},
+			prepare: func(t *testing.T, dir, _ string) { write(t, filepath.Join(dir, "change.txt")) },
+			want:    vcs.Status{CurrentRef: "main", Dirty: true, UnpushedReason: "uncommitted changes"},
+		},
+		{
+			name: "on its upstream on a deleted base",
+			slot: vcs.Slot{BaseRef: "gone"},
+			want: vcs.Status{CurrentRef: "main", Upstream: "origin/main", Pushed: true},
+		},
+		{
+			name:    "ahead of its upstream on a deleted base",
+			slot:    vcs.Slot{BaseRef: "gone"},
+			prepare: func(t *testing.T, dir, _ string) { commit(t, dir, "change.txt") },
+			want:    vcs.Status{CurrentRef: "main", Upstream: "origin/main", Ahead: 1, UnpushedReason: "1 commit(s) ahead of origin/main"},
+		},
+		{
 			name:   "worktree: own commit without an upstream",
 			linked: true,
 			prepare: func(t *testing.T, dir, _ string) {

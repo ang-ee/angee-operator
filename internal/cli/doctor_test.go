@@ -198,24 +198,29 @@ func TestCommandVersionSurfacesStderrOnFailure(t *testing.T) {
 	}
 }
 
-// git below 2.42 is a warning naming the floor jj slots need, not an error:
-// no manifest can declare a jj slot yet.
+// git below 2.42 is a warning naming the git jj slots need, 2.48, not an
+// error: no manifest can declare a jj slot yet. A git from 2.42 to 2.47 gets
+// no warning from tool.git, as before 2.48 was needed, so a stack that does
+// not use jj gets none; tool.jj warns of it once jj can create slots.
 func TestDoctorWarnsOfGitBelowTheJJFloor(t *testing.T) {
 	tool := doctorToolNamed(t, "git")
 	if tool.short == nil {
 		t.Fatal("the git probe checks no version floor")
 	}
-	if detail, hint := tool.short("git version 2.50.1 (Apple Git-155)"); detail != "" || hint != "" {
-		t.Fatalf("short(2.50.1) = %q, %q; want nothing", detail, hint)
+	for _, version := range []string{"git version 2.50.1 (Apple Git-155)", "git version 2.47.2", "git version 2.42.0"} {
+		if detail, hint := tool.short(version); detail != "" || hint != "" {
+			t.Fatalf("short(%s) = %q, %q; want nothing", version, detail, hint)
+		}
 	}
 	detail, hint := tool.short("git version 2.41.0")
-	if detail != "git version 2.41.0 is older than 2.42, which jj slots need" || !strings.Contains(hint, "2.42") {
-		t.Fatalf("short(2.41.0) = %q, %q; want the 2.42 floor", detail, hint)
+	if detail != "git version 2.41.0 is older than 2.48, which jj slots need" || !strings.Contains(hint, "Upgrade git to 2.48 or later") {
+		t.Fatalf("short(2.41.0) = %q, %q; want the 2.48 jj slots need", detail, hint)
 	}
 }
 
 // tool.jj reports jj's version and its colocate capability, and warns
-// rather than fails without them.
+// rather than fails without them, or when the git jj slots would run is older
+// than 2.48 and cannot open the cache jj adds them to.
 func TestDoctorJJCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -249,6 +254,33 @@ func TestDoctorJJCheck(t *testing.T) {
 			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1", OSErr: errors.New("jj slots are not supported on Windows yet")},
 			status: doctorWarn,
 			detail: "jj 0.45.1: jj slots are not supported on Windows yet",
+		},
+		{
+			name:   "git 2.48",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1", Git: "git version 2.48.0"},
+			status: doctorOK,
+			detail: "jj 0.45.1 (workspace add --colocate)",
+		},
+		{
+			name:   "git without relative worktrees",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1", Git: "git version 2.47.2"},
+			status: doctorWarn,
+			detail: "jj 0.45.1 (workspace add --colocate), but git version 2.47.2 is older than 2.48, which jj slots need",
+			hint:   "Upgrade git to 2.48 or later before using jj slots",
+		},
+		{
+			name:   "git below the probe's floor",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1", Git: "git version 2.41.0", GitErr: errors.New("git version 2.41.0 is older than 2.42")},
+			status: doctorWarn,
+			detail: "jj 0.45.1 (workspace add --colocate), but git version 2.41.0 is older than 2.48, which jj slots need",
+			hint:   "Upgrade git to 2.48 or later before using jj slots",
+		},
+		{
+			name:   "git did not answer",
+			caps:   jjdriver.Capabilities{JJ: "jj 0.45.1", GitErr: errors.New("git --version failed: exit status 1")},
+			status: doctorWarn,
+			detail: "jj 0.45.1 (workspace add --colocate), but git reported no version, and jj slots need 2.48 or later",
+			hint:   "Upgrade git to 2.48 or later before using jj slots",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

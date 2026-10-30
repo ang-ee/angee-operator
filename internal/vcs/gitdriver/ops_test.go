@@ -123,12 +123,12 @@ func fakeGit(t *testing.T, sshCommand string) string {
 	return home
 }
 
-// unsetIdentityEnv clears identityEnvKeys, EMAIL and GIT_CONFIG_COUNT for the
+// unsetIdentityEnv clears git.IdentityEnvKeys, EMAIL and GIT_CONFIG_COUNT for the
 // test, so commitIdentity sees no identity from the environment the tests run
 // in.
 func unsetIdentityEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range append(slices.Clone(identityEnvKeys), "EMAIL", "GIT_CONFIG_COUNT") {
+	for _, key := range append(slices.Clone(git.IdentityEnvKeys), "EMAIL", "GIT_CONFIG_COUNT") {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("Unsetenv(%s) error = %v", key, err)

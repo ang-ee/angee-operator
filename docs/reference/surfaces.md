@@ -76,6 +76,7 @@ helper used by adapters or tests and should not be exposed directly.
 | `WorkspaceSourceRebaseAbort` | Yes | Yes | Yes | `angee workspace source rebase-abort`; REST `POST /workspaces/{name}/sources/{slot}/rebase-abort`. |
 | `WorkspaceSourceRebaseContinue` | Yes | Yes | Yes | `angee workspace source rebase-continue`; REST `POST /workspaces/{name}/sources/{slot}/rebase-continue`. |
 | `WorkspaceSourcePublish` | Yes | Yes | Yes | `angee workspace source publish`; REST `POST /workspaces/{name}/sources/{slot}/publish`. |
+| `WorkspaceSourceMigrate` | Yes | Yes | Yes | `angee workspace source migrate`; REST `POST /workspaces/{name}/sources/{slot}/migrate`. |
 | `WorkspaceCreatePreflight` | Yes | Yes | Yes | `angee workspace preflight`; REST `POST /workspaces/preflight`. |
 | `Templates` | Yes | Yes | Yes | `angee template list`; REST `GET /templates`. |
 | `Template` | Yes | Yes | Yes | `angee template get`; REST `GET /templates/{ref...}`. |

@@ -4,11 +4,127 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
+
+// Ready answers a verb's preconditions. sync-base, pull and push need a
+// checkout that must be on a branch (Slot.Branch) to be on it, and to have no
+// uncommitted changes, which a merge or rebase would mix into the base's and
+// a push would leave behind. Destroy, and repair's check of a slot it made,
+// need only the branch: the destroy guard reads what the checkout holds from
+// Status. Migrate needs the branch and no changes to tracked files, since
+// the new checkout is cut from the branch and only what git does not track is
+// carried across. A slot's own rebase, publish and merge need nothing: git refuses a
+// rebase over uncommitted changes, and a merge that would overwrite one,
+// itself, and publish pushes what is committed, creating the branch on a
+// detached HEAD.
+func (d Driver) Ready(ctx context.Context, s vcs.Slot, verb vcs.Verb) error {
+	switch verb {
+	case vcs.VerbSyncBase, vcs.VerbPull, vcs.VerbPush:
+		if err := d.onBranch(ctx, s); err != nil {
+			return err
+		}
+		paths, err := d.DirtyPaths(ctx, s)
+		if err != nil {
+			return err
+		}
+		if len(paths) > 0 {
+			return &vcs.UncommittedError{Paths: paths}
+		}
+		return nil
+	case vcs.VerbDestroy, vcs.VerbRepair:
+		return d.onBranch(ctx, s)
+	case vcs.VerbMigrate:
+		return d.readyToMigrate(ctx, s)
+	case vcs.VerbRebase, vcs.VerbPublish, vcs.VerbMerge:
+		return nil
+	}
+	return fmt.Errorf("no preconditions for %s on a git slot: %w", verb, vcs.ErrUnsupported)
+}
+
+// readyToMigrate answers migrate's preconditions. The new checkout is cut
+// from the branch, and only what git does not track is carried across, so
+// the checkout must be on its branch, and hold no change to a tracked file:
+// neither one git status reports (*vcs.UncommittedError) nor one git is told
+// not to look at, a skip-worktree or assume-unchanged file on disk, which
+// would be checked out again as committed (*vcs.NotReadyError). A checkout
+// with submodules is refused too: their repositories live in the worktree's
+// git directory, which the old checkout's removal deletes, and jj does not
+// support them.
+func (d Driver) readyToMigrate(ctx context.Context, s vcs.Slot) error {
+	if err := d.onBranch(ctx, s); err != nil {
+		return err
+	}
+	paths, err := d.git.ChangedPaths(ctx, s.Path)
+	if err != nil {
+		return err
+	}
+	if len(paths) > 0 {
+		return &vcs.UncommittedError{Paths: paths}
+	}
+	hidden, err := d.git.HiddenPaths(ctx, s.Path)
+	if err != nil {
+		return err
+	}
+	if len(hidden) > 0 {
+		return &vcs.NotReadyError{
+			Reason: "it has files git is told not to look at (skip-worktree or assume-unchanged), whose local versions would be checked out again as committed: " + vcs.NamePaths(hidden, 10),
+			// One update-index with both flags clears only the last (probed).
+			Fix: fmt.Sprintf("git -C %[1]s update-index --no-skip-worktree -- %[2]s && git -C %[1]s update-index --no-assume-unchanged -- %[2]s", shellWord(s.Path), strings.Join(shellWords(hidden), " ")),
+		}
+	}
+	modules, err := d.git.Submodules(ctx, s.Path)
+	if err != nil {
+		return err
+	}
+	if len(modules) > 0 {
+		return &vcs.NotReadyError{Reason: "it has submodules, whose repositories live in the worktree's git directory, which migrate removes, and which jj does not support: " + vcs.NamePaths(modules, 10)}
+	}
+	return nil
+}
+
+// shellWord quotes s for a POSIX shell, as one word.
+func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// shellWords quotes each of words (shellWord).
+func shellWords(words []string) []string {
+	quoted := make([]string, len(words))
+	for i, word := range words {
+		quoted[i] = shellWord(word)
+	}
+	return quoted
+}
+
+// onBranch refuses a checkout that is not on Slot.Branch, when it must be on
+// one, with git's own command that puts it back.
+func (d Driver) onBranch(ctx context.Context, s vcs.Slot) error {
+	if s.Branch == "" {
+		return nil
+	}
+	reason, err := d.BranchMismatch(ctx, s)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		return &vcs.BranchMismatchError{Reason: reason, Fix: fmt.Sprintf("git -C %s switch %s", s.Path, s.Branch)}
+	}
+	return nil
+}
+
+// SyncMethod syncs by merging unless rebasing is asked for.
+func (Driver) SyncMethod(method string) (string, error) {
+	switch method {
+	case vcs.SyncDefault, vcs.SyncMerge:
+		return vcs.SyncMerge, nil
+	case vcs.SyncRebase:
+		return vcs.SyncRebase, nil
+	}
+	return "", fmt.Errorf("unknown sync method %q: %w", method, vcs.ErrUnsupported)
+}
 
 // BranchMismatch says how the checkout differs from the branch it must be on.
 func (d Driver) BranchMismatch(ctx context.Context, s vcs.Slot) (string, error) {
@@ -151,6 +267,11 @@ func (d Driver) SyncBase(ctx context.Context, s vcs.Slot, onto, method string) (
 	}
 	return d.syncResult(ctx, s.Path, err)
 }
+
+// CheckRebase lets every rebase run: git rebases only the checkout's branch,
+// which git lets no other worktree check out, and leaves the commits it
+// replays where they were for anything else built on them.
+func (Driver) CheckRebase(context.Context, vcs.Slot, string) error { return nil }
 
 // Merge merges ref with --no-ff, so a merge commit is recorded even when the
 // branch could fast-forward. The commit is the user's (commitIdentity).

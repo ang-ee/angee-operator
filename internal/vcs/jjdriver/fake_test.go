@@ -16,7 +16,10 @@ import (
 // Run that way, it records its run in $HOME/fake-runs.jsonl, sleeps when
 // $HOME/sleep exists, fails when $HOME/fail does or when one of its arguments
 // is a line of $HOME/fail-on, prints the version and help text files in
-// $HOME hold, and exits instead of testing.
+// $HOME hold, for `git worktree list` $HOME/git-worktree-list when it
+// exists, for `git var` $HOME/git-var, for `jj config get <key>`
+// $HOME/jj-config-<key>, and for `jj op log` and `jj bookmark list`
+// $HOME/jj-op-log and $HOME/jj-bookmark-list, and exits instead of testing.
 func init() {
 	tool := filepath.Base(os.Args[0])
 	if tool != "jj" && tool != "git" {
@@ -42,6 +45,31 @@ func init() {
 		reply = tool + "-version"
 	case slices.Contains(os.Args, "--help"):
 		reply = tool + "-help"
+	case tool == "git" && slices.Contains(os.Args, "worktree") && slices.Contains(os.Args, "list"):
+		// The worktrees $HOME/git-worktree-list lists, none without it.
+		if _, err := os.Stat(filepath.Join(home, "git-worktree-list")); err == nil {
+			reply = "git-worktree-list"
+		}
+	case tool == "git" && slices.Contains(os.Args, "var"):
+		if _, err := os.Stat(filepath.Join(home, "git-var")); err == nil {
+			reply = "git-var"
+		}
+	case tool == "jj" && slices.Contains(os.Args, "config"):
+		key := "jj-config-" + os.Args[len(os.Args)-1]
+		if _, err := os.Stat(filepath.Join(home, key)); err == nil {
+			reply = key
+		}
+	case tool == "jj" && slices.Contains(os.Args, "op") && slices.Contains(os.Args, "log"),
+		tool == "jj" && slices.Contains(os.Args, "bookmark") && slices.Contains(os.Args, "list"):
+		// `jj op log` prints $HOME/jj-op-log and `jj bookmark list`
+		// $HOME/jj-bookmark-list, when they exist.
+		key := "jj-op-log"
+		if slices.Contains(os.Args, "bookmark") {
+			key = "jj-bookmark-list"
+		}
+		if _, err := os.Stat(filepath.Join(home, key)); err == nil {
+			reply = key
+		}
 	}
 	if reply != "" {
 		out, err := os.ReadFile(filepath.Join(home, reply))
@@ -76,7 +104,8 @@ type fakeRun struct {
 // fakeTools puts the fake jj (unless replies has no "jj-version") and git on
 // an otherwise empty PATH, writes replies (file name to content) into a fresh
 // HOME, sets every variable git.IsolatedEnv passes on to a known value plus
-// one it must not pass, and returns the HOME.
+// one it must not pass, gives the operator a jj identity (JJ_USER, JJ_EMAIL),
+// so no run asks for one, and returns the HOME.
 func fakeTools(t *testing.T, replies map[string]string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -105,7 +134,7 @@ func fakeTools(t *testing.T, replies map[string]string) string {
 	for key, value := range map[string]string{
 		"PATH": bin, "HOME": home, "USER": "tester", "SSH_AUTH_SOCK": "/tmp/agent.sock", "LANG": "C.UTF-8",
 		"GH_TOKEN": "gh-token", "XDG_CONFIG_HOME": filepath.Join(home, ".config"),
-		"ANGEE_UNRELATED_SECRET": "must-not-leak",
+		"ANGEE_UNRELATED_SECRET": "must-not-leak", "JJ_USER": "tester", "JJ_EMAIL": "tester@example.invalid",
 	} {
 		t.Setenv(key, value)
 	}

@@ -85,6 +85,13 @@
     },
     "Job": {
       "properties": {
+        "holds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "capture": {
           "$ref": "#/$defs/BackupCapture"
         },
@@ -640,6 +647,13 @@
           },
           "type": "object"
         },
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "jj"
+          ]
+        },
         "sources": {
           "additionalProperties": {
             "$ref": "#/$defs/Source"
@@ -800,7 +814,15 @@
           "type": "string",
           "enum": [
             "worktree",
-            "clone"
+            "clone",
+            "jj"
+          ]
+        },
+        "vcs": {
+          "type": "string",
+          "enum": [
+            "git",
+            "jj"
           ]
         },
         "branch": {

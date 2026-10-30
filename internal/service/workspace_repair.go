@@ -13,6 +13,7 @@ import (
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
 // WorkspaceRepair brings the source slots of an existing workspace back in
@@ -125,12 +126,18 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 	if err := ctx.Err(); err != nil {
 		return finish(api.WorkspaceRepairFailed, "not attempted: "+repairReason(err))
 	}
+	// A slot path a migrate left empty is not missing: its checkout may be set
+	// aside beside it.
+	if reason, hint, unfinished := p.unfinishedMigrate(workspaceName, slot, path); unfinished {
+		return finish(api.WorkspaceRepairFailed, reason+". "+hint)
+	}
 	if owner, taken := run.claimed[path]; taken {
 		return finish(api.WorkspaceRepairFailed, fmt.Sprintf("shares its path with slot %q", owner))
 	}
 	run.claimed[path] = slot
 	source, declared := stack.Sources[wsSource.Source]
-	disk, err := inspectWorkspaceSlot(path, source)
+	mode := stack.EffectiveSourceMode(wsSource)
+	disk, err := inspectWorkspaceSlot(path, source, mode)
 	if err != nil {
 		return finish(api.WorkspaceRepairFailed, repairReason(err))
 	}
@@ -144,7 +151,11 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 	case workspaceSlotDangling:
 		return finish(api.WorkspaceRepairNeedsAttention, fmt.Sprintf("%s is a link whose target is missing; remove it and repair again", path))
 	case workspaceSlotNotCheckout:
-		return finish(api.WorkspaceRepairNeedsAttention, fmt.Sprintf("%s exists but is not a git checkout; move it aside and repair again", path))
+		checkout := "a git checkout"
+		if mode == manifest.WorkspaceSourceModeJJ {
+			checkout = "a jj workspace"
+		}
+		return finish(api.WorkspaceRepairNeedsAttention, fmt.Sprintf("%s exists but is not %s; move it aside and repair again", path, checkout))
 	}
 	if !declared {
 		return vacate(fmt.Sprintf("source %q is not declared", wsSource.Source))
@@ -155,14 +166,14 @@ func (p *Platform) repairWorkspaceSource(ctx context.Context, run *workspaceRepa
 		}
 	}
 	done := logctx.Step(ctx, "materializing source slot "+slot)
-	err = p.repairMissingWorkspaceSlot(ctx, workspaceName, slot, source, wsSource, path)
+	err = p.repairMissingWorkspaceSlot(ctx, stack, workspaceName, slot, source, wsSource, path)
 	done(err)
 	status := p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack)
 	outcome.Status = &status
 	if err != nil {
 		return vacate(repairReason(err))
 	}
-	return finish(api.WorkspaceRepairCreated, describeWorkspaceSlotCut(source, wsSource))
+	return finish(api.WorkspaceRepairCreated, describeWorkspaceSlotCut(source, withEffectiveMode(stack, wsSource)))
 }
 
 // repairReason renders an error as a slot outcome's reason: on one line, with
@@ -174,8 +185,8 @@ func repairReason(err error) string {
 	var opErr *OperationError
 	if errors.As(err, &opErr) && opErr != nil && opErr.Summary != "" {
 		text = opErr.Summary
-		if opErr.GitLine != "" {
-			text += " git: " + opErr.GitLine
+		if opErr.ToolLine != "" {
+			text += " " + opErr.tool() + ": " + opErr.ToolLine
 		}
 	}
 	return strings.Join(strings.Fields(logctx.RedactText(text)), " ")
@@ -186,8 +197,8 @@ func repairReason(err error) string {
 // cleanup: if the cut fails, or the new slot is not on its branch, whatever was
 // created is rolled back through workspaceSourceCleanup as a failed create
 // would, so nothing is left at the path and no other slot is affected.
-func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource, dest string) (retErr error) {
-	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws); err != nil {
+func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manifest.Stack, workspaceName, slot string, source manifest.Source, ws manifest.WorkspaceSource, dest string) (retErr error) {
+	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws, stack.EffectiveSourceMode(ws)); err != nil {
 		return err
 	}
 	cleanup := &workspaceSourceCleanup{}
@@ -202,11 +213,19 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, workspaceName
 		defer cancel()
 		retErr = joinRollbackErrors(retErr, func() error { return cleanup.Rollback(cleanupCtx) })
 	}()
-	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false); err != nil {
+	ws = withEffectiveMode(stack, ws)
+	var jj jjSlotTarget
+	if ws.Mode == manifest.WorkspaceSourceModeJJ {
+		var err error
+		if jj, err = p.recordedJJSlotTarget(ctx, stack, workspaceName, slot, source, ws, dest); err != nil {
+			return err
+		}
+	}
+	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false, jj); err != nil {
 		return err
 	}
-	// Every git verb refuses a slot off its branch, so do not leave one behind.
-	return p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, ws)
+	// The verbs refuse a slot off its branch, so do not leave one behind.
+	return p.requireWorkspaceSlotReady(ctx, vcs.VerbRepair, workspaceName, slot, source, ws)
 }
 
 // existingWorkspaceSlotOutcome classifies a slot repair found on disk from its
@@ -251,13 +270,18 @@ func withUnpushedReason(reason string, status api.WorkspaceSourceStatus) string 
 	return reason + ": " + status.UnpushedReason
 }
 
-// describeWorkspaceSlotCut says how a slot repair created was materialized.
+// describeWorkspaceSlotCut says how a slot repair created was materialized;
+// ws's mode is the effective one.
 func describeWorkspaceSlotCut(source manifest.Source, ws manifest.WorkspaceSource) string {
 	base := workspaceSourceBaseRef(source, ws)
 	if base == "" {
 		base = "the cache's HEAD"
 	}
 	switch {
+	case ws.Mode == manifest.WorkspaceSourceModeJJ && ws.Branch != "":
+		return fmt.Sprintf("jj workspace on bookmark %q when it exists, else at base %s", ws.Branch, base)
+	case ws.Mode == manifest.WorkspaceSourceModeJJ:
+		return "jj workspace at base " + base
 	case source.Kind != "git":
 		return fmt.Sprintf("linked to source %q", ws.Source)
 	case ws.Mode == manifest.WorkspaceSourceModeWorktree && ws.Branch != "":

@@ -28,12 +28,18 @@ func (p *Platform) SourceDiff(ctx context.Context, name, ref string) ([]api.Diff
 }
 
 // WorkspaceSourceDiff returns the unified-diff hunks for a per-workspace
-// source slot. Semantics for ref mirror SourceDiff.
+// source slot. Semantics for ref mirror SourceDiff. On a jj slot, the
+// uncommitted changes are its working-copy commit's, and ref is in jj's
+// spelling (`main@origin` for a remote bookmark), diffed from the commit
+// under the working copy.
 func (p *Platform) WorkspaceSourceDiff(ctx context.Context, workspace, slot, ref string) ([]api.DiffFile, error) {
-	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, workspace, slot)
+	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "diff", workspace, slot)
 	if err != nil {
 		return nil, err
 	}
 	target := workspaceVCSSlot(path, source, wsSource)
+	if err := p.requireJJSlot(ctx, target); err != nil {
+		return nil, err
+	}
 	return p.slotDriver(target).Diff(ctx, target, ref)
 }

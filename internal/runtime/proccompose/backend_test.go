@@ -1329,10 +1329,10 @@ func TestBackendStatusParsesProcessList(t *testing.T) {
 		t.Fatalf("args = %v, want %v", runner.args, wantArgs)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
-		{Name: "worker", Runtime: "local", State: "restarting", ExitCode: intPointer(1), Restarts: 3, Generation: "3:<nil>:<nil>"},
+		{Name: "build-watch", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "web", Runtime: "local", State: "running", Health: "healthy", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "migrate", Runtime: "local", State: "completed", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
+		{Name: "worker", Runtime: "local", State: "restarting", ExitCode: intPointer(1), Restarts: 3, Generation: "0:3:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -1351,7 +1351,7 @@ func TestProcessUpdatesIncludesLogFile(t *testing.T) {
 			TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
 			Rotation:        &LogRotation{MaxSizeMB: 10, MaxBackups: 3},
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1363,7 +1363,7 @@ func TestProcessUpdatesIncludesLogFile(t *testing.T) {
 	if updates["logLocation"] != "/stack/run/logs/web.log" || !reflect.DeepEqual(updates["loggerConfig"], wantLogger) {
 		t.Fatalf("log updates = %v, %#v; want the log file and %#v", updates["logLocation"], updates["loggerConfig"], wantLogger)
 	}
-	updates, err = processUpdates(Process{})
+	updates, err = processUpdates(Process{}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1408,7 +1408,7 @@ func TestUpFailureNamesTheStackLog(t *testing.T) {
 }
 
 func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
-	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}})
+	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1419,7 +1419,7 @@ func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
 }
 
 func TestProcessUpdatesPreservesShutdownWhenGraceIsOmitted(t *testing.T) {
-	updates, err := processUpdates(Process{})
+	updates, err := processUpdates(Process{}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1553,7 +1553,7 @@ func TestProcessUpdatesIncludesRestartPolicy(t *testing.T) {
 		// A job compiles no availability: process-compose's default, no restart.
 		{nil, map[string]any{"restart": 0, "backoffSeconds": 0, "maxRestarts": 0}},
 	} {
-		updates, err := processUpdates(Process{Availability: tc.availability})
+		updates, err := processUpdates(Process{Availability: tc.availability}, false)
 		if err != nil {
 			t.Fatalf("processUpdates(%+v) error = %v", tc.availability, err)
 		}
@@ -1561,7 +1561,7 @@ func TestProcessUpdatesIncludesRestartPolicy(t *testing.T) {
 			t.Fatalf("processUpdates(%+v) restartPolicy = %#v, want %#v", tc.availability, got, tc.want)
 		}
 	}
-	if _, err := processUpdates(Process{Availability: &Availability{Restart: "exit_on_failure"}}); err == nil {
+	if _, err := processUpdates(Process{Availability: &Availability{Restart: "exit_on_failure"}}, false); err == nil {
 		t.Fatal("processUpdates() accepted a restart policy Angee does not compile")
 	}
 }
@@ -1684,7 +1684,7 @@ func TestBackendStatusParsesProcessListWithANSIBanner(t *testing.T) {
 		t.Fatalf("Status() error = %v", err)
 	}
 	want := []runtime.ServiceStatus{
-		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:<nil>:<nil>"},
+		{Name: "storybook", Runtime: "local", State: "running", ExitCode: intPointer(0), Generation: "0:0:<nil>:<nil>"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("statuses = %#v, want %#v", got, want)
@@ -1703,7 +1703,7 @@ func TestBackendStatusIncludesNativeGeneration(t *testing.T) {
 	if len(got) != 1 || got[0].ExitCode == nil || *got[0].ExitCode != 0 {
 		t.Fatalf("statuses = %#v, want completed zero-exit process", got)
 	}
-	wantGeneration := "2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
+	wantGeneration := "0:2:2026-09-13 10:00:00 +0000 UTC:2026-09-13 10:00:01 +0000 UTC"
 	if got[0].Generation != wantGeneration {
 		t.Fatalf("generation = %q, want %q", got[0].Generation, wantGeneration)
 	}
@@ -1755,6 +1755,48 @@ func hasArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestRunJobUsesVerifiedPrerequisitesOnlyWhenRequested(t *testing.T) {
+	for _, verified := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verified=%t", verified), func(t *testing.T) {
+			supervisor := &fakeSupervisor{
+				name: "job", config: `{"name":"job","command":"old"}`,
+				state: processListEntry{Name: "job", Status: "Completed", PID: 100},
+			}
+			server := httptest.NewServer(supervisor)
+			defer server.Close()
+			configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{
+				"job": {Command: "run", DependsOn: map[string]ProcessDependency{
+					"prerequisite": {Condition: "process_completed_successfully"},
+				}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			_, err = (Backend{Runner: supervisor}).RunJob(ctx, runtime.Target{
+				ControlPort: serverPort(t, server), DependenciesSatisfied: verified,
+			}, runtime.JobSpec{Name: "job", Configuration: configuration})
+			if err != nil {
+				t.Fatal(err)
+			}
+			supervisor.mu.Lock()
+			defer supervisor.mu.Unlock()
+			if len(supervisor.posted) != 1 {
+				t.Fatalf("posted %d updates, want 1", len(supervisor.posted))
+			}
+			dependencies := supervisor.posted[0]["dependsOn"]
+			var want any
+			if !verified {
+				want = map[string]any{"prerequisite": map[string]any{"condition": float64(1)}}
+			}
+			if !reflect.DeepEqual(dependencies, want) {
+				t.Fatalf("native dependencies = %#v, want %#v", dependencies, want)
+			}
+		})
+	}
 }
 
 // A re-run driven through UpdateProcess goes Pending -> Launching -> Launched ->
@@ -2568,5 +2610,327 @@ func TestRunJobKeepsTransientJobOutOfTheSharedSupervisor(t *testing.T) {
 	}
 	if posts, restarts, _ := supervisor.observed(); posts != 0 || restarts != 0 {
 		t.Fatalf("shared supervisor got %d updates and %d restarts; want none", posts, restarts)
+	}
+}
+
+func TestStopAbsentSupervisorIsAlreadyStopped(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	port := serverPort(t, server)
+	server.Close()
+	runner := &recordingRunner{}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), ControlPort: port, Services: []string{"web"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("unexpected command: %v", runner.args)
+	}
+}
+
+func TestStopSkipsMissingProcessesButStopsEveryPresentTarget(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", PID: 1}})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	if err := backend.Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"missing"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command for absent process: %v", runner.args)
+	}
+	if err := backend.Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"missing", "web"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopTerminalAndDisabledProcessesAreAlreadyStopped(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed": {Status: "Completed"},
+		"error":     {Status: "Error"},
+		"skipped":   {Status: "Skipped"},
+		"disabled":  {Status: "Disabled"},
+	})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{
+		Root: root, ControlPort: port, Services: []string{"completed", "error", "skipped", "disabled"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command for stopped processes: %v", runner.args)
+	}
+}
+
+func TestStopMixedTargetsKeepsRunningAndTransitionalProcesses(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed":         {Status: "Completed"},
+		"disabled":          {Status: "Disabled"},
+		"running":           {Status: "Running", IsRunning: true},
+		"pending":           {Status: "Pending"},
+		"scheduled":         {Status: "Scheduled"},
+		"restarting":        {Status: "Restarting"},
+		"unknown":           {Status: "Unknown"},
+		"running-completed": {Status: "Completed", IsRunning: true},
+		"running-error":     {Status: "Error", IsRunning: true},
+		"running-skipped":   {Status: "Skipped", IsRunning: true},
+		"running-disabled":  {Status: "Disabled", IsRunning: true},
+	})
+	port := project.serve(t)
+	runner := &recordingRunner{}
+	services := []string{"completed", "running", "missing", "disabled", "pending", "scheduled", "restarting", "unknown", "running-completed", "running-error", "running-skipped", "running-disabled"}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: services}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "running", "pending", "scheduled", "restarting", "unknown", "running-completed", "running-error", "running-skipped", "running-disabled"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopPreservesCommandFailure(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"completed": {Status: "Completed"},
+		"web":       {Status: "Running", IsRunning: true},
+	})
+	port := project.serve(t)
+	failure := errors.New("stop failed")
+	runner := &stubListRunner{err: failure}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"completed", "web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop error = %v, want %v", err, failure)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+// stopRunner answers a `process stop` by running onStop, as a supervisor
+// whose processes change state while it handles the stop does, and then
+// returning err.
+type stopRunner struct {
+	onStop func()
+	err    error
+	args   []string
+}
+
+func (r *stopRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	r.args = append([]string(nil), args...)
+	if hasArg(args, "stop") && r.onStop != nil {
+		r.onStop()
+	}
+	return nil, r.err
+}
+
+func (p *fakeProject) setState(name string, state processListEntry) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state.Name = name
+	p.processes[name].state = state
+}
+
+func TestStopAcceptsProcessesThatEndedBeforeTheSupervisorStoppedThem(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"web":    {Status: "Running", IsRunning: true},
+		"worker": {Status: "Running", IsRunning: true},
+	})
+	port := project.serve(t)
+	// process-compose v1.122.0 refuses to stop a process that has ended, and
+	// exits 1 naming it (probed).
+	runner := &stopRunner{err: errors.New("Successfully stopped 'worker' but encountered failures for: 'web'")}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.setState("worker", processListEntry{Status: "Disabled"})
+	}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}}); err != nil {
+		t.Fatalf("Stop() = %v, want nil once every named process reads as stopped", err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web", "worker"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopKeepsTheFailureWhileANamedProcessStillRunsOrMayLaunch(t *testing.T) {
+	for _, after := range []processListEntry{
+		{Status: "Running", IsRunning: true},
+		{Status: "Pending"},
+		{Status: "Restarting"},
+		{Status: "Completed", IsRunning: true},
+	} {
+		t.Run(after.Status, func(t *testing.T) {
+			root := t.TempDir()
+			project := newFakeProject(root, map[string]processListEntry{
+				"web":    {Status: "Running", IsRunning: true},
+				"worker": {Status: "Running", IsRunning: true},
+			})
+			port := project.serve(t)
+			failure := errors.New("Failed to stop: 'worker'")
+			runner := &stopRunner{err: failure}
+			runner.onStop = func() {
+				project.setState("web", processListEntry{Status: "Completed"})
+				project.setState("worker", after)
+			}
+			err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}})
+			if !errors.Is(err, failure) {
+				t.Fatalf("Stop() = %v, want %v while worker is %+v", err, failure, after)
+			}
+		})
+	}
+}
+
+func TestStopKeepsTheFailureWhenASkippedRequestedProcessStarted(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"web":    {Status: "Running", IsRunning: true},
+		"worker": {Status: "Completed"},
+	})
+	port := project.serve(t)
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.setState("worker", processListEntry{Status: "Running", IsRunning: true})
+	}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v: worker, skipped as completed, started during the stop", err, failure)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopKeepsTheFailureWhenAnotherProjectNowServesThePort(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	port := project.serve(t)
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.mu.Lock()
+		project.fileNames = []string{filepath.Join(t.TempDir(), "process-compose.yaml")}
+		project.mu.Unlock()
+	}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v when another project's supervisor answers the re-read", err, failure)
+	}
+}
+
+func TestStopAcceptsASupervisorThatExitedWithItsLastProcess(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	server := httptest.NewServer(project)
+	defer server.Close()
+	runner := &stopRunner{err: errors.New("Failed to stop: 'web'"), onStop: server.Close}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: serverPort(t, server), Services: []string{"web"}}); err != nil {
+		t.Fatalf("Stop() = %v, want nil once the supervisor no longer serves", err)
+	}
+}
+
+func TestStopKeepsTheFailureWhenStatesCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	var forbid atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if forbid.Load() && strings.HasPrefix(r.URL.Path, "/process/") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		project.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure, onStop: func() { forbid.Store(true) }}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: serverPort(t, server), Services: []string{"web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v when the states cannot be read again", err, failure)
+	}
+}
+
+func TestStopDoesNotTreatControlPlaneFailureAsAbsence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/live":
+			_, _ = w.Write([]byte(`{"status":"alive"}`))
+		case "/project/state":
+			http.NotFound(w, r)
+		default:
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	runner := &recordingRunner{}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), ControlPort: serverPort(t, server), Services: []string{"web"}})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("Stop error = %v, want control-plane failure", err)
+	}
+	if len(runner.args) != 0 {
+		t.Fatalf("command after failed state read: %v", runner.args)
+	}
+}
+
+func TestProtectedApplyRefusesNewServiceWithoutProjectReplacement(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"held": {Status: "Completed"}})
+	port := project.serve(t)
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"new": {Command: "new"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (Backend{Runner: project}).Apply(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"new"}, Configuration: document, ProtectStopped: true, DependenciesSatisfied: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot register service") {
+		t.Fatalf("Apply = %v", err)
+	}
+	if writes := project.writes(); len(writes) != 0 {
+		t.Fatalf("unsafe project write: %v", writes)
+	}
+}
+
+func TestApplyOmitsPrerequisitesAlreadySatisfiedByOperation(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Completed"}})
+	port := project.serve(t)
+	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"web": {Command: "web", DependsOn: map[string]ProcessDependency{"isolated-job": {Condition: "process_completed_successfully"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (Backend{Runner: project}).Apply(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web"}, Configuration: document, DependenciesSatisfied: true}); err != nil {
+		t.Fatal(err)
+	}
+	project.mu.Lock()
+	dependencies := project.processes["web"].config["dependsOn"]
+	project.mu.Unlock()
+	if dependencies != nil {
+		t.Fatalf("native service still waits for isolated prerequisite: %#v", dependencies)
+	}
+}
+
+func TestNativeGenerationChangesOnManualRestartPID(t *testing.T) {
+	runner := &stubListRunner{output: []byte(`[{"name":"job","status":"Completed","pid":100,"exit_code":0}]`)}
+	backend := Backend{Runner: runner}
+	before, err := backend.Status(t.Context(), runtime.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.output = []byte(`[{"name":"job","status":"Completed","pid":101,"exit_code":0}]`)
+	after, err := backend.Status(t.Context(), runtime.StatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[0].Generation == after[0].Generation {
+		t.Fatal("manual restart reused native generation despite changed PID")
 	}
 }

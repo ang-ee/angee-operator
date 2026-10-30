@@ -27,6 +27,8 @@ type recordingDest struct {
 	path       string
 	fail       int
 	registered []bool
+	// staged is the stage ReplaceFrom installed from.
+	staged string
 }
 
 func (d *recordingDest) Lstat() (fs.FileInfo, bool, error) {
@@ -45,6 +47,7 @@ func (d *recordingDest) IsEmptyDirectory() (bool, error) {
 func (d *recordingDest) MkdirAll(mode fs.FileMode) error { return os.MkdirAll(d.path, mode) }
 
 func (d *recordingDest) ReplaceFrom(_ context.Context, stage string) error {
+	d.staged = stage
 	return os.CopyFS(d.path, os.DirFS(stage))
 }
 
@@ -89,6 +92,48 @@ func TestAddWorktreeChecksThePathAfterTheRepair(t *testing.T) {
 	}
 }
 
+// AddStaged makes the worktree in the stage root it is given, at StagePath of
+// it, where a caller can name it before git runs, and removes the root
+// however the add ends: once the worktree is installed, and when a slot of
+// another mode is refused.
+func TestAddStagedStagesInTheRootItIsGiven(t *testing.T) {
+	ctx := context.Background()
+	primary, _ := clone(t)
+	client := git.New()
+	t.Setenv("TMPDIR", t.TempDir())
+	root, err := StageRoot()
+	if err != nil {
+		t.Fatalf("StageRoot() error = %v", err)
+	}
+	if !strings.HasPrefix(filepath.Base(root), "angee-worktree-stage-") || filepath.Dir(root) != filepath.Clean(os.Getenv("TMPDIR")) {
+		t.Fatalf("StageRoot() = %s, want an angee-worktree-stage-… directory in TMPDIR", root)
+	}
+	slot := vcs.Slot{Mode: vcs.ModeWorktree, Primary: primary, Path: filepath.Join(t.TempDir(), "slot"), BaseRef: "main", BaseRemote: "origin"}
+	dest := &recordingDest{client: client, primary: primary, path: slot.Path}
+	if err := New(client).AddStaged(ctx, slot, dest, root); err != nil {
+		t.Fatalf("AddStaged() error = %v", err)
+	}
+	if dest.staged != StagePath(root) {
+		t.Errorf("installed from %s, want the stage %s", dest.staged, StagePath(root))
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the stage root after AddStaged: Lstat error = %v, want it removed", err)
+	}
+	if registered, err := client.WorktreeRegistered(ctx, primary, slot.Path); err != nil || !registered {
+		t.Errorf("WorktreeRegistered(slot) = %v, %v, want the installed worktree", registered, err)
+	}
+
+	if root, err = StageRoot(); err != nil {
+		t.Fatalf("StageRoot() error = %v", err)
+	}
+	if err := New(client).AddStaged(ctx, vcs.Slot{Mode: vcs.ModeClone}, nil, root); !errors.Is(err, vcs.ErrUnsupported) {
+		t.Fatalf("AddStaged(clone) error = %v, want vcs.ErrUnsupported", err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the stage root after a refused AddStaged: Lstat error = %v, want it removed", err)
+	}
+}
+
 // A worktree starts at the first ref baseRefs lists, the one Status counts a
 // slot without an upstream against: the local base, else its remote
 // counterpart, else the base as given, for git to resolve.
@@ -128,5 +173,60 @@ func TestLifecycleModes(t *testing.T) {
 	}
 	if exists, err := driver.Exists(ctx, vcs.Slot{Mode: vcs.ModeClone, Path: t.TempDir()}); exists || err != nil {
 		t.Fatalf("Exists(clone) = %v, %v, want false", exists, err)
+	}
+}
+
+// RepointRegistration points one worktree's registration at where it was
+// moved, keeping its link's form, relative or absolute, and touches no other
+// worktree's.
+func TestRepointRegistrationKeepsTheLinksForm(t *testing.T) {
+	ctx := context.Background()
+	client := git.New()
+	version, err := client.Version(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []bool{false, true} {
+		if relative && !git.VersionAtLeast(version, git.RelativeWorktreesVersion) {
+			continue
+		}
+		primary, _ := clone(t)
+		base := t.TempDir()
+		slot, other := filepath.Join(base, "slot"), filepath.Join(base, "other")
+		for _, path := range []string{slot, other} {
+			run(t, primary, "-c", fmt.Sprintf("worktree.useRelativePaths=%t", relative), "worktree", "add", "-q", "--detach", path)
+		}
+		otherLink, err := os.ReadFile(filepath.Join(other, ".git"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		moved := filepath.Join(base, ".slot-aside")
+		if err := os.Rename(slot, moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := RepointRegistration(moved, moved, primary); err != nil {
+			t.Fatalf("RepointRegistration(relative %t) error = %v", relative, err)
+		}
+		if ok, err := client.WorktreeRegistered(ctx, primary, moved); err != nil || !ok {
+			t.Fatalf("worktree at %s registered = %v, %v, want it", moved, ok, err)
+		}
+		list := gitOutput(t, primary, "worktree", "list", "--porcelain")
+		if strings.Contains(list, "prunable") {
+			t.Errorf("relative %t: a registration is prunable:\n%s", relative, list)
+		}
+		admin := strings.TrimSpace(strings.TrimPrefix(gitOutput(t, moved, "rev-parse", "--git-dir"), "gitdir: "))
+		link, err := os.ReadFile(filepath.Join(admin, "gitdir"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filepath.IsAbs(strings.TrimSpace(string(link))) == relative {
+			t.Errorf("relative %t: the registration's link is %q", relative, link)
+		}
+		if got, err := os.ReadFile(filepath.Join(other, ".git")); err != nil || string(got) != string(otherLink) {
+			t.Errorf("relative %t: the other worktree's .git = %q, want %q", relative, got, otherLink)
+		}
+		if out := gitOutput(t, moved, "status", "--short"); out != "" {
+			t.Errorf("relative %t: git status in the moved worktree = %q", relative, out)
+		}
 	}
 }

@@ -131,7 +131,15 @@ func eval(expr string, ctx Context) (string, error) {
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
 		return "", errors.New("empty substitution")
 	}
-	value, err := resolvePath(strings.TrimSpace(parts[0]), ctx)
+	path := strings.TrimSpace(parts[0])
+	value, err := resolvePath(path, ctx)
+	// An explicit leading default makes a job input optional. Missing inputs
+	// without that filter, and every other namespace, retain strict lookup.
+	if err != nil && strings.HasPrefix(path, "inputs.") && len(parts) > 1 {
+		if filter, _ := parseCall(strings.TrimSpace(parts[1])); filter == "default" {
+			value, err = "", nil
+		}
+	}
 	if err != nil {
 		return "", err
 	}

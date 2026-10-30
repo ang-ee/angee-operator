@@ -65,6 +65,7 @@ type Stack struct {
 	Ports             map[string]Port              `yaml:"ports,omitempty" json:"ports,omitempty"`
 	Volumes           map[string]Volume            `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 	Persist           map[string]PersistPath       `yaml:"persist,omitempty" json:"persist,omitempty"`
+	VCS               string                       `yaml:"vcs,omitempty" json:"vcs,omitempty" validate:"omitempty,oneof=git jj" jsonschema:"enum=git,enum=jj"`
 	Sources           map[string]Source            `yaml:"sources,omitempty" json:"sources,omitempty"`
 	WorkspaceDefaults map[string]WorkspaceDefaults `yaml:"workspace_defaults,omitempty" json:"workspace_defaults,omitempty"`
 	Workspaces        map[string]Workspace         `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
@@ -475,10 +476,20 @@ type Workspace struct {
 
 type WorkspaceSource struct {
 	Source string `yaml:"source" json:"source" validate:"required" jsonschema:"required"`
-	// Mode selects how a git source is materialized: a worktree of the shared
-	// cache or a standalone clone. Omitted, a git source is cloned and a local
-	// source is linked; a local source is linked whatever the mode says.
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone"`
+	// Mode selects how a source is checked out: a worktree of a git source's
+	// shared cache, a standalone clone, or a jj workspace of the cache, or of
+	// a local source that already is a jj repository. Omitted, the stack's vcs
+	// decides (Stack.EffectiveSourceMode). A local source is linked under any
+	// mode but jj.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty" jsonschema:"enum=worktree,enum=clone,enum=jj"`
+	// VCS, for a slot that names no mode, is the version control the slot
+	// was checked out with: the stack's vcs when angee cut it, which create
+	// records, so that a later change of the stack's vcs does not read an
+	// existing slot as another kind of checkout than the one on disk (a jj
+	// workspace read as a git clone leaks its jj name on destroy). Omitted,
+	// as on a slot cut before angee recorded it, the stack's vcs decides
+	// (Stack.EffectiveSourceMode). A slot that names a mode ignores it.
+	VCS string `yaml:"vcs,omitempty" json:"vcs,omitempty" jsonschema:"enum=git,enum=jj"`
 	// Branch is the branch a worktree slot is cut on. Omitted, the worktree
 	// starts on a detached HEAD at Ref and gets a branch when it is published.
 	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
@@ -486,21 +497,70 @@ type WorkspaceSource struct {
 	Subpath string `yaml:"subpath,omitempty" json:"subpath,omitempty"`
 }
 
-// Workspace source modes. The empty mode is also valid and keeps the source
-// kind's default.
+// Workspace source modes. The empty mode is also valid and leaves the choice
+// to the stack's vcs (Stack.EffectiveSourceMode).
 const (
 	WorkspaceSourceModeWorktree = "worktree"
 	WorkspaceSourceModeClone    = "clone"
+	WorkspaceSourceModeJJ       = "jj"
+)
+
+// The version control systems a stack's vcs can name: the one a workspace
+// slot that names no mode is checked out with (Stack.EffectiveSourceMode).
+// Empty is git.
+const (
+	VCSGit = "git"
+	VCSJJ  = "jj"
 )
 
 // ValidateWorkspaceSourceMode rejects a workspace source mode the operator
 // does not implement, so a typo fails loudly instead of quietly cloning.
 func ValidateWorkspaceSourceMode(mode string) error {
 	switch mode {
-	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone:
+	case "", WorkspaceSourceModeWorktree, WorkspaceSourceModeClone, WorkspaceSourceModeJJ:
 		return nil
 	}
-	return fmt.Errorf("mode %q is not supported; use %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone)
+	return fmt.Errorf("mode %q is not supported; use %q, %q or %q, or omit it", mode, WorkspaceSourceModeWorktree, WorkspaceSourceModeClone, WorkspaceSourceModeJJ)
+}
+
+// EffectiveSourceMode is the mode ws is checked out in, which everything that
+// reads a slot's mode asks. A mode the slot names wins. With none, the vcs
+// the slot was cut with (WorkspaceSource.VCS), else the stack's, decides: jj
+// makes the slot a jj workspace, and git leaves the mode empty, keeping each
+// source kind's default: a git source is cloned and a local source linked
+// (plan D3). The manifest keeps the mode as written, so the stack's vcs
+// decides only for a slot that names no mode and records no vcs, as one cut
+// before create recorded it.
+func (s *Stack) EffectiveSourceMode(ws WorkspaceSource) string {
+	vcs := ws.VCS
+	if vcs == "" && s != nil {
+		vcs = s.VCS
+	}
+	switch {
+	case ws.Mode != "":
+		return ws.Mode
+	case vcs == VCSJJ:
+		return WorkspaceSourceModeJJ
+	}
+	return ""
+}
+
+// SlotVCS is the vcs create records on a slot that names no mode
+// (WorkspaceSource.VCS): the stack's, git when it names none.
+func (s *Stack) SlotVCS() string {
+	if s != nil && s.VCS == VCSJJ {
+		return VCSJJ
+	}
+	return VCSGit
+}
+
+// ValidateWorkspaceSourceVCS rejects a slot vcs the operator does not know.
+func ValidateWorkspaceSourceVCS(vcs string) error {
+	switch vcs {
+	case "", VCSGit, VCSJJ:
+		return nil
+	}
+	return fmt.Errorf("vcs %q is not supported; use %q or %q, or omit it", vcs, VCSGit, VCSJJ)
 }
 
 type WorkspaceResolved struct {
@@ -683,6 +743,9 @@ type BackupCapture struct {
 }
 
 type Job struct {
+	// Holds names services stopped before this operation runs any job.
+	Holds []string `yaml:"holds,omitempty" json:"holds,omitempty" jsonschema:"uniqueItems=true"`
+
 	Capture *BackupCapture `yaml:"capture,omitempty" json:"capture,omitempty"`
 
 	Runtime   Runtime           `yaml:"runtime" json:"runtime" validate:"required,oneof=container local" jsonschema:"required,enum=container,enum=local"`
@@ -988,7 +1051,20 @@ func (s *Stack) ValidateExtended() error {
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
 			return err
 		}
+		seenHolds := map[string]bool{}
+		for _, held := range job.Holds {
+			if _, ok := s.Services[held]; !ok {
+				return fmt.Errorf("job %q holds unknown service %q", name, held)
+			}
+			if seenHolds[held] {
+				return fmt.Errorf("job %q holds service %q more than once", name, held)
+			}
+			seenHolds[held] = true
+		}
 		if capture := job.Capture; capture != nil {
+			if len(job.Holds) > 0 {
+				return fmt.Errorf("capture job %q cannot declare holds", name)
+			}
 			if len(job.RunOn) > 0 {
 				return fmt.Errorf("capture job %q is manual and cannot declare run_on", name)
 			}
@@ -1018,6 +1094,9 @@ func (s *Stack) ValidateExtended() error {
 				// Before modes were validated, an unknown mode on a git source
 				// was materialized as a clone, which is what is on disk now.
 				return fmt.Errorf("workspace %q source %q: %w (an existing workspace with this mode was cloned: set mode: clone or remove the line to keep it as it is)", name, slot, err)
+			}
+			if err := ValidateWorkspaceSourceVCS(source.VCS); err != nil {
+				return fmt.Errorf("workspace %q source %q: %w", name, slot, err)
 			}
 		}
 	}

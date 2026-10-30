@@ -26,6 +26,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/query"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
+	"github.com/ang-ee/angee-operator/internal/vcs"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
@@ -559,7 +560,8 @@ func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command 
 		Short: "Show the output of a job's last run",
 		Long: "Show the last lines of a job's last run (200 unless -n says otherwise),\n" +
 			"as the runtime holds it: the process-compose log buffer for a local job,\n" +
-			"the exited container for a container job. The output lasts until the\n" +
+			"the exited container for a container job. Isolated held jobs read their\n" +
+			"durable operation output. Native supervisor output lasts until the\n" +
 			"stack goes down; a local job's output is also written to\n" +
 			"run/logs/<name>.log under the stack root.",
 		Args: cobra.ExactArgs(1),
@@ -1270,6 +1272,9 @@ func workspaceGitCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 				if state.UnpushedReason != "" {
 					stateText += " " + state.UnpushedReason
 				}
+				if conflict := conflictDetail(state.JJSlotState); conflict != "" {
+					stateText += " " + conflict
+				}
 				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
@@ -1283,8 +1288,11 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 	var ref string
 	cmd := &cobra.Command{
 		Use:   "push <name>",
-		Short: "Push workspace git sources",
-		Args:  cobra.ExactArgs(1),
+		Short: "Push workspace sources",
+		Long: "Push each slot whose manifest names a mode (worktree, clone or jj); a slot that names no mode, and a jj slot of a local store, is skipped. " +
+			"A git slot pushes its branch; a jj slot is published under --ref, else its manifest branch, to the remote git pushes that branch to. " +
+			"Every slot is checked before any is pushed, and a slot with nothing of its own is left alone.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -1309,7 +1317,7 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&ref, "ref", "", "ref to push")
+	cmd.Flags().StringVar(&ref, "ref", "", "ref to push (for a jj slot, the branch to publish under)")
 	return cmd
 }
 
@@ -1318,14 +1326,24 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 	var rebase bool
 	cmd := &cobra.Command{
 		Use:   "sync-base [name]",
-		Short: "Update workspace git sources from their base ref without changing branches",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Update workspace sources from their base ref without changing branches",
+		Long: "Update each workspace slot whose manifest names a mode that syncs (worktree or jj) from its base ref; " +
+			"a slot that names no mode is skipped. With neither flag, each slot is synced its own way: " +
+			"a git worktree by merging, a jj slot by rebasing. --merge is refused for a workspace with a slot that names mode jj.\n\n" +
+			"Example:\n  angee workspace sync-base feature-a\n  angee workspace sync-base feature-a --rebase",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if merge && rebase {
 				return fmt.Errorf("choose only one of --merge or --rebase")
 			}
-			method := "merge"
-			if rebase {
+			// No flag sends no method, so the operator picks each slot's own
+			// sync (plan D11) and can tell an explicit --merge from the
+			// default.
+			method := ""
+			switch {
+			case merge:
+				method = "merge"
+			case rebase:
 				method = "rebase"
 			}
 			platform, name, err := workspaceTarget(args, root, operatorURL, "sync-base")
@@ -1344,15 +1362,19 @@ func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonO
 				if ref == "" {
 					ref = state.Ref
 				}
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, state.State, state.Path); err != nil {
+				stateText := state.State
+				if conflict := conflictDetail(state.JJSlotState); conflict != "" {
+					stateText += " " + conflict
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each workspace branch (default)")
-	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each workspace branch onto its base ref")
+	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each git worktree's branch (git's default; refused with a jj slot)")
+	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each slot onto its base ref (a jj slot's default)")
 	return cmd
 }
 
@@ -1641,6 +1663,9 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 			if source.Ahead > 0 || source.Behind > 0 {
 				detail += fmt.Sprintf(" ahead=%d behind=%d", source.Ahead, source.Behind)
 			}
+			if conflict := conflictDetail(source.JJSlotState); conflict != "" {
+				detail += " " + conflict
+			}
 			if _, err := fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n", source.Slot, source.Source, source.Kind, source.Mode, ref, detail, source.Path); err != nil {
 				return err
 			}
@@ -1657,6 +1682,24 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 		}
 	}
 	return nil
+}
+
+// maxConflictPathsShown caps how many conflicted files a status line names;
+// --json lists them all.
+const maxConflictPathsShown = 10
+
+// conflictDetail says that a jj slot holds a conflicted commit, naming up to
+// maxConflictPathsShown of its conflicted files, or is "" for a slot that
+// holds none. The files are named as vcs.NamePaths names them, so an escape
+// sequence in a name stays off the terminal.
+func conflictDetail(jj api.JJSlotState) string {
+	if !jj.Conflicted {
+		return ""
+	}
+	if len(jj.ConflictPaths) == 0 {
+		return "conflicted"
+	}
+	return "conflicted: " + vcs.NamePaths(jj.ConflictPaths, maxConflictPathsShown)
 }
 
 func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {

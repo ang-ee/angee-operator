@@ -502,9 +502,11 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 		{mode: ""},
 		{mode: WorkspaceSourceModeWorktree},
 		{mode: WorkspaceSourceModeClone},
+		{mode: WorkspaceSourceModeJJ},
 		{mode: "worktre", wantErr: true},
 		{mode: "Worktree", wantErr: true},
-		{mode: "jj", wantErr: true},
+		{mode: "JJ", wantErr: true},
+		{mode: "link", wantErr: true},
 	} {
 		stack := &Stack{
 			Version: VersionCurrent,
@@ -549,6 +551,75 @@ func TestValidateWorkspaceSourceMode(t *testing.T) {
 	}
 }
 
+// A stack's vcs is git or jj, or omitted; nothing else loads.
+func TestValidateStackVCS(t *testing.T) {
+	for _, tc := range []struct {
+		vcs     string
+		wantErr bool
+	}{
+		{vcs: ""},
+		{vcs: VCSGit},
+		{vcs: VCSJJ},
+		{vcs: "hg", wantErr: true},
+		{vcs: "JJ", wantErr: true},
+	} {
+		stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "vcs", VCS: tc.vcs}
+		err := stack.Validate()
+		if tc.wantErr != (err != nil) {
+			t.Errorf("Validate() with vcs %q error = %v, want error %v", tc.vcs, err, tc.wantErr)
+		}
+	}
+}
+
+// A slot's own mode wins; a slot with none follows the vcs it records, else
+// the stack's: a jj slot under jj, and its source kind's default (the empty
+// mode) under git.
+func TestEffectiveSourceMode(t *testing.T) {
+	for _, tc := range []struct {
+		vcs, mode, slotVCS, want string
+	}{
+		{vcs: "", mode: "", want: ""},
+		{vcs: VCSGit, mode: "", want: ""},
+		{vcs: VCSJJ, mode: "", want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeWorktree, want: WorkspaceSourceModeWorktree},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeClone, want: WorkspaceSourceModeClone},
+		{vcs: VCSGit, mode: WorkspaceSourceModeJJ, want: WorkspaceSourceModeJJ},
+		{vcs: "", mode: WorkspaceSourceModeWorktree, want: WorkspaceSourceModeWorktree},
+		{vcs: "", mode: "", slotVCS: VCSJJ, want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: "", slotVCS: VCSGit, want: ""},
+		{vcs: VCSGit, mode: "", slotVCS: VCSJJ, want: WorkspaceSourceModeJJ},
+		{vcs: VCSJJ, mode: WorkspaceSourceModeWorktree, slotVCS: VCSJJ, want: WorkspaceSourceModeWorktree},
+		{vcs: "", mode: WorkspaceSourceModeJJ, slotVCS: VCSGit, want: WorkspaceSourceModeJJ},
+	} {
+		stack := &Stack{VCS: tc.vcs}
+		if got := stack.EffectiveSourceMode(WorkspaceSource{Source: "app", Mode: tc.mode, VCS: tc.slotVCS}); got != tc.want {
+			t.Errorf("EffectiveSourceMode(vcs %q, mode %q, slot vcs %q) = %q, want %q", tc.vcs, tc.mode, tc.slotVCS, got, tc.want)
+		}
+	}
+	for vcs, want := range map[string]string{"": VCSGit, VCSGit: VCSGit, VCSJJ: VCSJJ} {
+		if got := (&Stack{VCS: vcs}).SlotVCS(); got != want {
+			t.Errorf("SlotVCS() under vcs %q = %q, want %q", vcs, got, want)
+		}
+	}
+	var none *Stack
+	if got := none.EffectiveSourceMode(WorkspaceSource{Source: "app"}); got != "" {
+		t.Errorf("EffectiveSourceMode() on no stack = %q, want the empty mode", got)
+	}
+}
+
+// A slot vcs angee does not know is refused when the manifest is validated.
+func TestWorkspaceSourceVCSIsValidated(t *testing.T) {
+	for vcs, ok := range map[string]bool{"": true, VCSGit: true, VCSJJ: true, "hg": false} {
+		stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "test", Workspaces: map[string]Workspace{
+			"ws": {Template: "t", Sources: map[string]WorkspaceSource{"app": {Source: "app", VCS: vcs}}},
+		}}
+		err := stack.Validate()
+		if ok != (err == nil) || !ok && !strings.Contains(err.Error(), `workspace "ws" source "app": vcs "hg" is not supported`) {
+			t.Errorf("Validate() of a slot with vcs %q error = %v, want ok %v", vcs, err, ok)
+		}
+	}
+}
+
 func TestCaptureJobsAreManualDependencyLeaves(t *testing.T) {
 	for _, kind := range []string{"run_on", "job", "service_after", "service_depends_on", "valid"} {
 		t.Run(kind, func(t *testing.T) {
@@ -572,6 +643,50 @@ func TestCaptureJobsAreManualDependencyLeaves(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "capture") {
 				t.Fatalf("expected capture dependency validation, got %v", err)
+			}
+		})
+	}
+}
+
+func TestJobHoldsValidationAndRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		holds   []string
+		capture bool
+		want    string
+	}{
+		{"valid", []string{"web"}, false, ""},
+		{"unknown", []string{"absent"}, false, "unknown service"},
+		{"job-not-service", []string{"build"}, false, "unknown service"},
+		{"duplicate", []string{"web", "web"}, false, "more than once"},
+		{"capture", []string{"web"}, true, "cannot declare holds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := Job{Runtime: RuntimeLocal, Command: []string{"build"}, Holds: tc.holds}
+			if tc.capture {
+				job.Capture = &BackupCapture{Name: "capture", Output: "result", Group: "databases"}
+			}
+			stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "holds", Jobs: map[string]Job{"build": job}, Services: map[string]Service{"web": {Runtime: RuntimeLocal, Command: []string{"web"}}}}
+			err := stack.Validate()
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("Validate = %v, want %s", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "angee.yaml")
+			if err := SaveFile(path, stack); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded.Jobs["build"].Holds) != 1 || loaded.Jobs["build"].Holds[0] != "web" {
+				t.Fatalf("round trip holds = %v", loaded.Jobs["build"].Holds)
 			}
 		})
 	}

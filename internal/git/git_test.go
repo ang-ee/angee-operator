@@ -3,10 +3,13 @@ package git
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -795,5 +798,434 @@ func TestLinkedWorktree(t *testing.T) {
 		if err != nil || got != tc.want {
 			t.Fatalf("LinkedWorktree(%s) = %v, %v, want %v", tc.dir, got, err, tc.want)
 		}
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		line, floor string
+		want        bool
+	}{
+		{"git version 2.48.0", RelativeWorktreesVersion, true},
+		{"git version 2.50.1 (Apple Git-155)", RelativeWorktreesVersion, true},
+		{"git version 2.48.0.windows.1", RelativeWorktreesVersion, true},
+		{"git version 3.0.0", RelativeWorktreesVersion, true},
+		{"git version 2.47.2", RelativeWorktreesVersion, false},
+		{"git version 2.100.0", RelativeWorktreesVersion, true},
+		{"git version 1.99.0", RelativeWorktreesVersion, false},
+		{"git version 2.42.0", "2.42", true},
+		{"git version 2.41.9", "2.42", false},
+		{"", RelativeWorktreesVersion, false},
+		{"git version unknown", RelativeWorktreesVersion, false},
+		{"git version 2.50.1", "", false},
+	} {
+		if got := VersionAtLeast(tc.line, tc.floor); got != tc.want {
+			t.Errorf("VersionAtLeast(%q, %q) = %v, want %v", tc.line, tc.floor, got, tc.want)
+		}
+	}
+}
+
+// commitAt commits what is staged in dir with message, as committed at when.
+func commitAt(t *testing.T, dir, when, message string) {
+	t.Helper()
+	t.Setenv("GIT_AUTHOR_DATE", when)
+	t.Setenv("GIT_COMMITTER_DATE", when)
+	runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", message)
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		t.Fatalf("git %v in %s error = %v", args, dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Log lists HEAD's history newest committer time first, merges with both
+// parents and messages whole, up to its limit; a file named HEAD does not
+// make HEAD ambiguous, and a repository with no commit yet has none, while
+// a HEAD naming a missing commit is an error. The repository's
+// i18n.logOutputEncoding and its replace refs change nothing it reads.
+func TestLog(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	// git does not look for a repository in the ceiling, only below it.
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	mustWriteFile(t, filepath.Join(repo, "HEAD"), "a file named HEAD\n")
+	runGit(t, repo, "add", "HEAD")
+	commitAt(t, repo, "2026-01-01T00:00:00Z", "first\n\nwith a body")
+	runGit(t, repo, "branch", "topic")
+	commitAt(t, repo, "2026-01-03T00:00:00Z", "second, café")
+	runGit(t, repo, "checkout", "-q", "topic")
+	commitAt(t, repo, "2026-01-02T00:00:00Z", "topic")
+	runGit(t, repo, "checkout", "-q", "main")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-01-04T00:00:00Z")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "merge", "-q", "--no-ff", "-m", "merge topic", "topic")
+	id := func(rev string) string { return gitOutput(t, repo, "rev-parse", rev) }
+
+	client := New()
+	commits, err := client.Log(ctx, repo, 10)
+	if err != nil {
+		t.Fatalf("Log() error = %v", err)
+	}
+	var hashes, messages []string
+	for _, c := range commits {
+		hashes = append(hashes, c.Hash)
+		messages = append(messages, c.Message)
+	}
+	if want := []string{id("main"), id("main^1"), id("topic"), id("topic^")}; !slices.Equal(hashes, want) {
+		t.Fatalf("Log() hashes = %q, want merge, second, topic, first: %q", hashes, want)
+	}
+	if want := []string{"merge topic\n", "second, café\n", "topic\n", "first\n\nwith a body\n"}; !slices.Equal(messages, want) {
+		t.Fatalf("Log() messages = %q, want %q", messages, want)
+	}
+	merge, first := commits[0], commits[3]
+	if want := []string{id("main^1"), id("main^2")}; !slices.Equal(merge.Parents, want) {
+		t.Fatalf("merge parents = %q, want %q", merge.Parents, want)
+	}
+	if first.Parents == nil || len(first.Parents) != 0 {
+		t.Fatalf("root commit parents = %#v, want empty", first.Parents)
+	}
+	if want := time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC); !merge.Committed.Equal(want) {
+		t.Fatalf("merge committed at %s, want %s", merge.Committed, want)
+	}
+	if merge.AuthorName != "Test User" || merge.AuthorEmail != "test@example.com" {
+		t.Fatalf("merge author = %q <%q>, want Test User <test@example.com>", merge.AuthorName, merge.AuthorEmail)
+	}
+
+	if limited, err := client.Log(ctx, repo, 2); err != nil || len(limited) != 2 || limited[1].Hash != id("main^1") {
+		t.Fatalf("Log(2) = %+v, %v; want merge and second", limited, err)
+	}
+	if none, err := client.Log(ctx, repo, 0); err != nil || none != nil {
+		t.Fatalf("Log(0) = %+v, %v; want nothing run", none, err)
+	}
+	empty := filepath.Join(base, "empty")
+	runGit(t, "", "init", "-q", empty)
+	if none, err := client.Log(ctx, empty, 10); err != nil || len(none) != 0 {
+		t.Fatalf("Log(empty repository) = %+v, %v; want no commits", none, err)
+	}
+	if _, err := client.Log(ctx, base, 10); err == nil {
+		t.Fatal("Log(not a repository) error = nil")
+	}
+	broken := filepath.Join(base, "broken")
+	runGit(t, "", "init", "-q", "--initial-branch=main", broken)
+	mustWriteFile(t, filepath.Join(broken, ".git", "refs", "heads", "main"), strings.Repeat("0123456789", 4)+"\n")
+	if got, err := client.Log(ctx, broken, 10); err == nil {
+		t.Fatalf("Log(HEAD names a missing commit) = %+v, want an error", got)
+	}
+
+	runGit(t, repo, "config", "i18n.logOutputEncoding", "ISO-8859-1")
+	runGit(t, repo, "replace", id("main^1"), id("topic"))
+	if again, err := client.Log(ctx, repo, 10); err != nil || !reflect.DeepEqual(again, commits) {
+		t.Fatalf("Log() under i18n.logOutputEncoding and a replace ref =\n%+v, %v\nwant\n%+v", again, err, commits)
+	}
+}
+
+// Log and RefTargets read the repository in their directory even when the
+// process environment points git at another one.
+func TestCLIReadsIgnoreRepositoryOverrides(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo, other := filepath.Join(base, "repo"), filepath.Join(base, "other")
+	for _, dir := range []string{repo, other} {
+		runGit(t, "", "init", "-q", "--initial-branch=main", dir)
+		commitAt(t, dir, "2026-01-01T00:00:00Z", filepath.Base(dir))
+	}
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	commits, err := New().Log(ctx, repo, 10)
+	if err != nil || len(commits) != 1 || commits[0].Message != "repo\n" {
+		t.Fatalf("Log(repo) under GIT_DIR=other = %+v, %v; want repo's commit", commits, err)
+	}
+	targets, err := New().RefTargets(ctx, repo)
+	if err != nil || !slices.Contains(targets[commits[0].Hash], "refs/heads/main") {
+		t.Fatalf("RefTargets(repo) under GIT_DIR=other = %v, %v; want repo's main", targets, err)
+	}
+}
+
+// A command whose output outgrows runStdout's limit is stopped and fails
+// rather than being read whole.
+func TestRunStdoutStopsAtItsLimit(t *testing.T) {
+	isolateGitConfig(t)
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	commitAt(t, repo, "2026-01-01T00:00:00Z", strings.Repeat("a long message ", 1000))
+	_, err := New().runStdout(context.Background(), repo, 1024, "log", "--format=%B")
+	if err == nil || !strings.Contains(err.Error(), "output exceeds 1024 bytes") {
+		t.Fatalf("runStdout() past its limit error = %v, want the limit named", err)
+	}
+	if out, err := New().runStdout(context.Background(), repo, stdoutLimit, "log", "--format=%B"); err != nil || len(out) < 15000 {
+		t.Fatalf("runStdout() within its limit = %d bytes, %v", len(out), err)
+	}
+}
+
+// A commit object whose message holds a NUL, which git commit refuses but
+// other tools can write, still parses as one commit: git prints a message only
+// up to its NUL, so the NUL ending each record stays unambiguous.
+func TestLogReadsAMessageHoldingANUL(t *testing.T) {
+	isolateGitConfig(t)
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	commitAt(t, repo, "2026-01-01T00:00:00Z", "first")
+	object := fmt.Sprintf("tree %s\nparent %s\nauthor A <a@example.com> 1767225600 +0000\ncommitter A <a@example.com> 1767225600 +0000\n\nbefore\x00after\nmore\n",
+		gitOutput(t, repo, "rev-parse", "HEAD^{tree}"), gitOutput(t, repo, "rev-parse", "HEAD"))
+	cmd := exec.Command("git", "hash-object", "-t", "commit", "-w", "--literally", "--stdin")
+	cmd.Dir, cmd.Stdin = repo, strings.NewReader(object)
+	id, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hash-object error = %v", err)
+	}
+	runGit(t, repo, "update-ref", "HEAD", strings.TrimSpace(string(id)))
+	commits, err := New().Log(context.Background(), repo, 10)
+	if err != nil || len(commits) != 2 || commits[0].Message != "before" || commits[1].Message != "first\n" {
+		t.Fatalf("Log() = %+v, %v; want the NUL commit's message cut at its NUL, then first", commits, err)
+	}
+}
+
+// RefTargets keys each ref by what it points at: a commit for branches,
+// remote-tracking branches and lightweight tags, the tag object for an
+// annotated tag. A symbolic ref (origin/HEAD) is left out.
+func TestRefTargets(t *testing.T) {
+	isolateGitConfig(t)
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--bare", "--initial-branch=main", remote)
+	runGit(t, "", "clone", "-q", remote, repo)
+	commitAt(t, repo, "2026-01-01T00:00:00Z", "first")
+	runGit(t, repo, "push", "-q", "origin", "main")
+	runGit(t, repo, "remote", "set-head", "origin", "main")
+	runGit(t, repo, "branch", "other")
+	runGit(t, repo, "tag", "light")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "tag", "-a", "-m", "annotated", "annotated")
+	if got := gitOutput(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD"); got != "refs/remotes/origin/main" {
+		t.Fatalf("origin/HEAD = %q, want a symbolic ref to origin/main", got)
+	}
+
+	targets, err := New().RefTargets(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("RefTargets() error = %v", err)
+	}
+	want := map[string][]string{
+		gitOutput(t, repo, "rev-parse", "main"):      {"refs/heads/main", "refs/heads/other", "refs/remotes/origin/main", "refs/tags/light"},
+		gitOutput(t, repo, "rev-parse", "annotated"): {"refs/tags/annotated"},
+	}
+	if !reflect.DeepEqual(targets, want) {
+		t.Fatalf("RefTargets() = %q, want %q", targets, want)
+	}
+}
+
+// A repository with extensions.relativeWorktrees, which `jj workspace add
+// --colocate` sets on a source's cache, is one go-git refuses to open. The
+// readers that try go-git first answer for the cache and for its worktrees
+// what they answered before the extension was set, through the git CLI, and
+// the CLI-only readers read it too.
+func TestReadOnlyQueriesFallbackForRelativeWorktreesExtension(t *testing.T) {
+	isolateGitConfig(t)
+	ctx := context.Background()
+	client := New()
+	if version, err := client.Version(ctx); err != nil || !VersionAtLeast(version, RelativeWorktreesVersion) {
+		t.Skipf("git %q (%v) has no relative worktrees", version, err)
+	}
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	cache := filepath.Join(base, "cache")
+	slot := filepath.Join(base, "slot")
+	runGit(t, "", "init", "-q", "--bare", "--initial-branch=main", remote)
+	runGit(t, "", "clone", "-q", remote, cache)
+	commitAt(t, cache, "2026-01-01T00:00:00Z", "first")
+	runGit(t, cache, "push", "-q", "-u", "origin", "main")
+	if err := client.WorktreeAddBranch(ctx, cache, slot, "workspace/slot", "main", false); err != nil {
+		t.Fatalf("WorktreeAddBranch() error = %v", err)
+	}
+
+	read := func(dir string) string {
+		t.Helper()
+		ref, refErr := client.CurrentRef(ctx, dir)
+		branch, onBranch, branchErr := client.CurrentBranch(ctx, dir)
+		upstream, hasUpstream, upstreamErr := client.Upstream(ctx, dir)
+		remotes, remotesErr := client.Remotes(ctx, dir)
+		return fmt.Sprintf("ref=%s,%v branch=%s,%v,%v upstream=%s,%v,%v remotes=%q,%v main=%v origin/main=%v missing=%v",
+			ref, refErr, branch, onBranch, branchErr, upstream, hasUpstream, upstreamErr, remotes, remotesErr,
+			client.RefExists(ctx, dir, "main"), client.RefExists(ctx, dir, "origin/main"), client.RefExists(ctx, dir, "missing"))
+	}
+	before := map[string]string{cache: read(cache), slot: read(slot)}
+
+	runGit(t, cache, "-c", "worktree.useRelativePaths=true", "worktree", "add", "-q", "--detach", filepath.Join(base, "relative"))
+	if got := configValue(t, cache, "extensions.relativeWorktrees"); got != "true" {
+		t.Fatalf("extensions.relativeWorktrees = %q, want true", got)
+	}
+	if got := configValue(t, cache, "core.repositoryformatversion"); got != "1" {
+		t.Fatalf("core.repositoryformatversion = %q, want 1", got)
+	}
+	for dir, want := range before {
+		if got := read(dir); got != want {
+			t.Errorf("after the extension, %s reads\n%s\nwant\n%s", filepath.Base(dir), got, want)
+		}
+	}
+	if commits, err := client.Log(ctx, cache, 10); err != nil || len(commits) != 1 || commits[0].Message != "first\n" {
+		t.Fatalf("Log(cache) = %+v, %v; want the one commit", commits, err)
+	}
+	if targets, err := client.RefTargets(ctx, cache); err != nil || len(targets) != 1 {
+		t.Fatalf("RefTargets(cache) = %q, %v; want main's commit", targets, err)
+	}
+}
+
+// Worktrees lists every worktree, the main one first, with its HEAD and the
+// branch it has checked out, none when detached, from any of them; a path
+// holding a line break is read whole.
+func TestWorktrees(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "--initial-branch=main", repo)
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "readme\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "-m", "init")
+	head := gitOutput(t, repo, "rev-parse", "HEAD")
+	topic, detached := filepath.Join(base, "topic\nline"), filepath.Join(base, "detached")
+	runGit(t, repo, "worktree", "add", "-b", "feature/x", topic)
+	runGit(t, repo, "worktree", "add", "--detach", detached)
+
+	got, err := New().Worktrees(ctx, detached)
+	if err != nil {
+		t.Fatalf("Worktrees() error = %v", err)
+	}
+	resolve := func(path string) string {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) error = %v", path, err)
+		}
+		return resolved
+	}
+	// git lists the linked worktrees by the names it keeps them under.
+	want := []Worktree{
+		{Path: resolve(repo), Head: head, Branch: "main"},
+		{Path: resolve(detached), Head: head},
+		{Path: resolve(topic), Head: head, Branch: "feature/x"},
+	}
+	for i := range got {
+		got[i].Path = resolve(got[i].Path)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Worktrees() = %#v, want %#v", got, want)
+	}
+}
+
+// ChangedPaths lists changes to tracked files alone, and OtherPaths what git
+// does not track, the tops of untracked directories as one entry each, with
+// or without the ignored ones; IgnoredPaths what git ignores of that, a
+// directory it ignores whole as one, beside a sibling it re-includes too.
+func TestChangedAndOtherPaths(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q", "--initial-branch=main")
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	runGit(t, repo, "config", "user.name", "test")
+	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(repo, ".gitignore"), "*.log\nnode_modules/\n/vendor/*\n!/vendor/keep/\n")
+	mustWriteFile(t, filepath.Join(repo, "src", "a.txt"), "a\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-q", "-m", "base")
+	if err := os.MkdirAll(filepath.Join(repo, "vendor", "keep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "vendor", "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"src/a.txt": "changed\n", "src/debug.log": "log\n", "notes.txt": "n\n", "vendor/keep/k.txt": "k\n", "vendor/other/o.txt": "o\n"} {
+		mustWriteFile(t, filepath.Join(repo, name), content)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(repo, "node_modules", "pkg", "i.js"), "x\n")
+	client := New()
+	if got, err := client.ChangedPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"src/a.txt"}) {
+		t.Errorf("ChangedPaths() = %q, %v, want src/a.txt alone", got, err)
+	}
+	if got, err := client.OtherPaths(ctx, repo, true); err != nil || !slices.Equal(got, []string{"node_modules/", "notes.txt", "src/debug.log", "vendor/"}) {
+		t.Errorf("OtherPaths(ignored) = %q, %v", got, err)
+	}
+	if got, err := client.OtherPaths(ctx, repo, false); err != nil || !slices.Equal(got, []string{"notes.txt", "vendor/"}) {
+		t.Errorf("OtherPaths() = %q, %v", got, err)
+	}
+	if got, err := client.IgnoredPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"node_modules/", "src/debug.log", "vendor/other/"}) {
+		t.Errorf("IgnoredPaths() = %q, %v", got, err)
+	}
+	head, err := client.Commit(ctx, repo, "HEAD")
+	if err != nil || len(head) != 40 {
+		t.Errorf("Commit(HEAD) = %q, %v", head, err)
+	}
+}
+
+// HiddenPaths lists the skip-worktree and assume-unchanged files on disk,
+// Submodules the gitlinks, and DeregisterWorktree drops one missing
+// worktree's registration and no other, refusing one still on disk.
+func TestHiddenPathsSubmodulesAndDeregister(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "-q", "--initial-branch=main", repo)
+	runGit(t, repo, "config", "user.email", "test@example.invalid")
+	runGit(t, repo, "config", "user.name", "test")
+	for _, name := range []string{"a", "b", "c", "gone"} {
+		mustWriteFile(t, filepath.Join(repo, name), name+"\n")
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-q", "-m", "base")
+	runGit(t, repo, "update-index", "--skip-worktree", "a", "gone")
+	runGit(t, repo, "update-index", "--assume-unchanged", "b")
+	if err := os.Remove(filepath.Join(repo, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	client := New()
+	if got, err := client.HiddenPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("HiddenPaths() = %q, %v, want a and b, not the absent gone", got, err)
+	}
+	head, err := client.Commit(ctx, repo, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+head+",vendor/lib")
+	if got, err := client.Submodules(ctx, repo); err != nil || !slices.Equal(got, []string{"vendor/lib"}) {
+		t.Errorf("Submodules() = %q, %v", got, err)
+	}
+
+	kept, dropped := filepath.Join(base, "kept"), filepath.Join(base, "dropped")
+	runGit(t, repo, "worktree", "add", "-q", "--detach", kept)
+	runGit(t, repo, "worktree", "add", "-q", "--detach", dropped)
+	if err := client.DeregisterWorktree(ctx, repo, dropped); err == nil {
+		t.Fatalf("DeregisterWorktree() of a worktree on disk succeeded")
+	}
+	if err := os.RemoveAll(dropped); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeregisterWorktree(ctx, repo, dropped); err != nil {
+		t.Fatalf("DeregisterWorktree() error = %v", err)
+	}
+	if ok, _ := client.WorktreeRegistered(ctx, repo, dropped); ok {
+		t.Errorf("the dropped worktree is still registered")
+	}
+	if ok, _ := client.WorktreeRegistered(ctx, repo, kept); !ok {
+		t.Errorf("the other missing worktree's registration was dropped too")
+	}
+	if err := client.DeregisterWorktree(ctx, repo, filepath.Join(base, "never")); err != nil {
+		t.Errorf("DeregisterWorktree() of nothing registered error = %v", err)
 	}
 }

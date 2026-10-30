@@ -6,6 +6,527 @@ latest tag.
 
 ## Unreleased
 
+## v0.27.3 — 2026-10-30
+
+### Changed
+
+- **Dependencies, CI actions and container base images are updated** (#155,
+  superseding dependabot #68, #47, #65 and #32). gqlgen moves to v0.17.94
+  (with go-gitdiff v0.9.0, validator v10.30.3 and gqlparser v2.5.36). gqlgen
+  now makes its websocket library pluggable; the operator keeps GraphQL
+  subscriptions on gorilla's upgrader, so the origin allowlist that guards
+  against cross-site WebSocket hijacking behaves as before, and a client's
+  websocket message is now capped at 1 MB. The container images build with
+  `golang:1.26.10-alpine3.24`, the Go release the binaries use, and run on
+  `alpine:3.24`. CI uses actions/checkout, setup-go and codecov-action v7.
+
+### Fixed
+
+- **A migrate to a worktree killed while git made it is recovered by its
+  record.** `angee workspace source migrate` makes the new git worktree in
+  a staging directory first, where a migrate killed then leaves a full
+  checkout registered in the source's cache. The record's step named that
+  directory in words only, so running its commands left the checkout
+  behind. The staging directory is now made before git runs, and the step
+  removes it by its path: the worktree there and its registration, if git
+  lists one, then the directory.
+- **Undoing a migrate no longer deletes an entry the old checkout holds
+  again.** A process still writing into the slot's old checkout (a watcher
+  rebuilding `node_modules/`) could make an entry there again once it was
+  carried across. The record's step then left the carried copy in the new
+  checkout, and the next one, `rm -rf` of the new checkout, deleted it.
+  Now, by hand and in the rollback alike, the carried copy is kept beside
+  the slot, in `.angee-migrate-<id>-kept/<slot>/`, outside both checkouts
+  and with a `.gitignore` that hides it from a checkout around it, so
+  neither git nor jj picks it up, and the new checkout is removed only once
+  it holds none of the entries the migrate carries across: the record's
+  command refuses, naming one and where to move it, and the rollback
+  stops. A rollback that kept a copy names it in its error, and `workspace
+  destroy` refuses while the directory is there. Each recorded step is now
+  one command, so following the steps cannot run past a refusal into the
+  removal of the checkout, and a step that moves a checkout back to the
+  slot's path refuses while something is there instead of moving it
+  inside. A rollback stopped by something that appeared at the slot's path
+  before the new checkout was made records a step that removes nothing
+  there. Stop the slot's services before a migrate, as before.
+- **A repository in a directory git ignores beside one it re-includes
+  migrates to jj.** With `/vendor/*` and `!/vendor/keep/` in `.gitignore`,
+  a repository in `vendor/other/` was refused (`nested_repositories`),
+  though git ignores that directory whole and the migrate moves `vendor/`
+  whole. A directory git's own listing (`git ls-files --others --ignored
+  --exclude-standard --directory`) reports as ignored whole now counts as
+  moved whole; a repository in `vendor/keep/` is still refused.
+
+## v0.27.2 — 2026-10-30
+
+### Fixed
+
+- **A local service that ends while the operator stops it no longer fails
+  the stop.** v0.27.1 skips a process that has already ended, but one could
+  still end between that check and the supervisor handling the stop, and
+  process-compose then refuses to stop it (`Failed to stop: 'web'`), failing
+  the `deps` job or the chained restart. When the stop fails, the operator
+  reads every requested process again and accepts the failure once none of
+  them runs or may still launch, including when the supervisor itself has
+  exited. A process that still runs, states it cannot read, or a supervisor
+  that now serves another stack's project keep the failure.
+
+## v0.27.1 — 2026-10-30
+
+### Fixed
+
+- **A dependency operation no longer fails stopping a local service that has
+  already stopped.** The process-compose backend asked its supervisor to stop
+  every process it knew, including ones that had completed, failed or were
+  disabled, and the supervisor's refusal failed the `deps` job and the chained
+  restart. Stop now skips a process that is not running and is in a terminal
+  or disabled state, and still stops running and transitional ones (#149).
+- **A job whose prerequisites the operation verified runs even when the shared
+  supervisor still holds an older failed run of one.** After an isolated
+  prerequisite run succeeded, process-compose's own `depends_on` check read
+  the stale failed state in the shared supervisor and skipped the job. A job
+  the operation graph dispatches after its prerequisites passed now runs
+  without that native check. A direct call keeps its declared dependencies,
+  and a failed prerequisite still prevents dispatch (#149).
+
+## v0.27.0 — 2026-10-30
+
+### Added
+
+- Explicit leading `default(...)` filters now allow absent job inputs, without
+  changing empty-string semantics or weakening required inputs and secrets.
+
+- Jobs can declare `holds: [service, ...]` to stop services before any selected
+  job runs. A chained run reapplies held and dependent services once after all
+  selected jobs succeed; a plain run leaves held services stopped. Operation
+  nodes report partial stop failures and held outcomes. Failures and cancellation
+  retain holds, including restoring a hold after a failed service recovery.
+  Local held jobs use isolated native execution, with per-node durable status and
+  output for logs and prerequisites; newer native generations take precedence.
+  Unsafe hot registration of recovery services fails without a project rewrite.
+  The durable root lock protects live job receipts from interrupted-operation
+  recovery by concurrent CLI or daemon readers.
+
+## v0.26.0 — 2026-10-30
+
+### Added
+
+- **`angee workspace source migrate <workspace> <slot> [--to jj|worktree]`
+  moves a slot between a git worktree and a jj slot** of its source's cache
+  (phase 9 of `.agents/plans/jj-native-operator.md`), with REST `POST
+  /workspaces/{name}/sources/{slot}/migrate` (`{"to": ...}`), the GraphQL
+  mutation `workspaceSourceMigrate(workspace, slot, to)` and the remote
+  client. Without `--to` the slot becomes the other of the two.
+  - It keeps the slot's commits and every file it holds that neither
+    tracks, which `git worktree remove` would delete (`node_modules`,
+    `.venv`, `.env`): the slot is renamed aside in its own directory, its
+    git registration pointed at it, the new checkout made at its
+    path on the same commit, and the untracked and ignored entries renamed
+    into it, before the manifest records the new `mode` and the old
+    checkout, and only its own git registration, are removed. A jj slot's
+    workspace is forgotten; a worktree's cache is colocated with jj first.
+  - To jj, the worktree must be on its branch with no changes to tracked
+    files, and the jj slot starts on that branch's bookmark, named as
+    `workspace create` names one. Untracked files git did not ignore become
+    changes in the jj slot's working-copy commit, as jj records every file
+    it does not ignore; the result's message lists them.
+  - To a worktree, the jj slot's working copy must hold nothing (no
+    changes, no files jj does not track, `untracked_paths`) over a commit
+    that is not conflicted. Its branch is set on that commit, created or
+    moved forward, but not past commits the slot does not hold
+    (`branch_moved`), and the worktree is cut on it, or detached at the
+    commit for a slot on no branch.
+  - A failure before the manifest is written rolls back in reverse, leaving
+    the slot the checkout it was; a failure in the clean-up after it is a
+    warning in the message, with the command that finishes it. An old
+    checkout that holds anything written into it after its files were
+    carried across (a shell or server whose working directory was in it
+    follows it aside) is kept, not removed, and the message says where;
+    `workspace destroy` refuses while anything a migrate set aside sits
+    beside a slot.
+  - A rollback that cannot finish stops, so it deletes nothing it could not
+    put back, and fails with `INTERNAL`, cause `migrate_incomplete`, naming
+    where the slot's checkout is. A migrate keeps a record under
+    `run/migrate/` while the slot may be set aside, rewritten at each step
+    with how far it got and the steps that recover from there by hand, in
+    order, each recorded before what it undoes is done: the removal of the
+    new checkout, as far as it got, before it is made, and every entry
+    carried across before the first is moved, each moved back by hand only
+    when it is in the new checkout and no longer in the old one, so a
+    migrate killed at any point leaves nothing out of the record. One left
+    by a migrate that stopped or was killed makes the slot's status an
+    error naming the steps, and its `repair`, `destroy` and slot verbs
+    refuse it (`migrate_incomplete`) until the steps are followed and the
+    record deleted. Removing the old checkout's registration drops its
+    `HEAD` reflog and `refs/worktree/*`, as destroy does.
+  - Refused: a slot that holds a repository of its own below its top (a
+    `.git` or `.jj`; `nested_repositories`, naming them) outside a
+    directory the migrate moves whole: one in a tracked directory, either
+    way, and, to jj, one anywhere git does not ignore, since jj records
+    nothing of it in its working copy. A package's clone under an ignored
+    `node_modules/` or `.venv/` moves with its directory, and, to a
+    worktree, so does one in any directory that holds no tracked file. Also
+    refused: a worktree with skip-worktree or assume-unchanged files, whose
+    local versions git does not report, or with submodules; a branch
+    another worktree has checked out (`branch_checked_out`); a checkout
+    that is not the jj workspace this stack made (`slot_not_held`); a slot
+    at the workspace's root, or with other slots inside it; and a `kind:
+    local` source's slot. The slot's git registration alone is pointed at
+    where it moves, never other worktrees' (`git worktree repair` would
+    rewrite them all).
+
+### Changed
+
+- **A manifest written by this release may not load in v0.25.0 or
+  earlier.** `angee workspace create` now writes `vcs:` on every workspace
+  slot that names no `mode` (below), pure-git stacks included, and the
+  strict manifest decoder of v0.25.0 and earlier refuses that key. An older
+  operator, such as a container image pinned to v0.25.0, then cannot load
+  an `angee.yaml` a newer CLI wrote. Upgrade every angee that reads the
+  stack together. The record stays: it is what makes a later `vcs` change
+  safe for existing slots.
+
+### Fixed
+
+- **A failed git worktree create no longer prunes the source cache.** When
+  a worktree slot's checkout failed after git had added it, the clean-up
+  ran `git worktree prune`, dropping every registration of the cache whose
+  checkout this process cannot see, such as other stacks' slots out of a
+  container's sight. It now drops only that worktree's own registration,
+  as jj slots' removal does; one it cannot drop is left, with a warning,
+  for the next create at that path to drop.
+- **Changing a stack's `vcs` no longer changes what its existing slots
+  are.** A slot that names no `mode` followed the stack's `vcs`, existing
+  ones too, so switching a stack from `vcs: jj` to `git` read its jj slots
+  as git clones: status read them through git, and destroy removed them
+  without forgetting their jj workspaces, whose names then refused the next
+  create of the workspace as a `CONFLICT` (the gap phase 6 of
+  `.agents/plans/jj-native-operator.md` left). `angee workspace create` now
+  records, on each slot that names no mode, the `vcs` it was cut with (`vcs:
+  git` or `vcs: jj` beside `source:`), and that slot follows it rather than
+  the stack's, so a stack's `vcs` decides only for workspaces created after
+  it changes. It is not a mode: `sync-base` and `workspace push` still walk
+  only slots whose manifest names a mode (plan Q7), so a work-state `.work`
+  slot stays out of them. A slot recorded by v0.25.0 or earlier records no
+  `vcs` and follows the stack's as before; give it one by hand before
+  changing the stack's `vcs`. An unknown slot `vcs` is refused when the
+  manifest loads.
+- **`angee stack update --template` applies the template's `vcs`.** The
+  merge kept the manifest's `vcs` whatever the template rendered, so a
+  stack template's `vcs` answer never reached an existing stack. It is now
+  template-origin, as sources are, when the render names one; a render that
+  names none keeps the manifest's. Since slots keep the `vcs` they were
+  created with, the change reaches only workspaces created after it: when
+  the update changes `vcs`, it records the old one on each existing slot
+  that names no mode and records none, which freezes the stack's `vcs` as
+  it was for them (right unless it was edited by hand since they were
+  created), and reports `~ vcs (<old> to <new>)`, `""` to `git` included,
+  and `~ workspaces/<workspace>/sources/<slot>` for each slot it pinned. A `vcs` set by
+  hand in `angee.yaml` is replaced by the template's on the next `stack
+  update --template`, as a hand-edited source is; answer the template's
+  input instead.
+
+- **A jj slot's branch publishes to a second remote.** A branch already
+  published to one remote (origin) could not be published to another: jj
+  refuses to create a remote bookmark for a bookmark that tracks another
+  remote but not that one ("Refusing to create new remote bookmark"), and
+  the publish failed with `push_failed` after setting the bookmark. Publish
+  now tracks the branch on the remote that does not have it yet before it
+  pushes.
+- **A jj publish refused with `branch_moved` names what to merge.** When
+  the branch moved on another remote than the publish's (the slot published
+  to origin, sync-base rebased it, and a collaborator pushed onto the old
+  version, so a publish to a second remote finds the bookmark conflicted),
+  the hint named the bare branch, and `angee workspace source merge … feature`
+  then failed with "Name 'feature' is conflicted". The hint now names a ref
+  that is one commit holding the stray commits: the remote branch that holds
+  them (`feature@origin`), the slot's own branch when it is not conflicted,
+  else the stray commits themselves by id.
+
+## v0.25.0 — 2026-10-29
+
+### Added
+
+- **Status reports a jj slot's conflicts, change id and base, and the
+  topology lists a source's jj workspaces** (phase 7 of
+  `.agents/plans/jj-native-operator.md`). jj records a conflict in a commit
+  and goes on, so a jj slot could be conflicted with nothing saying so.
+  - Workspace status, `repair`'s slot status, the topology's links and
+    `workspace git` now carry, for a jj slot, `conflicted` and
+    `conflict_paths` (the conflicted files of the slot's own commits),
+    `change_id` (its working-copy commit's), `base_behind` (the commits of
+    its base it lacks, even when `behind` counts against its upstream), and
+    `untracked_paths` (the new files jj leaves out of the working-copy
+    commit, which make it dirty), in JSON and GraphQL alike. The per-slot
+    verbs, `push` and `sync-base` return the same fields once phase 8 runs
+    them on jj slots.
+  - The state vocabulary does not change: `conflicted` is a flag beside
+    `state`, so existing clients read a slot as before. It is `false`, and
+    the other fields absent, for every other slot. `summary.conflicted`
+    counts conflicted slots, and `summary.worktrees` still counts git
+    worktree slots only.
+  - A source whose cache or store is a jj repository lists its jj
+    workspaces, in the topology and in source status and list, as
+    `workspaces: [{name, owned, path}]`. A workspace is `owned`, with the
+    slot's `path`, when the checkout at a path this stack's manifest gives
+    one of its jj slots is that workspace; the repository's own, other
+    stacks' slots (a stack of the same name included) and a slot whose
+    checkout is gone or cannot be read are not owned and have no path, since
+    jj's record of a workspace's path goes stale once it moves. A source that
+    is not a jj repository, or an operator that found no jj on PATH, lists
+    none and runs no jj.
+  - `workspace git` and `workspace status` print `conflicted:` and up to ten
+    of a slot's conflicted files after its state.
+
+- **`workspace sync-base` rebases jj slots** (the first half of phase 8 of
+  `.agents/plans/jj-native-operator.md`). With no method, each slot is now
+  synced its own way: a git worktree slot is merged, as before, and a jj slot
+  is rebased onto its base (`jj git fetch --all-remotes`, then `jj rebase -b
+  @ --onto <base>` in the slot), its working-copy commit with any
+  uncommitted changes riding along. The CLI sends no method unless
+  `--merge` or `--rebase` is given; `--merge` over a workspace with a slot
+  whose manifest names mode `jj` is refused (`INVALID_INPUT`, naming the
+  slot) before anything is fetched.
+  - **A rebase rewrites commits that were already published, so the next
+    publish of such a slot force-updates its remote branch** (jj does so with
+    a lease). The default merge of a git slot never rewrites.
+  - A jj slot's conflict is recorded in its commits and reported on its state
+    (`conflicted`, `conflict_paths`, and `conflicted: <paths>` after the
+    state in the CLI's output), and the sync goes on to the next slot; a git slot that
+    stops on conflicts still fails the sync with `merge_conflict`. A failure
+    that is not a conflict quotes jj (`... failed. jj: Error: ...`).
+  - A rebase that would rewrite another checkout's commits is refused
+    before any slot is rebased (`PRECONDITION_FAILED`, cause
+    `shared_commits`, naming them): another jj workspace's working-copy
+    commit stacked on the slot's commits, or a branch a git worktree of the
+    same cache has checked out at one of them. So is one that would rewrite
+    a commit jj holds immutable, such as a tagged one (cause
+    `immutable_commits`), and sync-base or rebase of a jj slot on a machine
+    that cannot run jj slots (cause `jj_unavailable`).
+  - A jj slot that holds files jj does not track is refused, naming them
+    (cause `untracked_paths`), before anything is fetched: a base that adds
+    the same path would have the local file kept over its own. When jj warns
+    while it rebases a slot (it skipped updating a file the working copy
+    held, such as an ignored one), the warning is on that slot's `error` in
+    sync-base and in the rebase's `message`.
+  - A bookmark on the rebased commits that nothing has checked out moves
+    with them, as jj moves it, and a pushed one force-updates, with a lease,
+    on its next publish.
+  - A slot's sync that fails after others synced names those slots, which
+    stay synced.
+  - A `kind: local` store's jj slot is rebased onto its base as the store has
+    it; angee fetches nothing into a user's store.
+  - `workspace source rebase` runs on a jj slot (`ref` in jj's spelling, such
+    as `main@origin`), with the same check, and answers a recorded conflict
+    as `ok` and `conflicted`. `merge-abort`, `rebase-abort` and
+    `rebase-continue` on a jj slot answer `INVALID_INPUT`: a jj slot never
+    has a merge or rebase in progress.
+
+- **jj slots publish, push, merge, fetch and diff** (the second half of
+  phase 8 of `.agents/plans/jj-native-operator.md`). A jj slot now does
+  everything a git slot does but `workspace source pull`.
+  - `workspace source publish` publishes a jj slot's commits under a branch
+    (`--branch`, else the slot's manifest `branch`) to `--remote`, else the
+    remote git pushes that branch to from the slot, the order a git slot's
+    publish follows, so the source's `push_default` decides for both. A
+    publish to another remote records it as the branch's push remote
+    (`branch.<branch>.pushRemote` in the source cache), as `git push -u`
+    records an upstream, so status, later publishes and destroy follow it;
+    a `kind: local` store's git config is never written, and the result
+    says the remote was not recorded. It
+    sends the commits since the branch on the remote, else since the base,
+    as `jj bookmark set <branch> -r @-` and `jj git push --remote <remote>
+    --bookmark <branch>`, and returns `ok` with `nothing to publish` when
+    there are none. The manifest's rules for the remote (canonical,
+    `branches`) apply as for git slots.
+  - **A publish after a rebase-based sync force-updates the remote branch,
+    with jj's lease**: `sync-base` rewrote the commits it published, so jj
+    moves the remote branch sideways, and refuses if the remote branch moved
+    since the slot last fetched it.
+  - Publish sends the commit under the working copy, so a slot with changes
+    in its working-copy commit is refused (`uncommitted_changes`, with the
+    `jj commit` that records them), and so is one with untracked paths
+    (`untracked_paths`). A commit the remote lacks that has conflicts or no
+    description, which jj will not push, is refused before anything changes,
+    naming each (`PRECONDITION_FAILED`, cause `conflicted_commits` or
+    `undescribed_commits`). So is a branch that is not the slot's to set
+    (`INVALID_INPUT`): one a git worktree of the source has checked out, and
+    one the remote has that the repository does not track, and one that
+    exists, here or on the remote, and is not the slot's, which publish
+    would move onto the slot's commits. A branch that holds work the slot
+    lacks, such as a collaborator's commit pushed onto it, or their new
+    version of one of the slot's commits, fetched since, is refused naming
+    them (`PRECONDITION_FAILED`, cause `branch_moved`): jj's lease passes
+    once they are fetched, and the push would drop them. Any other refusal of the
+    push quotes jj (`GIT_FAILED`, cause `push_failed`).
+  - `workspace source push` and `workspace push` publish a jj slot to its
+    default remote, under `--ref` when given, else its branch, and leave a
+    slot with nothing to send alone. `workspace push` now reaches the jj
+    slots whose manifest names mode `jj`, checks and plans every slot before
+    it pushes any, and still skips a slot that names no mode, and a jj slot
+    of a `kind: local` store, which its own publish reaches.
+  - `workspace source merge` merges a ref, in jj's spelling, into a jj slot
+    as the commit under a fresh working copy (`jj new @- <ref> -m "Merge
+    <ref>"`, then `jj new`), so the next publish sends it; a ref the slot
+    already holds makes no merge, and a conflict is answered as `ok` and
+    `conflicted`. It refuses what the working copy holds, as publish does,
+    and a described working-copy commit with no changes, which it would
+    leave behind.
+  - `workspace source fetch` and `diff` run on a jj slot; a diff's `--ref` is
+    in jj's spelling (`main@origin`). A jj slot of a `kind: local` store is
+    never fetched into (`INVALID_INPUT`).
+  - `workspace source pull` of a jj slot is refused (`INVALID_INPUT`, cause
+    `jj_slot_unsupported`), with a hint naming `workspace sync-base` and the
+    slot's own fetch and rebase: jj takes in a base by rebasing onto it.
+    That is the cause's only use now.
+
+### Changed
+
+- **Go API: `api.WorkspaceSourceStatus` and `api.GitOpsLink` are no longer
+  comparable with `==`**, since the embedded `api.JJSlotState` holds slices
+  (`api.SourceState` already held some). Its fields are promoted, so they
+  read as before, but a composite literal sets them through `JJSlotState:`.
+- **A file name in a jj slot's `unpushed_reason` that holds `", "` is
+  quoted**, as one that does not print already was, so it does not read as
+  two names.
+
+- **`sync-base` and `workspace push` walk only the slots whose manifest names
+  a mode** (owner's answer to Q7 of the jj plan). A slot that names none is
+  skipped by both, even a jj slot under `vcs: jj`, so a work-state `.work`
+  slot is left to its own workflow, and `workspace push` no longer refuses a
+  workspace for one. The `workspace source` verbs still reach such a slot.
+- **jj slots commit as git's identity when the operator's jj has none.** A
+  jj command angee runs that may record a commit (a snapshot, a slot's
+  creation) reads `user.name` and `user.email` from jj's config, and sets
+  `JJ_USER` or `JJ_EMAIL` only for one that is empty: from git's configured
+  identity, else angee's placeholder when git has none either, as merges and
+  rebases of git slots do. jj recorded an empty author and committer before,
+  which `jj git push` refuses.
+- **sync-base checks each git slot's branch and its uncommitted changes
+  together, slot by slot.** It checked every slot's branch first before.
+  With slot `a` dirty and slot `b` off its branch, the refusal now names
+  `a`'s uncommitted changes rather than `b`'s branch; nothing is touched
+  either way.
+- A failure's message names the tool it quotes: ` jj: <line>` for a jj
+  command, ` git: <line>` for git as before. A step that fails with neither
+  tool's words, such as resolving a base, now ends with the error itself
+  (`resolving the base of source slot "app" failed: <error>.`).
+
+- **`workspace push` checks each git slot's branch and its uncommitted
+  changes together, slot by slot**, as sync-base now does. It checked every
+  slot's branch first before. The slot verbs ask the slot's driver whether
+  they may run, so their refusals word the fix in the slot's own tool; a git
+  slot's codes, causes and messages are unchanged.
+- A jj command that fails outside a verb's own steps, such as a diff onto a
+  ref jj does not know, is `GIT_FAILED` quoting jj, as a git command's
+  failure is; it was `INTERNAL`.
+- A failure to plan a publish or a push, or to create a publish's branch,
+  names the step (`planning the publish of source slot "app" failed. git:
+  ...`, `creating branch "x" in source slot "app" failed. git: ...`) where it
+  named the git command before.
+
+## v0.24.0 — 2026-10-29
+
+### Added
+
+- **A workspace slot can be a jj workspace** (phase 6 of
+  `.agents/plans/jj-native-operator.md`). `mode: jj` makes a slot a jj
+  workspace of its source's cache, which angee colocates with jj the first
+  time, or of a `kind: local` store that already is a jj repository; a
+  stack's new `vcs: jj` (default `git`) makes every slot that names no mode
+  one. The manifest keeps a slot's mode as written, so `vcs` decides for
+  existing slots without one too. One stack can mix git and jj slots of one
+  source.
+  - `workspace create`, `status`, `git`, `repair` and `destroy` handle jj
+    slots. A slot is created in place on its branch's bookmark when that
+    exists, else at its base, colocated with git when the primary is, and
+    named `<stack>--<workspace>` (plus `--<slot>` for several jj slots of
+    one primary) in the primary; no stack, workspace or slot name in such a
+    name may be empty, hold `--` or start or end with `-`. A name the
+    primary already has for a slot this stack's manifest does not record, or
+    that is checked out anywhere else, is a `CONFLICT` naming it, and is
+    never forgotten; destroy forgets only the workspace the slot's own
+    checkout is.
+  - A create first checks that this machine can run jj slots (jj with
+    `workspace add --colocate`, git 2.48 or later, not Windows;
+    `PRECONDITION_FAILED`, cause `jj_unavailable`) and that each primary is
+    where the manifest says: a cache outside the stack root must already
+    exist, so a container must mount it at the same path.
+  - `--sync` keeps a jj slot that is still its workspace's checkout, with
+    its uncommitted work; a slot whose directory is gone, or empty, is added
+    again by repair, under the name it had. Rollback and `destroy --purge`
+    forget the slot's jj workspace and drop its git worktree registration,
+    and no other, without pruning the cache, also when the cache's lock
+    cannot be taken, and a rollback puts back an empty directory a slot was
+    made in. `destroy` lets a jj slot whose directory is empty go.
+  - Status reads a jj slot through jj, which snapshots it first, so an edit
+    no jj command has recorded yet is `dirty`; a jj slot is never
+    `branch-mismatch`. `destroy` refuses a jj slot with work of its own, and
+    one that holds a nested `.git` or `.jj`, which jj does not record,
+    naming them.
+  - Every other slot verb (`workspace source fetch`, `pull`, `push`,
+    `diff`, `merge`, `rebase`, `merge-abort`, `rebase-abort`,
+    `rebase-continue`, `publish`) refuses a jj slot, and `workspace push`
+    and `sync-base` refuse a workspace that has one, before touching any
+    slot: `INVALID_INPUT` (HTTP 400), cause `jj_slot_unsupported`. They
+    come with phase 8.
+
+- **`angee doctor` says that jj slots need git 2.48.** Adding a jj slot
+  (`jj workspace add --colocate`) links its git worktree with relative paths,
+  so git sets `extensions.relativeWorktrees` and
+  `core.repositoryformatversion = 1` on the source's cache, and git before
+  2.48 refuses that cache and every worktree slot of it. `tool.jj` now warns
+  when jj can create slots but git is older than 2.48. `tool.git` still warns
+  only below 2.42, now naming 2.48, so a stack that does not use jj gets no
+  new warning.
+
+### Changed
+
+- **`workspace destroy`'s refusal says "sources that have not been
+  pushed"** rather than "git sources", since it now names jj slots too.
+
+- **The jj driver counts files jj will not snapshot as uncommitted, and
+  keeps a pushed verdict when a slot's base is gone** (the prerequisites of
+  phase 6 step 5 in `.agents/plans/jj-native-operator.md`, settling its
+  Q10). Both ship with phase 6, so a jj slot's status and destroy guard
+  have them from the start.
+  - A new file over jj's `snapshot.max-new-file-size`, or outside its
+    `snapshot.auto-track`, never reaches the slot's working-copy commit, so
+    the slot read as clean and pushed while only it held the file. Status
+    now takes its snapshot through `jj status`, without asking git, and
+    counts the untracked paths it lists as uncommitted. Its other reads are
+    pinned to the operation that snapshot recorded; when another jj command
+    records one around it, Status snapshots again, up to three times, then
+    fails. A `jj status` report it does not recognize (a heading out of
+    place, or a report cut short) fails the read, rather than passing for
+    one with no untracked paths. What jj neither records nor lists still
+    reads as clean: a nested repository, which destroy refuses instead (see
+    Added), and a new file outside the slot's sparse patterns, which jj
+    slots do not support.
+  - With a base that exists nowhere, the jj driver returned no verdict at
+    all. Like the git driver, it now keeps the verdict wherever one needs no
+    base: a dirty slot is not pushed, and one with an upstream is pushed when
+    nothing is ahead of it. Unlike git, which reads no base there, it returns
+    that verdict with the base's error as a `*vcs.CountError`, since the
+    conflicts it reads are bounded by the base. A clean slot with no
+    upstream still gets the base's error alone, so a destroy refuses it.
+
+### Fixed
+
+- **The GitOps topology lists the commits of a cache that go-git cannot
+  open.** `angee gitops topology --with-commits N` (REST `with_commits`,
+  GraphQL `withCommits`) returned no commits, and no error, for a source
+  whose cache has `extensions.relativeWorktrees`, which go-git refuses: a
+  cache a jj slot is added to, or one a worktree slot was added to under
+  `worktree.useRelativePaths` before v0.22.0. Such a cache is now read with
+  the git CLI, which returns the same commits, refs, times and authors as
+  go-git does for any other, though commits with the same committer time
+  may come in another order. A cache whose commits cannot be read is logged
+  as a warning instead of being left out silently. The other git reads of a
+  cache or slot already fell back to the git CLI.
+
+## v0.23.0 — 2026-10-28
+
 ### Added
 
 - Manual backup preview and capture REST APIs, restricted to the operator admin
@@ -119,9 +640,10 @@ latest tag.
 
 ### Security
 
-- **Built with Go 1.26.10.** Release binaries and images were built with Go
-  1.26.9, whose `crypto/x509` has a vulnerability fixed in 1.26.10
-  (GO-2026-6809). govulncheck reports none on this release.
+- **Built with Go 1.26.10.** This release's binaries and images are built
+  with Go 1.26.10. v0.22.0's were built with Go 1.26.9, whose `crypto/x509`
+  has a vulnerability fixed in 1.26.10 (GO-2026-6809). govulncheck reports
+  none on this release.
 
 ## v0.22.0 — 2026-10-13
 

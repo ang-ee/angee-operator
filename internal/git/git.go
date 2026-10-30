@@ -12,10 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -171,7 +173,134 @@ func (e *CommandError) Unwrap() error { return e.Err }
 // DirtyPaths lists the paths `git status` reports as changed, staged or
 // untracked in the checkout at dir, in its order. A rename lists its new path.
 func (c Client) DirtyPaths(ctx context.Context, dir string) ([]string, error) {
-	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	return c.statusPaths(ctx, dir, "--untracked-files=all")
+}
+
+// ChangedPaths lists the paths `git status` reports as changed or staged in
+// the checkout at dir, leaving out untracked and ignored files, in its order.
+// A rename lists its new path.
+func (c Client) ChangedPaths(ctx context.Context, dir string) ([]string, error) {
+	return c.statusPaths(ctx, dir, "--untracked-files=no")
+}
+
+// OtherPaths lists what the checkout at dir holds that git does not track:
+// with ignored, every untracked and ignored entry, else the untracked ones
+// that are not ignored. A directory git tracks nothing in is one entry,
+// ending in "/", as `git ls-files --others --directory` lists it, so the
+// entries are the tops of what git does not track. An empty directory is
+// listed too.
+func (c Client) OtherPaths(ctx context.Context, dir string, ignored bool) ([]string, error) {
+	args := []string{"ls-files", "--others", "--directory", "-z"}
+	if !ignored {
+		args = append(args, "--exclude-standard")
+	}
+	out, err := c.runStdout(ctx, dir, stdoutLimit, args...)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// IgnoredPaths lists what git ignores of what the checkout at dir holds that
+// it does not track, as `git ls-files --others --ignored --exclude-standard
+// --directory` lists it: a directory git ignores whole is one entry, ending
+// in "/", even beside a sibling it re-includes, as `/vendor/*` with
+// `!/vendor/keep/` lists vendor/other/ while OtherPaths lists vendor/ alone.
+// A directory whose files are all ignored, though it is not, is listed both
+// as one and file by file.
+func (c Client) IgnoredPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// HiddenPaths lists the tracked files of the checkout at dir that git is told
+// not to look at, and that are on disk: those flagged skip-worktree (`git
+// update-index --skip-worktree`) or assume-unchanged. git status reports no
+// change to them, so a local edit there is invisible to ChangedPaths. A
+// sparse checkout's skip-worktree entries are not on disk, and are left out.
+func (c Client) HiddenPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "-v", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		tag, path, ok := strings.Cut(entry, " ")
+		if !ok || path == "" || tag != "S" && (tag == "" || tag[0] < 'a' || tag[0] > 'z') {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(path))); err == nil {
+			paths = append(paths, path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return paths, nil
+}
+
+// Submodules lists the paths the index of the checkout at dir records as
+// submodules (gitlinks, mode 160000).
+func (c Client) Submodules(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "ls-files", "-s", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(meta, "160000 ") {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+// DeregisterWorktree drops repoDir's registration of a worktree at path once
+// nothing is there, and no other: `git worktree remove --force --force`,
+// which with nothing at the path removes only git's record of it (probed on
+// git 2.50), never pruning the registrations of other checkouts this process
+// cannot see. It refuses while anything is at path, which git would delete,
+// and does nothing when repoDir registers nothing there.
+func (c Client) DeregisterWorktree(ctx context.Context, repoDir, path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("deregister the git worktree at %s: it still exists", path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	registered, err := c.WorktreeRegistered(ctx, repoDir, path)
+	if err != nil || !registered {
+		return err
+	}
+	canonical, err := canonicalWorktreePath(path)
+	if err != nil {
+		return err
+	}
+	return c.WorktreeRemove(ctx, repoDir, canonical)
+}
+
+// Commit returns the full id of the commit ref names in the repository at
+// dir.
+func (c Client) Commit(ctx context.Context, dir, ref string) (string, error) {
+	return c.runText(ctx, dir, "rev-parse", "--verify", EndOfOptions, ref+"^{commit}")
+}
+
+func (c Client) statusPaths(ctx context.Context, dir, untracked string) ([]string, error) {
+	out, err := c.Run(ctx, dir, "status", "--porcelain=v1", "-z", untracked)
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +356,72 @@ func (c Client) runText(ctx context.Context, dir string, args ...string) (string
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// runStdout runs git in dir and returns its standard output alone, for a
+// caller that parses it, so a warning git prints is not read as output. A
+// failure carries standard error. git reads the repository at dir whatever
+// the process environment says (repositoryEnvKeys), and an output of more
+// than limit bytes stops git and fails, so a pathological history cannot be
+// read into memory.
+func (c Client) runStdout(ctx context.Context, dir string, limit int, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	env := slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		key, _, _ := strings.Cut(entry, "=")
+		return slices.Contains(repositoryEnvKeys, key)
+	})
+	if c.NonInteractive {
+		env = NonInteractiveEnv(env)
+	}
+	cmd, trace := c.command(ctx, dir, env, args)
+	stdout := &cappedBuffer{limit: limit, cancel: cancel}
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	trace(logctx.CombinedOutput(stdout.Bytes(), stderr.Bytes()), err)
+	if stdout.over {
+		return nil, commandError(args, stderr.Bytes(), fmt.Errorf("output exceeds %d bytes", limit))
+	}
+	if err != nil {
+		return nil, commandError(args, stderr.Bytes(), err)
+	}
+	return stdout.Bytes(), nil
+}
+
+// repositoryEnvKeys are the variables that point git at another repository,
+// work tree, index or object store than the one in its directory. runStdout
+// leaves them out; the ones that only bound the search for a repository
+// (GIT_CEILING_DIRECTORIES) stay.
+var repositoryEnvKeys = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+}
+
+// stdoutLimit bounds what runStdout reads from one git command.
+const stdoutLimit = 32 << 20
+
+// cappedBuffer holds a command's output up to limit bytes; a write past it
+// marks the buffer over and cancels the command instead. The buffer is a
+// field, not embedded, so io.Copy cannot bypass Write through its ReadFrom.
+type cappedBuffer struct {
+	buf    bytes.Buffer
+	limit  int
+	cancel context.CancelFunc
+	over   bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.limit {
+		b.over = true
+		b.cancel()
+		return 0, errors.New("output limit reached")
+	}
+	return b.buf.Write(p)
+}
+
+// Bytes is the output held so far.
+func (b *cappedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 // NonInteractiveEnv returns env configured so git and SSH cannot prompt. An
 // existing GIT_SSH_COMMAND is preserved verbatim.
@@ -439,7 +634,7 @@ func (c Client) WorktreeAddBranch(ctx context.Context, repoDir, dest, branch, re
 // recovery in materializeWorkspaceSource still routes through WorktreePrune, the
 // portable recovery for older git that refuses to remove a missing working tree.
 func (c Client) WorktreeRemove(ctx context.Context, repoDir, dest string) error {
-	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", dest)
+	_, err := c.Run(ctx, repoDir, "worktree", "remove", "--force", "--force", EndOfOptions, dest)
 	return err
 }
 
@@ -474,6 +669,49 @@ func (c Client) WorktreeRegistered(ctx context.Context, repoDir, dest string) (b
 		}
 	}
 	return false, nil
+}
+
+// Worktree is one worktree a repository lists, its main one included: where
+// it is checked out, the commit at its HEAD, and the branch it has checked
+// out, by its short name ("" when HEAD is detached).
+type Worktree struct {
+	Path   string
+	Head   string
+	Branch string
+}
+
+// Worktrees lists the worktrees of the repository at dir (`git worktree list
+// --porcelain -z`, so no path is misread), in git's order, its main worktree
+// first.
+func (c Client) Worktrees(ctx context.Context, dir string) ([]Worktree, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return nil, err
+	}
+	return parseWorktrees(string(out)), nil
+}
+
+// parseWorktrees reads `git worktree list --porcelain -z`: each attribute
+// ends in a NUL, and an empty one ends a worktree.
+func parseWorktrees(out string) []Worktree {
+	var worktrees []Worktree
+	var current *Worktree
+	for _, field := range strings.Split(out, "\x00") {
+		key, value, _ := strings.Cut(field, " ")
+		switch {
+		case field == "":
+			current = nil
+		case key == "worktree":
+			worktrees = append(worktrees, Worktree{Path: value})
+			current = &worktrees[len(worktrees)-1]
+		case current == nil:
+		case key == "HEAD":
+			current.Head = value
+		case key == "branch":
+			current.Branch = strings.TrimPrefix(value, "refs/heads/")
+		}
+	}
+	return worktrees
 }
 
 func canonicalWorktreePath(path string) (string, error) {
@@ -796,6 +1034,92 @@ func (c Client) AheadBehind(ctx context.Context, dir, base string) (ahead int, b
 	return c.aheadBehindCLI(ctx, dir, base)
 }
 
+// LogCommit is a commit as Log lists it.
+type LogCommit struct {
+	Hash        string
+	Parents     []string
+	AuthorName  string
+	AuthorEmail string
+	Committed   time.Time // the committer's time
+	Message     string
+}
+
+// logFormat prints a commit's fields a line each, the message last, since it
+// may span lines. With -z a NUL ends each commit, which no field holds: git
+// prints a message only up to a NUL it contains.
+const logFormat = "%H%n%P%n%ct%n%an%n%ae%n%B"
+
+// Log lists up to limit commits reachable from HEAD in the repository at dir,
+// in git log's default order, newest committer time first. A HEAD with no
+// commit yet has none. It runs the git CLI, so it reads a repository go-git
+// refuses to open, such as a cache jj has added a slot to
+// (RelativeWorktreesVersion). Names and messages are UTF-8, converted from
+// the encoding a commit declares, and replace refs are not followed, as
+// go-git follows none.
+func (c Client) Log(ctx context.Context, dir string, limit int) ([]LogCommit, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	// The -- keeps a file named HEAD from making HEAD ambiguous.
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "--no-replace-objects", "log", "-z", "--no-show-signature", "--encoding=UTF-8",
+		"--max-count="+strconv.Itoa(limit), "--format="+logFormat, "HEAD", "--")
+	if err != nil {
+		// rev-parse exits 1 for a HEAD that names nothing, an unborn branch,
+		// but 0 for one that names a missing object, and 128 outside a
+		// repository: only the first is an empty history.
+		var exitErr *exec.ExitError
+		if _, headErr := c.runStdout(ctx, dir, stdoutLimit, "rev-parse", "--verify", "--quiet", "HEAD"); errors.As(headErr, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var commits []LogCommit
+	for _, record := range strings.Split(string(out), "\x00") {
+		if record == "" {
+			continue
+		}
+		fields := strings.SplitN(record, "\n", 6)
+		if len(fields) != 6 {
+			return nil, fmt.Errorf("git log in %s: unexpected record %q", dir, record)
+		}
+		seconds, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("git log in %s: committer time %q: %w", dir, fields[2], err)
+		}
+		commits = append(commits, LogCommit{
+			Hash:        fields[0],
+			Parents:     strings.Fields(fields[1]),
+			Committed:   time.Unix(seconds, 0),
+			AuthorName:  fields[3],
+			AuthorEmail: fields[4],
+			Message:     fields[5],
+		})
+	}
+	return commits, nil
+}
+
+// RefTargets maps each object a ref of the repository at dir points at to the
+// full names of those refs, sorted. A symbolic ref (refs/remotes/origin/HEAD)
+// is left out, and an annotated tag is keyed by its tag object, not by the
+// commit it tags. Like Log, it runs the git CLI.
+func (c Client) RefTargets(ctx context.Context, dir string) (map[string][]string, error) {
+	out, err := c.runStdout(ctx, dir, stdoutLimit, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
+	if err != nil {
+		return nil, err
+	}
+	targets := map[string][]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		// A symbolic ref has a third field, its target's name.
+		if fields := strings.Fields(line); len(fields) == 2 {
+			targets[fields[0]] = append(targets[fields[0]], fields[1])
+		}
+	}
+	for _, names := range targets {
+		slices.Sort(names)
+	}
+	return targets, nil
+}
+
 func (c Client) Config(ctx context.Context, dir, key string) (string, bool, error) {
 	return c.configCLI(ctx, dir, key)
 }
@@ -804,6 +1128,44 @@ func (c Client) Config(ctx context.Context, dir, key string) (string, bool, erro
 // "git version 2.50.1 (Apple Git-155)".
 func (c Client) Version(ctx context.Context) (string, error) {
 	return c.runText(ctx, "", "--version")
+}
+
+// RelativeWorktreesVersion is the oldest git that opens a repository with
+// extensions.relativeWorktrees set. `jj workspace add --colocate` sets it on
+// the repository it adds a workspace to, since it adds the workspace's git
+// worktree with relative links, and an older git refuses that repository (a
+// source's cache) and every git worktree slot of it. So jj slots need it.
+const RelativeWorktreesVersion = "2.48"
+
+var versionNumber = regexp.MustCompile(`(\d+)\.(\d+)`)
+
+// VersionAtLeast reports whether versionLine, what `git --version` prints,
+// names git floor or later; floor is "<major>.<minor>", such as
+// RelativeWorktreesVersion. A line or a floor that names no version is not.
+func VersionAtLeast(versionLine, floor string) bool {
+	have, ok := majorMinor(versionLine)
+	if !ok {
+		return false
+	}
+	want, ok := majorMinor(floor)
+	return ok && slices.Compare(have, want) >= 0
+}
+
+// majorMinor reads the first "<major>.<minor>" in s.
+func majorMinor(s string) ([]int, bool) {
+	m := versionNumber.FindStringSubmatch(s)
+	if m == nil {
+		return nil, false
+	}
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return nil, false
+	}
+	minor, err := strconv.Atoi(m[2])
+	if err != nil {
+		return nil, false
+	}
+	return []int{major, minor}, true
 }
 
 func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, error) {
@@ -877,6 +1239,16 @@ func (c Client) UnsetPushURL(ctx context.Context, dir, remote string) error {
 func (c Client) SetPushDefault(ctx context.Context, dir, remote string) error {
 	if _, err := c.Run(ctx, dir, "config", EndOfOptions, "remote.pushDefault", remote); err != nil {
 		return fmt.Errorf("set remote.pushDefault: %w", err)
+	}
+	return nil
+}
+
+// SetBranchPushRemote sets branch.<branch>.pushRemote, the remote a push of
+// branch goes to before remote.pushDefault (PushRemoteFor's first answer).
+func (c Client) SetBranchPushRemote(ctx context.Context, dir, branch, remote string) error {
+	key := "branch." + branch + ".pushRemote"
+	if _, err := c.Run(ctx, dir, "config", EndOfOptions, key, remote); err != nil {
+		return fmt.Errorf("set %s: %w", key, err)
 	}
 	return nil
 }

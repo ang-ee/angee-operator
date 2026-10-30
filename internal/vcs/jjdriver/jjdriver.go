@@ -1,11 +1,14 @@
-// Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces,
-// colocated with git, of a source's primary. It makes and removes a slot
-// (lifecycle.go) and reads its status and diff; every other verb waits for
-// phase 8 of .agents/plans/jj-native-operator.md and reports
-// vcs.ErrUnsupported. No manifest can name a jj slot yet, so normal slot
-// dispatch does not select this driver. Source captures use it as the
-// vcs.BackupLayer over a Git checkout, which plans nothing unless colocated
-// JJ metadata is present.
+// Package jjdriver is the vcs.Driver for jj slots: secondary jj workspaces of
+// a source's primary, colocated with git when the primary is. It makes and
+// removes a slot (lifecycle.go), reads its status and diff, fetches, syncs
+// and rebases it (rebase.go), publishes and pushes it under a bookmark
+// (publish.go), merges into it (merge.go) and readies it, or its primary,
+// for a migrate between a git worktree and a jj slot (migrate.go), as phases
+// 8 and 9 of .agents/plans/jj-native-operator.md lay out. A jj slot is never
+// pulled, and never has a merge or rebase in progress to abort or continue: those
+// verbs report vcs.ErrUnsupported. The service selects it for a slot whose
+// mode is jj. Source captures also use it as the vcs.BackupLayer over a Git
+// checkout, which plans nothing unless colocated JJ metadata is present.
 //
 // jj owns the slot: the lifecycle, status, diff and verbs run the jj CLI and
 // interpret what it prints through the templates in templates.go. BackupLayerPlan additionally
@@ -17,9 +20,10 @@
 //
 // The primary's lock (plan D9) is the caller's: EnsurePrimary (which creates
 // the primary's .jj), Add and Remove (which add and forget a workspace, and
-// prune the primary's git worktree registrations) run under it. jj merges
+// drop its git worktree registration) run under it. jj merges
 // concurrent operations on its own, so nothing else needs it: Exists,
-// Status, Diff and the slot verbs take none.
+// Workspaces, CheckoutAt, Holds, Elsewhere, ForgetName (of a slot whose
+// directory is gone), Status, Diff and the slot verbs take none.
 package jjdriver
 
 import (
@@ -45,9 +49,11 @@ type Driver struct {
 
 var _ vcs.Driver = Driver{}
 
-// New returns a driver that runs jj from PATH, and git through client.
+// New returns a driver that runs jj from PATH, and git through client, for
+// one slot operation: the identity it gives jj commits for a user with none
+// configured (identity) is resolved once for the driver.
 func New(client git.Client) Driver {
-	return Driver{git: client}
+	return Driver{jj: runner{identity: &identity{git: client}}, git: client}
 }
 
 // target is a revision Status counts against: its revset, and the name a
@@ -57,18 +63,21 @@ type target struct {
 	name   string
 }
 
-// Status reads the slot. Its first read snapshots the slot's working copy,
-// so edits jj has recorded nothing of yet count (plan D7), except files jj
-// refuses to snapshot (open question Q10); every read after it is pinned to
-// the operation that snapshot recorded, so they agree with each other
-// whatever agents do meanwhile. A slot whose working copy another workspace
-// rewrote updates itself (D8).
+// Status reads the slot. Its snapshot, `jj status`, records the edits jj
+// has recorded nothing of yet (plan D7), and reports the new files it left
+// out (Q10). Every read after it is pinned to the operation that snapshot
+// left the repository at (statusSnapshot), so they see what the report saw,
+// and agree with each other whatever agents do meanwhile. A slot whose
+// working copy another workspace rewrote updates itself (D8).
 //
 // For slot branch X (Slot.Branch), base B (Slot.BaseRef on Slot.BaseRemote,
 // else origin, else the local bookmark) and R, the remote git pushes X to
 // from the slot (git.Client.PushRemoteFor, as publish resolves it for git
 // slots; a jj git.push setting plays no part):
-//   - Dirty: the working-copy commit `@` is not empty.
+//   - UntrackedPaths: the new paths `jj status` lists as untracked, files
+//     over snapshot.max-new-file-size or outside snapshot.auto-track.
+//   - Dirty: the working-copy commit `@` is not empty, or there are
+//     UntrackedPaths.
 //   - Upstream: X@R when the slot has a branch, git names R, and that remote
 //     bookmark exists.
 //   - Ahead and Behind: from `@-`, against Upstream when set, else B.
@@ -79,11 +88,17 @@ type target struct {
 //   - ChangeID: the change id of `@`.
 //   - Pushed: not dirty and nothing ahead.
 //
-// A base that exists neither on its remote nor locally is an error wrapping
-// vcs.ErrBaseNotFound, returned with what was read before it.
+// A base that exists neither on its remote nor locally (vcs.ErrBaseNotFound)
+// leaves out what only B bounds: BaseBehind, the conflicts and CurrentRef's
+// X, and, with no upstream, Ahead and Behind. As the git driver does, Status
+// keeps the verdict wherever it needs no base, for a dirty slot or one with
+// an upstream; unlike it, it returns the verdict with a *vcs.CountError
+// wrapping the base's error, since what B bounds is unread. A clean slot with
+// no upstream has only B to measure its own commits by, so the base's error
+// comes with no verdict.
 func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	var status vcs.Status
-	op, err := d.snapshot(ctx, s.Path)
+	untracked, op, err := d.statusSnapshot(ctx, s.Path)
 	if err != nil {
 		return status, err
 	}
@@ -92,7 +107,8 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 		return status, err
 	}
 	status.ChangeID = wc.Commit.ChangeID
-	status.Dirty = !wc.Empty
+	status.UntrackedPaths = untracked
+	status.Dirty = !wc.Empty || len(untracked) > 0
 	if len(wc.ParentsShort) > 0 {
 		status.CurrentRef = wc.ParentsShort[0]
 	}
@@ -101,56 +117,67 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	if err != nil {
 		return status, err
 	}
-	base, err := resolveBase(marks, s.BaseRef, s.BaseRemote)
-	if err != nil {
-		return status, err
-	}
-	counted := base
 	upstream, hasUpstream, err := d.upstream(ctx, s.Path, s.Branch, marks)
 	if err != nil {
 		return status, err
 	}
 	if hasUpstream {
 		status.Upstream = upstream.name
-		counted = upstream
 	}
+	base, baseErr := resolveBase(marks, s.BaseRef, s.BaseRemote)
+	if baseErr != nil && !errors.Is(baseErr, vcs.ErrBaseNotFound) {
+		return status, baseErr
+	}
+	hasBase := baseErr == nil
 
-	own, err := d.commits(ctx, s.Path, op, base.revset.to(workingCopy))
-	if err != nil {
-		return status, err
-	}
-	var conflictPaths []string
-	for _, c := range own {
-		if c.Conflict {
-			status.Conflicted = true
-			conflictPaths = append(conflictPaths, c.ConflictedFiles...)
+	if hasBase {
+		own, err := d.commits(ctx, s.Path, op, base.revset.to(workingCopy))
+		if err != nil {
+			return status, err
 		}
-		if s.Branch != "" && c.hasLocalBookmark(s.Branch) {
-			status.CurrentRef = s.Branch
+		var conflictPaths []string
+		for _, c := range own {
+			if c.Conflict {
+				status.Conflicted = true
+				conflictPaths = append(conflictPaths, c.ConflictedFiles...)
+			}
+			if s.Branch != "" && c.hasLocalBookmark(s.Branch) {
+				status.CurrentRef = s.Branch
+			}
 		}
-	}
-	if status.Conflicted {
-		slices.Sort(conflictPaths)
-		status.ConflictPaths = slices.Compact(conflictPaths)
+		if status.Conflicted {
+			slices.Sort(conflictPaths)
+			status.ConflictPaths = slices.Compact(conflictPaths)
+		}
 	}
 
 	from := workingCopy.parents()
-	if status.Ahead, err = d.count(ctx, s.Path, op, counted.revset.to(from)); err != nil {
-		return status, err
-	}
-	if status.Behind, err = d.count(ctx, s.Path, op, from.to(counted.revset)); err != nil {
-		return status, err
-	}
-	status.BaseBehind = status.Behind
+	counted, hasCounted := base, hasBase
 	if hasUpstream {
-		if status.BaseBehind, err = d.count(ctx, s.Path, op, from.to(base.revset)); err != nil {
+		counted, hasCounted = upstream, true
+	}
+	if hasCounted {
+		if status.Ahead, err = d.count(ctx, s.Path, op, counted.revset.to(from)); err != nil {
 			return status, err
+		}
+		if status.Behind, err = d.count(ctx, s.Path, op, from.to(counted.revset)); err != nil {
+			return status, err
+		}
+	}
+	if hasBase {
+		status.BaseBehind = status.Behind
+		if hasUpstream {
+			if status.BaseBehind, err = d.count(ctx, s.Path, op, from.to(base.revset)); err != nil {
+				return status, err
+			}
 		}
 	}
 
 	switch {
 	case status.Dirty:
-		status.UnpushedReason = "uncommitted changes"
+		status.UnpushedReason = dirtyReason(!wc.Empty, status.UntrackedPaths)
+	case !hasCounted:
+		return status, baseErr
 	case status.Ahead > 0 && hasUpstream:
 		status.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", status.Ahead, upstream.name)
 	case status.Ahead > 0:
@@ -158,7 +185,28 @@ func (d Driver) Status(ctx context.Context, s vcs.Slot) (vcs.Status, error) {
 	default:
 		status.Pushed = true
 	}
+	if !hasBase {
+		return status, &vcs.CountError{Err: baseErr}
+	}
 	return status, nil
+}
+
+// maxReasonPaths is how many untracked paths dirtyReason names, as many as
+// the service names in a message.
+const maxReasonPaths = 10
+
+// dirtyReason says what a dirty slot holds that nothing else does: changes
+// recorded in its working-copy commit, untracked paths, or both. The paths
+// are named as vcs.NamePaths names them, quoted where they would not print.
+func dirtyReason(changed bool, untracked []string) string {
+	if len(untracked) == 0 {
+		return "uncommitted changes"
+	}
+	reason := "untracked paths jj does not snapshot: " + vcs.NamePaths(untracked, maxReasonPaths)
+	if changed {
+		return "uncommitted changes, and " + reason
+	}
+	return reason
 }
 
 // resolveBase picks the slot's base from the bookmarks listed for it: the
@@ -209,10 +257,15 @@ func baseRemote(remote string) string {
 
 // upstream returns branch on the remote git pushes it to from the slot, when
 // that remote bookmark exists. It reports none when git names no push remote
-// for it (several remotes, none of them origin, and no push default).
+// for it (several remotes, none of them origin, and no push default), and for
+// a slot that is not colocated with git, which has no git config of its own
+// to ask: git run there would read whatever repository encloses it.
 func (d Driver) upstream(ctx context.Context, dir, branch string, marks []bookmark) (target, bool, error) {
 	if branch == "" {
 		return target{}, false, nil
+	}
+	if colocated, err := colocated(dir); err != nil || !colocated {
+		return target{}, false, err
 	}
 	remote, err := d.git.PushRemoteFor(ctx, dir, branch)
 	var none *git.NoPushRemoteError
@@ -236,11 +289,15 @@ func hasBookmark(marks []bookmark, name, remote string) bool {
 	})
 }
 
+// operationArgs print the repository's latest operation.
+var operationArgs = []string{"op", "log", "--no-graph", "-n", "1", "-T", operationTemplate}
+
 // snapshot snapshots the slot's working copy and returns the operation that
 // recorded it: `jj op log` snapshots before it reads. It is the one command of
-// a call that may snapshot; the reads after it are pinned to its operation.
+// Diff that snapshots; the reads after it are pinned to its operation. Status
+// snapshots through `jj status` instead (statusSnapshot).
 func (d Driver) snapshot(ctx context.Context, dir string) (string, error) {
-	out, err := d.jj.snapshot(ctx, dir, "op", "log", "--no-graph", "-n", "1", "-T", operationTemplate)
+	out, err := d.jj.snapshot(ctx, dir, operationArgs...)
 	if err != nil {
 		return "", err
 	}
@@ -249,6 +306,76 @@ func (d Driver) snapshot(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("jj op log in %s printed %q, want one operation id", dir, out)
 	}
 	return op, nil
+}
+
+// maxSnapshotAttempts bounds how often statusSnapshot snapshots a slot while
+// other jj commands keep recording operations in its repository.
+const maxSnapshotAttempts = 3
+
+// statusSnapshot snapshots the slot through `jj status` (untracked) and
+// returns the untracked paths its report lists, with the operation that
+// report describes, for the reads that follow to be pinned to.
+//
+// `jj status` does not say which operation it ended at, and another jj
+// command can record one before or after it. So statusSnapshot reads the
+// latest operation before the snapshot (A) and after it (C), and takes C only
+// when nothing but that snapshot came between (settled): C is A, since the
+// snapshot found nothing to record, or C is a snapshot whose only parent is
+// A. Otherwise it snapshots again, from C, up to maxSnapshotAttempts times,
+// then fails. `jj status` itself records an operation that is not a snapshot
+// when it updates a stale working copy (`reset git head`) or imports what git
+// changed in the colocated repository (`import git refs`); each costs one
+// more snapshot.
+func (d Driver) statusSnapshot(ctx context.Context, dir string) ([]string, string, error) {
+	before, err := d.latestOperation(ctx, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	for attempt := 1; ; attempt++ {
+		untracked, err := d.untracked(ctx, dir)
+		if err != nil {
+			return nil, "", err
+		}
+		after, err := d.latestOperation(ctx, dir)
+		if err != nil {
+			return nil, "", err
+		}
+		if settled(before, after) {
+			return untracked, after.ID, nil
+		}
+		if attempt == maxSnapshotAttempts {
+			return nil, "", fmt.Errorf("jj status in %s: other jj commands recorded operations during each of %d snapshots; retry once they finish", dir, attempt)
+		}
+		before = after
+	}
+}
+
+// settled reports whether after, the latest operation once a snapshot ran,
+// is before or the snapshot's own: nothing else was recorded in between.
+func settled(before, after operationEntry) bool {
+	return after.ID == before.ID || after.IsSnapshot && slices.Equal(after.Parents, []string{before.ID})
+}
+
+// latestOperation reads the repository's latest operation without
+// snapshotting.
+func (d Driver) latestOperation(ctx context.Context, dir string) (operationEntry, error) {
+	out, err := d.jj.latest(ctx, dir, "op", "log", "--no-graph", "-n", "1", "-T", operationEntryTemplate)
+	if err != nil {
+		return operationEntry{}, err
+	}
+	return decodeOperation(dir, out)
+}
+
+// decodeOperation reads the one operation `jj op log -n 1` printed in dir.
+func decodeOperation(dir string, out []byte) (operationEntry, error) {
+	ops, err := decodeLines[operationEntry](out)
+	if err != nil {
+		return operationEntry{}, fmt.Errorf("jj op log in %s: %w", dir, err)
+	}
+	if len(ops) != 1 || ops[0].ID == "" {
+		return operationEntry{}, fmt.Errorf("jj op log in %s printed %q, want one operation", dir, out)
+	}
+	return ops[0], nil
 }
 
 // workingCopy reads the slot's working-copy commit at operation op.
@@ -307,9 +434,10 @@ func (d Driver) count(ctx context.Context, dir, op string, r revset) (int, error
 // against its parents) when ref is empty, else the committed range from the
 // slot to ref: the tree of `@`'s first parent against ref's, leaving
 // uncommitted changes out, as the git driver leaves out the working tree.
-// ref is one revision as jj resolves a name (a bookmark, tag, commit or
-// change id), quoted, so a remote bookmark cannot be named through it yet.
-// The slot is snapshotted first either way.
+// ref is jj's spelling of one revision (refRevision): `main@origin` is the
+// remote bookmark, anything else one name as jj resolves it (a bookmark,
+// tag, commit or change id), and it must be exactly one commit. The slot is
+// snapshotted first either way.
 func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFile, error) {
 	op, err := d.snapshot(ctx, s.Path)
 	if err != nil {
@@ -317,7 +445,7 @@ func (d Driver) Diff(ctx context.Context, s vcs.Slot, ref string) ([]api.DiffFil
 	}
 	args := []string{"diff", "--git"}
 	if ref != "" {
-		args = append(args, "--from", workingCopy.firstParent().String(), "--to", symbol(ref).String())
+		args = append(args, "--from", workingCopy.firstParent().String(), "--to", refRevision(ref).single().String())
 	}
 	out, err := d.jj.read(ctx, s.Path, op, args...)
 	if err != nil {

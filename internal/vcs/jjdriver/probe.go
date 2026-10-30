@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +17,10 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-// MinGitVersion is the oldest git a jj slot runs on.
+// MinGitVersion is the oldest git the jj driver runs on. Creating a jj slot
+// needs git.RelativeWorktreesVersion, which the service checks; doctor warns
+// below this one for every stack.
 const MinGitVersion = "2.42"
-
-const minGitMajor, minGitMinor = 2, 42
 
 // InstallHint says how to get a jj that can create colocated workspaces.
 const InstallHint = "Install a current jj build, e.g. `brew install --HEAD jj`."
@@ -152,24 +151,10 @@ func probeGit(ctx context.Context, client git.Client) (string, error) {
 	return version, nil
 }
 
-var gitVersionNumber = regexp.MustCompile(`(\d+)\.(\d+)`)
-
 // GitSupported reports whether a `git --version` line names MinGitVersion or
 // later.
 func GitSupported(versionLine string) bool {
-	m := gitVersionNumber.FindStringSubmatch(versionLine)
-	if m == nil {
-		return false
-	}
-	major, err := strconv.Atoi(m[1])
-	if err != nil {
-		return false
-	}
-	minor, err := strconv.Atoi(m[2])
-	if err != nil {
-		return false
-	}
-	return major > minGitMajor || (major == minGitMajor && minor >= minGitMinor)
+	return git.VersionAtLeast(versionLine, MinGitVersion)
 }
 
 // probeOnce keeps the first probe that ran to completion. A probe that was

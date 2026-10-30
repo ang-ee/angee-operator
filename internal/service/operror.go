@@ -47,6 +47,28 @@ const (
 	CauseMergeConflict         = "merge_conflict"
 	CauseDependencyFailed      = "dependency_failed"
 	CauseBackupRequestConflict = "backup_request_conflict"
+	CauseJJSlotUnsupported     = "jj_slot_unsupported"
+	CauseJJUnavailable         = "jj_unavailable"
+	CauseSharedCommits         = "shared_commits"
+	CauseImmutableCommits      = "immutable_commits"
+	CauseUntrackedPaths        = "untracked_paths"
+	CauseConflictedCommits     = "conflicted_commits"
+	CauseUndescribedCommits    = "undescribed_commits"
+	CauseBranchMoved           = "branch_moved"
+	// CauseBranchCheckedOut: the branch a slot is to be checked out on is
+	// checked out by another git worktree of its source, and git checks a
+	// branch out in one worktree only.
+	CauseBranchCheckedOut = "branch_checked_out"
+	// CauseSlotNotHeld: the checkout at a jj slot's path is not the jj
+	// workspace this stack made there.
+	CauseSlotNotHeld = "slot_not_held"
+	// CauseMigrateIncomplete: a migrate of the slot did not finish, so its
+	// checkout may be set aside under a private name.
+	CauseMigrateIncomplete = "migrate_incomplete"
+	// CauseNestedRepositories: a slot holds a repository of its own (a .git
+	// or .jj below its own) that a migrate would not move whole, inside an
+	// entry it carries across.
+	CauseNestedRepositories = "nested_repositories"
 )
 
 // maxErrorDetail caps OperationError.Detail; the tail is kept.
@@ -63,7 +85,8 @@ const (
 // code, the cause when known, the operation and the objects it concerns, a
 // remedy, and the failing tool's output. Its message reads
 // "<Operation> for <target>: <what failed>. <remedy>", followed by
-// " git: <line>" when a git command failed.
+// " <tool>: <line>" when a version-control command failed (" git: <line>",
+// " jj: <line>").
 type OperationError struct {
 	Code      string
 	Cause     string
@@ -79,12 +102,14 @@ type OperationError struct {
 	// Detail is the redacted tail of the failing tool's output.
 	Detail string
 	// Title is the operation and its target, e.g. `Sync base for workspace
-	// "src"`; Summary is what failed and the remedy; GitLine is git's line
-	// that names the failure.
-	Title   string
-	Summary string
-	GitLine string
-	Err     error
+	// "src"`; Summary is what failed and the remedy; ToolLine is the failing
+	// tool's own line that names the failure, and Tool names that tool (git
+	// when empty).
+	Title    string
+	Summary  string
+	Tool     string
+	ToolLine string
+	Err      error
 }
 
 func (e *OperationError) Error() string {
@@ -98,10 +123,18 @@ func (e *OperationError) Error() string {
 	if e.Title != "" {
 		message = e.Title + ": " + message
 	}
-	if e.GitLine != "" {
-		message += " git: " + e.GitLine
+	if e.ToolLine != "" {
+		message += " " + e.tool() + ": " + e.ToolLine
 	}
 	return message
+}
+
+// tool names the tool ToolLine quotes.
+func (e *OperationError) tool() string {
+	if e.Tool == "" {
+		return "git"
+	}
+	return e.Tool
 }
 
 func (e *OperationError) Unwrap() error { return e.Err }
@@ -228,8 +261,11 @@ func classifyOperationError(err error) *OperationError {
 		}
 		return opErr
 	}
+	// A version-control command that failed, git's or a driver's tool's (a
+	// jj command's), quoting the tool.
 	var command *git.CommandError
-	if git.IsTimeout(err) || errors.As(err, &command) {
+	var tool vcs.ToolError
+	if git.IsTimeout(err) || errors.As(err, &command) || errors.As(err, &tool) {
 		var opErr *OperationError
 		errors.As(gitFailure(err, gitStep{}), &opErr)
 		return opErr
@@ -275,11 +311,12 @@ func (s gitStep) describe() string {
 	return text
 }
 
-// gitFailure turns a failed git command into a GIT_FAILED (or TIMEOUT)
-// *OperationError whose message names the action and remote. git's own
-// words follow (gitErrorLine) and its whole output goes to Detail: angee does
-// not interpret them, since git and ssh own their diagnostics. An
-// *OperationError passes through.
+// gitFailure turns a failed version-control command into a GIT_FAILED (or
+// TIMEOUT) *OperationError whose message names the action and remote. The
+// tool's own words follow and its whole output goes to Detail: git's line is
+// gitErrorLine, and a driver's vcs.ToolError (a jj command's) names its tool
+// and line itself. angee does not interpret them, since the tools and ssh own
+// their diagnostics. An *OperationError passes through.
 func gitFailure(err error, step gitStep) error {
 	if err == nil {
 		return nil
@@ -291,6 +328,11 @@ func gitFailure(err error, step gitStep) error {
 		return err
 	}
 	code, cause := CodeGitFailed, step.cause
+	tool, line, detail := "", gitErrorLine(err), gitErrorDetail(err)
+	var toolErr vcs.ToolError
+	if errors.As(err, &toolErr) {
+		tool, line, detail = toolErr.Tool(), toolErr.Line(), tailBytes(strings.TrimSpace(toolErr.Output()), maxErrorDetail)
+	}
 	summary := step.describe()
 	if summary == "" {
 		summary = gitErrorAction(err)
@@ -303,23 +345,30 @@ func gitFailure(err error, step gitStep) error {
 		code = CodeTimeout
 		hint = "Raise ANGEE_GIT_TIMEOUT for slow remotes."
 		summary += fmt.Sprintf(": timed out after %s. %s", timeout.Timeout, hint)
-	case errors.Is(err, exec.ErrNotFound):
+	case errors.Is(err, exec.ErrNotFound) && tool == "":
 		cause = CauseGitUnavailable
 		summary += ": git is not installed."
+	case errors.Is(err, exec.ErrNotFound):
+		code, cause = CodePreconditionFailed, CauseJJUnavailable
+		summary += ": " + tool + " is not installed."
+	case line == "" && tool == "" && !errors.As(err, new(*git.CommandError)):
+		// Neither git's nor a tool's words: the error is all there is.
+		summary += ": " + logctx.RedactText(err.Error()) + "."
 	default:
 		summary += "."
 	}
 	return &OperationError{
-		Code:    code,
-		Cause:   cause,
-		Slot:    step.slot,
-		Source:  step.source,
-		Remote:  logctx.RedactURL(step.remote),
-		Hint:    hint,
-		Detail:  gitErrorDetail(err),
-		Summary: summary,
-		GitLine: gitErrorLine(err),
-		Err:     err,
+		Code:     code,
+		Cause:    cause,
+		Slot:     step.slot,
+		Source:   step.source,
+		Remote:   logctx.RedactURL(step.remote),
+		Hint:     hint,
+		Detail:   detail,
+		Summary:  summary,
+		Tool:     tool,
+		ToolLine: line,
+		Err:      err,
 	}
 }
 
@@ -400,13 +449,22 @@ func tailBytes(s string, max int) string {
 }
 
 // requireCleanSlot fails with uncommitted_changes, listing the changed paths,
-// when the checkout target, a workspace slot or a source cache, has
-// uncommitted changes.
+// when the checkout target, a source cache, has uncommitted changes. A
+// workspace slot's verbs ask its driver instead (requireSlotReady), which
+// knows what the verb needs.
 func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, object, slot, source string) error {
 	paths, err := driver.DirtyPaths(ctx, target)
 	if err != nil {
 		return err
 	}
+	return uncommittedChanges(paths, "", object, slot, source)
+}
+
+// uncommittedChanges is the uncommitted_changes refusal of object, a
+// workspace slot or a source cache, listing paths; nil when there are none.
+// fix, when set, is the version-control tool's own command that records them
+// (vcs.UncommittedError.Fix).
+func uncommittedChanges(paths []string, fix, object, slot, source string) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -416,6 +474,9 @@ func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, o
 		listed += fmt.Sprintf(" and %d more", more)
 	}
 	hint := "Commit or restore the changes, then retry."
+	if fix != "" {
+		hint = fmt.Sprintf("Commit the working copy first with `%s`, or restore the changes, then retry.", fix)
+	}
 	return &OperationError{
 		Code:    CodePreconditionFailed,
 		Cause:   CauseUncommittedChanges,
@@ -424,6 +485,143 @@ func requireCleanSlot(ctx context.Context, driver vcs.Driver, target vcs.Slot, o
 		Paths:   paths[:min(len(paths), maxErrorPaths)],
 		Hint:    hint,
 		Summary: fmt.Sprintf("%s has uncommitted changes in %s. %s", object, listed, hint),
+	}
+}
+
+// unpushableCommits is the refusal of a push or publish of slot that would
+// send commits jj will not push (a *vcs.UnpushableCommitsError, plan D6):
+// conflicted_commits when some hold conflicts, else undescribed_commits. The
+// message names every commit, and nothing is pushed or changed. It is nil for
+// any other error.
+func unpushableCommits(err error, slot, source string) *OperationError {
+	var refused *vcs.UnpushableCommitsError
+	if !errors.As(err, &refused) {
+		return nil
+	}
+	var hints []string
+	cause := CauseUndescribedCommits
+	if len(refused.Conflicted) > 0 {
+		cause = CauseConflictedCommits
+		hints = append(hints, "Resolve the conflicts in the slot with jj")
+	}
+	if len(refused.Undescribed) > 0 {
+		hints = append(hints, "describe each commit with `jj describe -r <commit> -m <message>` in the slot")
+	}
+	hint := strings.Join(hints, ", and ") + ", then retry."
+	hint = strings.ToUpper(hint[:1]) + hint[1:]
+	return &OperationError{
+		Code:    CodePreconditionFailed,
+		Cause:   cause,
+		Slot:    slot,
+		Source:  source,
+		Hint:    hint,
+		Summary: fmt.Sprintf("source slot %q was not pushed: %v. %s", slot, refused, hint),
+		Err:     err,
+	}
+}
+
+// toolFailure is gitFailure for a failure a version-control tool reported (a
+// git or driver tool's command, or a network timeout), and err as it is for
+// anything else, for the operation's annotation to classify: a cancelled
+// context, an OS error or a bug keep the code classifyOperationError gives
+// them, rather than reading as GIT_FAILED.
+func toolFailure(err error, step gitStep) error {
+	var command *git.CommandError
+	var tool vcs.ToolError
+	if git.IsTimeout(err) || errors.As(err, &command) || errors.As(err, &tool) {
+		return gitFailure(err, step)
+	}
+	return err
+}
+
+// branchMoved is the refusal of a publish or push of slot whose branch holds
+// work the slot does not (a *vcs.BranchMovedError): a collaborator's commits
+// on the remote branch, fetched, or on the repository's own. Publishing would
+// drop them from the remote, so the slot must take them in first: the hint
+// names what to merge, the remote branch that holds them, else the
+// repository's own, else, when that is conflicted, the stray commits
+// themselves. Nothing is pushed. It is nil for any other error.
+func branchMoved(err error, workspaceName, slot, source string) *OperationError {
+	return branchMovedRefusal(err, workspaceName, slot, source, "pushed", "which pushing would drop")
+}
+
+// branchMovedRefusal is branchMoved for a verb, done, that the moved branch
+// stops, with what the verb would do to the stray commits.
+func branchMovedRefusal(err error, workspaceName, slot, source, done, consequence string) *OperationError {
+	var moved *vcs.BranchMovedError
+	if !errors.As(err, &moved) {
+		return nil
+	}
+	ref := moved.Branch
+	if moved.Remote != "" {
+		ref += "@" + moved.Remote
+	}
+	hint := fmt.Sprintf("Take them in first with `angee workspace source merge %s %s %s`, then retry.", workspaceName, slot, ref)
+	switch {
+	case moved.Remote != "":
+	case len(moved.Heads) == 1:
+		// The branch is conflicted, so its name is no one commit to merge.
+		hint = fmt.Sprintf("Take them in first with `angee workspace source merge %s %s %s`, then retry.", workspaceName, slot, moved.Heads[0])
+	case len(moved.Heads) > 1:
+		hint = fmt.Sprintf("Take them in first by merging each of %s with `angee workspace source merge %s %s <commit>`, then retry.", strings.Join(moved.Heads, ", "), workspaceName, slot)
+	}
+	return &OperationError{
+		Code:      CodePreconditionFailed,
+		Cause:     CauseBranchMoved,
+		Workspace: workspaceName,
+		Slot:      slot,
+		Source:    source,
+		Hint:      hint,
+		Summary:   fmt.Sprintf("source slot %q was not %s: %v, %s. %s", slot, done, moved, consequence, hint),
+		Err:       err,
+	}
+}
+
+// jjBranchExists is the refusal of a publish or push of jj slot slot under a
+// branch that exists and is not the slot's (vcs.ErrBranchExists from its
+// driver): it points at commits the slot does not own, and publishing would
+// move it onto the slot's. own is the slot's manifest branch, which it may
+// always publish under.
+func jjBranchExists(slot, branch, own string) error {
+	remedy := "pass another branch"
+	if own != "" {
+		remedy = fmt.Sprintf("pass another branch, or the slot's own, %q", own)
+	}
+	return &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("branch %q already exists and is not jj slot %q's: it points at commits the slot does not own; %s", branch, slot, remedy)}
+}
+
+// branchTaken is the refusal of a publish or push of slot under a branch that
+// is not the slot's to set (a *vcs.BranchTakenError): a git worktree of the
+// same source has it checked out, or the remote has a branch of that name the
+// repository does not track. It is the caller's choice of branch at fault, as
+// a git publish's existing branch is. It is nil for any other error.
+func branchTaken(err error, slot string) error {
+	var taken *vcs.BranchTakenError
+	if !errors.As(err, &taken) {
+		return nil
+	}
+	remedy := "pass another branch"
+	if taken.Remote != "" {
+		remedy = fmt.Sprintf("pass another branch, or track it with `jj bookmark track %s@%s` and rebase the slot onto it", taken.Branch, taken.Remote)
+	}
+	return &InvalidInputError{Field: "branch", Reason: fmt.Sprintf("source slot %q cannot be published under branch %q: %v; %s", slot, taken.Branch, taken, remedy)}
+}
+
+// checkoutMoved is the refusal of a publish or push of slot whose checkout
+// moved after its push was planned (vcs.ErrCheckoutMoved): nothing was pushed,
+// and the verb run again plans afresh. It is nil for any other error.
+func checkoutMoved(err error, slot, source, verb string) *OperationError {
+	if !errors.Is(err, vcs.ErrCheckoutMoved) {
+		return nil
+	}
+	hint := fmt.Sprintf("Run %s again.", verb)
+	return &OperationError{
+		Code:    CodeConflict,
+		Slot:    slot,
+		Source:  source,
+		Hint:    hint,
+		Summary: fmt.Sprintf("source slot %q changed while its %s was checked, so nothing was pushed: %v. %s", slot, verb, err, hint),
+		Err:     err,
 	}
 }
 
