@@ -6,6 +6,18 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **A local service that ends while the operator stops it no longer fails
+  the stop.** v0.27.1 skips a process that has already ended, but one could
+  still end between that check and the supervisor handling the stop, and
+  process-compose then refuses to stop it (`Failed to stop: 'web'`), failing
+  the `deps` job or the chained restart. When the stop fails, the operator
+  reads every requested process again and accepts the failure once none of
+  them runs or may still launch, including when the supervisor itself has
+  exited. A process that still runs, states it cannot read, or a supervisor
+  that now serves another stack's project keep the failure.
+
 ## v0.27.1 — 2026-10-30
 
 ### Fixed
