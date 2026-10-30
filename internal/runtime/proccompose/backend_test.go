@@ -2788,6 +2788,47 @@ func TestStopKeepsTheFailureWhileANamedProcessStillRunsOrMayLaunch(t *testing.T)
 	}
 }
 
+func TestStopKeepsTheFailureWhenASkippedRequestedProcessStarted(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"web":    {Status: "Running", IsRunning: true},
+		"worker": {Status: "Completed"},
+	})
+	port := project.serve(t)
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.setState("worker", processListEntry{Status: "Running", IsRunning: true})
+	}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v: worker, skipped as completed, started during the stop", err, failure)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopKeepsTheFailureWhenAnotherProjectNowServesThePort(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	port := project.serve(t)
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.mu.Lock()
+		project.fileNames = []string{filepath.Join(t.TempDir(), "process-compose.yaml")}
+		project.mu.Unlock()
+	}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v when another project's supervisor answers the re-read", err, failure)
+	}
+}
+
 func TestStopAcceptsASupervisorThatExitedWithItsLastProcess(t *testing.T) {
 	root := t.TempDir()
 	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})

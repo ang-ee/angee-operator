@@ -187,6 +187,7 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	if err := b.checkSupervisorProject(ctx, target); err != nil {
 		return err
 	}
+	requested := target.Services
 	if len(target.Services) > 0 {
 		present := make([]string, 0, len(target.Services))
 		for _, name := range target.Services {
@@ -214,8 +215,12 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	// of the stop, which then refuses to stop it ("Failed to stop: 'web'"), and
 	// the supervisor itself can exit once nothing runs. The stop's goal is that
 	// none of the named processes runs, so its failure stands only while one
-	// still does, or while their states cannot be read.
-	if stopped, checkErr := b.servicesStopped(ctx, target); checkErr == nil && stopped {
+	// still does, or while their states cannot be read. Every requested
+	// process is read again, not only those the stop named: one skipped above
+	// as stopped may have started meanwhile.
+	check := target
+	check.Services = requested
+	if stopped, checkErr := b.servicesStopped(ctx, check); checkErr == nil && stopped {
 		return nil
 	}
 	return err
@@ -223,7 +228,9 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 
 // servicesStopped reports whether none of target's named processes runs or
 // may still launch: each is absent from the supervisor, or alreadyStopped, or
-// the supervisor no longer serves at all.
+// the supervisor no longer serves at all. A supervisor that now serves another
+// stack's project is an error, since its process table says nothing of this
+// stack's processes.
 func (b Backend) servicesStopped(ctx context.Context, target runtime.Target) (bool, error) {
 	serving, err := b.supervisorServing(ctx, target)
 	if err != nil {
@@ -231,6 +238,9 @@ func (b Backend) servicesStopped(ctx context.Context, target runtime.Target) (bo
 	}
 	if !serving {
 		return true, nil
+	}
+	if err := b.checkSupervisorProject(ctx, target); err != nil {
+		return false, err
 	}
 	for _, name := range target.Services {
 		state, err := b.processState(ctx, target, name)

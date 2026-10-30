@@ -13,9 +13,10 @@ latest tag.
   still end between that check and the supervisor handling the stop, and
   process-compose then refuses to stop it (`Failed to stop: 'web'`), failing
   the `deps` job or the chained restart. When the stop fails, the operator
-  reads the named processes again and accepts the failure once none of them
-  runs or may still launch, including when the supervisor itself has exited.
-  A process that still runs, or states it cannot read, keep the failure.
+  reads every requested process again and accepts the failure once none of
+  them runs or may still launch, including when the supervisor itself has
+  exited. A process that still runs, states it cannot read, or a supervisor
+  that now serves another stack's project keep the failure.
 
 ## v0.27.1 — 2026-10-30
 
