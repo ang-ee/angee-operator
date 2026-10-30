@@ -6,6 +6,17 @@ latest tag.
 
 ## Unreleased
 
+### Fixed
+
+- **A migrate to a worktree killed while git made it is recovered by its
+  record.** `angee workspace source migrate` makes the new git worktree in
+  a staging directory first, where a migrate killed then leaves a full
+  checkout registered in the source's cache. The record's step named that
+  directory in words only, so running its commands left the checkout
+  behind. The staging directory is now made before git runs, and the step
+  removes it by its path: the worktree there and its registration, if git
+  lists one, then the directory.
+
 ## v0.26.0 — 2026-10-30
 
 ### Added

@@ -35,6 +35,16 @@ type jjMigrator interface {
 
 var _ jjMigrator = jjdriver.Driver{}
 
+// worktreeStager is what migrating a slot to a git worktree asks of the git
+// driver beyond vcs.Driver: an add staged where the migrate's record names
+// before git runs (gitdriver.Driver.AddStaged).
+type worktreeStager interface {
+	vcs.Driver
+	AddStaged(ctx context.Context, s vcs.Slot, dest vcs.Dest, stageRoot string) error
+}
+
+var _ worktreeStager = gitdriver.Driver{}
+
 // The steps after which a test fails a migrate (Platform.migrateFault), each
 // named for what has just been done. A failure at any of them, or in any
 // action between them, rolls the migrate back.
@@ -560,7 +570,10 @@ func (p *Platform) migrateToWorktree(ctx context.Context, m *migration) (string,
 	worktree := m.wsSource
 	worktree.Mode, worktree.VCS = manifest.WorkspaceSourceModeWorktree, ""
 	gitSlot := p.workspaceLifecycleSlot(m.path, m.source, worktree)
-	gitDriver := p.slotDriver(gitSlot)
+	gitDriver, ok := p.slotDriver(gitSlot).(worktreeStager)
+	if !ok {
+		return "", fmt.Errorf("the driver of git worktree %s cannot migrate a slot to it", m.path)
+	}
 	var handoff jjdriver.Handoff
 	err := withPrimaryLock(ctx, m.primary, func() error {
 		if err := m.run(ctx, func() error {
@@ -664,7 +677,7 @@ func (m *migration) prepareWorktree(ctx context.Context, jj jjMigrator, named vc
 
 // toWorktree is migrateToWorktree's work under the lock once the bookmark is
 // set, each step recorded for the rollback.
-func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigrator, gitDriver vcs.Driver, named, gitSlot vcs.Slot, handoff jjdriver.Handoff) error {
+func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigrator, gitDriver worktreeStager, named, gitSlot vcs.Slot, handoff jjdriver.Handoff) error {
 	if err := m.setAside(ctx, client); err != nil {
 		return err
 	}
@@ -695,12 +708,23 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	} else if tip != handoff.Tip {
 		return m.movedMeanwhile(handoff.Tip, tip)
 	}
-	// Recorded before git makes anything, as in toJJ. git adds the worktree
-	// in a staging directory first (gitdriver), where a migrate killed then
-	// leaves it registered.
+	// Recorded before git makes anything, as in toJJ. git makes the worktree
+	// in a stage first, which is made here so the record names it
+	// (gitdriver.Driver.AddStaged): a migrate killed while git makes it, or
+	// before it is installed, leaves it there, registered in the cache.
+	stageRoot, err := gitdriver.StageRoot()
+	if err != nil {
+		return err
+	}
+	stage := gitdriver.StagePath(stageRoot)
 	added := false
-	if err := m.push(fmt.Sprintf("remove what the migrate made of the git worktree at %[1]s, as far as it got: its directory, `rm -rf %[1]s`, then git's registration of it alone, if git lists one, `%[2]s`; a migrate stopped while git made it may leave it registered in a staging directory instead, named angee-worktree-stage-…, which `git -C %[3]s worktree list` lists: remove that one with git's worktree remove --force --force", shellQuote(m.path), deregisterCommand(m.primary, m.path), shellQuote(m.primary)), func(ctx context.Context) error {
+	if err := m.push(fmt.Sprintf("remove what the migrate made of the git worktree at %[1]s, as far as it got: its directory, `rm -rf %[1]s`, then git's registration of it alone, if git lists one, `%[2]s`, then the worktree git staged it in, with its registration, if git lists one there, `%[3]s`, and the staging directory, `rm -rf %[4]s`", shellQuote(m.path), deregisterCommand(m.primary, m.path), deregisterCommand(m.primary, stage), shellQuote(stageRoot)), func(ctx context.Context) error {
 		if !added {
+			// AddStaged removes the stage root however it ends, unless it
+			// never ran.
+			if err := os.RemoveAll(stageRoot); err != nil {
+				logctx.From(ctx).Warn(fmt.Sprintf("left the staging directory %s: %v", stageRoot, err))
+			}
 			return m.nothingMade()
 		}
 		if err := m.dest.RemoveAll(); err != nil {
@@ -713,7 +737,7 @@ func (m *migration) toWorktree(ctx context.Context, client git.Client, jj jjMigr
 	if err := m.step(migrateStepAdding); err != nil {
 		return err
 	}
-	if err := gitDriver.Add(ctx, gitSlot, m.dest, nil); err != nil {
+	if err := gitDriver.AddStaged(ctx, gitSlot, m.dest, stageRoot); err != nil {
 		return err
 	}
 	added = true
@@ -944,9 +968,10 @@ func (m *migration) nothingMade() error {
 
 // deregisterCommand is the shell command that drops primary's registration
 // of a worktree at path, and no other, if git lists one: with nothing at
-// path, `git worktree remove` removes only git's record of it. git lists a
-// worktree by the path it was added at, or that path resolved, so either is
-// looked for.
+// path, `git worktree remove` removes only git's record of it; with the
+// worktree there, as a staging directory may hold one, the checkout too.
+// git lists a worktree by the path it was added at, or that path resolved,
+// so either is looked for.
 func deregisterCommand(primary, path string) string {
 	canonical := vcs.CanonicalPath(path)
 	match := "-e " + shellQuote("worktree "+canonical)

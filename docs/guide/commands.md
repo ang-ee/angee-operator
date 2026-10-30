@@ -930,7 +930,8 @@ step with how far it got and the steps that recover from there by hand, in
 order: before the new checkout is made, move the slot's checkout back;
 from then, first move back each entry that is in the new checkout and no
 longer in the old one (every entry is recorded before the first is moved),
-then remove what was made of the new checkout, as far as it got, then move
+then remove what was made of the new checkout, as far as it got (for a
+worktree, the staging directory git made it in too, by its path), then move
 the slot's checkout back; once the
 manifest records the new mode, only clean-up is left (removing the old
 checkout, and forgetting a jj slot's workspace only while nothing is at its

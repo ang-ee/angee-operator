@@ -124,7 +124,8 @@ func (f *migrateFixture) tip() string {
 }
 
 // noAside fails the test when anything a migrate set aside is left in the
-// workspace, or the cache registers a worktree that is gone.
+// workspace, or the cache registers a worktree that is gone or one staged
+// for a worktree slot (gitdriver.StageRoot).
 func (f *migrateFixture) noAside() {
 	f.t.Helper()
 	entries, err := os.ReadDir(f.workspace("ws"))
@@ -137,7 +138,7 @@ func (f *migrateFixture) noAside() {
 		}
 	}
 	for _, reg := range f.registrations(f.cache()) {
-		if strings.Contains(reg, asidePrefix) || strings.Contains(reg, "prunable") {
+		if strings.Contains(reg, asidePrefix) || strings.Contains(reg, "prunable") || strings.Contains(reg, "angee-worktree-stage-") {
 			f.t.Errorf("the cache keeps registration %q", reg)
 		}
 	}
@@ -991,6 +992,17 @@ func (f *migrateFixture) killAt(step, to string, before func()) {
 	f.platform.migrateFault = nil
 }
 
+// stage is where git makes the worktree of a migrate to one, killed after
+// its stage was made: in the one stage root in TMPDIR.
+func (f *migrateFixture) stage() string {
+	f.t.Helper()
+	roots, err := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "angee-worktree-stage-*"))
+	if err != nil || len(roots) != 1 {
+		f.t.Fatalf("stage roots = %q, %v, want one", roots, err)
+	}
+	return filepath.Join(roots[0], "source")
+}
+
 // followRecord recovers by hand from a migrate that stopped, as its record
 // says: it runs every command the record's steps quote, in order, then
 // deletes the record, and returns the record's phase.
@@ -1032,8 +1044,10 @@ func (f *migrateFixture) followRecord() string {
 //
 // The kills before the write are: before the new checkout exists; while it
 // is being made (adding, with what the tool had made by then: a whole jj
-// slot, jj's name and git's registration included, or a worktree's
-// directory, which git had not registered there yet); and right after the
+// slot, jj's name and git's registration included, or a worktree, made and
+// registered by git in its stage, with its copy at the slot's path, which
+// git had not registered there yet, so the record's steps remove the stage
+// by its path, leaving nothing registered or on disk); and right after the
 // first entry is renamed into it (carried), before anything else, when the
 // record holds every kind of undo step (the bookmark, the slot set aside,
 // the new checkout, the entries) and names every entry, renamed or not.
@@ -1053,6 +1067,7 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepCarried, phase: migratePhaseMigrating},
 		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepSaved, phase: migratePhaseSaved},
 		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepAdding, phase: migratePhaseMigrating, before: func(f *migrateFixture) {
+			runGit(f.t, f.cache(), "worktree", "add", "-q", f.stage(), "ws")
 			mustWriteFileAll(f.t, filepath.Join(f.slot, "src", "a.txt"), "a\n")
 		}},
 		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepCarried, phase: migratePhaseMigrating},
@@ -1061,6 +1076,9 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 	} {
 		t.Run(tc.mode+"/"+tc.step, func(t *testing.T) {
 			f := newMigrateFixture(t, tc.mode)
+			// The stage of a worktree's add (gitdriver.StageRoot), where
+			// nothing else stages one.
+			t.Setenv("TMPDIR", t.TempDir())
 			to := manifest.WorkspaceSourceModeJJ
 			files, commit, names := f.files(), f.head(), f.jjNames()
 			if tc.mode == manifest.WorkspaceSourceModeJJ {
@@ -1088,6 +1106,9 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 			}
 			if phase := f.followRecord(); phase != tc.phase {
 				t.Fatalf("the record's phase = %q, want %q", phase, tc.phase)
+			}
+			if staged, _ := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "angee-worktree-stage-*")); len(staged) != 0 {
+				t.Errorf("following the record left the staging directories %q", staged)
 			}
 			if tc.phase == migratePhaseMigrating {
 				f.intact(tc.mode, files, commit, names)
