@@ -88,18 +88,29 @@ func (p *GuardedPath) RestoreAside(a *Aside) error {
 // and nothing may be at rel in the guarded directory: an entry is never
 // overwritten.
 func (p *GuardedPath) MoveFromAside(a *Aside, rel string) error {
-	return p.moveAside(a, rel, true)
+	return p.moveAside(a, rel, rel, true)
 }
 
 // MoveToAside moves the entry rel of the guarded directory back into the
 // directory set aside, as MoveFromAside moves one out, undoing it.
 func (p *GuardedPath) MoveToAside(a *Aside, rel string) error {
-	return p.moveAside(a, rel, false)
+	return p.moveAside(a, rel, rel, false)
 }
 
-func (p *GuardedPath) moveAside(a *Aside, rel string, out bool) error {
-	if err := validateRelativePath(rel); err != nil {
-		return err
+// MoveToAsideAs moves the entry rel of the guarded directory into the
+// directory set aside as as, as MoveToAside moves it to rel: for an entry
+// the directory set aside holds again, kept beside it under another name.
+func (p *GuardedPath) MoveToAsideAs(a *Aside, rel, as string) error {
+	return p.moveAside(a, rel, as, false)
+}
+
+// moveAside moves the entry rel of one side to target on the other: out of
+// the directory set aside into the guarded one (out), else back.
+func (p *GuardedPath) moveAside(a *Aside, rel, target string, out bool) error {
+	for _, path := range []string{rel, target} {
+		if err := validateRelativePath(path); err != nil {
+			return err
+		}
 	}
 	if err := p.sameParent(a); err != nil {
 		return err
@@ -113,15 +124,15 @@ func (p *GuardedPath) moveAside(a *Aside, rel string, out bool) error {
 	if !p.exists || p.entryRoot == nil {
 		return fmt.Errorf("guarded destination %q is not a real directory", p.leaf)
 	}
-	rel = filepath.Clean(filepath.FromSlash(rel))
+	rel, target = filepath.Clean(filepath.FromSlash(rel)), filepath.Clean(filepath.FromSlash(target))
 	from, to := a.name, p.leaf
 	if !out {
 		from, to = p.leaf, a.name
 	}
-	parts := splitPathParts(rel)
-	for _, base := range []string{from, to} {
+	for _, side := range []struct{ base, rel string }{{from, rel}, {to, target}} {
+		parts := splitPathParts(side.rel)
 		for i := 1; i < len(parts); i++ {
-			dir := filepath.Join(append([]string{base}, parts[:i]...)...)
+			dir := filepath.Join(append([]string{side.base}, parts[:i]...)...)
 			info, err := p.parent.Lstat(dir)
 			if err != nil {
 				return fmt.Errorf("move %s: %w", rel, err)
@@ -131,16 +142,16 @@ func (p *GuardedPath) moveAside(a *Aside, rel string, out bool) error {
 			}
 		}
 	}
-	source, target := filepath.Join(from, rel), filepath.Join(to, rel)
+	source, dest := filepath.Join(from, rel), filepath.Join(to, target)
 	if _, err := p.parent.Lstat(source); err != nil {
 		return fmt.Errorf("move %s: %w", rel, err)
 	}
-	if _, err := p.parent.Lstat(target); err == nil {
+	if _, err := p.parent.Lstat(dest); err == nil {
 		return fmt.Errorf("move %s: %w", rel, fs.ErrExist)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("move %s: %w", rel, err)
 	}
-	return p.parent.Rename(source, target)
+	return p.parent.Rename(source, dest)
 }
 
 // RemoveAll removes the directory set aside, once its name still leads to it.

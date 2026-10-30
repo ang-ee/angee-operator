@@ -21,8 +21,9 @@ func writeAsideFile(t *testing.T, path, content string) {
 
 // A guarded directory set aside keeps its name's parent and depth, a new
 // directory takes its path, and entries move between the two by rename,
-// never over an entry, and back; the directory set aside goes back when the
-// path is free, and is removed through its own name.
+// never over an entry, and back, or back under another name; the directory
+// set aside goes back when the path is free, and is removed through its own
+// name.
 func TestGuardedPathSetsADirectoryAside(t *testing.T) {
 	root := t.TempDir()
 	slot := filepath.Join(root, "ws", "app")
@@ -77,7 +78,22 @@ func TestGuardedPathSetsADirectoryAside(t *testing.T) {
 		t.Fatalf(".env moved as %q, %v", data, err)
 	}
 
-	for _, rel := range []string{".env", "src/debug.log", "src/link"} {
+	// What the directory set aside holds again is kept beside, under
+	// another name, never overwritten.
+	writeAsideFile(t, filepath.Join(aside.Path(), ".env"), "rewritten\n")
+	if err := guard.MoveToAside(aside, ".env"); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("MoveToAside(.env) over an entry error = %v, want fs.ErrExist", err)
+	}
+	if err := guard.MoveToAsideAs(aside, ".env", "../escape"); err == nil {
+		t.Fatalf("MoveToAsideAs(.env, ../escape) succeeded, want it refused")
+	}
+	if err := guard.MoveToAsideAs(aside, ".env", "src/a.txt"); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("MoveToAsideAs(.env, src/a.txt) over an entry error = %v, want fs.ErrExist", err)
+	}
+	if err := guard.MoveToAsideAs(aside, ".env", ".env.kept"); err != nil {
+		t.Fatalf("MoveToAsideAs(.env, .env.kept) error = %v", err)
+	}
+	for _, rel := range []string{"src/debug.log", "src/link"} {
 		if err := guard.MoveToAside(aside, rel); err != nil {
 			t.Fatalf("MoveToAside(%s) error = %v", rel, err)
 		}
@@ -91,7 +107,7 @@ func TestGuardedPathSetsADirectoryAside(t *testing.T) {
 	if err := guard.RestoreAside(aside); err != nil {
 		t.Fatalf("RestoreAside() error = %v", err)
 	}
-	for rel, want := range map[string]string{".env": "secret\n", "src/debug.log": "log\n", "src/a.txt": "old\n"} {
+	for rel, want := range map[string]string{".env": "rewritten\n", ".env.kept": "secret\n", "src/debug.log": "log\n", "src/a.txt": "old\n"} {
 		if data, err := os.ReadFile(filepath.Join(slot, rel)); err != nil || string(data) != want {
 			t.Errorf("%s after the restore = %q, %v, want %q", rel, data, err, want)
 		}

@@ -16,6 +16,17 @@ latest tag.
   behind. The staging directory is now made before git runs, and the step
   removes it by its path: the worktree there and its registration, if git
   lists one, then the directory.
+- **Undoing a migrate no longer deletes an entry the old checkout holds
+  again.** A process still writing into the slot's old checkout (a watcher
+  rebuilding `node_modules/`) could make an entry there again once it was
+  carried across. The record's step then left the carried copy in the new
+  checkout, and the next one, `rm -rf` of the new checkout, deleted it.
+  Now, by hand and in the rollback alike, the carried copy goes back
+  beside its namesake, as `<entry>.migrated`, and the new checkout is
+  removed only once it holds none of the entries the migrate carries
+  across: the record's command refuses, naming one, and the rollback
+  stops. A rollback that kept a copy says so in its error. Stop the slot's
+  services before a migrate, as before.
 
 ## v0.26.0 — 2026-10-30
 

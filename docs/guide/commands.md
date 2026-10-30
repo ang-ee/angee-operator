@@ -922,17 +922,24 @@ Untracked files that git did not ignore become changes in the jj slot's
 working-copy commit, since jj records every file it does not ignore; the
 message lists them. A failure before the manifest is written rolls back
 what was done, in reverse, so the slot is the checkout it was, with its
-files and branch. A rollback that cannot finish stops (since what comes
-after would delete what it could not put back) and fails with `INTERNAL`,
-cause `migrate_incomplete`, naming where the slot's checkout is. The record
-of the migrate, `run/migrate/<workspace>/<slot>.json`, is rewritten at each
+files and branch. An entry carried across that the old checkout holds
+again by then, written into it meanwhile (a watcher rebuilding
+`node_modules/`), is not deleted: the carried copy goes back beside it, as
+`<entry>.migrated`, and the error names it; the new checkout is removed
+only once it holds none of the entries the migrate carries across. A
+rollback that cannot finish stops (since what comes after would delete
+what it could not put back) and fails with `INTERNAL`, cause
+`migrate_incomplete`, naming where the slot's checkout is. The record of
+the migrate, `run/migrate/<workspace>/<slot>.json`, is rewritten at each
 step with how far it got and the steps that recover from there by hand, in
 order: before the new checkout is made, move the slot's checkout back;
-from then, first move back each entry that is in the new checkout and no
-longer in the old one (every entry is recorded before the first is moved),
-then remove what was made of the new checkout, as far as it got (for a
-worktree, the staging directory git made it in too, by its path), then move
-the slot's checkout back; once the
+from then, first move back each entry that is in the new checkout (every
+entry is recorded before the first is moved), beside its namesake as
+`<entry>.migrated` when the old checkout holds it again, then remove what
+was made of the new checkout, as far as it got (for a worktree, the
+staging directory git made it in too, by its path), which refuses, naming
+one, while it still holds any of those entries, then move the slot's
+checkout back; once the
 manifest records the new mode, only clean-up is left (removing the old
 checkout, and forgetting a jj slot's workspace only while nothing is at its
 path, since jj removes the git worktree it finds at the path it recorded).

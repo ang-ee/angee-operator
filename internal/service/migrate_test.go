@@ -1008,6 +1008,21 @@ func (f *migrateFixture) stage() string {
 // deletes the record, and returns the record's phase.
 func (f *migrateFixture) followRecord() string {
 	f.t.Helper()
+	phase, step, out, err := f.runRecord()
+	if err != nil {
+		f.t.Fatalf("step %q: %v\n%s", step, err, out)
+	}
+	if err := os.Remove(f.platform.migrateMarkerPath("ws", "app")); err != nil {
+		f.t.Fatal(err)
+	}
+	return phase
+}
+
+// runRecord runs every command the steps of the migrate's record quote, in
+// order, until one fails, and returns the record's phase and, when one
+// failed, its step, its output and the error.
+func (f *migrateFixture) runRecord() (phase, step, out string, err error) {
+	f.t.Helper()
 	marker := f.platform.migrateMarkerPath("ws", "app")
 	data, err := os.ReadFile(marker)
 	if err != nil {
@@ -1023,14 +1038,11 @@ func (f *migrateFixture) followRecord() string {
 			cmd := exec.Command("sh", "-c", quoted[1])
 			cmd.Dir = f.base
 			if out, err := cmd.CombinedOutput(); err != nil {
-				f.t.Fatalf("step %q: %s: %v\n%s", step, quoted[1], err, out)
+				return record.Phase, step, string(out), fmt.Errorf("%s: %w", quoted[1], err)
 			}
 		}
 	}
-	if err := os.Remove(marker); err != nil {
-		f.t.Fatal(err)
-	}
-	return record.Phase
+	return record.Phase, "", "", nil
 }
 
 // A migrate killed after a step leaves a record whose steps fit how far it
@@ -1136,6 +1148,115 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// keptBeside is files, a slot's, as a migrate undone leaves them when a
+// process wrote node_modules/pkg/index.js, as rebuilt, into the old checkout
+// after node_modules/ was carried across: the copy carried across beside it,
+// as node_modules.migrated.
+func keptBeside(files map[string]string, rebuilt string) map[string]string {
+	kept := maps.Clone(files)
+	for rel, content := range files {
+		if rest, ok := strings.CutPrefix(rel, "node_modules"); ok {
+			kept["node_modules"+keptSuffix+rest] = content
+		}
+	}
+	kept[filepath.Join("node_modules", "pkg", "index.js")] = rebuilt
+	return kept
+}
+
+// A process still writing into the old checkout (a watcher rebuilding
+// node_modules) can make an entry there again once it is carried across.
+// Undoing the migrate deletes neither copy: a migrate killed and recovered
+// by its record's steps, either way, and one rolled back in process, move
+// the copy carried across beside the rebuilt one, as node_modules.migrated,
+// before the new checkout is removed, and the rollback's error says so.
+func TestMigrateUndoneKeepsWhatTheOldCheckoutHoldsAgain(t *testing.T) {
+	injected := errors.New("injected failure")
+	for _, tc := range []struct {
+		mode   string
+		killed bool
+	}{
+		{manifest.WorkspaceSourceModeWorktree, true},
+		{manifest.WorkspaceSourceModeJJ, true},
+		{manifest.WorkspaceSourceModeWorktree, false},
+	} {
+		name := tc.mode + "/rolled back"
+		if tc.killed {
+			name = tc.mode + "/killed"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newMigrateFixture(t, tc.mode)
+			to, commit := manifest.WorkspaceSourceModeJJ, f.head()
+			if tc.mode == manifest.WorkspaceSourceModeJJ {
+				to, commit = manifest.WorkspaceSourceModeWorktree, f.tip()
+			}
+			files, names := f.files(), f.jjNames()
+			rebuild := func() {
+				mustWriteFileAll(t, filepath.Join(f.asideOf(), "node_modules", "pkg", "index.js"), "rebuilt\n")
+			}
+			if tc.killed {
+				f.killAt(migrateStepSave, to, rebuild)
+				if phase := f.followRecord(); phase != migratePhaseMigrating {
+					t.Fatalf("the record's phase = %q, want %q", phase, migratePhaseMigrating)
+				}
+			} else {
+				f.platform.migrateFault = func(at string) error {
+					if at == migrateStepSave {
+						rebuild()
+						return injected
+					}
+					return nil
+				}
+				_, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", to)
+				f.platform.migrateFault = nil
+				opErr := AsOperationError(err)
+				if !errors.Is(err, injected) || opErr == nil || !strings.Contains(err.Error(), "kept beside them in it: node_modules.migrated.") || !slices.Contains(opErr.Paths, filepath.Join(f.slot, "node_modules.migrated")) {
+					t.Fatalf("WorkspaceSourceMigrate() error = %v (%+v), want the injected failure, saying node_modules.migrated is kept", err, opErr)
+				}
+			}
+			f.intact(tc.mode, keptBeside(files, "rebuilt\n"), commit, names)
+		})
+	}
+}
+
+// A new checkout that still holds an entry the migrate carries across once
+// the ones it carried are back (written there meanwhile, by a process
+// writing the slot by its path) is not removed: the rollback stops, naming
+// it, and the record's step refuses too, until it is moved out of the way.
+func TestMigrateKeepsANewCheckoutThatHoldsAnEntry(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	files, commit, names := f.files(), f.head(), f.jjNames()
+	written := filepath.Join(f.slot, "node_modules", "written.js")
+	f.platform.migrateFault = func(at string) error {
+		if at == migrateStepCarried {
+			mustWriteFileAll(t, written, "written\n")
+			return errors.New("injected failure")
+		}
+		return nil
+	}
+	_, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", "")
+	f.platform.migrateFault = nil
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause != CauseMigrateIncomplete || !strings.Contains(err.Error(), "holds node_modules/, which the migrate carries across") {
+		t.Fatalf("WorkspaceSourceMigrate() error = %v (%+v), want a stopped rollback naming node_modules/", err, opErr)
+	}
+	aside := f.asideOf()
+	if !pathExists(t, written) || !pathExists(t, filepath.Join(aside, "node_modules", "pkg", "index.js")) || !pathExists(t, filepath.Join(aside, ".env")) {
+		t.Fatalf("the stopped rollback lost an entry")
+	}
+	if _, step, out, err := f.runRecord(); err == nil || !strings.HasPrefix(step, "remove what the migrate made") || !strings.Contains(out, "still holds node_modules, which the migrate carries across") {
+		t.Fatalf("following the record = step %q, %q, %v, want its removal of the new checkout refused", step, out, err)
+	}
+	if !pathExists(t, written) {
+		t.Fatalf("the record's refused removal deleted node_modules")
+	}
+	if err := os.Rename(filepath.Join(f.slot, "node_modules"), filepath.Join(aside, "node_modules"+keptSuffix)); err != nil {
+		t.Fatal(err)
+	}
+	f.followRecord()
+	want := maps.Clone(files)
+	want["node_modules"+keptSuffix], want[filepath.Join("node_modules"+keptSuffix, "written.js")] = "dir", "written\n"
+	f.intact(manifest.WorkspaceSourceModeWorktree, want, commit, names)
 }
 
 // The checks before a migrate are made again on the checkout set aside: a
