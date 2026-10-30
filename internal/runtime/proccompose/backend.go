@@ -177,10 +177,35 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
+	// An absent supervisor or process is already stopped, including a stack's
+	// first dependency operation before the supervisor has ever started.
+	serving, err := b.supervisorServing(ctx, target)
+	if err != nil || !serving {
+		return err
+	}
+	if err := b.checkSupervisorProject(ctx, target); err != nil {
+		return err
+	}
+	if len(target.Services) > 0 {
+		present := make([]string, 0, len(target.Services))
+		for _, name := range target.Services {
+			state, err := b.processState(ctx, target, name)
+			if err != nil {
+				return err
+			}
+			if state != nil {
+				present = append(present, name)
+			}
+		}
+		if len(present) == 0 {
+			return nil
+		}
+		target.Services = present
+	}
 	args := b.clientArgs(target.ControlPort)
 	args = append(args, "process", "stop")
 	args = append(args, target.Services...)
-	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
+	_, err = b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
@@ -890,6 +915,9 @@ func (b Backend) processSafelyInactive(ctx context.Context, target runtime.Targe
 // gets here: RunJob runs it under a private foreground supervisor
 // (runTransientJob) and leaves the shared project untouched.
 func (b Backend) addMissingProcess(ctx context.Context, target runtime.Target, name string, updates map[string]any) (bool, error) {
+	if target.ProtectStopped {
+		return false, fmt.Errorf("cannot register service %s while services are held: process-compose project replacement can relaunch stopped processes; restart the supervisor to load declared services before retrying", name)
+	}
 	base := "http://127.0.0.1:" + strconv.Itoa(target.ControlPort)
 	list, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/processes", nil)
 	if err != nil {
@@ -1077,6 +1105,9 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 		process, ok := document.Processes[name]
 		if !ok {
 			return fmt.Errorf("process %s is absent from the generated process-compose config", name)
+		}
+		if target.DependenciesSatisfied {
+			process.DependsOn = nil
 		}
 		updates, err := processUpdates(process)
 		if err != nil {
@@ -1453,7 +1484,7 @@ func (b Backend) Status(ctx context.Context, req runtime.StatusRequest) ([]runti
 			ExitCode:   &entry.ExitCode,
 			Restarts:   entry.Restarts,
 			PID:        entry.PID,
-			Generation: fmt.Sprintf("%d:%v:%v", entry.Restarts, entry.ProcessStartTime, entry.ProcessEndTime),
+			Generation: fmt.Sprintf("%d:%d:%v:%v", entry.PID, entry.Restarts, entry.ProcessStartTime, entry.ProcessEndTime),
 		})
 	}
 	return statuses, nil

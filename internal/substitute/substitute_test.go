@@ -120,3 +120,34 @@ func TestTruncateCountsRunes(t *testing.T) {
 		t.Fatalf("Resolve() = %q", got)
 	}
 }
+
+func TestDefaultedMissingInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		inputs           map[string]string
+		want             string
+		failure          bool
+	}{
+		{"missing", "${inputs.value | default('run')}", nil, "run", false},
+		{"missing-empty-default", "${inputs.value | default('')}", nil, "", false},
+		{"present-empty", "${inputs.value | default('run')}", map[string]string{"value": ""}, "run", false},
+		{"present-false", "${inputs.value | default('run')}", map[string]string{"value": "false"}, "false", false},
+		{"present-zero", "${inputs.value | default('run')}", map[string]string{"value": "0"}, "0", false},
+		{"present-value", "${inputs.value | default('run') | upper}", map[string]string{"value": "chosen"}, "CHOSEN", false},
+		{"required-input", "${inputs.value}", nil, "", true},
+		{"no-leading-default", "${inputs.value | lower | default('run')}", nil, "", true},
+		{"missing-secret", "${secret.value | default('unsafe')}", nil, "", true},
+		{"missing-port", "${ports.value | default('9000')}", nil, "", true},
+		{"invalid-default", "${inputs.value | default()}", nil, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Resolve(tc.expression, Context{Inputs: tc.inputs})
+			if (err != nil) != tc.failure {
+				t.Fatalf("Resolve = %q, %v; failure=%v", got, err, tc.failure)
+			}
+			if !tc.failure && got != tc.want {
+				t.Fatalf("Resolve = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

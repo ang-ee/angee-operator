@@ -177,6 +177,9 @@ type JobRunNode {
 	kind: JobRunNodeKind!
 	status: JobRunStatus!
 	message: String
+	isolated: Boolean!
+	output: String
+	exitCode: Int
 }
 enum JobRunNodeKind {
 	JOB

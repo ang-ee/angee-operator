@@ -396,6 +396,63 @@ jobs:
 
 Jobs are run explicitly with `angee job run <name>`.
 
+### Hold services during a job chain
+
+Use `holds` when jobs must modify shared inputs while services are stopped:
+
+```yaml
+jobs:
+  prepare:
+    runtime: local
+    command: ["./prepare"]
+    holds: [web, worker]
+  validate:
+    runtime: local
+    command: ["./validate"]
+    depends_on: [prepare]
+```
+
+Before any selected job command runs, the operator stops the union of those
+jobs' held services, once per service. Each name must identify a declared
+service; duplicate names within a job and holds on manual capture jobs are
+invalid. An absent local supervisor or process is already stopped.
+
+`angee job run prepare` runs only `prepare` and leaves its held services stopped.
+Use `angee job run prepare --chained-restart` to run the downstream jobs and
+then reapply the held and dependent services in dependency order, once each.
+Every selected job must succeed before any selected service is reapplied. A job
+cannot require a service selected for this recovery, directly or transitively:
+that would require starting it before the jobs have finished.
+
+A failed stop prevents all commands and recovery; services that stopped
+successfully remain stopped. Job failure or cancellation also leaves the held
+services stopped. If recovery fails after resuming a held service, the operator
+stops that service again; any failure to restore a hold is reported explicitly.
+Local jobs selected by a held operation run through the native isolated
+foreground lifecycle; adding a job never rewrites the shared process-compose
+project. The existing operation receipt retains each job's bounded, redacted
+output, exit code when available, status and pre-run native generation. Status,
+logs and prerequisite checks use that attempt until a newer native job generation
+exists. Ordinary supervisor-backed runs keep their native behavior.
+
+`job logs` reads isolated output from the durable receipt, including after an
+operator restart. `--follow` waits for the selected attempt's buffered output;
+it closes after that attempt ends. Local full log files remain at their declared
+`run/logs/<name>.log` paths. Failed or interrupted attempts cannot satisfy a
+later job's prerequisites.
+
+Recovery only applies already loaded local services. Adding a new service while
+holds are active fails explicitly: process-compose's whole-project registration
+can relaunch other stopped services. Load declared services through an ordinary
+supervisor restart before retrying the job chain. Any held services already
+resumed before this refusal are stopped again. Ordinary startup still uses the
+native `up` lifecycle.
+
+Operation service nodes report `held stopped`, a failed stop, or a successful
+resume through their existing status and message fields, including partial
+stop outcomes. A successful plain run can therefore contain a successful
+service node whose outcome is `held stopped`, rather than a restart.
+
 ## Sources
 
 Implemented source kinds:
@@ -706,3 +763,9 @@ ${name}
 Supported filters include `slug`, `lower`, `upper`, `local_part`,
 `truncate(n)`, `default(value)`, `required(message)`, `b64encode`, and
 `replace(old,new)`.
+
+A missing job input is optional only with an explicit leading default, such as
+`${inputs.action | default('run')}` or `${inputs.value | default('')}`. Present
+empty strings keep the filter's existing fallback behavior; strings such as
+`false` and `0` remain values. Missing inputs without a leading default, secrets,
+and other namespaces still fail instead of silently supplying a value.

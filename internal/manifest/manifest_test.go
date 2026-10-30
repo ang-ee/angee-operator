@@ -647,3 +647,47 @@ func TestCaptureJobsAreManualDependencyLeaves(t *testing.T) {
 		})
 	}
 }
+
+func TestJobHoldsValidationAndRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		holds   []string
+		capture bool
+		want    string
+	}{
+		{"valid", []string{"web"}, false, ""},
+		{"unknown", []string{"absent"}, false, "unknown service"},
+		{"job-not-service", []string{"build"}, false, "unknown service"},
+		{"duplicate", []string{"web", "web"}, false, "more than once"},
+		{"capture", []string{"web"}, true, "cannot declare holds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := Job{Runtime: RuntimeLocal, Command: []string{"build"}, Holds: tc.holds}
+			if tc.capture {
+				job.Capture = &BackupCapture{Name: "capture", Output: "result", Group: "databases"}
+			}
+			stack := &Stack{Version: VersionCurrent, Kind: KindStack, Name: "holds", Jobs: map[string]Job{"build": job}, Services: map[string]Service{"web": {Runtime: RuntimeLocal, Command: []string{"web"}}}}
+			err := stack.Validate()
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("Validate = %v, want %s", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "angee.yaml")
+			if err := SaveFile(path, stack); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded.Jobs["build"].Holds) != 1 || loaded.Jobs["build"].Holds[0] != "web" {
+				t.Fatalf("round trip holds = %v", loaded.Jobs["build"].Holds)
+			}
+		})
+	}
+}
