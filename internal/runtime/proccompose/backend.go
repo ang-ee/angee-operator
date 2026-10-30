@@ -179,6 +179,7 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	// An absent supervisor or process is already stopped, including a stack's
 	// first dependency operation before the supervisor has ever started.
+	// Terminal and disabled processes need no stop either (alreadyStopped).
 	serving, err := b.supervisorServing(ctx, target)
 	if err != nil || !serving {
 		return err
@@ -186,6 +187,7 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	if err := b.checkSupervisorProject(ctx, target); err != nil {
 		return err
 	}
+	requested := target.Services
 	if len(target.Services) > 0 {
 		present := make([]string, 0, len(target.Services))
 		for _, name := range target.Services {
@@ -193,9 +195,10 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 			if err != nil {
 				return err
 			}
-			if state != nil {
-				present = append(present, name)
+			if state == nil || alreadyStopped(state) {
+				continue
 			}
+			present = append(present, name)
 		}
 		if len(present) == 0 {
 			return nil
@@ -205,8 +208,59 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	args := b.clientArgs(target.ControlPort)
 	args = append(args, "process", "stop")
 	args = append(args, target.Services...)
-	_, err = b.run(ctx, target.Root, target.EnvFile, args...)
+	if _, err = b.run(ctx, target.Root, target.EnvFile, args...); err == nil || len(target.Services) == 0 {
+		return err
+	}
+	// A process can end between the read above and the supervisor's handling
+	// of the stop, which then refuses to stop it ("Failed to stop: 'web'"), and
+	// the supervisor itself can exit once nothing runs. The stop's goal is that
+	// none of the named processes runs, so its failure stands only while one
+	// still does, or while their states cannot be read. Every requested
+	// process is read again, not only those the stop named: one skipped above
+	// as stopped may have started meanwhile.
+	check := target
+	check.Services = requested
+	if stopped, checkErr := b.servicesStopped(ctx, check); checkErr == nil && stopped {
+		return nil
+	}
 	return err
+}
+
+// servicesStopped reports whether none of target's named processes runs or
+// may still launch: each is absent from the supervisor, or alreadyStopped, or
+// the supervisor no longer serves at all. A supervisor that now serves another
+// stack's project is an error, since its process table says nothing of this
+// stack's processes.
+func (b Backend) servicesStopped(ctx context.Context, target runtime.Target) (bool, error) {
+	serving, err := b.supervisorServing(ctx, target)
+	if err != nil {
+		return false, err
+	}
+	if !serving {
+		return true, nil
+	}
+	if err := b.checkSupervisorProject(ctx, target); err != nil {
+		return false, err
+	}
+	for _, name := range target.Services {
+		state, err := b.processState(ctx, target, name)
+		if err != nil {
+			return false, err
+		}
+		if state != nil && !alreadyStopped(state) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// alreadyStopped reports whether a process the supervisor holds needs no
+// stop: it has ended or is disabled, and is not running. A transitional
+// process (pending, scheduled, restarting) may still launch even though
+// is_running is false, so it is not stopped.
+func alreadyStopped(state *processListEntry) bool {
+	status := strings.ToLower(strings.TrimSpace(state.Status))
+	return !state.IsRunning && (isTerminalState(status) || status == "disabled")
 }
 
 func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
@@ -261,7 +315,7 @@ func (b Backend) upThroughSupervisor(ctx context.Context, target runtime.Target)
 		return fmt.Errorf("process-compose supervisor on 127.0.0.1:%d has not loaded %s, which the stack defined after it started; adding processes through its API restarts processes it runs, so restart the supervisor to load them", target.ControlPort, strings.Join(unknown, ", "))
 	}
 	for _, name := range order {
-		updates, err := processUpdates(document.Processes[name])
+		updates, err := processUpdates(document.Processes[name], target.DependenciesSatisfied)
 		if err != nil {
 			return err
 		}
@@ -523,7 +577,7 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		baselineEnd = baseline.ProcessEndTime
 		baselinePid = baseline.PID
 	}
-	updates, err := processUpdates(process)
+	updates, err := processUpdates(process, target.DependenciesSatisfied)
 	if err != nil {
 		return nil, err
 	}
@@ -1106,10 +1160,7 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 		if !ok {
 			return fmt.Errorf("process %s is absent from the generated process-compose config", name)
 		}
-		if target.DependenciesSatisfied {
-			process.DependsOn = nil
-		}
-		updates, err := processUpdates(process)
+		updates, err := processUpdates(process, target.DependenciesSatisfied)
 		if err != nil {
 			return err
 		}
@@ -1154,7 +1205,12 @@ func nativeAvailability(availability *Availability) (map[string]any, error) {
 	return map[string]any{"restart": restart, "backoffSeconds": 0, "maxRestarts": 0}, nil
 }
 
-func processUpdates(process Process) (map[string]any, error) {
+func processUpdates(process Process, dependenciesSatisfied bool) (map[string]any, error) {
+	// The operation's verified prerequisite results can include isolated job
+	// receipts that supersede stale states in this shared supervisor.
+	if dependenciesSatisfied {
+		process.DependsOn = nil
+	}
 	var dependsOn map[string]any
 	if len(process.DependsOn) > 0 {
 		dependsOn = map[string]any{}

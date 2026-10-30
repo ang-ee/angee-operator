@@ -987,6 +987,7 @@ func (p *Platform) operationRuntime(stack *manifest.Stack, compiled *CompiledSta
 	return backend, request, err
 }
 
+// runJob executes a job after its caller has validated the prerequisites.
 func (p *Platform) runJob(ctx context.Context, stack *manifest.Stack, compiled *CompiledStack, name string, isolated bool) ([]byte, error) {
 	job, ok := stack.Jobs[name]
 	if !ok {
@@ -999,7 +1000,7 @@ func (p *Platform) runJob(ctx context.Context, stack *manifest.Stack, compiled *
 			return nil, err
 		}
 		spec.Configuration = configuration
-		target := runtime.Target{Root: p.root, Services: []string{name}, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
+		target := runtime.Target{Root: p.root, Services: []string{name}, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack), DependenciesSatisfied: true}
 		p.jobOutput.status(name, "running")
 		finish := logctx.Step(ctx, "running job "+name)
 		runner, ok := p.procBackend.(runtime.JobBackend)
