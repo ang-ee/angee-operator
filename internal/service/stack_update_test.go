@@ -1141,8 +1141,13 @@ func TestMergeStackFromTemplateTakesTheTemplatesVCS(t *testing.T) {
 	if ours.Workspaces["ws"].Sources["old"].VCS != "" {
 		t.Fatal("merge mutated ours.Workspaces")
 	}
-	if changes := summarizeStackChanges(ours, merged); !reflect.DeepEqual(changes, []string{"~ vcs"}) {
-		t.Fatalf("changes = %v, want the vcs change alone", changes)
+	if changes, want := summarizeStackChanges(ours, merged), []string{`~ vcs ("" to jj)`, "~ workspaces/ws/sources/old (vcs pinned to git, the stack's before)"}; !reflect.DeepEqual(changes, want) {
+		t.Fatalf("changes = %v, want %v", changes, want)
+	}
+	// A render that only spells out the default changes no slot, and says so.
+	spelled := mergeStackFromTemplate(ours, &manifest.Stack{Version: 1, Kind: "stack", Name: "demo", VCS: manifest.VCSGit})
+	if changes, want := summarizeStackChanges(ours, spelled), []string{`~ vcs ("" to git)`}; !reflect.DeepEqual(changes, want) {
+		t.Fatalf("changes for vcs git = %v, want %v", changes, want)
 	}
 	if kept := mergeStackFromTemplate(merged, &manifest.Stack{Version: 1, Kind: "stack", Name: "demo"}); kept.VCS != manifest.VCSJJ || !reflect.DeepEqual(kept.Workspaces, merged.Workspaces) {
 		t.Fatalf("a render with no vcs = %q, %+v, want ours kept", kept.VCS, kept.Workspaces)

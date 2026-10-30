@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -395,7 +396,11 @@ func summarizeRenderedFileChange(renderTarget, stackRoot string, change copierx.
 // (manifest.WorkspaceSource.VCS), so changing it reads no existing slot as
 // another kind of checkout. A slot recorded before create recorded it follows
 // the stack's vcs, so when the merge changes it, each such slot is given the
-// one it was cut with, ours (pinSlotVCS).
+// stack's vcs before the merge, ours (pinSlotVCS). That freezes ours, which
+// is the slot's own only when ours is the vcs it was cut with: a stack whose
+// vcs was edited by hand since such a slot was cut pins it to the edited
+// value. The summary reports the change and each slot pinned
+// (summarizeStackChanges).
 func mergeStackFromTemplate(ours, theirs *manifest.Stack) *manifest.Stack {
 	merged := *ours
 	if theirs.VCS != "" {
@@ -431,6 +436,9 @@ func mergeStackFromTemplate(ours, theirs *manifest.Stack) *manifest.Stack {
 
 // pinSlotVCS returns workspaces with vcs recorded on every slot that names no
 // mode and records none, as create records it now, copying what it changes.
+// vcs is the stack's before the change, which is taken for the one the slot
+// was cut with: the best evidence the manifest has, and wrong only for a slot
+// cut before the stack's vcs was last edited by hand.
 func pinSlotVCS(workspaces map[string]manifest.Workspace, vcs string) map[string]manifest.Workspace {
 	if len(workspaces) == 0 {
 		return workspaces
@@ -493,8 +501,16 @@ func overlayMap[V any](ours, theirs map[string]V) map[string]V {
 // applied (e.g. a preserved port value shows no change).
 func summarizeStackChanges(ours, merged *manifest.Stack) []string {
 	var changes []string
-	if ours.SlotVCS() != merged.SlotVCS() {
-		changes = append(changes, "~ vcs")
+	if ours.VCS != merged.VCS {
+		changes = append(changes, fmt.Sprintf("~ vcs (%s to %s)", cmp.Or(ours.VCS, `""`), cmp.Or(merged.VCS, `""`)))
+	}
+	for _, name := range sortedKeys(merged.Workspaces) {
+		sources := merged.Workspaces[name].Sources
+		for _, slot := range sortedKeys(sources) {
+			if before := ours.Workspaces[name].Sources[slot]; before.VCS != sources[slot].VCS {
+				changes = append(changes, fmt.Sprintf("~ workspaces/%s/sources/%s (vcs pinned to %s, the stack's before)", name, slot, sources[slot].VCS))
+			}
+		}
 	}
 	reportKeyChanges(&changes, "sources", ours.Sources, merged.Sources)
 	reportKeyChanges(&changes, "workspace_defaults", ours.WorkspaceDefaults, merged.WorkspaceDefaults)
