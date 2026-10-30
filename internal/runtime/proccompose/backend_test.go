@@ -1351,7 +1351,7 @@ func TestProcessUpdatesIncludesLogFile(t *testing.T) {
 			TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
 			Rotation:        &LogRotation{MaxSizeMB: 10, MaxBackups: 3},
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1363,7 +1363,7 @@ func TestProcessUpdatesIncludesLogFile(t *testing.T) {
 	if updates["logLocation"] != "/stack/run/logs/web.log" || !reflect.DeepEqual(updates["loggerConfig"], wantLogger) {
 		t.Fatalf("log updates = %v, %#v; want the log file and %#v", updates["logLocation"], updates["loggerConfig"], wantLogger)
 	}
-	updates, err = processUpdates(Process{})
+	updates, err = processUpdates(Process{}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1408,7 +1408,7 @@ func TestUpFailureNamesTheStackLog(t *testing.T) {
 }
 
 func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
-	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}})
+	updates, err := processUpdates(Process{Shutdown: &Shutdown{TimeoutSeconds: 30, Signal: 15}}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1419,7 +1419,7 @@ func TestProcessUpdatesIncludesShutdownTimeout(t *testing.T) {
 }
 
 func TestProcessUpdatesPreservesShutdownWhenGraceIsOmitted(t *testing.T) {
-	updates, err := processUpdates(Process{})
+	updates, err := processUpdates(Process{}, false)
 	if err != nil {
 		t.Fatalf("processUpdates() error = %v", err)
 	}
@@ -1553,7 +1553,7 @@ func TestProcessUpdatesIncludesRestartPolicy(t *testing.T) {
 		// A job compiles no availability: process-compose's default, no restart.
 		{nil, map[string]any{"restart": 0, "backoffSeconds": 0, "maxRestarts": 0}},
 	} {
-		updates, err := processUpdates(Process{Availability: tc.availability})
+		updates, err := processUpdates(Process{Availability: tc.availability}, false)
 		if err != nil {
 			t.Fatalf("processUpdates(%+v) error = %v", tc.availability, err)
 		}
@@ -1561,7 +1561,7 @@ func TestProcessUpdatesIncludesRestartPolicy(t *testing.T) {
 			t.Fatalf("processUpdates(%+v) restartPolicy = %#v, want %#v", tc.availability, got, tc.want)
 		}
 	}
-	if _, err := processUpdates(Process{Availability: &Availability{Restart: "exit_on_failure"}}); err == nil {
+	if _, err := processUpdates(Process{Availability: &Availability{Restart: "exit_on_failure"}}, false); err == nil {
 		t.Fatal("processUpdates() accepted a restart policy Angee does not compile")
 	}
 }
@@ -1755,6 +1755,48 @@ func hasArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestRunJobUsesVerifiedPrerequisitesOnlyWhenRequested(t *testing.T) {
+	for _, verified := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verified=%t", verified), func(t *testing.T) {
+			supervisor := &fakeSupervisor{
+				name: "job", config: `{"name":"job","command":"old"}`,
+				state: processListEntry{Name: "job", Status: "Completed", PID: 100},
+			}
+			server := httptest.NewServer(supervisor)
+			defer server.Close()
+			configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{
+				"job": {Command: "run", DependsOn: map[string]ProcessDependency{
+					"prerequisite": {Condition: "process_completed_successfully"},
+				}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			_, err = (Backend{Runner: supervisor}).RunJob(ctx, runtime.Target{
+				ControlPort: serverPort(t, server), DependenciesSatisfied: verified,
+			}, runtime.JobSpec{Name: "job", Configuration: configuration})
+			if err != nil {
+				t.Fatal(err)
+			}
+			supervisor.mu.Lock()
+			defer supervisor.mu.Unlock()
+			if len(supervisor.posted) != 1 {
+				t.Fatalf("posted %d updates, want 1", len(supervisor.posted))
+			}
+			dependencies := supervisor.posted[0]["dependsOn"]
+			var want any
+			if !verified {
+				want = map[string]any{"prerequisite": map[string]any{"condition": float64(1)}}
+			}
+			if !reflect.DeepEqual(dependencies, want) {
+				t.Fatalf("native dependencies = %#v, want %#v", dependencies, want)
+			}
+		})
+	}
 }
 
 // A re-run driven through UpdateProcess goes Pending -> Launching -> Launched ->

@@ -24,6 +24,7 @@ type recordingJobBackend struct {
 	stubStatusBackend
 	mu          sync.Mutex
 	calls       []string
+	jobTargets  []runtime.Target
 	failJobs    map[string]error
 	failStops   map[string]error
 	failApply   map[string]error
@@ -31,12 +32,13 @@ type recordingJobBackend struct {
 	beforeApply func()
 }
 
-func (b *recordingJobBackend) RunJob(ctx context.Context, _ runtime.Target, job runtime.JobSpec) ([]byte, error) {
+func (b *recordingJobBackend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
 	if b.beforeJob != nil {
 		b.beforeJob(ctx, job)
 	}
 	b.mu.Lock()
 	b.calls = append(b.calls, "job:"+job.Name)
+	b.jobTargets = append(b.jobTargets, target)
 	err := b.failJobs[job.Name]
 	b.mu.Unlock()
 	return []byte(job.Name + " output"), err
@@ -139,6 +141,56 @@ func TestExecuteJobRunOrdersChainedJoinOnce(t *testing.T) {
 	}
 	if again.Nodes[0].Status != api.JobRunSucceeded {
 		t.Fatalf("stored node status changed through receipt slice: %q", again.Nodes[0].Status)
+	}
+}
+
+func TestExecuteJobRunDispatchesOnlyVerifiedPrerequisites(t *testing.T) {
+	for _, succeeded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("isolated prerequisite succeeded=%t", succeeded), func(t *testing.T) {
+			stack := &manifest.Stack{
+				Version: manifest.VersionCurrent, Kind: manifest.KindStack, Name: "jobs",
+				Jobs: map[string]manifest.Job{
+					"prerequisite": {Runtime: manifest.RuntimeLocal, Command: []string{"prerequisite"}},
+					"job":          {Runtime: manifest.RuntimeLocal, Command: []string{"job"}, DependsOn: []string{"prerequisite"}},
+				},
+			}
+			backend := &recordingJobBackend{stubStatusBackend: stubStatusBackend{statuses: []runtime.ServiceStatus{
+				{Name: "prerequisite", State: "error", ExitCode: exitCode(1), Generation: "stale-native"},
+			}}}
+			p, id := newJobOperationPlatform(t, stack, backend, "job", false)
+			status := api.JobRunFailed
+			if succeeded {
+				status = api.JobRunSucceeded
+			}
+			if err := p.persistJobReceipt(api.JobRunOperation{
+				ID: "isolated-prerequisite", RootJob: "prerequisite", Status: status, StartedAt: time.Now(),
+				Nodes: []api.JobRunNode{{Name: "prerequisite", Kind: "job", Isolated: true, RuntimeGeneration: "stale-native", Status: status}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			p.executeJobRun(t.Context(), id, func() {})
+			op, err := p.JobRunGet(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !succeeded {
+				if op.Status != api.JobRunFailed || len(backend.recordedCalls()) != 0 {
+					t.Fatalf("failed prerequisite dispatched: operation=%#v, calls=%v", op, backend.recordedCalls())
+				}
+				return
+			}
+			if op.Status != api.JobRunSucceeded {
+				t.Fatalf("operation = %#v", op)
+			}
+			if got := backend.recordedCalls(); !reflect.DeepEqual(got, []string{"job:job"}) {
+				t.Fatalf("calls = %v, want only job:job", got)
+			}
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			if len(backend.jobTargets) != 1 || !backend.jobTargets[0].DependenciesSatisfied {
+				t.Fatalf("job targets = %#v, want verified prerequisites", backend.jobTargets)
+			}
+		})
 	}
 }
 
