@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/manifest"
 )
 
@@ -124,7 +125,8 @@ func (f *migrateFixture) tip() string {
 }
 
 // noAside fails the test when anything a migrate set aside is left in the
-// workspace, or the cache registers a worktree that is gone.
+// workspace, or the cache registers a worktree that is gone or one staged
+// for a worktree slot (gitdriver.StageRoot).
 func (f *migrateFixture) noAside() {
 	f.t.Helper()
 	entries, err := os.ReadDir(f.workspace("ws"))
@@ -137,7 +139,7 @@ func (f *migrateFixture) noAside() {
 		}
 	}
 	for _, reg := range f.registrations(f.cache()) {
-		if strings.Contains(reg, asidePrefix) || strings.Contains(reg, "prunable") {
+		if strings.Contains(reg, asidePrefix) || strings.Contains(reg, "prunable") || strings.Contains(reg, "angee-worktree-stage-") {
 			f.t.Errorf("the cache keeps registration %q", reg)
 		}
 	}
@@ -332,8 +334,9 @@ func TestMigrateAJJSlotOnNoBranch(t *testing.T) {
 }
 
 // intact fails the test unless the slot is still a mode slot with files,
-// on head (a commit id, for git) or tip (for jj), and nothing a migrate set
-// aside is left: the state a migrate refused or rolled back leaves.
+// on head (a commit id, for git) or tip (for jj), with nothing in a jj
+// slot's working copy, and nothing a migrate set aside is left: the state a
+// migrate refused or rolled back leaves.
 func (f *migrateFixture) intact(mode string, files map[string]string, commit string, names []string) {
 	f.t.Helper()
 	if got := f.recorded(); got.Mode != mode {
@@ -346,7 +349,9 @@ func (f *migrateFixture) intact(mode string, files map[string]string, commit str
 		if got := f.tip(); got != commit {
 			f.t.Errorf("the jj slot's @- is %s, want %s", got, commit)
 		}
-		f.jj(f.slot, "status")
+		if changed := strings.TrimSpace(f.jj(f.slot, "diff", "--summary")); changed != "" {
+			f.t.Errorf("the jj slot's working copy holds %s, want nothing", changed)
+		}
 		if regs := f.registeredAt(); len(regs) != 1 {
 			f.t.Errorf("registrations at the slot = %q, want one", regs)
 		}
@@ -608,6 +613,46 @@ func TestMigrateCarriesRepositoriesItMovesWhole(t *testing.T) {
 	}
 }
 
+// A repository in a directory git ignores whole beside one it re-includes
+// (`/vendor/*` with `!/vendor/keep/`) migrates to jj inside vendor/, which
+// the migrate renames whole, its commit with it: git lists vendor/other/ as
+// ignored whole (`ls-files --others --ignored --directory`), though vendor/
+// holds what git does not ignore. One in the re-included directory is still
+// refused, naming it alone, since jj records nothing of it in its working
+// copy.
+func TestMigrateCarriesARepositoryGitIgnoresBesideAReincludedOne(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	ctx := context.Background()
+	mustWriteFile(t, filepath.Join(f.slot, ".gitignore"), "node_modules/\n.env\n*.log\n/vendor/*\n!/vendor/keep/\n")
+	runGit(t, f.slot, "commit", "-q", "-am", "vendor")
+	mustWriteFileAll(t, filepath.Join(f.slot, "vendor", "keep", "k.txt"), "kept\n")
+	other := filepath.Join(f.slot, "vendor", "other")
+	runGit(t, f.slot, "init", "-q", "-b", "main", "vendor/other")
+	mustWriteFile(t, filepath.Join(other, "own.txt"), "own\n")
+	runGit(t, other, "add", "own.txt")
+	runGit(t, other, "commit", "-q", "-m", "unpushed")
+	commit := strings.TrimSpace(runGitOutput(t, other, "rev-parse", "HEAD"))
+	runGit(t, f.slot, "init", "-q", "vendor/keep/lib")
+	_, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ)
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause != CauseNestedRepositories || !slices.Equal(opErr.Paths, []string{filepath.Join("vendor", "keep", "lib", ".git")}) {
+		t.Fatalf("WorkspaceSourceMigrate(jj) error = %v, want nested_repositories naming vendor/keep/lib/.git alone", err)
+	}
+	if err := os.RemoveAll(filepath.Join(f.slot, "vendor", "keep", "lib")); err != nil {
+		t.Fatal(err)
+	}
+	files := f.files()
+	if result, err := f.platform.WorkspaceSourceMigrate(ctx, "ws", "app", manifest.WorkspaceSourceModeJJ); err != nil || !result.OK {
+		t.Fatalf("WorkspaceSourceMigrate(jj) = %+v, %v", result, err)
+	}
+	if got := f.files(); !maps.Equal(got, files) {
+		t.Errorf("files after the migrate to jj = %v, want %v", got, files)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, other, "rev-parse", "HEAD")); got != commit {
+		t.Errorf("the repository in vendor/other is at %s, want %s", got, commit)
+	}
+	f.noAside()
+}
+
 // A slot on no branch whose HEAD holds commits beyond its base is refused,
 // since a jj slot on no branch starts at the base; one at its base migrates.
 func TestMigrateAWorktreeOnNoBranch(t *testing.T) {
@@ -810,10 +855,12 @@ func TestMigrateReportsARollbackThatStops(t *testing.T) {
 	}
 }
 
-// asideOf is the one directory a migrate set aside in workspace ws.
+// asideOf is the one directory a migrate set aside in workspace ws, but the
+// one an undo keeps carried copies in (keptDir).
 func (f *migrateFixture) asideOf() string {
 	f.t.Helper()
 	matches, err := filepath.Glob(filepath.Join(f.workspace("ws"), asidePrefix+"*"))
+	matches = slices.DeleteFunc(matches, func(match string) bool { return strings.HasSuffix(match, keptSuffix) })
 	if err != nil || len(matches) != 1 {
 		f.t.Fatalf("set-aside directories = %q, %v, want one", matches, err)
 	}
@@ -991,10 +1038,36 @@ func (f *migrateFixture) killAt(step, to string, before func()) {
 	f.platform.migrateFault = nil
 }
 
+// stage is where git makes the worktree of a migrate to one, killed after
+// its stage was made: in the one stage root in TMPDIR.
+func (f *migrateFixture) stage() string {
+	f.t.Helper()
+	roots, err := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "angee-worktree-stage-*"))
+	if err != nil || len(roots) != 1 {
+		f.t.Fatalf("stage roots = %q, %v, want one", roots, err)
+	}
+	return filepath.Join(roots[0], "source")
+}
+
 // followRecord recovers by hand from a migrate that stopped, as its record
 // says: it runs every command the record's steps quote, in order, then
 // deletes the record, and returns the record's phase.
 func (f *migrateFixture) followRecord() string {
+	f.t.Helper()
+	phase, step, out, err := f.runRecord()
+	if err != nil {
+		f.t.Fatalf("step %q: %v\n%s", step, err, out)
+	}
+	if err := os.Remove(f.platform.migrateMarkerPath("ws", "app")); err != nil {
+		f.t.Fatal(err)
+	}
+	return phase
+}
+
+// runRecord runs every command the steps of the migrate's record quote, in
+// order, until one fails, and returns the record's phase and, when one
+// failed, its step, its output and the error.
+func (f *migrateFixture) runRecord() (phase, step, out string, err error) {
 	f.t.Helper()
 	marker := f.platform.migrateMarkerPath("ws", "app")
 	data, err := os.ReadFile(marker)
@@ -1011,14 +1084,11 @@ func (f *migrateFixture) followRecord() string {
 			cmd := exec.Command("sh", "-c", quoted[1])
 			cmd.Dir = f.base
 			if out, err := cmd.CombinedOutput(); err != nil {
-				f.t.Fatalf("step %q: %s: %v\n%s", step, quoted[1], err, out)
+				return record.Phase, step, string(out), fmt.Errorf("%s: %w", quoted[1], err)
 			}
 		}
 	}
-	if err := os.Remove(marker); err != nil {
-		f.t.Fatal(err)
-	}
-	return record.Phase
+	return record.Phase, "", "", nil
 }
 
 // A migrate killed after a step leaves a record whose steps fit how far it
@@ -1032,8 +1102,10 @@ func (f *migrateFixture) followRecord() string {
 //
 // The kills before the write are: before the new checkout exists; while it
 // is being made (adding, with what the tool had made by then: a whole jj
-// slot, jj's name and git's registration included, or a worktree's
-// directory, which git had not registered there yet); and right after the
+// slot, jj's name and git's registration included, or a worktree, made and
+// registered by git in its stage, with its copy at the slot's path, which
+// git had not registered there yet, so the record's steps remove the stage
+// by its path, leaving nothing registered or on disk); and right after the
 // first entry is renamed into it (carried), before anything else, when the
 // record holds every kind of undo step (the bookmark, the slot set aside,
 // the new checkout, the entries) and names every entry, renamed or not.
@@ -1053,6 +1125,7 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepCarried, phase: migratePhaseMigrating},
 		{mode: manifest.WorkspaceSourceModeWorktree, step: migrateStepSaved, phase: migratePhaseSaved},
 		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepAdding, phase: migratePhaseMigrating, before: func(f *migrateFixture) {
+			runGit(f.t, f.cache(), "worktree", "add", "-q", f.stage(), "ws")
 			mustWriteFileAll(f.t, filepath.Join(f.slot, "src", "a.txt"), "a\n")
 		}},
 		{mode: manifest.WorkspaceSourceModeJJ, step: migrateStepCarried, phase: migratePhaseMigrating},
@@ -1061,6 +1134,9 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 	} {
 		t.Run(tc.mode+"/"+tc.step, func(t *testing.T) {
 			f := newMigrateFixture(t, tc.mode)
+			// The stage of a worktree's add (gitdriver.StageRoot), where
+			// nothing else stages one.
+			t.Setenv("TMPDIR", t.TempDir())
 			to := manifest.WorkspaceSourceModeJJ
 			files, commit, names := f.files(), f.head(), f.jjNames()
 			if tc.mode == manifest.WorkspaceSourceModeJJ {
@@ -1089,6 +1165,9 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 			if phase := f.followRecord(); phase != tc.phase {
 				t.Fatalf("the record's phase = %q, want %q", phase, tc.phase)
 			}
+			if staged, _ := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "angee-worktree-stage-*")); len(staged) != 0 {
+				t.Errorf("following the record left the staging directories %q", staged)
+			}
 			if tc.phase == migratePhaseMigrating {
 				f.intact(tc.mode, files, commit, names)
 				if result, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", to); err != nil || !result.OK {
@@ -1114,6 +1193,290 @@ func TestMigrateKilledAtEachStepRecovers(t *testing.T) {
 				t.Errorf("status = %+v, want a usable %s slot", got, to)
 			}
 		})
+	}
+}
+
+// keptDir is the one directory an undo of a migrate kept carried copies in,
+// beside the slot (keptSuffix).
+func (f *migrateFixture) keptDir() string {
+	f.t.Helper()
+	matches, err := filepath.Glob(filepath.Join(f.workspace("ws"), asidePrefix+"*"+keptSuffix))
+	if err != nil || len(matches) != 1 {
+		f.t.Fatalf("kept directories = %q, %v, want one", matches, err)
+	}
+	return matches[0]
+}
+
+// takeKept checks that the directory an undo kept carried copies in holds
+// want under the slot's name, as files lists it, and a .gitignore that hides
+// it from any checkout it lies in, and removes it, as a person does once
+// they have taken what they need.
+func (f *migrateFixture) takeKept(want map[string]string) {
+	f.t.Helper()
+	kept := f.keptDir()
+	if data, err := os.ReadFile(filepath.Join(kept, ".gitignore")); err != nil || string(data) != keptIgnore {
+		f.t.Errorf("the kept directory's .gitignore = %q, %v, want %q", data, err, keptIgnore)
+	}
+	slot := f.slot
+	f.slot = filepath.Join(kept, filepath.Base(slot))
+	got := f.files()
+	f.slot = slot
+	if !maps.Equal(got, want) {
+		f.t.Errorf("kept beside the slot = %v, want %v", got, want)
+	}
+	if err := os.RemoveAll(kept); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// keptModules is what the fixture's slot holds under node_modules/, as files
+// lists it, which an undo keeps beside the slot once the old checkout holds
+// node_modules/ again.
+func keptModules(files map[string]string) map[string]string {
+	kept := map[string]string{}
+	for rel, content := range files {
+		if strings.HasPrefix(rel, "node_modules") {
+			kept[rel] = content
+		}
+	}
+	return kept
+}
+
+// A process still writing into the old checkout (a watcher rebuilding
+// node_modules) can make an entry there again once it is carried across.
+// Undoing the migrate deletes neither copy, either way: a migrate killed and
+// recovered by its record's steps, and one rolled back in process, keep the
+// copy carried across beside the slot, outside both checkouts, so the old
+// one is as it was but for the rebuilt entry, and nothing in it is new to
+// git or jj; the rollback's error names the kept copy.
+func TestMigrateUndoneKeepsWhatTheOldCheckoutHoldsAgain(t *testing.T) {
+	injected := errors.New("injected failure")
+	for _, tc := range []struct {
+		mode   string
+		killed bool
+	}{
+		{manifest.WorkspaceSourceModeWorktree, true},
+		{manifest.WorkspaceSourceModeJJ, true},
+		{manifest.WorkspaceSourceModeWorktree, false},
+		{manifest.WorkspaceSourceModeJJ, false},
+	} {
+		name := tc.mode + "/rolled back"
+		if tc.killed {
+			name = tc.mode + "/killed"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newMigrateFixture(t, tc.mode)
+			to, commit := manifest.WorkspaceSourceModeJJ, f.head()
+			if tc.mode == manifest.WorkspaceSourceModeJJ {
+				to, commit = manifest.WorkspaceSourceModeWorktree, f.tip()
+			}
+			files, names := f.files(), f.jjNames()
+			rebuilt := filepath.Join("node_modules", "pkg", "index.js")
+			rebuild := func() { mustWriteFileAll(t, filepath.Join(f.asideOf(), rebuilt), "rebuilt\n") }
+			if tc.killed {
+				f.killAt(migrateStepSave, to, rebuild)
+				if phase := f.followRecord(); phase != migratePhaseMigrating {
+					t.Fatalf("the record's phase = %q, want %q", phase, migratePhaseMigrating)
+				}
+			} else {
+				f.platform.migrateFault = func(at string) error {
+					if at == migrateStepSave {
+						rebuild()
+						return injected
+					}
+					return nil
+				}
+				_, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", to)
+				f.platform.migrateFault = nil
+				opErr := AsOperationError(err)
+				if !errors.Is(err, injected) || opErr == nil || !strings.Contains(err.Error(), "Rolled back, but the old checkout held node_modules again") || !slices.Contains(opErr.Paths, filepath.Join(f.keptDir(), "app", "node_modules")) {
+					t.Fatalf("WorkspaceSourceMigrate() error = %v (%+v), want the injected failure, naming the kept node_modules", err, opErr)
+				}
+				// The kept copies are in the workspace: destroy refuses to
+				// purge them.
+				if err := f.platform.WorkspaceDestroy(context.Background(), "ws", true); err == nil || !strings.Contains(err.Error(), f.keptDir()+" (copies of entries a migrate carried across") {
+					t.Errorf("WorkspaceDestroy() error = %v, want it refused, naming %s", err, f.keptDir())
+				}
+			}
+			f.takeKept(keptModules(files))
+			want := maps.Clone(files)
+			want[rebuilt] = "rebuilt\n"
+			f.intact(tc.mode, want, commit, names)
+		})
+	}
+}
+
+// A new checkout that still holds an entry the migrate carries across once
+// the ones it carried are back (written there meanwhile, by a process
+// writing the slot by its path) is not removed: the rollback stops, naming
+// it, and so does the record's step, until it is moved out of the way. A
+// copy the rollback kept before it stopped is named in the record too.
+func TestMigrateKeepsANewCheckoutThatHoldsAnEntry(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	files, commit, names := f.files(), f.head(), f.jjNames()
+	written := filepath.Join(f.slot, "node_modules", "written.js")
+	f.platform.migrateFault = func(at string) error {
+		if at == migrateStepCarried {
+			mustWriteFileAll(t, written, "written\n")
+			mustWriteFile(t, filepath.Join(f.asideOf(), ".env"), "REWRITTEN=1\n")
+			return errors.New("injected failure")
+		}
+		return nil
+	}
+	_, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", "")
+	f.platform.migrateFault = nil
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause != CauseMigrateIncomplete || !strings.Contains(err.Error(), "holds node_modules/, which the migrate carries across") || !strings.Contains(err.Error(), "the old checkout held .env again") {
+		t.Fatalf("WorkspaceSourceMigrate() error = %v (%+v), want a stopped rollback naming node_modules/ and the kept .env", err, opErr)
+	}
+	aside, kept := f.asideOf(), f.keptDir()
+	if !pathExists(t, written) || !pathExists(t, filepath.Join(aside, "node_modules", "pkg", "index.js")) || !pathExists(t, filepath.Join(kept, "app", ".env")) {
+		t.Fatalf("the stopped rollback lost an entry")
+	}
+	if data, err := os.ReadFile(f.platform.migrateMarkerPath("ws", "app")); err != nil || !strings.Contains(string(data), "are kept beside it, in "+kept) {
+		t.Fatalf("the record = %s, %v, want it to name the kept .env", data, err)
+	}
+	_, step, out, err := f.runRecord()
+	if err == nil || !strings.HasPrefix(step, "remove what the migrate made") || !strings.Contains(out, "still holds node_modules, which the migrate carries across") {
+		t.Fatalf("following the record = step %q, %q, %v, want its removal of the new checkout refused", step, out, err)
+	}
+	// One command, so what comes after the refusal (git's removal of the
+	// worktree registered there, with its files) never runs past it.
+	if quoted := strings.Count(step, "`"); quoted != 2 {
+		t.Errorf("the removal step quotes %d commands, want one: %s", quoted/2, step)
+	}
+	if !pathExists(t, written) {
+		t.Fatalf("the record's refused removal deleted node_modules")
+	}
+	if err := os.Rename(filepath.Join(f.slot, "node_modules"), filepath.Join(kept, "app", "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	f.followRecord()
+	f.takeKept(map[string]string{".env": "SECRET=1\n", "node_modules": "dir", filepath.Join("node_modules", "written.js"): "written\n"})
+	want := maps.Clone(files)
+	want[".env"] = "REWRITTEN=1\n"
+	f.intact(manifest.WorkspaceSourceModeWorktree, want, commit, names)
+}
+
+// Something at the slot's path before the new checkout is made (written by
+// a process that writes the slot by its path) stops the rollback, which
+// does not move the old checkout back on top of it, and the record's steps
+// do not remove it: they refuse until a person has.
+func TestMigrateLeavesWhatAppearsAtTheSlotsPath(t *testing.T) {
+	f := newMigrateFixture(t, manifest.WorkspaceSourceModeWorktree)
+	files, commit, names := f.files(), f.head(), f.jjNames()
+	saved := filepath.Join(f.slot, "saved.txt")
+	f.platform.migrateFault = func(at string) error {
+		if at == migrateStepAdding {
+			mustWriteFileAll(t, saved, "saved by path\n")
+			return errors.New("injected failure")
+		}
+		return nil
+	}
+	_, err := f.platform.WorkspaceSourceMigrate(context.Background(), "ws", "app", "")
+	f.platform.migrateFault = nil
+	if opErr := AsOperationError(err); opErr == nil || opErr.Cause != CauseMigrateIncomplete || !strings.Contains(err.Error(), "holds what was left there while the new checkout was being made") {
+		t.Fatalf("WorkspaceSourceMigrate() error = %v (%+v), want a stopped rollback", err, opErr)
+	}
+	if _, step, out, err := f.runRecord(); err == nil || !strings.HasPrefix(step, "look at what") || !strings.Contains(out, "is in the way") {
+		t.Fatalf("following the record = step %q, %q, %v, want it refused while the slot's path holds something", step, out, err)
+	}
+	if data, err := os.ReadFile(saved); err != nil || string(data) != "saved by path\n" {
+		t.Fatalf("what was saved at the slot's path = %q, %v, want it kept", data, err)
+	}
+	if err := os.RemoveAll(f.slot); err != nil {
+		t.Fatal(err)
+	}
+	f.followRecord()
+	f.intact(manifest.WorkspaceSourceModeWorktree, files, commit, names)
+}
+
+// ignoredEntries counts as moved whole, for a migrate to jj, an entry git
+// ignores all of, and a directory git lists as ignored whole inside a
+// directory entry, but never one that is or holds what git does not
+// ignore, a file git lists, nor one no entry holds.
+func TestIgnoredEntries(t *testing.T) {
+	entries := []string{".env", "logs/", "node_modules/", "notes.txt", "src/debug.log", "vendor/"}
+	untracked := []string{"logs/", "notes.txt", "vendor/"}
+	ignored := []string{".env", "logs/", "logs/a.log", "node_modules/", "src/debug.log", "src/gen/", "vendor/other/", "vendor/top.txt"}
+	want := []string{".env", "node_modules/", "src/debug.log", "vendor/other/"}
+	if got := ignoredEntries(entries, untracked, ignored); !slices.Equal(got, want) {
+		t.Errorf("ignoredEntries() = %q, want %q", got, want)
+	}
+}
+
+// The recorded steps' commands work on names a shell would split, expand or
+// read as an option, in a slot path holding a quote and a printf directive:
+// an entry goes back, or, held by the old checkout too, into the kept
+// directory, which a checkout around it does not list; the removal of the
+// new checkout refuses, naming the entry and where to move it, while one is
+// there; a move to a path refuses while something is in the way.
+func TestRecordedStepsQuoteTheirPaths(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-q")
+	rel := filepath.Join("a %s workspace", "it's a slot")
+	path := filepath.Join(root, rel)
+	mustMkdirAll(t, path)
+	dest, err := copierx.OpenGuardedPath(root, root, filepath.ToSlash(rel), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dest.Close() }()
+	aside, err := dest.SetAside(asidePrefix, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &migration{path: path, aside: aside}
+	entries := []string{"a b", "it's", "-x/", "$HOME"}
+	for rel, content := range map[string]string{"a b": "carried\n", "it's": "carried\n", "$HOME": "carried\n"} {
+		mustWriteFileAll(t, filepath.Join(path, rel), content)
+	}
+	for rel, content := range map[string]string{"it's": "rewritten\n", "-x/x": "not carried\n"} {
+		mustWriteFileAll(t, filepath.Join(aside.Path(), rel), content)
+	}
+	command := regexp.MustCompile("`([^`]+)`")
+	run := func(step string) (string, error) {
+		t.Helper()
+		quoted := command.FindAllStringSubmatch(step, -1)
+		if len(quoted) != 1 {
+			t.Fatalf("step %q quotes %d commands, want one", step, len(quoted))
+		}
+		out, err := exec.Command("sh", "-c", quoted[0][1]).CombinedOutput()
+		return string(out), err
+	}
+	for _, entry := range entries {
+		if out, err := run(m.carryBackStep(entry)); err != nil {
+			t.Fatalf("carryBackStep(%s): %v\n%s", entry, err, out)
+		}
+	}
+	if listed := runGitOutput(t, root, "status", "--porcelain", "--untracked-files=all"); strings.Contains(listed, keptSuffix) {
+		t.Errorf("the checkout around the kept directory lists it:\n%s", listed)
+	}
+	mustWriteFile(t, filepath.Join(path, "-x"), "written by path\n")
+	if out, err := run("`" + m.removeNewCommand(entries) + "`"); err == nil || !strings.Contains(out, path+" still holds -x, which the migrate carries across: move it to "+m.keptPath("-x")+" if nothing is there") || !pathExists(t, filepath.Join(path, "-x")) {
+		t.Fatalf("removeNewCommand() with -x in the new checkout = %q, %v, want it refused", out, err)
+	}
+	if err := os.Remove(filepath.Join(path, "-x")); err != nil {
+		t.Fatal(err)
+	}
+	for file, want := range map[string]string{
+		filepath.Join(aside.Path(), "a b"): "carried\n", filepath.Join(aside.Path(), "$HOME"): "carried\n",
+		filepath.Join(aside.Path(), "it's"): "rewritten\n", m.keptPath("it's"): "carried\n",
+		filepath.Join(m.keptDir(), ".gitignore"): keptIgnore,
+		filepath.Join(aside.Path(), "-x", "x"):   "not carried\n",
+	} {
+		if data, err := os.ReadFile(file); err != nil || string(data) != want {
+			t.Errorf("%s = %q, %v, want %q", file, data, err, want)
+		}
+	}
+	back := vacantCommand(path, fmt.Sprintf("mv %s %s", shellQuote(aside.Path()), shellQuote(path)))
+	if out, err := run("`" + back + "`"); err == nil || !strings.Contains(out, path+" is in the way") || !pathExists(t, filepath.Join(aside.Path(), "a b")) {
+		t.Fatalf("vacantCommand() with the new checkout there = %q, %v, want it refused", out, err)
+	}
+	if out, err := run("`" + m.removeNewCommand(entries) + "`"); err != nil || pathExists(t, path) {
+		t.Fatalf("removeNewCommand() once the entries are back = %q, %v, want the new checkout removed", out, err)
+	}
+	if out, err := run("`" + back + "`"); err != nil || !pathExists(t, filepath.Join(path, "a b")) {
+		t.Fatalf("vacantCommand() with nothing in the way = %q, %v, want the old checkout moved back", out, err)
 	}
 }
 

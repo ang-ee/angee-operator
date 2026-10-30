@@ -29,11 +29,50 @@ func (d Driver) Exists(ctx context.Context, s vcs.Slot) (bool, error) {
 func (d Driver) Add(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure func(ctx context.Context, checkout string) error) error {
 	switch s.Mode {
 	case vcs.ModeWorktree:
-		return d.addWorktree(ctx, s, dest, configure)
+		stageRoot, err := StageRoot()
+		if err != nil {
+			return err
+		}
+		return d.addWorktree(ctx, s, dest, stageRoot, configure)
 	case vcs.ModeClone:
 		return d.addClone(ctx, s, dest, configure)
 	}
 	return fmt.Errorf("%w: slot mode %q", vcs.ErrUnsupported, s.Mode)
+}
+
+// StageRoot makes a directory of its own, in the system's temporary one, for
+// a worktree add to stage its checkout in (AddStaged), at StagePath of it.
+// The path is absolute, so a command that names it means it from anywhere.
+func StageRoot() (string, error) {
+	root, err := os.MkdirTemp("", "angee-worktree-stage-*")
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return "", err
+	}
+	return abs, nil
+}
+
+// StagePath is where git makes a worktree staged in stageRoot.
+func StagePath(stageRoot string) string {
+	return filepath.Join(stageRoot, "source")
+}
+
+// AddStaged is Add of a worktree slot, staged in stageRoot, a directory
+// StageRoot made, which it removes however the add ends, as Add removes its
+// own. A caller that records how to undo the add before it runs (a migrate)
+// can so name the stage: a process killed while git makes the worktree, or
+// before it is installed, leaves it at StagePath(stageRoot), registered in
+// the cache there.
+func (d Driver) AddStaged(ctx context.Context, s vcs.Slot, dest vcs.Dest, stageRoot string) error {
+	if s.Mode != vcs.ModeWorktree {
+		_ = os.RemoveAll(stageRoot)
+		return fmt.Errorf("%w: a staged add of slot mode %q", vcs.ErrUnsupported, s.Mode)
+	}
+	return d.addWorktree(ctx, s, dest, stageRoot, nil)
 }
 
 // Remove removes the checkout through dest and, for a worktree, runs `git
@@ -49,19 +88,15 @@ func (d Driver) Remove(ctx context.Context, s vcs.Slot, dest vcs.Dest) error {
 	return err
 }
 
-// addWorktree adds the worktree in a staging directory, installs it through
-// dest, and points the cache's registration at the slot path. Until that
-// repair, git takes the registration for one whose checkout is gone, so the
-// caller holds the cache's lock throughout. On failure the installed
-// checkout and the stage are removed, and the registration with them
-// (dropRegistrations).
-func (d Driver) addWorktree(ctx context.Context, s vcs.Slot, dest vcs.Dest, configure func(context.Context, string) error) error {
-	stageRoot, err := os.MkdirTemp("", "angee-worktree-stage-*")
-	if err != nil {
-		return err
-	}
+// addWorktree adds the worktree in a staging directory, in stageRoot, which
+// it removes, installs it through dest, and points the cache's registration
+// at the slot path. Until that repair, git takes the registration for one
+// whose checkout is gone, so the caller holds the cache's lock throughout.
+// On failure the installed checkout and the stage are removed, and the
+// registration with them (dropRegistrations).
+func (d Driver) addWorktree(ctx context.Context, s vcs.Slot, dest vcs.Dest, stageRoot string, configure func(context.Context, string) error) error {
 	defer func() { _ = os.RemoveAll(stageRoot) }()
-	stage := filepath.Join(stageRoot, "source")
+	stage := StagePath(stageRoot)
 	installed := false
 	defer func() {
 		if installed {
@@ -82,6 +117,7 @@ func (d Driver) addWorktree(ctx context.Context, s vcs.Slot, dest vcs.Dest, conf
 	// name, git creates and checks out a local tracking branch of that name
 	// (even with -b), and --detach refuses it.
 	start, startIsRemote := startRef(ctx, d.git, s.Primary, s.BaseRef, s.BaseRemote)
+	var err error
 	switch {
 	case s.Branch == "":
 		// A slot without a branch starts detached at its base, so an untouched

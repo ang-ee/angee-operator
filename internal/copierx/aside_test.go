@@ -21,8 +21,9 @@ func writeAsideFile(t *testing.T, path, content string) {
 
 // A guarded directory set aside keeps its name's parent and depth, a new
 // directory takes its path, and entries move between the two by rename,
-// never over an entry, and back; the directory set aside goes back when the
-// path is free, and is removed through its own name.
+// never over an entry, and back, or into a third directory beside both;
+// the directory set aside goes back when the path is free, and is removed
+// through its own name.
 func TestGuardedPathSetsADirectoryAside(t *testing.T) {
 	root := t.TempDir()
 	slot := filepath.Join(root, "ws", "app")
@@ -77,10 +78,45 @@ func TestGuardedPathSetsADirectoryAside(t *testing.T) {
 		t.Fatalf(".env moved as %q, %v", data, err)
 	}
 
-	for _, rel := range []string{".env", "src/debug.log", "src/link"} {
-		if err := guard.MoveToAside(aside, rel); err != nil {
-			t.Fatalf("MoveToAside(%s) error = %v", rel, err)
+	// What the directory set aside holds again is kept beside both, in a
+	// directory of the parent made for it, never overwritten.
+	writeAsideFile(t, filepath.Join(aside.Path(), ".env"), "rewritten\n")
+	if err := guard.MoveToAside(aside, ".env"); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("MoveToAside(.env) over an entry error = %v, want fs.ErrExist", err)
+	}
+	for _, dir := range []string{"", ".", "..", "../out", "app", "app/x"} {
+		if err := guard.MoveBeside(dir, ".env"); err == nil {
+			t.Fatalf("MoveBeside(%q, .env) succeeded, want it refused", dir)
 		}
+	}
+	if err := guard.MoveBeside(".kept/app", "../escape"); err == nil {
+		t.Fatalf("MoveBeside(.kept/app, ../escape) succeeded, want it refused")
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "ws", ".link")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if err := guard.MoveBeside(".link/app", ".env"); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+		t.Fatalf("MoveBeside(.link/app, .env) through a link error = %v, want it refused", err)
+	}
+	for _, rel := range []string{".env", "src/debug.log"} {
+		if err := guard.MoveBeside(".kept/app", rel); err != nil {
+			t.Fatalf("MoveBeside(.kept/app, %s) error = %v", rel, err)
+		}
+	}
+	writeAsideFile(t, filepath.Join(slot, ".env"), "again\n")
+	if err := guard.MoveBeside(".kept/app", ".env"); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("MoveBeside(.kept/app, .env) over an entry error = %v, want fs.ErrExist", err)
+	}
+	if err := os.Remove(filepath.Join(slot, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]string{".env": "secret\n", "src/debug.log": "log\n"} {
+		if data, err := os.ReadFile(filepath.Join(root, "ws", ".kept", "app", rel)); err != nil || string(data) != want {
+			t.Errorf("%s kept beside = %q, %v, want %q", rel, data, err, want)
+		}
+	}
+	if err := guard.MoveToAside(aside, "src/link"); err != nil {
+		t.Fatalf("MoveToAside(src/link) error = %v", err)
 	}
 	if err := guard.RestoreAside(aside); err == nil {
 		t.Fatalf("RestoreAside() over the new directory succeeded, want it refused")
@@ -91,7 +127,7 @@ func TestGuardedPathSetsADirectoryAside(t *testing.T) {
 	if err := guard.RestoreAside(aside); err != nil {
 		t.Fatalf("RestoreAside() error = %v", err)
 	}
-	for rel, want := range map[string]string{".env": "secret\n", "src/debug.log": "log\n", "src/a.txt": "old\n"} {
+	for rel, want := range map[string]string{".env": "rewritten\n", "src/a.txt": "old\n"} {
 		if data, err := os.ReadFile(filepath.Join(slot, rel)); err != nil || string(data) != want {
 			t.Errorf("%s after the restore = %q, %v, want %q", rel, data, err, want)
 		}

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // Aside is the directory a GuardedPath held, renamed under a private name in
@@ -97,6 +98,51 @@ func (p *GuardedPath) MoveToAside(a *Aside, rel string) error {
 	return p.moveAside(a, rel, false)
 }
 
+// MoveBeside moves the entry rel of the guarded directory to the same place
+// in dir, a directory beside it in the same parent, for an entry neither it
+// nor the directory set aside can keep: dir, a path relative to the parent
+// whose first entry is another than the guarded one, is made when it is
+// missing, and so are the directories above rel in it. Every directory above
+// rel, on both sides, and on the way to dir, must be a real directory, and
+// nothing may be at rel in dir.
+func (p *GuardedPath) MoveBeside(dir, rel string) error {
+	for _, path := range []string{dir, rel} {
+		if err := validateRelativePath(path); err != nil {
+			return err
+		}
+	}
+	dir, rel = filepath.Clean(filepath.FromSlash(dir)), filepath.Clean(filepath.FromSlash(rel))
+	dirParts := splitPathParts(dir)
+	if len(dirParts) == 0 || dirParts[0] == p.leaf {
+		return fmt.Errorf("move %s beside %q: %q is not beside it", rel, p.leaf, dir)
+	}
+	if err := p.verifyEntry(); err != nil {
+		return err
+	}
+	if !p.exists || p.entryRoot == nil {
+		return fmt.Errorf("guarded destination %q is not a real directory", p.leaf)
+	}
+	parts := slices.Concat(dirParts, splitPathParts(rel))
+	for i := 1; i < len(parts); i++ {
+		made := filepath.Join(parts[:i]...)
+		info, err := p.parent.Lstat(made)
+		if errors.Is(err, fs.ErrNotExist) {
+			if err := p.parent.Mkdir(made, 0o755); err != nil {
+				return fmt.Errorf("move %s: %w", rel, err)
+			}
+			continue
+		} else if err != nil {
+			return fmt.Errorf("move %s: %w", rel, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("move %s: %s is not a real directory", rel, made)
+		}
+	}
+	return p.moveWithin(p.leaf, dir, rel)
+}
+
+// moveAside moves the entry rel out of the directory set aside into the
+// guarded one (out), else back.
 func (p *GuardedPath) moveAside(a *Aside, rel string, out bool) error {
 	if err := validateRelativePath(rel); err != nil {
 		return err
@@ -113,11 +159,17 @@ func (p *GuardedPath) moveAside(a *Aside, rel string, out bool) error {
 	if !p.exists || p.entryRoot == nil {
 		return fmt.Errorf("guarded destination %q is not a real directory", p.leaf)
 	}
-	rel = filepath.Clean(filepath.FromSlash(rel))
 	from, to := a.name, p.leaf
 	if !out {
 		from, to = p.leaf, a.name
 	}
+	return p.moveWithin(from, to, filepath.Clean(filepath.FromSlash(rel)))
+}
+
+// moveWithin renames the entry rel of the parent's entry from to rel in its
+// entry to, once every directory above rel is a real directory on both
+// sides and nothing is at rel in to.
+func (p *GuardedPath) moveWithin(from, to, rel string) error {
 	parts := splitPathParts(rel)
 	for _, base := range []string{from, to} {
 		for i := 1; i < len(parts); i++ {
