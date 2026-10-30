@@ -73,11 +73,12 @@ func newGraphQLHandler(s *Server) (post, ws http.Handler, err error) {
 	// Authorization header, so auth runs in InitFunc (the same two-tier check
 	// as s.auth, reading the token from connection_init). CrossOriginProtection
 	// treats the GET upgrade as safe and does not gate it, so the origin
-	// allowlist on the upgrader is the cross-site-WebSocket-hijacking guard.
+	// allowlist on the upgrader is the cross-site-WebSocket-hijacking guard
+	// (gorillaWebsocket keeps gqlgen on gorilla's upgrader for it).
 	// On a rejected origin gorilla writes a 403 itself; gqlgen then logs a
 	// (harmless) "superfluous WriteHeader" — the client still sees the 403.
 	gqlServer.AddTransport(transport.Websocket{
-		Upgrader:              websocket.Upgrader{CheckOrigin: s.checkWebSocketOrigin},
+		Implementation:        gorillaWebsocket{upgrader: websocket.Upgrader{CheckOrigin: s.checkWebSocketOrigin}},
 		InitFunc:              s.graphqlWSInit,
 		InitTimeout:           wsInitTimeout,
 		KeepAlivePingInterval: wsKeepAlivePingInterval,
