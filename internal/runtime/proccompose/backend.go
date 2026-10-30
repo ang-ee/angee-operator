@@ -179,6 +179,8 @@ func (b Backend) Start(ctx context.Context, target runtime.Target) error {
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 	// An absent supervisor or process is already stopped, including a stack's
 	// first dependency operation before the supervisor has ever started.
+	// Terminal and disabled processes need no stop either; transitional ones
+	// may still launch even when is_running is false.
 	serving, err := b.supervisorServing(ctx, target)
 	if err != nil || !serving {
 		return err
@@ -193,9 +195,14 @@ func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
 			if err != nil {
 				return err
 			}
-			if state != nil {
-				present = append(present, name)
+			if state == nil {
+				continue
 			}
+			status := strings.ToLower(strings.TrimSpace(state.Status))
+			if !state.IsRunning && (isTerminalState(status) || status == "disabled") {
+				continue
+			}
+			present = append(present, name)
 		}
 		if len(present) == 0 {
 			return nil
@@ -261,7 +268,7 @@ func (b Backend) upThroughSupervisor(ctx context.Context, target runtime.Target)
 		return fmt.Errorf("process-compose supervisor on 127.0.0.1:%d has not loaded %s, which the stack defined after it started; adding processes through its API restarts processes it runs, so restart the supervisor to load them", target.ControlPort, strings.Join(unknown, ", "))
 	}
 	for _, name := range order {
-		updates, err := processUpdates(document.Processes[name])
+		updates, err := processUpdates(document.Processes[name], target.DependenciesSatisfied)
 		if err != nil {
 			return err
 		}
@@ -523,7 +530,7 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 		baselineEnd = baseline.ProcessEndTime
 		baselinePid = baseline.PID
 	}
-	updates, err := processUpdates(process)
+	updates, err := processUpdates(process, target.DependenciesSatisfied)
 	if err != nil {
 		return nil, err
 	}
@@ -1106,10 +1113,7 @@ func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
 		if !ok {
 			return fmt.Errorf("process %s is absent from the generated process-compose config", name)
 		}
-		if target.DependenciesSatisfied {
-			process.DependsOn = nil
-		}
-		updates, err := processUpdates(process)
+		updates, err := processUpdates(process, target.DependenciesSatisfied)
 		if err != nil {
 			return err
 		}
@@ -1154,7 +1158,12 @@ func nativeAvailability(availability *Availability) (map[string]any, error) {
 	return map[string]any{"restart": restart, "backoffSeconds": 0, "maxRestarts": 0}, nil
 }
 
-func processUpdates(process Process) (map[string]any, error) {
+func processUpdates(process Process, dependenciesSatisfied bool) (map[string]any, error) {
+	// The operation's verified prerequisite results can include isolated job
+	// receipts that supersede stale states in this shared supervisor.
+	if dependenciesSatisfied {
+		process.DependsOn = nil
+	}
 	var dependsOn map[string]any
 	if len(process.DependsOn) > 0 {
 		dependsOn = map[string]any{}
