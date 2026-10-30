@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.27.2 — 2026-10-30
+
 ### Fixed
 
 - **A local service that ends while the operator stops it no longer fails
