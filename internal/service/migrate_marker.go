@@ -78,7 +78,7 @@ func (m *migration) beginMarker() error {
 		return nil
 	}
 	m.started = time.Now().UTC()
-	if err := m.record(migratePhaseSettingAside, []string{fmt.Sprintf("if nothing is at %[1]s and a %[2]s… entry beside it is the slot's checkout, move it back: `mv <that entry> %[1]s && %[3]s`", shellQuote(m.path), asidePrefix, repairCommand(m.primary, m.path))}); err != nil {
+	if err := m.record(migratePhaseSettingAside, []string{fmt.Sprintf("if nothing is at %[1]s and a %[2]s… entry beside it (not one ending in %[3]s) is the slot's checkout, move it back: `%[4]s`", shellQuote(m.path), asidePrefix, keptSuffix, vacantCommand(m.path, fmt.Sprintf("mv <that entry> %s && %s", shellQuote(m.path), repairCommand(m.primary, m.path))))}); err != nil {
 		return err
 	}
 	m.marked = true
@@ -197,7 +197,9 @@ func (p *Platform) unfinishedMigrate(workspaceName, slot, path string) (reason, 
 // asidesBeside lists what a migrate set aside beside the slot path path: the
 // entries of its parent with the migrate's private prefix. A migrate leaves
 // one when it is killed, when its rollback stops, when the old checkout held
-// what was written into it late, or when the new one could not be moved back.
+// what was written into it late, or when the new one could not be moved back;
+// an undo of it leaves a kept directory (keptSuffix) when the old checkout
+// held a carried entry again.
 func asidesBeside(path string) []string {
 	var asides []string
 	entries, err := os.ReadDir(filepath.Dir(path))

@@ -1124,7 +1124,8 @@ func TestWorktrees(t *testing.T) {
 
 // ChangedPaths lists changes to tracked files alone, and OtherPaths what git
 // does not track, the tops of untracked directories as one entry each, with
-// or without the ignored ones.
+// or without the ignored ones; IgnoredPaths what git ignores of that, a
+// directory it ignores whole as one, beside a sibling it re-includes too.
 func TestChangedAndOtherPaths(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
@@ -1134,11 +1135,17 @@ func TestChangedAndOtherPaths(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWriteFile(t, filepath.Join(repo, ".gitignore"), "*.log\nnode_modules/\n")
+	mustWriteFile(t, filepath.Join(repo, ".gitignore"), "*.log\nnode_modules/\n/vendor/*\n!/vendor/keep/\n")
 	mustWriteFile(t, filepath.Join(repo, "src", "a.txt"), "a\n")
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-q", "-m", "base")
-	for name, content := range map[string]string{"src/a.txt": "changed\n", "src/debug.log": "log\n", "notes.txt": "n\n"} {
+	if err := os.MkdirAll(filepath.Join(repo, "vendor", "keep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "vendor", "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"src/a.txt": "changed\n", "src/debug.log": "log\n", "notes.txt": "n\n", "vendor/keep/k.txt": "k\n", "vendor/other/o.txt": "o\n"} {
 		mustWriteFile(t, filepath.Join(repo, name), content)
 	}
 	if err := os.MkdirAll(filepath.Join(repo, "node_modules", "pkg"), 0o755); err != nil {
@@ -1149,11 +1156,14 @@ func TestChangedAndOtherPaths(t *testing.T) {
 	if got, err := client.ChangedPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"src/a.txt"}) {
 		t.Errorf("ChangedPaths() = %q, %v, want src/a.txt alone", got, err)
 	}
-	if got, err := client.OtherPaths(ctx, repo, true); err != nil || !slices.Equal(got, []string{"node_modules/", "notes.txt", "src/debug.log"}) {
+	if got, err := client.OtherPaths(ctx, repo, true); err != nil || !slices.Equal(got, []string{"node_modules/", "notes.txt", "src/debug.log", "vendor/"}) {
 		t.Errorf("OtherPaths(ignored) = %q, %v", got, err)
 	}
-	if got, err := client.OtherPaths(ctx, repo, false); err != nil || !slices.Equal(got, []string{"notes.txt"}) {
+	if got, err := client.OtherPaths(ctx, repo, false); err != nil || !slices.Equal(got, []string{"notes.txt", "vendor/"}) {
 		t.Errorf("OtherPaths() = %q, %v", got, err)
+	}
+	if got, err := client.IgnoredPaths(ctx, repo); err != nil || !slices.Equal(got, []string{"node_modules/", "src/debug.log", "vendor/other/"}) {
+		t.Errorf("IgnoredPaths() = %q, %v", got, err)
 	}
 	head, err := client.Commit(ctx, repo, "HEAD")
 	if err != nil || len(head) != 40 {
