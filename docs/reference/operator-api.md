@@ -121,7 +121,7 @@ example, sync-base on a workspace whose slot has uncommitted changes:
 
 ```json
 {
-  "message": "Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in addons/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry.",
+  "message": "Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in src/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry.",
   "path": ["workspaceSyncBase"],
   "extensions": {
     "code": "PRECONDITION_FAILED",
@@ -130,7 +130,7 @@ example, sync-base on a workspace whose slot has uncommitted changes:
     "workspace": "src",
     "slot": "django",
     "source": "angee-django",
-    "paths": ["addons/angee/operator/web/schema/operator.graphql"],
+    "paths": ["src/angee/operator/web/schema/operator.graphql"],
     "hint": "Commit or restore the changes, then retry.",
     "request_id": "7f3a2c19"
   }
@@ -167,7 +167,7 @@ that ID, at `WARN` for `NOT_FOUND`, `INVALID_INPUT`, `CONFLICT` and
 still answers HTTP `200`, so its record is the only trace in the log:
 
 ```text
-level=WARN msg="graphql operation failed" req=7f3a2c19 path=workspaceSyncBase code=PRECONDITION_FAILED cause=uncommitted_changes operation=workspace.sync-base error="Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in addons/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry."
+level=WARN msg="graphql operation failed" req=7f3a2c19 path=workspaceSyncBase code=PRECONDITION_FAILED cause=uncommitted_changes operation=workspace.sync-base error="Sync base for workspace \"src\": source slot \"django\" has uncommitted changes in src/angee/operator/web/schema/operator.graphql. Commit or restore the changes, then retry."
 ```
 
 ## Running in a container
