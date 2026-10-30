@@ -6,6 +6,20 @@ latest tag.
 
 ## Unreleased
 
+## v0.27.3 — 2026-10-30
+
+### Changed
+
+- **Dependencies, CI actions and container base images are updated** (#155,
+  superseding dependabot #68, #47, #65 and #32). gqlgen moves to v0.17.94
+  (with go-gitdiff v0.9.0, validator v10.30.3 and gqlparser v2.5.36). gqlgen
+  now makes its websocket library pluggable; the operator keeps GraphQL
+  subscriptions on gorilla's upgrader, so the origin allowlist that guards
+  against cross-site WebSocket hijacking behaves as before, and a client's
+  websocket message is now capped at 1 MB. The container images build with
+  `golang:1.26.10-alpine3.24`, the Go release the binaries use, and run on
+  `alpine:3.24`. CI uses actions/checkout, setup-go and codecov-action v7.
+
 ### Fixed
 
 - **A migrate to a worktree killed while git made it is recovered by its
