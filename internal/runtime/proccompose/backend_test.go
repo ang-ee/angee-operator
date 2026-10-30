@@ -2713,6 +2713,112 @@ func TestStopPreservesCommandFailure(t *testing.T) {
 	}
 }
 
+// stopRunner answers a `process stop` by running onStop, as a supervisor
+// whose processes change state while it handles the stop does, and then
+// returning err.
+type stopRunner struct {
+	onStop func()
+	err    error
+	args   []string
+}
+
+func (r *stopRunner) Run(_ context.Context, _ string, _ []string, _ string, args ...string) ([]byte, error) {
+	r.args = append([]string(nil), args...)
+	if hasArg(args, "stop") && r.onStop != nil {
+		r.onStop()
+	}
+	return nil, r.err
+}
+
+func (p *fakeProject) setState(name string, state processListEntry) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state.Name = name
+	p.processes[name].state = state
+}
+
+func TestStopAcceptsProcessesThatEndedBeforeTheSupervisorStoppedThem(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{
+		"web":    {Status: "Running", IsRunning: true},
+		"worker": {Status: "Running", IsRunning: true},
+	})
+	port := project.serve(t)
+	// process-compose v1.122.0 refuses to stop a process that has ended, and
+	// exits 1 naming it (probed).
+	runner := &stopRunner{err: errors.New("Successfully stopped 'worker' but encountered failures for: 'web'")}
+	runner.onStop = func() {
+		project.setState("web", processListEntry{Status: "Completed"})
+		project.setState("worker", processListEntry{Status: "Disabled"})
+	}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}}); err != nil {
+		t.Fatalf("Stop() = %v, want nil once every named process reads as stopped", err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", strconv.Itoa(port), "process", "stop", "web", "worker"}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("args = %v, want %v", runner.args, want)
+	}
+}
+
+func TestStopKeepsTheFailureWhileANamedProcessStillRunsOrMayLaunch(t *testing.T) {
+	for _, after := range []processListEntry{
+		{Status: "Running", IsRunning: true},
+		{Status: "Pending"},
+		{Status: "Restarting"},
+		{Status: "Completed", IsRunning: true},
+	} {
+		t.Run(after.Status, func(t *testing.T) {
+			root := t.TempDir()
+			project := newFakeProject(root, map[string]processListEntry{
+				"web":    {Status: "Running", IsRunning: true},
+				"worker": {Status: "Running", IsRunning: true},
+			})
+			port := project.serve(t)
+			failure := errors.New("Failed to stop: 'worker'")
+			runner := &stopRunner{err: failure}
+			runner.onStop = func() {
+				project.setState("web", processListEntry{Status: "Completed"})
+				project.setState("worker", after)
+			}
+			err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: port, Services: []string{"web", "worker"}})
+			if !errors.Is(err, failure) {
+				t.Fatalf("Stop() = %v, want %v while worker is %+v", err, failure, after)
+			}
+		})
+	}
+}
+
+func TestStopAcceptsASupervisorThatExitedWithItsLastProcess(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	server := httptest.NewServer(project)
+	defer server.Close()
+	runner := &stopRunner{err: errors.New("Failed to stop: 'web'"), onStop: server.Close}
+	if err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: serverPort(t, server), Services: []string{"web"}}); err != nil {
+		t.Fatalf("Stop() = %v, want nil once the supervisor no longer serves", err)
+	}
+}
+
+func TestStopKeepsTheFailureWhenStatesCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	project := newFakeProject(root, map[string]processListEntry{"web": {Status: "Running", IsRunning: true}})
+	var forbid atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if forbid.Load() && strings.HasPrefix(r.URL.Path, "/process/") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		project.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	failure := errors.New("Failed to stop: 'web'")
+	runner := &stopRunner{err: failure, onStop: func() { forbid.Store(true) }}
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: root, ControlPort: serverPort(t, server), Services: []string{"web"}})
+	if !errors.Is(err, failure) {
+		t.Fatalf("Stop() = %v, want %v when the states cannot be read again", err, failure)
+	}
+}
+
 func TestStopDoesNotTreatControlPlaneFailureAsAbsence(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
