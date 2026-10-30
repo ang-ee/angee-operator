@@ -560,7 +560,8 @@ func jobLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command 
 		Short: "Show the output of a job's last run",
 		Long: "Show the last lines of a job's last run (200 unless -n says otherwise),\n" +
 			"as the runtime holds it: the process-compose log buffer for a local job,\n" +
-			"the exited container for a container job. The output lasts until the\n" +
+			"the exited container for a container job. Isolated held jobs read their\n" +
+			"durable operation output. Native supervisor output lasts until the\n" +
 			"stack goes down; a local job's output is also written to\n" +
 			"run/logs/<name>.log under the stack root.",
 		Args: cobra.ExactArgs(1),

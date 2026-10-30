@@ -6,6 +6,24 @@ latest tag.
 
 ## Unreleased
 
+## v0.27.0 — 2026-10-30
+
+### Added
+
+- Explicit leading `default(...)` filters now allow absent job inputs, without
+  changing empty-string semantics or weakening required inputs and secrets.
+
+- Jobs can declare `holds: [service, ...]` to stop services before any selected
+  job runs. A chained run reapplies held and dependent services once after all
+  selected jobs succeed; a plain run leaves held services stopped. Operation
+  nodes report partial stop failures and held outcomes. Failures and cancellation
+  retain holds, including restoring a hold after a failed service recovery.
+  Local held jobs use isolated native execution, with per-node durable status and
+  output for logs and prerequisites; newer native generations take precedence.
+  Unsafe hot registration of recovery services fails without a project rewrite.
+  The durable root lock protects live job receipts from interrupted-operation
+  recovery by concurrent CLI or daemon readers.
+
 ## v0.26.0 — 2026-10-30
 
 ### Added

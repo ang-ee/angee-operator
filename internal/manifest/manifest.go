@@ -743,6 +743,9 @@ type BackupCapture struct {
 }
 
 type Job struct {
+	// Holds names services stopped before this operation runs any job.
+	Holds []string `yaml:"holds,omitempty" json:"holds,omitempty" jsonschema:"uniqueItems=true"`
+
 	Capture *BackupCapture `yaml:"capture,omitempty" json:"capture,omitempty"`
 
 	Runtime   Runtime           `yaml:"runtime" json:"runtime" validate:"required,oneof=container local" jsonschema:"required,enum=container,enum=local"`
@@ -1048,7 +1051,20 @@ func (s *Stack) ValidateExtended() error {
 		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
 			return err
 		}
+		seenHolds := map[string]bool{}
+		for _, held := range job.Holds {
+			if _, ok := s.Services[held]; !ok {
+				return fmt.Errorf("job %q holds unknown service %q", name, held)
+			}
+			if seenHolds[held] {
+				return fmt.Errorf("job %q holds service %q more than once", name, held)
+			}
+			seenHolds[held] = true
+		}
 		if capture := job.Capture; capture != nil {
+			if len(job.Holds) > 0 {
+				return fmt.Errorf("capture job %q cannot declare holds", name)
+			}
 			if len(job.RunOn) > 0 {
 				return fmt.Errorf("capture job %q is manual and cannot declare run_on", name)
 			}

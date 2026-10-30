@@ -588,3 +588,17 @@ func TestBackendRunJobReportsAFailedRemovalOfACanceledTransientJob(t *testing.T)
 		t.Fatalf("RunJob() error = %v, want the cancellation and the failed removal", err)
 	}
 }
+
+func TestStopUsesPreparedConfigurationWithoutDiskManifest(t *testing.T) {
+	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) { return nil, nil }}
+	configuration := []byte("services:\n  web:\n    image: web\n")
+	err := (Backend{Runner: runner}).Stop(t.Context(), runtime.Target{Root: t.TempDir(), Services: []string{"web"}, Configuration: configuration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := runner.recorded()
+	want := []string{"compose", "-f", "-", "stop", "web"}
+	if len(commands) != 1 || !reflect.DeepEqual(commands[0].args, want) || !bytes.Equal(commands[0].input, configuration) {
+		t.Fatalf("commands = %#v, want prepared stop %v", commands, want)
+	}
+}
