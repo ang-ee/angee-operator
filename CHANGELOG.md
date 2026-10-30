@@ -6,6 +6,17 @@ latest tag.
 
 ## Unreleased
 
+### Changed
+
+- **A manifest written by this release may not load in v0.25.0 or
+  earlier.** `angee workspace create` now writes `vcs:` on every workspace
+  slot that names no `mode` (below), pure-git stacks included, and the
+  strict manifest decoder of v0.25.0 and earlier refuses that key. An older
+  operator, such as a container image pinned to v0.25.0, then cannot load
+  an `angee.yaml` a newer CLI wrote. Upgrade every angee that reads the
+  stack together. The record stays: it is what makes a later `vcs` change
+  safe for existing slots.
+
 ### Added
 
 - **`angee workspace source migrate <workspace> <slot> [--to jj|worktree]`
@@ -44,11 +55,18 @@ latest tag.
   - A rollback that cannot finish stops, so it deletes nothing it could not
     put back, and fails with `INTERNAL`, cause `migrate_incomplete`, naming
     where the slot's checkout is. A migrate keeps a record under
-    `run/migrate/` while the slot may be set aside; one left by a migrate
-    that stopped or was killed makes the slot's status an error and its
-    `repair`, `destroy` and slot verbs refuse it (`migrate_incomplete`)
-    until the slot is put back and the record deleted.
-  - Refused: a worktree with skip-worktree or assume-unchanged files, whose
+    `run/migrate/` while the slot may be set aside, rewritten at each step
+    with how far it got and the steps that recover from there by hand, in
+    order. One left by a migrate that stopped or was killed makes the
+    slot's status an error naming the steps, and its `repair`, `destroy`
+    and slot verbs refuse it (`migrate_incomplete`) until the steps are
+    followed and the record deleted. Removing the old checkout's
+    registration drops its `HEAD` reflog and `refs/worktree/*`, as destroy
+    does.
+  - Refused: a slot that holds a repository of its own below its top (a
+    `.git` or `.jj`; `nested_repositories`, naming them), which git does not
+    list in a tracked directory, so it would not be carried, and jj does not
+    record; a worktree with skip-worktree or assume-unchanged files, whose
     local versions git does not report, or with submodules; a branch
     another worktree has checked out (`branch_checked_out`); a checkout
     that is not the jj workspace this stack made (`slot_not_held`); a slot
@@ -89,7 +107,10 @@ latest tag.
   names none keeps the manifest's. Since slots keep the `vcs` they were
   created with, the change reaches only workspaces created after it: when
   the update changes `vcs`, it records the old one on each existing slot
-  that names no mode and records none, and reports `~ vcs`. A `vcs` set by
+  that names no mode and records none, which freezes the stack's `vcs` as
+  it was for them (right unless it was edited by hand since they were
+  created), and reports `~ vcs (<old> to <new>)`, `""` to `git` included,
+  and `~ workspaces/<workspace>/sources/<slot>` for each slot it pinned. A `vcs` set by
   hand in `angee.yaml` is replaced by the template's on the next `stack
   update --template`, as a hand-edited source is; answer the template's
   input instead.

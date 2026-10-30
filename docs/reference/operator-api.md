@@ -738,22 +738,27 @@ status after it. A `to` other than `jj` or `worktree`, a slot that is a
 clone, a link or of a `kind: local` source, one at the workspace's root and
 one other slots lie inside answer `400` `INVALID_INPUT`. A slot that is not
 ready answers `409` `PRECONDITION_FAILED` with the cause of the matching
-verb's refusal: `branch_mismatch` or `uncommitted_changes` (changes to
-tracked files) for a worktree, `detached_head` for one on no branch with
-commits beyond its base; `uncommitted_changes`, `untracked_paths` or
-`branch_moved` for a jj slot, `branch_checked_out` for one whose branch
-another git worktree has checked out, `slot_not_held` for a checkout that
-is not the jj workspace this stack made, and no cause for a worktree with
-skip-worktree or assume-unchanged files or submodules, or a jj slot whose
-working-copy commit is described, has two parents or sits on a conflicted
-commit. A jj name the cache has for another checkout is `409` `CONFLICT`,
-and so is a slot whose commit changed while it was migrated. A failure
+verb's refusal: `nested_repositories`, with the repositories in `paths`,
+for a slot that holds a `.git` or `.jj` below its own, either way;
+`branch_mismatch` or `uncommitted_changes` (changes to tracked files) for a
+worktree, `detached_head` for one on no branch with commits beyond its
+base; `uncommitted_changes`, `untracked_paths` or `branch_moved` for a jj
+slot, `branch_checked_out` for one whose branch another git worktree has
+checked out, `slot_not_held` for a checkout that is not the jj workspace
+this stack made; and no cause for a worktree with skip-worktree or
+assume-unchanged files or submodules, or a jj slot whose working-copy
+commit is described, has two parents or sits on a conflicted commit. A jj
+name the cache has for another checkout is `409` `CONFLICT`, and so is a
+slot whose commit changed while it was migrated. A failure
 partway rolls the slot back; a rollback that stops is `500` `INTERNAL`,
 cause `migrate_incomplete`, with the slot's path and where its checkout was
-set aside in `paths`. Until such a slot is put back and its record under
-`run/migrate/` deleted, its status is an `error`, and `migrate`, `repair`,
-`destroy` and the verbs that check each slot refuse it with `409`
-`PRECONDITION_FAILED`, cause `migrate_incomplete`.
+set aside in `paths`, and a `hint` that lists the steps to recover by hand,
+in order. A migrate records them in `run/migrate/<workspace>/<slot>.json`
+as it goes, so one that is killed leaves them too. Until they are followed
+and the record deleted, the slot's status is an `error` naming them, and
+`migrate`, `repair`, `destroy` and the verbs that check each slot refuse it
+with `409` `PRECONDITION_FAILED`, cause `migrate_incomplete`, the steps in
+`hint`.
 
 Workspace preflight:
 

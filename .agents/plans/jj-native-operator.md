@@ -2586,7 +2586,8 @@ existing slot's effective mode into the record when `vcs` changes.
 v0.25.0 cut: the merge-hint follow-up from the review of #144, a fix it led
 to (a second remote), the phase 6 gap, the verb, `stack update` taking a
 template's `vcs`, which the gap's fix made safe, and the fixes from the
-`go-code-reviewer` pass; then this record.
+`go-code-reviewer` pass; then this record; then, on #146, the fixes from
+its review (below).
 
 - **The verb.** `Platform.WorkspaceSourceMigrate(ctx, workspace, slot, to)`
   (`service/migrate.go`), with `angee workspace source migrate <ws> <slot>
@@ -2784,6 +2785,67 @@ template's `vcs`, which the gap's fix made safe, and the fixes from the
   checkout's warning names its `git worktree remove`; an error releasing
   the cache's lock after the manifest is written is a warning, not a
   failure (`lockReleased`).
+- **Review of #146 (an independent pass, 2026-10-29), on top of the pushed
+  commits.** One blocker, confirmed with its probe before the fix:
+  migrating to jj deleted a repository nested in a tracked directory
+  (`src/.git` with an unpushed commit). git never lists an entry named
+  `.git`, so `git ls-files --others --directory` carried `src/page.html`
+  and left `src/.git` in the old checkout, which was removed; the tests
+  missed it because their file listing skipped every `.git`. *Decided
+  (coordinator):* a migrate refuses a slot that holds a nested `.git` or
+  `.jj` anywhere below its top, either way, `PRECONDITION_FAILED`, cause
+  `nested_repositories`, naming them, as destroy refuses a jj slot that
+  holds one. It reuses phase 6's `nestedRepositories` walk (`os.Root`, no
+  link followed, any entry type), at the readiness check, again in the
+  aside before the new checkout is made, and once more before the aside is
+  removed (`refuseNestedRepositories`). The test listing now hides only the
+  slot's own top-level `.git` and `.jj`, and the fixture no longer holds a
+  nested repository. The jj-to-worktree probe was already refused (jj reads
+  a tracked directory holding a `.git` as its files deleted), and is now
+  refused for the right reason. Also taken:
+  - *The record says how to recover from where the migrate stopped.* It
+    held no progress, so its advice after a kill once entries were carried
+    ("put the checkout back") would have deleted them. Now every undo step
+    is an instruction with the command (`migration.push`), and the record
+    (`run/migrate/<ws>/<slot>.json`, `Phase`, `Steps`) is rewritten with
+    the undo steps in the order to run them each time one is pushed, so a
+    kill at any point leaves the right steps: entries back first, then the
+    new checkout removed (a jj slot with `rm -rf`, then `jj workspace
+    forget` with nothing at its path, then its registration alone), then
+    the slot moved back and its registration repaired. Around the manifest
+    write the record holds both ways (`saving`: done if `angee.yaml`
+    records the new mode, else undo); after it, the clean-up (`saved`,
+    `forgetting`). Status, repair, destroy, the verbs and migrate quote the
+    steps. The test kills the migrate (a panic from `migrateFault`) after
+    the steps whose records differ, both ways (before the new checkout
+    exists; once an entry is carried, when the record holds every kind of
+    undo step; after the write; during the forget), runs the commands the
+    record quotes, and checks the slot is as it was (and migrates again), or
+    migrated and clean. Killing it after every step was trimmed: under
+    `-race` on a loaded machine the service package came within a minute
+    of `go test`'s ten. Recovery stays by hand: `workspace repair` does not run the
+    steps, since a record that a killed process wrote mid-step is not
+    enough to act on unattended. The destroy guard's own advice for a
+    set-aside directory (remove it) is given only beside a slot with no
+    record: beside one with a record, the directory may be the new
+    worktree, left aside by a failed move back, which the record's steps
+    say to move back instead.
+  - Repeating every check in the aside: the git side's whole `Ready`
+    (skip-worktree, submodules) and the nested-repository walk, not only
+    the tracked changes.
+  - `mergeableStray` names another remote's branch only when merging it
+    takes in the strays alone: `(::X@other ~ ::@-) ~ ::off` must be empty,
+    or the publish after the merge pushes the rest too (tested both ways;
+    the condition was preferred to tracking, which does not bound what the
+    branch holds).
+  - `pinSlotVCS` freezes the stack's old `vcs` for the slots it pins,
+    documented as such; the update's summary reports `~ vcs (<old> to
+    <new>)`, `""` to `git` included, and each slot pinned.
+  - The CHANGELOG says, under Changed, that a manifest with slot `vcs:` does
+    not load in v0.25.0 or earlier, whose strict decoder refuses the key.
+  - The docs say removing the old worktree's registration drops its `HEAD`
+    reflog and `refs/worktree/*`, as destroy does; the command's help has
+    examples.
 - **Tests** (`service/migrate_test.go`, real jj under `ANGEE_REQUIRE_JJ=1`):
   both directions on one slot holding a commit, a `.gitignore`, ignored
   files at its top and below a tracked directory, an empty directory, a

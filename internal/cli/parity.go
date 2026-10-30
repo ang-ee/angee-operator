@@ -456,7 +456,11 @@ func workspaceSlotMigrateCommand(stdout io.Writer, root, operatorURL *string, js
 		Short: "Move a workspace source slot between a git worktree and a jj slot",
 		Long: `Move a workspace source slot between a git worktree and a jj slot of its
 source's cache, keeping its untracked and ignored files, and record the new
-mode in angee.yaml. Without --to the slot becomes the other of the two.`,
+mode in angee.yaml. Without --to the slot becomes the other of the two.
+
+Example:
+  angee workspace source migrate feature app --to jj
+  angee workspace source migrate feature app --to worktree`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)

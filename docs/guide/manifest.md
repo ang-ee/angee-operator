@@ -561,8 +561,10 @@ is cloned and a local source is linked. A local source is linked under any
 mode but `jj`. Any other value of either is rejected when the manifest is
 loaded. `angee workspace create` records `vcs` on every slot that names no
 mode, set to the stack's `vcs` (`git` when it names none), so changing the
-stack's `vcs` later changes only the slots of workspaces created after it. A worktree source is
-cut on `branch`. Without a branch it starts on a detached HEAD at `ref` and
+stack's `vcs` later changes only the slots of workspaces created after it.
+angee v0.25.0 and earlier refuse a manifest that holds a slot's `vcs`, so
+every angee that reads the stack must be newer. A worktree source is cut on
+`branch`. Without a branch it starts on a detached HEAD at `ref` and
 gets its branch when it is published (see
 [workspace commands](./commands.md)).
 
