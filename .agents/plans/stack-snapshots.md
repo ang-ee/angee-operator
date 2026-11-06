@@ -1,6 +1,6 @@
 # Stack snapshots: design and refactor plan
 
-**Status:** Draft v3.1. v3 followed two Codex reviews and added portability across
+**Status:** Draft v3.2 (P0 inventory and P1 stream role corrected after the third Codex review; §22 lists the findings that gate P3–P7). v3 followed two Codex reviews and added portability across
 configurations: Alexis asked on 2026-11-06 that databases, code and workspaces be able to
 move between stack-hosted and external Postgres, and between runtimes and architectures.
 v3.1 records Alexis's answers to Q3–Q16 (§16).
@@ -356,8 +356,12 @@ stdin/stdout. `reset` gets nothing.
 - Exit 0 is required but proves only transport; formats are proved by `verify`.
 
 **Seam (B18).** `runtime.StreamJobBackend` adds
-`RunJobStreams(ctx, target, job, JobStreams{Stdin io.Reader; Stdout io.Writer}) ([]byte, error)`.
-`JobBackend.RunJob` and the compose `RunInput` stay for every existing path.
+`RunJobStreams(ctx, target, job, JobStreams{Role; Stdin io.Reader; Stdout io.Writer}) ([]byte, error)`.
+`Role` is `save`, `verify`, `check`, `reset` or `restore`. The backend derives
+`logging: none` (compose) and the fd-3 stdout routing (process-compose) from
+`Role == save`, so P1 never has to guess a job's purpose. P4 sets the role from the
+member declaration (third review, finding 11). `JobBackend.RunJob` and the compose
+`RunInput` stay for every existing path.
 
 **Compose** (`internal/runtime/compose`):
 1. **Invocation.** A new `StreamRunner` runs
@@ -769,27 +773,47 @@ no ZIP.
 
 ## 15. What stays, changes and goes
 
-This is a greenfield rebuild (Q1). P0 deletes the v0.23.0 feature, and keeps only
-internals that the new design reuses, renamed for it.
+This is a greenfield rebuild (Q1). P0 deletes the v0.23.0 feature in one buildable
+change. The repository lints with `unused` (`.golangci.yml`, `tests: true`), so
+unexported service code with no remaining caller cannot be parked for later phases.
+P0 therefore **deletes all of `internal/service/backups.go`**, including discovery, the
+confined walk and the source-tree planner. P4 rebuilds what it needs, using the code at
+`02dd95b` (v0.27.3) as reference. Only exported, tested seams survive, renamed.
 
-| Area | P0 action |
+**Deleted:**
+
+| Area | Items |
 |---|---|
-| `BackupStart`, `executeBackup`, `BackupPreview`, the ZIP writer, `archive.add`, `verifyBackupZIP`, `BackupArchive`, archive and staging recovery (`internal/service/backups.go` and tests) | **deleted** |
-| `api/backups.go` (`Backup*` request/response types), `BackupAPI`, `internal/operator/rest_backups.go`, `/backups*` routes, `platformclient/backups.go`, GraphQL `BACKUP` kind, backup receipt special cases (`IsBackupReceipt`, `rememberBackupRun`) | **deleted** |
-| `jobs.*.capture` (`BackupCapture`), `persist.*.backup`, capture-job guards (`refuseCaptureJob`, `compileCapture`, `Transient: … || job.Capture != nil`) | **deleted**. The guards come back for snapshot jobs in P3 and P4 |
-| `docs/proposals/operator-backup-restore.md`, the "Manual backups" section of `operator-api.md`, the backup rows in `surfaces.md` | **deleted**; the CHANGELOG notes the removal under `Removed` |
-| Discovery and selection logic (`backups.go:214–445`) | **moved** into the snapshot package as the starting point for §10 step 1 |
-| Confined walk (`backups.go:450–647`) | **moved**, and used for the include list, ancestor checks and advisory check |
-| vcs seam (`internal/vcs/backup.go` and driver `backup.go` files): `BackupPlanner`, `BackupPlan`, `BackupLayer`, `BackupLayerPlan`, `BackupComponent`, `BackupCapabilityError`, `BackupRefusal`, `BackupWithin` | **renamed** `Snapshot*`; files become `snapshot.go` |
-| jj driver (`internal/vcs/jjdriver/backup.go`): `BackupIdentity`, `BackupEvidence` | **renamed** `SnapshotIdentity`, `SnapshotEvidence` |
-| git helpers (`internal/git/backup.go`): `PublishedBackup`, `BackupPublicationError` | **renamed** `PublishedSnapshot`, `SnapshotPublicationError`; the file becomes `snapshot.go` |
-| `api.BackupSourceEvidence`, `verifyBackupSource` | **renamed** `api.SnapshotSourceEvidence`, `verifySnapshotSource` |
-| Receipts, mutation lease, redaction | kept as they are; kind `SNAPSHOT` added in P4 |
-| process-compose `MaxBackups`, copier reconciliation `renderedDocumentBackup` | untouched: owners' words and another feature |
-| `removeCanceledJob`'s ticker | replaced in P1 by group kill plus one removal |
+| Service | `internal/service/backups.go` and `backups_test.go` in full; `BackupAPI` and its methods in `service/api.go`; `backupMu`, `backupLayers` and `backupLayer` (`service/platform.go`, `service/vcs.go`); `compileCapture`, the `capture` parameter of `compileRuntime` and the capture skip in `compile` (`platform.go:708–722, 843`); `CaptureJobError`, `refuseCaptureJob` and their call sites, and `job.Capture` in `Transient: isolated \|\| job.Capture != nil` (`jobs.go:51–80, 118, 247, 275–277, 996`); the backup branches of job-receipt recovery and listing, `IsBackupReceipt` and `rememberBackupRun` (`job_receipts.go:116–121, 175`); `CauseBackupRequestConflict` (`operror.go:49`) |
+| API | `api/backups.go` except the source evidence type (renamed below); `JobRunOperation.Artifact` (`api/types.go:201`) and its clone (`jobs.go:235`) |
+| Operator | `internal/operator/rest_backups.go` and `rest_backups_test.go`; the `/backups*` routes and the backup-receipt admin check (`operator.go:199–201, 737`). The GraphQL enum value `BACKUP` (`schema.graphql:5`), regenerated with `make generate` (`gql/generated.go`, `gql/model/models_gen.go`, resolvers) |
+| Client | `internal/platformclient/backups.go` |
+| Manifest | `BackupCapture`, `Job.Capture`, `PersistPath.Backup` and their validation (`manifest.go:582–583, 734–749, 1045, 1064–1080, 1124–1126`), with the matching cases in `manifest_test.go` and `jobs_test.go` |
+| Docs | `docs/proposals/operator-backup-restore.md`; its ROADMAP row; the references in `local-platform-instance.md` (pointed at "stack snapshots, planned"); the "Manual backups" section of `docs/reference/operator-api.md`; the backup rows in `docs/reference/surfaces.md`; the capture-job clause in `docs/guide/manifest.md:417`; the regenerated `docs/public/angee.graphql` and `angee.schema.json`; a `CHANGELOG.md` entry under `Unreleased` / `Removed` |
 
-The existing on-disk `backups/archives/` and `state/backups/` directories on any stack
-are left alone; there are none in use.
+**Renamed (exported, tested, reused from P4 on):**
+
+| Before | After |
+|---|---|
+| `internal/vcs/backup.go`: `BackupPlanner`, `BackupPlan`, `BackupLayer`, `BackupLayerPlan`, `BackupComponent`, `BackupCapabilityError`, `BackupRefusal`, `BackupWithin` | `internal/vcs/snapshot.go`: the same names with `Snapshot` in place of `Backup` |
+| `internal/vcs/gitdriver/backup.go` (+ test) | `snapshot.go` (+ test), with methods renamed |
+| `internal/vcs/jjdriver/backup.go` (+ test): `BackupIdentity`, `BackupEvidence`, `BackupLayerPlan` | `snapshot.go` (+ test): `SnapshotIdentity`, `SnapshotEvidence`, `SnapshotLayerPlan`; the doc comments in `jjdriver.go` and `revset.go` follow |
+| `internal/git/backup.go` (+ test): `PublishedBackup`, `BackupPublicationError` | `snapshot.go` (+ test): `PublishedSnapshot`, `SnapshotPublicationError` |
+| `api.BackupSourceEvidence` | `api.SnapshotSourceEvidence`, in a new `api/snapshots.go` |
+
+**Unchanged:**
+- Receipts, the mutation lease and redaction.
+- `secrets.ReadDeclarations` (exported; reused by P4). Its error text loses
+  "recovery capture" wording.
+- `decodeStrict` (still used by migrate). Its comment loses the backup example.
+- The transient runners in both runtimes, still used by isolated job runs. The Windows
+  refusal text says "transient local jobs" instead of "capture jobs".
+- process-compose `MaxBackups` and copier's `renderedDocumentBackup`, which are other
+  owners' words.
+- `removeCanceledJob`'s ticker stays until P1 replaces it.
+
+Existing on-disk `backups/archives/` and `state/backups/` directories are left alone;
+none are in use.
 
 ## 16. Decisions
 
@@ -837,10 +861,13 @@ Every merge builds and passes `make check` and the go-code-reviewer agent. Each 
 carries its CHANGELOG entry. There is no compatibility constraint between phases (Q1).
 
 0. **Remove v0.23.0 backups and rename the reusable internals (§15).**
-   - Gate: `make check`; the vcs, git and jj driver tests pass under their renamed names;
-     the deleted feature's tests go with it; the moved walker and discovery code keep
-     their unit tests.
-   - **Ready to start.**
+   - Gate:
+     - `make check`, `make check-generated` and golangci-lint are clean;
+     - the vcs, git and jj driver tests pass under their renamed names;
+     - `grep -rn 'BackupCapture\|/backups\|IsBackupReceipt\|BackupArtifact'` finds
+       nothing;
+     - the deleted feature's tests go with it.
+   - **Ready to start** with the inventory as corrected in §15, after the third review.
 1. **Streaming runner and no-poll cleanup.**
    - Changes: `StreamJobBackend`; compose `StreamRunner` (`/dev/fd/3`,
      `--project-directory`, separate stdout); group kill plus one `rm -f` replacing the
@@ -1000,3 +1027,25 @@ same keys and formats.
 
 Findings 15, 18 and 19 were already fixed in v2.1. Finding 1 (buildable cutover) is moot:
 the greenfield decision (Q1) deletes the old feature in P0.
+
+## 22. Third review (v3.1): gates on later phases
+
+`codex-review-v3.md` gives P0 a go once its inventory is corrected (done in §15) and P1
+a go after P0 lands, with the stream role added (done in §7). Its remaining findings
+belong to later phases. Each phase below is **blocked until its plan section is revised
+for these findings**, and the revision is reviewed before that phase starts.
+
+| Third-review finding | Gate | What the revision must specify |
+|---|---|---|
+| 1 (blocker): portable restore can place archived config | P6 | Built-in member roles and an exact restore path map. In portable mode, archived `angee.yaml` and answers are metadata only; data paths are placed without config |
+| 2 (blocker): journal cannot undo its first writes | P6 | Record old config, answers, presence and old/new path maps before any copier or config write. Journal copier's file transaction (reusing `template_plan.go:512`'s rollback record). Secret undo uses `Delete` when the value was absent |
+| 3 (blocker): safety snapshot unprotected while a restore is open | P5, P6 | `forget` subtracts IDs referenced by open restore journals from restic's removal set, and refuses explicit forget of them |
+| 4 (major): claims are observations, not leases | P4 | A claim generation order, revalidation before commit and before each destructive repository call, and fencing of the old root before takeover. State the remaining race honestly where restic offers no atomic claim |
+| 5 (major): `--files-from-raw` vs live copy and S13 | P4 | Directory-level restic arguments for live trees, the hold test defined against the arguments restic opens, and an exact post-copy path check |
+| 6 (major): format equality is not enough | P3 | Compatibility also compares the channel and exact file names. Hosted state requires `owns`, or an explicit reset/empty-state contract |
+| 7 (major): `check` cannot run before a new hosted target exists | P6, P7 | A preflight check contract that needs no running target (archive plus target image), and a separate post-start check that is not called non-destructive |
+| 8 (major): source members vs the v1 scope | P4 | v1 `fetch_published` evidence is a manifest record with no restic member; bundle selection is refused until P10 |
+| 9 (major): archived answers can redirect init | P7 | Parse answers through the guarded reader, keep only the target template's declared inputs, replace `_src_path` and the root relation, then apply `--input` |
+| 10 (major): P0 inventory | P0 | **Done:** §15 |
+| 11 (minor): stream role | P1 | **Done:** §7 |
+| Partials B2, B3, B4, B6–B8 and first-review #5, #11–#14, #17, #20, #21, #24 | P4–P7 | Addressed by the rows above, plus acceptance rules for plaintext files staging and process-compose's temp config (P4) |

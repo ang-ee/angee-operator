@@ -16,6 +16,7 @@ Supporting material for [`../../plans/stack-snapshots.md`](../../plans/stack-sna
 - `spikes/restic/s12_copy.md`: `restic copy` gives new snapshot IDs but keeps tags and
   records `original`. Added after the review.
 - `spikes/restic/s13_symlinks_and_copy_ids.md`: restic stores symlinks inside a tree as links but follows a symlinked ancestor; `copy <id>` copies exactly that ID.
+- `codex-review-v3.md`: the third Codex review (of plan v3.1), saved verbatim. Plan v3.2 §22 maps its findings.
 - `codex-review-v2.md`: the second Codex review (of plan v2.1), saved verbatim. Plan v3 §21 maps its findings.
 - `codex-review.md`: Codex's adversarial review of plan v1, saved verbatim. Plan v2
   §17 maps each finding to its resolution.
