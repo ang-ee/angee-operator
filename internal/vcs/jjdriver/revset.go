@@ -22,7 +22,7 @@ const workingCopy revset = "@"
 // jj's git pseudo-remote, which mirrors the colocated repository's own refs.
 const published revset = "remote_bookmarks() | remote_tags()"
 
-// unpublished is every visible commit that a capture from the remotes alone
+// unpublished is every visible commit that a snapshot from the remotes alone
 // would lose: all but the ancestors of published, less the working-copy
 // commits jj discards itself, empty and undescribed. A working-copy commit
 // with changes or a description, in any workspace, counts.

@@ -2548,7 +2548,7 @@ func TestTransientNativeStdoutTailRedactsMultilineSecrets(t *testing.T) {
 }
 
 // process-compose's foreground run sets the terminal's title to
-// "process-compose: <host>/<directory>". Neither that nor a capture's colours
+// "process-compose: <host>/<directory>". Neither that nor a job's colours
 // reach the output or the error a receipt keeps.
 func TestTransientNativeDiagnosticsDropTerminalControls(t *testing.T) {
 	if err := transientJobSupport(); err != nil {
@@ -2566,10 +2566,10 @@ func TestTransientNativeDiagnosticsDropTerminalControls(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 	if string(output) != "pg_dump: error: connection refused\n" {
-		t.Fatalf("output = %q, want the capture's text alone", output)
+		t.Fatalf("output = %q, want the job's text alone", output)
 	}
 	if message := err.Error(); strings.Contains(message, "\x1b") || strings.Contains(message, "razor.local") || !strings.Contains(message, "native output: pg_dump: error: connection refused") {
-		t.Fatalf("error = %q, want the capture's text without terminal controls", message)
+		t.Fatalf("error = %q, want the job's text without terminal controls", message)
 	}
 }
 

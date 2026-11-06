@@ -4230,7 +4230,7 @@ var sources = []*ast.Source{
 scalar Time
 
 enum JobRunStatus { PENDING RUNNING SUCCEEDED FAILED BLOCKED }
-enum JobRunNodeKind { JOB SERVICE BACKUP }
+enum JobRunNodeKind { JOB SERVICE }
 type JobRunNode { name: String!, kind: JobRunNodeKind!, status: JobRunStatus!, message: String, isolated: Boolean!, output: String, exitCode: Int }
 type JobRunOperation { id: ID!, rootJob: String!, chainedRestart: Boolean!, status: JobRunStatus!, currentStep: String, startedAt: Time!, endedAt: Time, nodes: [JobRunNode!]!, output: String, error: String, errorCode: String, errorCause: String }
 type JobRunPreview { jobs: [String!]!, services: [String!]! }

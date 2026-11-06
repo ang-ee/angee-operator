@@ -17,7 +17,6 @@ once their design is captured in the code, the published docs, and
 | [global-source-registry](./global-source-registry.md) | A global source registry (`POST /sources` register-by-id, `POST /sources/{id}/destroy`) plus per-render workspace materialization via an `inputs.sources` render input. Only the pre-existing clone/cache machinery exists today. |
 | [ephemeral-workspace-pool](./ephemeral-workspace-pool.md) | Leased/reaped/recycled workspaces: a `WorkspaceLease` model + `/lease` endpoints, a TTL+lease reaper sweep, and a warm pool (`operator.workspace_pool.<template>` + `acquire`). Only the pre-existing TTL/`expired` computation exists today. |
 | [local-platform-instance](./local-platform-instance.md) | A central local operator that hosts workspaces and agents: a `stacks/local` platform template, containerized workspace dev stacks, per-workspace agent services, and the develop→reconcile loop. Largely cross-repo; depends on the entries below. |
-| [operator-backup-restore](./operator-backup-restore.md) | Snapshot a stack's data plane: a `backup.Backend` interface + registry (localfs-tarball/restic/s3), a `manifest.BackupBackend` field, a snapshot catalog in the `store` layer, and `stack backup`/`restore`/`backup ls` + `workspace create --restore` across CLI + REST. |
 
 ## Remaining pieces of shipped features
 

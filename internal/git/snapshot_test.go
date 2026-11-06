@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestPublishedBackupVerifiesLiveRemoteAndRefusesLocalOnly(t *testing.T) {
+func TestPublishedSnapshotVerifiesLiveRemoteAndRefusesLocalOnly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
 	}
@@ -23,8 +23,8 @@ func TestPublishedBackupVerifiesLiveRemoteAndRefusesLocalOnly(t *testing.T) {
 		}
 	}
 	run(dir, "init", "-b", "main")
-	run(dir, "config", "user.name", "backup-test")
-	run(dir, "config", "user.email", "backup@example.invalid")
+	run(dir, "config", "user.name", "snapshot-test")
+	run(dir, "config", "user.email", "snapshot@example.invalid")
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -33,48 +33,48 @@ func TestPublishedBackupVerifiesLiveRemoteAndRefusesLocalOnly(t *testing.T) {
 	run(dir, "init", "--bare", remote)
 	run(dir, "remote", "add", "origin", remote)
 	run(dir, "push", "-u", "origin", "main")
-	if remotes, err := client.PublishedBackup(t.Context(), dir, Colocated{}); err != nil || remotes["origin"] != remote {
+	if remotes, err := client.PublishedSnapshot(t.Context(), dir, Colocated{}); err != nil || remotes["origin"] != remote {
 		t.Fatalf("published=%v err=%v", remotes, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("local change"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); err == nil {
+	if _, err := client.PublishedSnapshot(t.Context(), dir, Colocated{}); err == nil {
 		t.Fatal("accepted dirty worktree")
 	}
 	run(dir, "add", "tracked")
 	run(dir, "commit", "-m", "local-only")
-	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); err == nil {
+	if _, err := client.PublishedSnapshot(t.Context(), dir, Colocated{}); err == nil {
 		t.Fatal("accepted unpublished commit")
 	}
 	run(dir, "push", "origin", "main")
-	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); err != nil {
+	if _, err := client.PublishedSnapshot(t.Context(), dir, Colocated{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tracked"), []byte("stashed local work"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	run(dir, "stash", "push", "-m", "private recovery state")
-	// A refusal points to the source policy the backup API accepts.
-	var refusal *BackupPublicationError
-	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); !errors.As(err, &refusal) || !strings.HasSuffix(refusal.Reason, "; use the bundle source policy") {
+	// A refusal points to the source policy the snapshot API accepts.
+	var refusal *SnapshotPublicationError
+	if _, err := client.PublishedSnapshot(t.Context(), dir, Colocated{}); !errors.As(err, &refusal) || !strings.HasSuffix(refusal.Reason, "; use the bundle source policy") {
 		t.Fatalf("private stash: err=%v, want a refusal naming the bundle source policy", err)
 	}
 	run(dir, "stash", "drop")
 	if err := os.RemoveAll(remote); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PublishedBackup(t.Context(), dir, Colocated{}); err == nil {
+	if _, err := client.PublishedSnapshot(t.Context(), dir, Colocated{}); err == nil {
 		t.Fatal("accepted unavailable advertised remote")
 	}
 }
 
-// TestPublishedBackupDisregardsExactlyColocatedMetadata gives a published
+// TestPublishedSnapshotDisregardsExactlyColocatedMetadata gives a published
 // checkout what colocated jj keeps in it, without needing jj: an ignored
 // worktree-root .jj tree and a refs/jj/ keep ref holding a local-only commit.
 // The verdict passes only when told to leave exactly that to the layer, and
 // still refuses anything else, and a layer revision no remote advertises.
-func TestPublishedBackupDisregardsExactlyColocatedMetadata(t *testing.T) {
+func TestPublishedSnapshotDisregardsExactlyColocatedMetadata(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
 	}
@@ -100,8 +100,8 @@ func TestPublishedBackupDisregardsExactlyColocatedMetadata(t *testing.T) {
 		}
 	}
 	run(dir, "init", "-b", "main")
-	run(dir, "config", "user.name", "backup-test")
-	run(dir, "config", "user.email", "backup@example.invalid")
+	run(dir, "config", "user.name", "snapshot-test")
+	run(dir, "config", "user.email", "snapshot@example.invalid")
 	write("tracked", "published")
 	run(dir, "add", "tracked")
 	run(dir, "commit", "-m", "published")
@@ -115,14 +115,14 @@ func TestPublishedBackupDisregardsExactlyColocatedMetadata(t *testing.T) {
 	jj := Colocated{Dirs: []string{".jj"}, Refs: []string{"refs/jj/"}}
 	refused := func(name string, colocated Colocated) {
 		t.Helper()
-		var refusal *BackupPublicationError
-		if _, err := client.PublishedBackup(t.Context(), dir, colocated); !errors.As(err, &refusal) {
+		var refusal *SnapshotPublicationError
+		if _, err := client.PublishedSnapshot(t.Context(), dir, colocated); !errors.As(err, &refusal) {
 			t.Fatalf("%s: err=%v, want a publication refusal", name, err)
 		}
 	}
 	refused("plain git verdict over jj metadata", Colocated{})
 	refused("jj directory alone", Colocated{Dirs: jj.Dirs})
-	if remotes, err := client.PublishedBackup(t.Context(), dir, jj); err != nil || remotes["origin"] != remote {
+	if remotes, err := client.PublishedSnapshot(t.Context(), dir, jj); err != nil || remotes["origin"] != remote {
 		t.Fatalf("published=%v err=%v", remotes, err)
 	}
 	refused("layer revision absent from the remote", Colocated{Dirs: jj.Dirs, Refs: jj.Refs, Revisions: []string{keep}})
@@ -142,8 +142,8 @@ func TestPublishedBackupDisregardsExactlyColocatedMetadata(t *testing.T) {
 		{Dirs: []string{"../outside"}}, {Dirs: []string{"."}}, {Dirs: []string{"/abs"}}, {Dirs: []string{"a/../b"}}, {Dirs: []string{"sub/.jj"}},
 		{Refs: []string{"refs/heads/"}}, {Refs: []string{"refs/remotes/origin/"}}, {Refs: []string{"refs/"}}, {Refs: []string{"refs/jj"}}, {Refs: []string{"refs/jj/*"}},
 	} {
-		var refusal *BackupPublicationError
-		if _, err := client.PublishedBackup(t.Context(), dir, invalid); err == nil || errors.As(err, &refusal) {
+		var refusal *SnapshotPublicationError
+		if _, err := client.PublishedSnapshot(t.Context(), dir, invalid); err == nil || errors.As(err, &refusal) {
 			t.Fatalf("metadata %+v: err=%v, want it rejected as invalid", invalid, err)
 		}
 	}

@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,38 +47,8 @@ func (p *Platform) JobList(ctx context.Context, q query.Args) ([]api.JobState, i
 
 var jobRunSequence atomic.Uint64
 
-// CaptureJobError refuses a backup capture job at a job entry point. A capture
-// job runs only inside a backup (BackupStart), which chooses its output paths
-// and is reachable only with the operator admin bearer; run as an ordinary job,
-// any caller could choose where it writes the stack's data.
-type CaptureJobError struct{ Job string }
-
-func (e *CaptureJobError) Error() string {
-	return fmt.Sprintf("job %q is a backup capture job and runs only as part of a backup", e.Job)
-}
-
-// refuseCaptureJob is the INVALID_INPUT a job entry point returns for a capture
-// job, and nil for any other name, declared or not.
-func refuseCaptureJob(stack *manifest.Stack, name string) error {
-	if job, ok := stack.Jobs[name]; !ok || job.Capture == nil {
-		return nil
-	}
-	refused := &CaptureJobError{Job: name}
-	hint := "Select its capture in a backup (POST /backups) instead."
-	return &OperationError{Code: CodeInvalidInput, Job: name, Hint: hint, Summary: refused.Error() + ". " + hint, Err: refused}
-}
-
 func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[string]string, chainedRestart bool) (receipt api.JobRunOperation, err error) {
 	defer jobOperation(name, chainedRestart).annotate(&err)
-	// Refuse a capture job before taking the lease or preparing anything; the
-	// stack this run executes is checked again once it is loaded below.
-	declared, err := p.LoadStack()
-	if err != nil {
-		return api.JobRunOperation{}, err
-	}
-	if err := refuseCaptureJob(declared, name); err != nil {
-		return api.JobRunOperation{}, err
-	}
 	ctx, release, err := p.beginMutation(ctx, "job")
 	if err != nil {
 		return api.JobRunOperation{}, err
@@ -114,10 +83,6 @@ func (p *Platform) JobRunStart(ctx context.Context, name string, inputs map[stri
 	if _, ok := stack.Jobs[name]; !ok {
 		release()
 		return api.JobRunOperation{}, &NotFoundError{Kind: "job", Name: name}
-	}
-	if err := refuseCaptureJob(stack, name); err != nil {
-		release()
-		return api.JobRunOperation{}, err
 	}
 	p.jobRunsMu.Lock()
 	if p.activeJobRun {
@@ -229,22 +194,12 @@ func cloneJobRun(op api.JobRunOperation) api.JobRunOperation {
 			op.Nodes[i].ExitCode = &value
 		}
 	}
-	if op.Artifact != nil {
-		// Artifact evidence includes nested collections; clone through its wire type.
-		data, _ := json.Marshal(op.Artifact)
-		var artifact api.BackupArtifact
-		_ = json.Unmarshal(data, &artifact)
-		op.Artifact = &artifact
-	}
 	return op
 }
 
 func (p *Platform) JobRunPreview(_ context.Context, name string, chained bool) (api.JobRunPreview, error) {
 	stack, err := p.LoadStack()
 	if err != nil {
-		return api.JobRunPreview{}, err
-	}
-	if err := refuseCaptureJob(stack, name); err != nil {
 		return api.JobRunPreview{}, err
 	}
 	nodes, err := jobRunNodes(stack, name, chained)
@@ -272,11 +227,6 @@ func jobRunNodes(stack *manifest.Stack, root string, chained bool) ([]api.JobRun
 		for changed {
 			changed = false
 			for name, j := range stack.Jobs {
-				// A capture job runs only in a backup, never as a restarted
-				// prerequisite's dependent.
-				if j.Capture != nil {
-					continue
-				}
 				for _, d := range j.DependsOn {
 					if seen[d] && !seen[name] {
 						seen[name] = true
@@ -993,7 +943,7 @@ func (p *Platform) runJob(ctx context.Context, stack *manifest.Stack, compiled *
 	if !ok {
 		return nil, &NotFoundError{Kind: "job", Name: name}
 	}
-	spec := runtime.JobSpec{Name: name, Transient: isolated || job.Capture != nil}
+	spec := runtime.JobSpec{Name: name, Transient: isolated}
 	if job.Runtime == manifest.RuntimeLocal {
 		configuration, err := proccompose.Marshal(compiled.ProcessCompose)
 		if err != nil {
@@ -1084,42 +1034,22 @@ func jobOperation(name string, chainedRestart bool) operation {
 	return operation{name: "job.run", title: title, job: name}
 }
 
-// maxRetainedJobRuns bounds the receipts held in memory. A persisted backup
-// receipt stays readable from state/job-runs after it leaves memory.
+// maxRetainedJobRuns bounds the receipts held in memory.
 const maxRetainedJobRuns = 64
 
-// rememberJobRun retains a job run's receipt and runtime snapshot and makes it
-// the latest run. Caller holds jobRunsMu.
+// rememberJobRun retains a job run's receipt and runtime snapshot. The oldest
+// in-memory receipt is dropped first; evicted receipts stay readable from
+// state/job-runs. Caller holds jobRunsMu.
 func (p *Platform) rememberJobRun(op api.JobRunOperation, stack *manifest.Stack, compiled *CompiledStack) {
-	p.latestJobRun = op.ID
-	p.retainJobRun(op)
-	p.jobRunStacks[op.ID] = stack
-	p.jobRunCompiled[op.ID] = compiled
-}
-
-// rememberBackupRun retains a backup's receipt, readable by its ID, without
-// making it the latest run: that is the job runner's and the restart flow's.
-// Caller holds jobRunsMu.
-func (p *Platform) rememberBackupRun(op api.JobRunOperation) {
-	p.retainJobRun(op)
-}
-
-// retainJobRun applies the shared receipt retention policy: the oldest receipt
-// is dropped first, except the latest job run, which newer backups never evict.
-// Caller holds jobRunsMu.
-func (p *Platform) retainJobRun(op api.JobRunOperation) {
 	p.jobRuns[op.ID] = op
 	p.jobRunOrder = append(p.jobRunOrder, op.ID)
-	if len(p.jobRunOrder) <= maxRetainedJobRuns {
-		return
+	if len(p.jobRunOrder) > maxRetainedJobRuns {
+		expired := p.jobRunOrder[0]
+		p.jobRunOrder = slices.Delete(p.jobRunOrder, 0, 1)
+		delete(p.jobRuns, expired)
+		delete(p.jobRunStacks, expired)
+		delete(p.jobRunCompiled, expired)
 	}
-	oldest := 0
-	if p.jobRunOrder[oldest] == p.latestJobRun {
-		oldest++
-	}
-	expired := p.jobRunOrder[oldest]
-	p.jobRunOrder = slices.Delete(p.jobRunOrder, oldest, oldest+1)
-	delete(p.jobRuns, expired)
-	delete(p.jobRunStacks, expired)
-	delete(p.jobRunCompiled, expired)
+	p.jobRunStacks[op.ID] = stack
+	p.jobRunCompiled[op.ID] = compiled
 }

@@ -13,12 +13,12 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs"
 )
 
-// TestBackupLayerPlanRemoteOnlyVerdict has jj's remote-only verdict read a
+// TestSnapshotLayerPlanRemoteOnlyVerdict has jj's remote-only verdict read a
 // real colocated workspace: a published one passes and names exactly jj's
 // own metadata for the Git verdict to leave to it, and a dirty or described
 // working-copy commit, or a commit no remote bookmark or tag holds, in this
 // workspace or another of the store, is refused until it is gone.
-func TestBackupLayerPlanRemoteOnlyVerdict(t *testing.T) {
+func TestSnapshotLayerPlanRemoteOnlyVerdict(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	store, err := filepath.EvalSymlinks(filepath.Join(f.primary, ".git"))
@@ -27,19 +27,19 @@ func TestBackupLayerPlanRemoteOnlyVerdict(t *testing.T) {
 	}
 	slot := vcs.Slot{Path: f.slot, Primary: f.primary}
 	main := strings.TrimSpace(f.jj(f.slot, "--ignore-working-copy", "log", "--no-graph", "-r", f.base().String(), "-T", `commit_id ++ "\n"`))
-	published := func(name string, s vcs.Slot) vcs.BackupPlan {
+	published := func(name string, s vcs.Slot) vcs.SnapshotPlan {
 		t.Helper()
-		plan, err := driver().BackupLayerPlan(ctx, s, store, true)
+		plan, err := driver().SnapshotLayerPlan(ctx, s, store, true)
 		if err != nil {
-			t.Fatalf("%s: BackupLayerPlan() error = %v", name, err)
+			t.Fatalf("%s: SnapshotLayerPlan() error = %v", name, err)
 		}
 		return plan
 	}
 	refused := func(name string, s vcs.Slot) {
 		t.Helper()
-		var refusal *git.BackupPublicationError
-		if _, err := driver().BackupLayerPlan(ctx, s, store, true); !errors.As(err, &refusal) {
-			t.Fatalf("%s: BackupLayerPlan() error = %v, want a publication refusal", name, err)
+		var refusal *git.SnapshotPublicationError
+		if _, err := driver().SnapshotLayerPlan(ctx, s, store, true); !errors.As(err, &refusal) {
+			t.Fatalf("%s: SnapshotLayerPlan() error = %v, want a publication refusal", name, err)
 		}
 	}
 
@@ -55,8 +55,8 @@ func TestBackupLayerPlanRemoteOnlyVerdict(t *testing.T) {
 	f.write(f.slot, "dirty.txt", "snapshotted edit\n")
 	f.jj(f.slot, "status")
 	refused("dirty working copy", slot)
-	if _, err := driver().BackupLayerPlan(ctx, slot, store, false); err != nil {
-		t.Fatalf("bundle capture of a dirty working copy: %v", err)
+	if _, err := driver().SnapshotLayerPlan(ctx, slot, store, false); err != nil {
+		t.Fatalf("bundle snapshot of a dirty working copy: %v", err)
 	}
 	f.jj(f.slot, "restore")
 	published("restored working copy", slot)
@@ -78,10 +78,10 @@ func TestBackupLayerPlanRemoteOnlyVerdict(t *testing.T) {
 	refused("committed but unpushed", slot)
 }
 
-// TestBackupLayerPlanCountsRemoteTags accepts a commit only a published tag
+// TestSnapshotLayerPlanCountsRemoteTags accepts a commit only a published tag
 // holds, as Git's verdict accepts an advertised tag, and hands its commit to
 // the Git verdict to find advertised.
-func TestBackupLayerPlanCountsRemoteTags(t *testing.T) {
+func TestSnapshotLayerPlanCountsRemoteTags(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	f.git(f.seed, "checkout", "-q", "--detach")
@@ -99,25 +99,25 @@ func TestBackupLayerPlanCountsRemoteTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := driver().BackupLayerPlan(ctx, vcs.Slot{Path: f.slot, Primary: f.primary}, store, true)
+	plan, err := driver().SnapshotLayerPlan(ctx, vcs.Slot{Path: f.slot, Primary: f.primary}, store, true)
 	if err != nil {
-		t.Fatalf("BackupLayerPlan() error = %v", err)
+		t.Fatalf("SnapshotLayerPlan() error = %v", err)
 	}
 	if !slices.Contains(plan.Colocated.Published, tagged) {
 		t.Fatalf("Published = %v, want the tagged commit %s", plan.Colocated.Published, tagged)
 	}
 }
 
-// TestBackupLayerPlanRefusesUnverifiedTopology names no metadata of jj's for
+// TestSnapshotLayerPlanRefusesUnverifiedTopology names no metadata of jj's for
 // a workspace whose backing Git store is not the one the Git plan verified,
 // or whose repo pointer is a symlink rather than a pointer file.
-func TestBackupLayerPlanRefusesUnverifiedTopology(t *testing.T) {
+func TestSnapshotLayerPlanRefusesUnverifiedTopology(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	slot := vcs.Slot{Path: f.slot, Primary: f.primary}
-	var refusal *vcs.BackupCapabilityError
-	if _, err := driver().BackupLayerPlan(ctx, slot, t.TempDir(), true); !errors.As(err, &refusal) {
-		t.Fatalf("another Git store: BackupLayerPlan() error = %v, want a capability refusal", err)
+	var refusal *vcs.SnapshotCapabilityError
+	if _, err := driver().SnapshotLayerPlan(ctx, slot, t.TempDir(), true); !errors.As(err, &refusal) {
+		t.Fatalf("another Git store: SnapshotLayerPlan() error = %v, want a capability refusal", err)
 	}
 	store, err := filepath.EvalSymlinks(filepath.Join(f.primary, ".git"))
 	if err != nil {
@@ -130,7 +130,7 @@ func TestBackupLayerPlanRefusesUnverifiedTopology(t *testing.T) {
 	if err := os.Symlink(filepath.Join(f.primary, ".jj", "repo"), pointer); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver().BackupLayerPlan(ctx, slot, store, true); !errors.As(err, &refusal) {
-		t.Fatalf("symlinked repo: BackupLayerPlan() error = %v, want a capability refusal", err)
+	if _, err := driver().SnapshotLayerPlan(ctx, slot, store, true); !errors.As(err, &refusal) {
+		t.Fatalf("symlinked repo: SnapshotLayerPlan() error = %v, want a capability refusal", err)
 	}
 }

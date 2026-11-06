@@ -127,7 +127,7 @@ func TestNativeHeldNewJobStaysIsolatedThroughRecovery(t *testing.T) {
 	if err := os.WriteFile(releaseFile, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	op = waitBackup(t, p, op.ID)
+	op = waitJobRun(t, p, op.ID)
 	waitLeaseFree(t, p)
 	if op.Status != api.JobRunSucceeded {
 		t.Fatalf("operation = %#v", op)
