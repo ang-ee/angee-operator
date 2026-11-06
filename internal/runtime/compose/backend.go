@@ -14,12 +14,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"github.com/ang-ee/angee-operator/internal/runtime/processgroup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +34,30 @@ type ExecRunner struct{}
 
 type InputRunner interface {
 	RunInput(context.Context, string, []string, []byte, string, ...string) ([]byte, error)
+}
+
+// StreamRunner runs a command with its configuration on fd 3 and independent
+// stdin and stdout. It returns stderr alone when stdout is set, or combined
+// stdout and stderr when it is nil. It is the test seam for streaming one-off
+// containers; existing in-memory operations continue through InputRunner.
+type StreamRunner interface {
+	RunStreams(context.Context, string, []string, []byte, io.Reader, io.Writer, string, ...string) ([]byte, error)
+}
+
+type transientInputRunner interface {
+	RunTransientInput(context.Context, string, []string, []byte, string, ...string) ([]byte, error)
+}
+
+type containerEventRunner interface {
+	subscribeContainerEvents(context.Context, string, []string, string) (containerEventSubscription, error)
+}
+
+type containerEventSubscription interface {
+	waitCreated(context.Context) (bool, error)
+	waitDestroyed(context.Context) (bool, error)
+	seenCreate() bool
+	eventError() error
+	stop()
 }
 
 func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
@@ -53,11 +80,298 @@ func (ExecRunner) Run(ctx context.Context, dir string, env []string, name string
 const maxErrorOutputBytes = 4 << 10
 
 func (ExecRunner) RunInput(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
+	return runInput(ctx, dir, env, input, name, args, false)
+}
+
+// RunTransientInput runs an input-bearing transient container client in an
+// isolated process group that is killed immediately on cancellation.
+func (ExecRunner) RunTransientInput(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
+	return runInput(ctx, dir, env, input, name, args, true)
+}
+
+func runInput(ctx context.Context, dir string, env []string, input []byte, name string, args []string, isolated bool) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = runtime.ChildEnviron(env)
 	cmd.Stdin = bytes.NewReader(input)
-	return cmd.CombinedOutput()
+	stopGroup := func() {}
+	if isolated {
+		var err error
+		stopGroup, err = processgroup.ConfigureImmediateKill(cmd)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out, err := cmd.CombinedOutput()
+	stopGroup()
+	return out, err
+}
+
+// RunStreams runs an input-bearing command with configuration supplied on fd
+// 3. When stdout is non-nil, only stderr is returned as diagnostics; otherwise
+// stdout and stderr are combined. Diagnostics retain only their bounded tail.
+func (ExecRunner) RunStreams(ctx context.Context, dir string, env []string, configuration []byte, stdin io.Reader, stdout io.Writer, name string, args ...string) ([]byte, error) {
+	configRead, configWrite, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("open compose configuration pipe: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Env = runtime.ChildEnviron(env)
+	cmd.Stdin = stdin
+	diagnostics := runtime.NewLimitedLogRead(maxJobOutputBytes)
+	var outputErrors *firstErrorWriter
+	if stdout == nil {
+		cmd.Stdout = diagnostics
+	} else {
+		outputErrors = &firstErrorWriter{writer: stdout}
+		cmd.Stdout = outputErrors
+	}
+	cmd.Stderr = diagnostics
+	cmd.ExtraFiles = []*os.File{configRead}
+	stopGroup, err := processgroup.ConfigureImmediateKill(cmd)
+	if err != nil {
+		_ = configRead.Close()
+		_ = configWrite.Close()
+		return nil, err
+	}
+	trace := logctx.TraceExec(ctx, name, args, dir, slog.Any("env", logctx.EnvKeys(env)))
+	if err := cmd.Start(); err != nil {
+		_ = configRead.Close()
+		_ = configWrite.Close()
+		stopGroup()
+		trace(nil, err)
+		return nil, err
+	}
+	_ = configRead.Close()
+	written := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(configWrite, bytes.NewReader(configuration))
+		_ = configWrite.Close()
+		written <- copyErr
+	}()
+	runErr := cmd.Wait()
+	stopGroup()
+	var writeErr error
+	select {
+	case writeErr = <-written:
+	default:
+		_ = configWrite.Close()
+		writeErr = <-written
+	}
+	if writeErr != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("write compose configuration: %w", writeErr))
+	}
+	if outputErrors != nil {
+		runErr = errors.Join(runErr, outputErrors.err())
+	}
+	out := []byte(diagnostics.String())
+	trace(out, runErr)
+	return out, runErr
+}
+
+type firstErrorWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+	first  error
+}
+
+func (w *firstErrorWriter) Write(data []byte) (int, error) {
+	n, err := w.writer.Write(data)
+	if err != nil {
+		w.mu.Lock()
+		if w.first == nil {
+			w.first = err
+		}
+		w.mu.Unlock()
+	}
+	return n, err
+}
+
+func (w *firstErrorWriter) err() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.first
+}
+
+type dockerContainerEvents struct {
+	cancel        context.CancelFunc
+	created       chan struct{}
+	destroyed     chan struct{}
+	done          chan struct{}
+	createdOnce   sync.Once
+	destroyedOnce sync.Once
+	stopOnce      sync.Once
+	mu            sync.Mutex
+	stopped       bool
+	err           error
+}
+
+func (ExecRunner) subscribeContainerEvents(ctx context.Context, dir string, env []string, container string) (containerEventSubscription, error) {
+	eventCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	args := dockerEventArgs(container, time.Now().Add(-time.Minute).UTC())
+	cmd := exec.CommandContext(eventCtx, "docker", args...)
+	cmd.Dir = dir
+	cmd.Env = runtime.ChildEnviron(env)
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("open docker events output for container %s: %w", container, err)
+	}
+	diagnostics := runtime.NewLimitedLogRead(maxErrorOutputBytes)
+	cmd.Stderr = diagnostics
+	stopGroup, err := processgroup.ConfigureImmediateKill(cmd)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		stopGroup()
+		return nil, fmt.Errorf("start docker events for container %s: %w: %s", container, err, strings.TrimSpace(diagnostics.String()))
+	}
+	subscription := &dockerContainerEvents{
+		cancel: func() {
+			// The subscription owns this process. Invoke the configured group
+			// cancellation directly instead of depending on CommandContext's
+			// asynchronous watcher to notice eventCtx before Scanner can unblock.
+			_ = cmd.Cancel()
+			cancel()
+		},
+		created:   make(chan struct{}),
+		destroyed: make(chan struct{}),
+		done:      make(chan struct{}),
+	}
+	go subscription.read(cmd, output, diagnostics, stopGroup)
+	return subscription, nil
+}
+
+func dockerEventArgs(container string, since time.Time) []string {
+	return []string{
+		"events", "--format", "{{json .}}", "--since", since.Format(time.RFC3339Nano),
+		"--filter", "type=container", "--filter", "container=" + container,
+	}
+}
+
+func (s *dockerContainerEvents) read(cmd *exec.Cmd, output io.ReadCloser, diagnostics *runtime.LimitedLogRead, stopGroup func()) {
+	defer close(s.done)
+	scanner := bufio.NewScanner(output)
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	for scanner.Scan() {
+		var event struct {
+			Action string `json:"Action"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		action := event.Action
+		if action == "" {
+			action = event.Status
+		}
+		switch strings.ToLower(action) {
+		case "create":
+			s.createdOnce.Do(func() { close(s.created) })
+		case "destroy":
+			s.destroyedOnce.Do(func() { close(s.destroyed) })
+		}
+	}
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		// A malformed or oversized daemon event must not leave the subscription
+		// process running with nobody reading its output.
+		s.cancel()
+	}
+	waitErr := cmd.Wait()
+	stopGroup()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
+	s.err = errors.Join(scanErr, waitErr)
+	if s.err == nil {
+		s.err = errors.New("docker events subscription exited unexpectedly")
+	}
+	if detail := strings.TrimSpace(diagnostics.String()); detail != "" {
+		s.err = fmt.Errorf("%w: %s", s.err, detail)
+	}
+}
+
+func (s *dockerContainerEvents) waitCreated(ctx context.Context) (bool, error) {
+	return s.wait(ctx, s.created)
+}
+
+func (s *dockerContainerEvents) waitDestroyed(ctx context.Context) (bool, error) {
+	return s.wait(ctx, s.destroyed)
+}
+
+func (s *dockerContainerEvents) seenCreate() bool {
+	select {
+	case <-s.created:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *dockerContainerEvents) eventError() error {
+	select {
+	case <-s.done:
+		s.mu.Lock()
+		err := s.err
+		s.mu.Unlock()
+		return err
+	default:
+		return nil
+	}
+}
+
+func (s *dockerContainerEvents) wait(ctx context.Context, event <-chan struct{}) (bool, error) {
+	select {
+	case <-event:
+		return true, nil
+	default:
+	}
+	select {
+	case <-s.done:
+		s.mu.Lock()
+		err := s.err
+		s.mu.Unlock()
+		return false, err
+	default:
+	}
+	select {
+	case <-event:
+		return true, nil
+	case <-ctx.Done():
+		select {
+		case <-event:
+			return true, nil
+		default:
+			return false, ctx.Err()
+		}
+	case <-s.done:
+		select {
+		case <-event:
+			return true, nil
+		default:
+		}
+		s.mu.Lock()
+		err := s.err
+		s.mu.Unlock()
+		return false, err
+	}
+}
+
+func (s *dockerContainerEvents) stop() {
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.stopped = true
+		s.mu.Unlock()
+		s.cancel()
+		<-s.done
+	})
 }
 
 type Backend struct {
@@ -186,6 +500,66 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 	return out, nil
 }
 
+// RunJobStreams runs a job as a one-off container with the compose document on
+// fd 3, leaving stdin available to the job and keeping an explicitly supplied
+// stdout stream out of the returned diagnostics.
+func (b Backend) RunJobStreams(ctx context.Context, target runtime.Target, job runtime.JobSpec, streams runtime.JobStreams) ([]byte, error) {
+	if !job.Transient {
+		return nil, &runtime.JobCapabilityError{Reason: "streaming container jobs require a transient job; shared compose jobs cannot expose isolated byte streams"}
+	}
+	if err := streams.Role.Validate(); err != nil {
+		return nil, err
+	}
+	if err := streamJobSupport(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("container job %s failed: %w", job.Name, err)
+	}
+	runner, ok := b.streamRunner()
+	if !ok {
+		return nil, fmt.Errorf("compose backend does not support streaming jobs")
+	}
+	env, err := runtime.ReadEnvFile(target.EnvFile)
+	if err != nil {
+		return nil, err
+	}
+	configuration := job.Configuration
+	if streams.Role == runtime.StreamRoleSave {
+		configuration, err = configurationWithLoggingDisabled(configuration, job.Name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	container := oneOffContainerName(job)
+	args := streamConfigurationArgs(target.Root, target.EnvFile)
+	args = append(args, "run", "--rm", "--no-deps", "-T", "--name", container, job.Name)
+	eventRunner, ok := b.containerEventRunner()
+	if !ok {
+		return nil, fmt.Errorf("compose backend does not support container event subscriptions")
+	}
+	events, err := eventRunner.subscribeContainerEvents(ctx, target.Root, env, container)
+	if err != nil {
+		return nil, err
+	}
+	defer events.stop()
+	stdout := streams.Stdout
+	if streams.Role == runtime.StreamRoleSave && stdout == nil {
+		stdout = io.Discard
+	}
+	diagnostics, runErr := runner.RunStreams(ctx, target.Root, env, configuration, streams.Stdin, stdout, "docker", args...)
+	diagnostics = safeJobOutput(diagnostics)
+	if runErr == nil {
+		return diagnostics, nil
+	}
+	killed := ctx.Err() != nil
+	if killed {
+		runErr = ctx.Err()
+	}
+	removeErr := b.cleanupFailedContainer(context.WithoutCancel(ctx), target, job.Name, container, killed, events)
+	return diagnostics, errors.Join(fmt.Errorf("container job %s failed: %w", job.Name, runErr), removeErr)
+}
+
 // runTransientJob runs a job as a one-off container, `docker compose run --rm`
 // from the request's in-memory configuration, so the attempt leaves nothing in
 // the shared project: no recreated service container that keeps its
@@ -195,9 +569,10 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 // redacted before it is cut to its last maxJobOutputBytes so the cut cannot
 // leave part of a secret.
 //
-// Cancelling ctx kills the docker client but not the container, which the
-// daemon keeps running, so the container is named up front and removed by that
-// name (removeCanceledJob).
+// The docker client runs in its own process group and is killed immediately on
+// cancellation. A Docker event subscription started before it records whether
+// the daemon created the named container. After failure, a created container is
+// removed exactly once and its destroy event is confirmed without polling.
 func (b Backend) runTransientJob(ctx context.Context, runner InputRunner, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("container job %s failed: %w", job.Name, err)
@@ -209,71 +584,124 @@ func (b Backend) runTransientJob(ctx context.Context, runner InputRunner, target
 	container := oneOffContainerName(job)
 	args := configurationArgs(target.EnvFile)
 	args = append(args, "run", "--rm", "--no-deps", "-T", "--name", container, job.Name)
-	exited := make(chan struct{})
-	removed := make(chan error, 1)
-	stop := context.AfterFunc(ctx, func() {
-		removed <- b.removeCanceledJob(context.WithoutCancel(ctx), target, container, exited)
-	})
-	out, runErr := runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", args...)
-	close(exited)
-	out = jobOutputTail([]byte(logctx.RedactText(runtime.StripTerminalControls(string(out)))))
-	var removeErr error
-	if !stop() {
-		if err := <-removed; err != nil {
-			removeErr = fmt.Errorf("remove container %s of canceled job %s: %w", container, job.Name, err)
-		}
+	eventRunner, ok := b.containerEventRunner()
+	if !ok {
+		return nil, fmt.Errorf("compose backend does not support container event subscriptions")
 	}
+	events, err := eventRunner.subscribeContainerEvents(ctx, target.Root, env, container)
+	if err != nil {
+		return nil, err
+	}
+	defer events.stop()
+	var out []byte
+	var runErr error
+	if isolated, ok := runner.(transientInputRunner); ok {
+		out, runErr = isolated.RunTransientInput(ctx, target.Root, env, job.Configuration, "docker", args...)
+	} else {
+		out, runErr = runner.RunInput(ctx, target.Root, env, job.Configuration, "docker", args...)
+	}
+	out = safeJobOutput(out)
 	if runErr != nil {
-		if ctx.Err() != nil {
-			// The client was killed; why matters more than its exit status.
+		killed := ctx.Err() != nil
+		if killed {
 			runErr = ctx.Err()
 		}
+		removeErr := b.cleanupFailedContainer(context.WithoutCancel(ctx), target, job.Name, container, killed, events)
 		return out, errors.Join(fmt.Errorf("container job %s failed: %w", job.Name, runErr), removeErr)
 	}
-	// The run succeeded, so --rm has removed its container; a removal that a
-	// cancel landing just after it started can only fail on a container that
-	// is gone, and must not fail the job.
 	return out, nil
 }
 
-// transientRemoveInterval is how often removeCanceledJob removes the container
-// of a canceled job again while its docker client has yet to exit.
-var transientRemoveInterval = time.Second
-
-// transientRemoveTimeout bounds one `docker rm -f` of a canceled job.
+// transientRemoveTimeout bounds the single `docker rm -f -v` after a failed job
+// and the following wait for Docker's destroy event.
 const transientRemoveTimeout = 30 * time.Second
 
-// removeCanceledJob force-removes the container of a canceled transient job:
-// at once, which stops a running container and so ends the attached client
-// too, then every transientRemoveInterval until the client has exited, in case
-// the compose plugin outlives the killed docker client and starts the
-// container after an earlier removal, and once more after it has exited, when
-// nothing is left to start it, for a container a create in flight left behind.
-// ctx must outlive the cancellation; each removal has its own timeout. The
-// last removal's error is returned.
-func (b Backend) removeCanceledJob(ctx context.Context, target runtime.Target, container string, exited <-chan struct{}) error {
-	ticker := time.NewTicker(transientRemoveInterval)
-	defer ticker.Stop()
-	for {
-		_ = b.removeContainer(ctx, target, container)
-		select {
-		case <-exited:
-			return b.removeContainer(ctx, target, container)
-		case <-ticker.C:
+// transientCreateTimeout is the bounded window in which a killed Docker client
+// may still complete an in-flight container create. It is a variable so tests
+// can cover the timeout without sleeping for the production grace period.
+var transientCreateTimeout = runtime.GracefulWaitDelay
+
+func (b Backend) cleanupFailedContainer(ctx context.Context, target runtime.Target, jobName, container string, killed bool, events containerEventSubscription) error {
+	var eventErr error
+	if killed {
+		createCtx, cancelCreate := context.WithTimeout(ctx, transientCreateTimeout)
+		created, createErr := events.waitCreated(createCtx)
+		cancelCreate()
+		if !created {
+			if errors.Is(createErr, context.DeadlineExceeded) {
+				// No create reached Docker's pushed stream within the bounded
+				// in-flight window, so there is no container to remove now. Stop
+				// and drain the subscription once, then report any create it saw
+				// at the boundary instead of silently losing that evidence.
+				events.stop()
+				if events.seenCreate() {
+					return fmt.Errorf("container %s of failed job %s may remain: Docker reported its create after the bounded %s cleanup window", container, jobName, transientCreateTimeout)
+				}
+				// A create after the subscription is stopped is outside the
+				// bounded proof. Make that residual risk visible as well.
+				logctx.From(ctx).WarnContext(ctx, "Docker did not report a container create within the bounded cleanup window; a later create cannot be removed by this attempt",
+					"container", container, "job", jobName, "window", transientCreateTimeout)
+				return nil
+			}
+			if createErr == nil {
+				createErr = errors.New("event subscription ended without a create event")
+			}
+			eventErr = fmt.Errorf("docker creation could not be confirmed: %w", createErr)
 		}
+	} else {
+		// Ordinary command failures cannot leave a daemon create in flight. Probe
+		// only for a subscription that has already died; never delay removal.
+		eventErr = events.eventError()
 	}
+	alreadyGone, removeErr := b.removeContainer(ctx, target, container)
+	if removeErr != nil {
+		removeErr = fmt.Errorf("remove container %s of failed job %s: %w", container, jobName, removeErr)
+	}
+	if eventErr != nil {
+		confirmationErr := fmt.Errorf("container %s of failed job %s may remain: removal could not be confirmed from Docker events: %w", container, jobName, eventErr)
+		return errors.Join(removeErr, confirmationErr)
+	}
+	if removeErr != nil && !killed {
+		return removeErr
+	}
+	if alreadyGone && !killed {
+		// A normal client failure cannot race an in-flight create. Docker either
+		// auto-removed the container (including its anonymous volumes) or never
+		// made one, so there will be no later destroy event to await.
+		eventErr = events.eventError()
+		if eventErr == nil {
+			return removeErr
+		}
+		confirmationErr := fmt.Errorf("container %s of failed job %s may remain: removal could not be confirmed from Docker events: %w", container, jobName, eventErr)
+		return errors.Join(removeErr, confirmationErr)
+	}
+	destroyCtx, cancelDestroy := context.WithTimeout(ctx, transientRemoveTimeout)
+	destroyed, destroyErr := events.waitDestroyed(destroyCtx)
+	cancelDestroy()
+	if !destroyed {
+		if destroyErr == nil {
+			destroyErr = errors.New("event subscription ended without a destroy event")
+		}
+		destroyErr = fmt.Errorf("container %s of failed job %s may remain: removal could not be confirmed from Docker events: %w", container, jobName, destroyErr)
+	}
+	return errors.Join(removeErr, destroyErr)
 }
 
-// removeContainer runs `docker rm -f` on one container. A container that is
-// already gone is no error, as older docker clients report it.
-func (b Backend) removeContainer(ctx context.Context, target runtime.Target, container string) error {
+// removeContainer runs `docker rm -f -v` on one container. Its boolean result
+// reports that Docker removed no named container, says the container is already
+// gone, or says removal is already in progress.
+func (b Backend) removeContainer(ctx context.Context, target runtime.Target, container string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, transientRemoveTimeout)
 	defer cancel()
-	out, err := b.run(ctx, target.Root, target.EnvFile, "rm", "-f", container)
-	if err != nil && strings.Contains(string(out), "No such container") {
-		return nil
+	out, err := b.run(ctx, target.Root, target.EnvFile, "rm", "-f", "-v", container)
+	if err == nil {
+		return !slices.Contains(strings.Fields(string(out)), container), nil
 	}
-	return err
+	detail := strings.ToLower(string(out))
+	if strings.Contains(detail, "no such container") || strings.Contains(detail, "already in progress") {
+		return true, nil
+	}
+	return false, err
 }
 
 // oneOffContainerName names one run of a transient job as docker compose names
@@ -300,6 +728,28 @@ func jobOutputTail(out []byte) []byte {
 		return out[len(out)-maxJobOutputBytes:]
 	}
 	return out
+}
+
+func safeJobOutput(out []byte) []byte {
+	return jobOutputTail([]byte(logctx.RedactText(runtime.StripTerminalControls(string(out)))))
+}
+
+func configurationWithLoggingDisabled(configuration []byte, service string) ([]byte, error) {
+	var document File
+	if err := yaml.Unmarshal(configuration, &document); err != nil {
+		return nil, fmt.Errorf("decode compose job configuration: %w", err)
+	}
+	jobService, ok := document.Services[service]
+	if !ok {
+		return nil, fmt.Errorf("compose job %s is absent from compiled runtime configuration", service)
+	}
+	jobService.Logging = &Logging{Driver: "none"}
+	document.Services[service] = jobService
+	encoded, err := Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("encode compose job configuration: %w", err)
+	}
+	return encoded, nil
 }
 
 func (b Backend) Apply(ctx context.Context, target runtime.Target) error {
@@ -488,11 +938,35 @@ func configurationArgs(envFile string) []string {
 	return args
 }
 
+func streamConfigurationArgs(root, envFile string) []string {
+	args := []string{"compose", "-f", "/dev/fd/3", "--project-directory", root}
+	if envFile != "" {
+		args = append(args, "--env-file", envFile)
+	}
+	return args
+}
+
 func (b Backend) inputRunner() (InputRunner, bool) {
 	if b.Runner == nil {
 		return ExecRunner{}, true
 	}
 	runner, ok := b.Runner.(InputRunner)
+	return runner, ok
+}
+
+func (b Backend) streamRunner() (StreamRunner, bool) {
+	if b.Runner == nil {
+		return ExecRunner{}, true
+	}
+	runner, ok := b.Runner.(StreamRunner)
+	return runner, ok
+}
+
+func (b Backend) containerEventRunner() (containerEventRunner, bool) {
+	if b.Runner == nil {
+		return ExecRunner{}, true
+	}
+	runner, ok := b.Runner.(containerEventRunner)
 	return runner, ok
 }
 

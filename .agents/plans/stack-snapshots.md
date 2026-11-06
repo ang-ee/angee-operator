@@ -368,25 +368,47 @@ member declaration (third review, finding 11). `JobBackend.RunJob` and the compo
    `docker compose -f /dev/fd/3 --project-directory <root> [--env-file F] run --rm --no-deps -T --name <c> <job>`.
    The YAML goes on `ExtraFiles[0]`; stdin and stdout come from `JobStreams`; stderr goes
    to diagnostics.
-2. **No-poll cleanup (B11).**
-   - The client runs in its **own process group**.
-   - Cancel sends SIGINT to the group, and SIGKILL to the group after `WaitDelay`.
-     Killing the group means the compose plugin cannot outlive the client, which is the
-     race `removeCanceledJob`'s ticker covers today.
-   - After the client has exited, whether it failed or was cancelled, Angee makes
-     **exactly one** `docker rm -f <c>` call with a fresh, bounded context. "No such
-     container" counts as success.
-   - P1 replaces the ticker for all transient jobs. A container that still survives is
-     reported in the receipt and never re-polled.
+2. **No-poll cleanup (B11), as built in P1 after two reviews.**
+   - **Process group.** The docker client runs in its own process group, which also
+     holds the compose plugin. On cancel the group is **SIGKILLed at once**: the client
+     could miss SIGINT during startup and keep streaming for a whole `WaitDelay`.
+     Docker owns the container's cleanup through the removal below.
+   - **Event subscription.** Before the client starts, Angee subscribes to Docker's own
+     events for this job's unique container name:
+     `docker events --filter type=container --filter container=<c>`. The subscription
+     replays from `--since` one minute back, to tolerate clock skew, and is stopped on
+     every path.
+   - **Removal.** After any non-success exit, Angee makes **exactly one**
+     `docker rm -f -v <c>` call with a fresh, bounded context. `-v` matters: our removal
+     wins the race against `run --rm`'s auto-remove, so without it anonymous volumes
+     would leak. "No such container" and "removal already in progress" count as gone.
+     - Only a **killed** client can leave a create in flight. In that case Angee waits
+       a bounded window on the event stream for a `create` event before removing, then
+       waits a bounded time for the `destroy` event.
+     - A client that exited on its own had every create answered, so the removal
+       happens at once with no window.
+     - If the event stream ends early, the removal still happens, and the receipt
+       reports that it could not be confirmed.
+   - **What is reported.** A container whose removal was not confirmed, or a create seen
+     after the window, is reported in the receipt and never re-polled. This replaces
+     `removeCanceledJob`'s ticker for all transient jobs.
 3. **Logs.** The compose model gains `Logging`. Save jobs compile with
-   `logging: {driver: none}` (R7).
+   `logging: {driver: none}` (R7). Roles are validated, so a mis-tagged save can't skip
+   this.
 
 **process-compose** (`internal/runtime/proccompose`):
 1. `cmd.Stdin` is set from `JobStreams`, or `/dev/null`; never a TTY.
-2. Local **stream saves** go through fd 3, compiled as `exec 1>&3 3>&-; <command>`, and
-   stay refused by a capability gate until P1's end-to-end test passes (binary payload,
-   early consumer death, producer failure, cancel). Files saves and stream restores are
-   unaffected.
+2. **Job stdout through fd 3.** Whenever `JobStreams.Stdout` is set, the job's stdout
+   goes through fd 3, with the command compiled as `exec 1>&3 3>&-; <command>`. This
+   gives one `Stdout` contract across both backends.
+   - **Proof.** The end-to-end proof (binary payload, early consumer death, producer
+     failure, cancel) runs in CI: the ubuntu job installs
+     `github.com/f1bonacc1/process-compose@v1.122.0` and sets
+     `ANGEE_REQUIRE_PROCESS_COMPOSE=1`. That allows local stream saves.
+   - **Bounded copy.** After the process exits, the fd-3 copy has an **idle** bound: the
+     read deadline is re-armed before each read. Survivors in the group are then
+     killed. A background child holding fd 3 can't hang a save, and a slow consumer
+     (restic stalling on a remote repository) can't fail a complete one.
 3. Cancel sends SIGINT to the isolated group, and SIGKILL to the group after `WaitDelay`.
    A SIGKILLed operator can still orphan a job; the docs say so.
 4. Windows keeps refusing transient local jobs.

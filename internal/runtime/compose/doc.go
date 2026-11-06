@@ -24,6 +24,13 @@ type Service struct {
 	DependsOn       map[string]ServiceDependency `yaml:"depends_on,omitempty"`
 	StopGracePeriod string                       `yaml:"stop_grace_period,omitempty"`
 	Restart         string                       `yaml:"restart,omitempty"`
+	Logging         *Logging                     `yaml:"logging,omitempty" json:"logging,omitempty"`
+}
+
+// Logging configures Docker's logging driver for a service.
+type Logging struct {
+	Driver  string            `yaml:"driver,omitempty" json:"driver,omitempty"`
+	Options map[string]string `yaml:"options,omitempty" json:"options,omitempty"`
 }
 
 type Healthcheck struct {
