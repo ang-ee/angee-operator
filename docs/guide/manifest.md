@@ -414,8 +414,8 @@ jobs:
 
 Before any selected job command runs, the operator stops the union of those
 jobs' held services, once per service. Each name must identify a declared
-service; duplicate names within a job and holds on manual capture jobs are
-invalid. An absent local supervisor or process is already stopped.
+service; duplicate names within a job are invalid. An absent local supervisor
+or process is already stopped.
 
 `angee job run prepare` runs only `prepare` and leaves its held services stopped.
 Use `angee job run prepare --chained-restart` to run the downstream jobs and

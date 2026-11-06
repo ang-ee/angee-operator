@@ -69,7 +69,7 @@ This is not green field. The operator already provides:
 
 And four sibling proposals are load-bearing dependencies (below):
 `compose-project-isolation`, `ephemeral-workspace-pool`, `global-source-registry`,
-`stack-update-template-sync` — plus `operator-backup-restore` for the data plane.
+`stack-update-template-sync` — plus stack snapshots (planned) for the data plane.
 
 ## The topology
 
@@ -83,7 +83,7 @@ stacks/local  (the instance dir — persistent, git-tracked)
       ├── git worktree of a source (e.g. angee-django) on workspace/<name>
       ├── django   (container: base image + workdir: source://app  [deps baked, code mounted])
       ├── vite      (container: pnpm dev, same mount)
-      ├── postgres  (container: pgvector — OPT-IN, bind data, leased port)   ← via operator-backup-restore for seed
+      ├── postgres  (container: pgvector — OPT-IN, bind data, leased port)   ← via stack snapshots (planned) for seed
       └── agent-<name>-<agent>  (container: codex | opencode | claude, mounts /workspace)
 ```
 
@@ -151,7 +151,7 @@ is the cleaner, framework-owned equivalent of fyltr's `djangoflow/docker-django`
   `workdir: source://app`), leased its own ports,
 - **optionally** adds a `postgres` service (`db: sqlite|postgres`, pgvector, bind
   `persist:` data, leased port) for RAG / real-data work — seeded out-of-band via
-  `operator-backup-restore`, never from the template.
+  stack snapshots (planned), never from the template.
 
 Each workspace is an **isolated compose project** (§Isolation), so many run at
 once on the one daemon.
@@ -186,7 +186,7 @@ The develop-and-merge loop, entirely over existing primitives:
    git→apply reconciler in `local-platform-instance` M5).
 5. Repeat.
 
-**Data does not travel with the merge** (see `operator-backup-restore`):
+**Data does not travel with the merge** (stack snapshots, planned):
 migrations run forward against the target's data; snapshots are the rollback net.
 
 ## Isolation & naming (the load-bearing correctness)
@@ -213,10 +213,10 @@ It retires angee-django's interim `name: ${example}-${name}` template hack.
 | Fact | Owner |
 | --- | --- |
 | Run services / mount code / lease ports / worktrees | **operator** (generic mechanism) |
-| Snapshot/restore data | **operator** `backup.Backend` (declared hooks) |
+| Snapshot/restore data | **operator** — stack snapshots (planned) |
 | Which sources/agents/workspaces exist, who may do what | **Angee** (Django), REBAC-gated |
 | Stack/workspace *shape* | templates |
-| A service's backup protocol | the service template |
+| A service's snapshot protocol | the service template |
 
 Same split as `global-source-registry`: the operator stays kind-free; Angee owns
 meaning and access.
@@ -265,7 +265,7 @@ meaning and access.
 - **Postgres: dedicated-per-workspace vs shared-per-database.** Dedicated (full
   isolation for destructive migrations / RAG re-index) is the default for this
   use case; shared-instance-per-database is the efficiency option. Seeding is
-  `operator-backup-restore`, not templates.
+  stack snapshots (planned), not templates.
 
 ## Out of scope
 
@@ -296,5 +296,5 @@ meaning and access.
   the kind-free mechanism/policy split.
 - [`stack-update-template-sync.md`](./stack-update-template-sync.md) — re-render
   from template; the M5 reconciler precursor.
-- [`operator-backup-restore.md`](./operator-backup-restore.md) — the data plane
-  that seeds workspaces and nets experiment rollbacks.
+- The data plane that seeds workspaces and nets experiment rollbacks is stack
+  snapshots (planned).

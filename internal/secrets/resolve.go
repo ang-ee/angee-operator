@@ -35,7 +35,7 @@ func resolveDeclarations(ctx context.Context, backend Backend, declarations map[
 			return nil, fmt.Errorf("get secret %q: %w", name, err)
 		}
 		if !ok && !materialize && (spec.Import != "" || spec.Generated || spec.Required) {
-			return nil, fmt.Errorf("original secret %q is missing; recovery capture never generates or imports replacement keys", name)
+			return nil, fmt.Errorf("original secret %q is missing; recovery never generates or imports replacement keys", name)
 		}
 		if !ok && spec.Import != "" {
 			importValue, err := importSecret(spec.Import, lookup)

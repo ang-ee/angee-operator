@@ -32,9 +32,4 @@ type Resolver struct {
 	// reach); nil in contexts that don't serve it, in which case the
 	// serviceEndpoint.logStream field is null.
 	LogStreamDescriptor func(ctx context.Context, service string) *api.LogStream
-	// IsAdmin reports whether the request behind ctx authenticated with the
-	// operator's admin bearer. Injected by the operator package, which owns
-	// authentication; nil means no caller is admin, so backup receipts stay
-	// hidden.
-	IsAdmin func(ctx context.Context) bool
 }

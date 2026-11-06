@@ -38,15 +38,12 @@ type Platform struct {
 	procBackend     runtime.Backend
 	portUnavailable func(int) bool
 	slotDrivers     func(vcs.Slot) vcs.Driver                   // nil selects slotDriver's default
-	backupLayers    func(vcs.Slot) vcs.BackupLayer              // nil selects backupLayer's default
 	jjProbe         func(context.Context) jjdriver.Capabilities // nil probes this machine (jjdriver.Probe)
 	migrateFault    func(step string) error                     // a test's failure after a migrate step; nil fails none
 	jobOutput       *jobOutputSink
 	interactive     bool
-	backupMu        sync.Mutex
 	jobRunsMu       sync.RWMutex
 	jobRuns         map[string]api.JobRunOperation
-	latestJobRun    string
 	activeJobRun    bool
 	jobRunStacks    map[string]*manifest.Stack
 	jobRunCompiled  map[string]*CompiledStack
@@ -705,21 +702,8 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 	return compile(stack, root, resolvedSecrets, nil, false)
 }
 
-// compile renders the stack's runtime documents. It leaves every backup capture
-// job out, whatever inputs it is given, so neither the generated runtime files
-// nor a job run's snapshot can start one.
+// compile renders the stack's runtime documents.
 func compile(stack *manifest.Stack, root string, resolvedSecrets map[string]string, jobInputs map[string]map[string]string, resolveProcessSecrets bool) (*CompiledStack, error) {
-	return compileRuntime(stack, root, resolvedSecrets, jobInputs, resolveProcessSecrets, "")
-}
-
-// compileCapture compiles the private snapshot a backup runs one capture job
-// in, with the output paths the backup chose as that job's inputs. It is the
-// only compile that includes a capture job.
-func compileCapture(stack *manifest.Stack, root string, resolvedSecrets map[string]string, capture string, inputs map[string]string) (*CompiledStack, error) {
-	return compileRuntime(stack, root, resolvedSecrets, map[string]map[string]string{capture: inputs}, true, capture)
-}
-
-func compileRuntime(stack *manifest.Stack, root string, resolvedSecrets map[string]string, jobInputs map[string]map[string]string, resolveProcessSecrets bool, capture string) (*CompiledStack, error) {
 	secretEnvVars := map[string]string{}
 	for name := range resolvedSecrets {
 		secretEnvVars[name] = substitute.SecretEnvName(name)
@@ -840,9 +824,6 @@ func compileRuntime(stack *manifest.Stack, root string, resolvedSecrets map[stri
 
 	for _, name := range sortedKeys(stack.Jobs) {
 		job := stack.Jobs[name]
-		if job.Capture != nil && name != capture {
-			continue
-		}
 		jobCtx := ctx
 		if resolveProcessSecrets && job.Runtime == manifest.RuntimeLocal {
 			jobCtx.SecretEnvVars = nil

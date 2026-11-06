@@ -456,8 +456,8 @@ func TestBackendRunJobReportsATransientJobsFailure(t *testing.T) {
 	}
 }
 
-// A transient job's output, which a backup receipt keeps, carries no terminal
-// controls: a capture's colours and titles are dropped and its text kept.
+// A transient job's output, which a job receipt keeps, carries no terminal
+// controls: a job's colours and titles are dropped and its text kept.
 func TestBackendRunJobDropsTerminalControlsFromATransientJobsOutput(t *testing.T) {
 	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) {
 		return []byte("\x1b]0;db.internal\apg_dump: \x1b[31merror\x1b[0m: connection refused\n"), errors.New("exit status 1")

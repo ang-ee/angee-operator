@@ -6,6 +6,17 @@ latest tag.
 
 ## Unreleased
 
+### Removed
+
+- **Manual backups are removed.** `POST /backups/preview`, `POST /backups` and
+  `GET /backups/{id}/archive`; `jobs.<name>.capture` and
+  `persist.<name>.backup`; the `BACKUP` job-run node kind; and
+  `JobRunOperation.artifact` and `request_digest` are removed; they were never
+  used, and stack snapshots (planned) will replace them. An
+  `angee.yaml` that still declares `capture:` or `persist.<name>.backup` now
+  fails strict loading. Any leftover backup receipts in `state/job-runs/` with
+  `root_job` set to `"backup"` can be deleted.
+
 ## v0.27.3 — 2026-10-30
 
 ### Changed
