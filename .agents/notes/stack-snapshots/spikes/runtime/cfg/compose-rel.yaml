@@ -1,0 +1,11 @@
+name: angee-spike-rt
+services:
+  # A relative bind mount: resolves against the compose project directory.
+  restore-rel:
+    image: alpine:3
+    volumes:
+      - ./data:/data:ro
+    command:
+      - sh
+      - -c
+      - 'if test -f /data/p64; then echo "bind-ok" >&2; else echo "bind-MISSING" >&2; fi; sha256sum >&2'

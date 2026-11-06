@@ -1,0 +1,6 @@
+ Container angee-spike-s3b-40f9e577 Creating 
+ Container angee-spike-s3b-40f9e577 Created 
+container-stderr-before
+container-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  /data/p64
+gorun: exit=0 in=0 out=67108864 elapsed=1.558s ctx=<nil> err=<nil>

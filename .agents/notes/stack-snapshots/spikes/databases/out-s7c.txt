@@ -1,0 +1,6 @@
+writer sleep 0.002s/txn for 25s (db 228 MiB): .backup started t+2.0s, returned t+25.2s (took 23.2s, rc=0); writer exited t+25.2s; copy integrity/rows/meta = ('ok', 1047500, 1047500)
+    VACUUM INTO under the same writer took 0.38s; copy = ('ok', 1066400, 1066400)
+writer sleep 0.05s/txn for 25s (db 102 MiB): .backup started t+2.0s, returned t+2.3s (took 0.3s, rc=0); writer exited t+25.1s; copy integrity/rows/meta = ('ok', 449200, 449200)
+    VACUUM INTO under the same writer took 0.20s; copy = ('ok', 471700, 471700)
+writer sleep 0.5s/txn for 25s (db 101 MiB): .backup started t+2.0s, returned t+2.2s (took 0.2s, rc=0); writer exited t+25.1s; copy integrity/rows/meta = ('ok', 462500, 462500)
+    VACUUM INTO under the same writer took 0.24s; copy = ('ok', 464850, 464850)

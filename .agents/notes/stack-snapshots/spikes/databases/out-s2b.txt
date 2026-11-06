@@ -1,0 +1,37 @@
+
+===== pg_dump -Fc -Z zstd =====
+    real 1.685s
+    size 97345522
+--- intact: pg_restore -f /dev/null
+    real 0.275s
+    exit=0
+flipped 1 bytes at offset 48672761 of 97345522
+--- 1-byte flip: pg_restore --list
+    exit=0
+--- 1-byte flip: pg_restore -f /dev/null
+    exit=0
+
+===== pg_dump -Fc -Z lz4 =====
+    real 0.950s
+    size 171729508
+--- intact: pg_restore -f /dev/null
+    real 0.127s
+    exit=0
+flipped 1 bytes at offset 85864754 of 171729508
+--- 1-byte flip: pg_restore --list
+    exit=0
+--- 1-byte flip: pg_restore -f /dev/null
+    exit=0
+
+===== pg_dump -Fc -Z gzip:9 =====
+    real 6.413s
+    size 103488356
+--- intact: pg_restore -f /dev/null
+    real 0.772s
+    exit=0
+flipped 1 bytes at offset 51744178 of 103488356
+--- 1-byte flip: pg_restore --list
+    exit=0
+--- 1-byte flip: pg_restore -f /dev/null
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1

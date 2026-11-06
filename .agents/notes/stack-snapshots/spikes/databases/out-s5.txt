@@ -1,0 +1,133 @@
+
+===== restic init =====
+init ok
+
+===== s1: backup app (small, pgvector) and bigdb (~218 MB COPY data) via pipe =====
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 4.690 KiB (2.190 KiB stored)
+processed 1 files, 3.812 KiB in 0:00
+snapshot 59804c7b saved
+    real 0.781s
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 99.228 MiB (97.794 MiB stored)
+processed 1 files, 99.223 MiB in 0:04
+snapshot 20ddbb17 saved
+    real 4.254s
+ID        Time                 Host        Tags               Paths                          Size
+-------------------------------------------------------------------------------------------------------
+59804c7b  2026-11-06 10:53:44  stackA      angee.snapshot=s1  /databases/app/app.pgdump      3.812 KiB
+20ddbb17  2026-11-06 10:53:45  stackA      angee.snapshot=s1  /databases/bigdb/bigdb.pgdump  99.223 MiB
+-------------------------------------------------------------------------------------------------------
+Timestamps shown in local time
+2 snapshots
+snapshot 20ddbb17 of [/databases/bigdb/bigdb.pgdump] at 2026-11-06 10:53:45.637548 -0400 AST by user@stackA filtered by []:
+/databases
+/databases/bigdb
+/databases/bigdb/bigdb.pgdump
+
+===== fresh target angee-spike-db-dst5 (POSTGRES_DB=app POSTGRES_USER=angee) =====
+
+===== restore app and bigdb: restic dump | docker exec -i pg_restore --no-owner --no-acl --single-transaction --exit-on-error =====
+--- app
+    real 0.766s
+    pipeline exit=0
+--- bigdb
+    real 2.575s
+    pipeline exit=0
+
+===== verify equality =====
+  app: src=75cbef0943e3b1cd dst=75cbef0943e3b1cd EQUAL
+  bigdb: src=6a9c63f2b5c68c2b dst=6a9c63f2b5c68c2b EQUAL
+  bigdb: src=536a9d8b7a7518bb dst=536a9d8b7a7518bb EQUAL
+  bigdb rows: src=2000000 dst=2000000
+
+===== sizes =====
+  bigdb -Fc dump bytes: 104042452
+  repo on disk after s1: 98M
+     Snapshots processed:  2
+        Total Blob Count:  82
+ Total Uncompressed Size:  99.235 MiB
+              Total Size:  97.793 MiB
+    Compression Progress:  100.00%
+       Compression Ratio:  1.01x
+Compression Space Saving:  1.45%
+
+===== dedup: s2 unchanged gzip, then update 1000 rows -> s3 gzip; same with -Z0 (z1, z2) =====
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 2.302 MiB (2.263 MiB stored)
+processed 1 files, 99.223 MiB in 0:04
+snapshot 98248817 saved
+    real 4.254s
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 99.224 MiB (97.848 MiB stored)
+processed 1 files, 99.219 MiB in 0:04
+snapshot 29f9a42c saved
+    real 4.205s
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 217.504 MiB (92.490 MiB stored)
+processed 1 files, 217.493 MiB in 0:01
+snapshot c119cb50 saved
+    real 1.542s
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 217.504 MiB (92.493 MiB stored)
+processed 1 files, 217.493 MiB in 0:01
+snapshot 001d2ea2 saved
+    real 1.645s
+  repo on disk now: 383M
+
+===== failure semantics: failing producer in a pipe vs --stdin-from-command =====
+--- pipe: pg_dump of a missing DB | restic backup --stdin
+pg_dump: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  database "nosuchdb" does not exist
+error: failed to save /databases/nosuchdb/nosuchdb.pgdump: read nosuchdb.pgdump: no data read
+Files:           0 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 620 B (616 B stored)
+processed 0 files, 0 B in 0:00
+snapshot dc7736fe saved
+Warning: at least one source file could not be read
+    pipeline exit (pipefail)=3
+--- pipe: producer writes partial output then exits 3
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            2 new,     0 changed,     0 unmodified
+Added to the repository: 918 B (872 B stored)
+processed 1 files, 12 B in 0:00
+snapshot 0573961f saved
+    pipeline exit (pipefail)=3
+--- --stdin-from-command: producer writes partial output then exits 3
+using parent snapshot 0573961f
+error: failed to save /databases/partial/partial.pgdump: Fatal: command failed: exit status 3
+error: no result
+Fatal: unable to save snapshot: failed to save /databases/partial/partial.pgdump: Fatal: command failed: exit status 3
+    restic exit=1
+--- --stdin-from-command: docker exec pg_dump (success)
+using parent snapshot 0573961f
+Files:           1 new,     0 changed,     0 unmodified
+Dirs:            1 new,     1 changed,     0 unmodified
+Added to the repository: 4.690 KiB (2.188 KiB stored)
+processed 1 files, 3.812 KiB in 0:00
+snapshot 0fbfeefb saved
+    real 0.873s
+    restic exit=0
+--- snapshots tagged fail*:
+ID        Time                 Host        Tags                  Paths                                Size
+----------------------------------------------------------------------------------------------------------
+dc7736fe  2026-11-06 10:54:28  stackA      angee.snapshot=fail1  /databases/nosuchdb/nosuchdb.pgdump  0 B
+0573961f  2026-11-06 10:54:29  stackA      angee.snapshot=fail2  /databases/partial/partial.pgdump    12 B
+----------------------------------------------------------------------------------------------------------
+Timestamps shown in local time
+2 snapshots
+--- restoring the fail2 snapshot:
+pg_restore: error: unsupported version (112.97) in file header
+    exit=1
+
+===== restic check --read-data =====
+read all data
+[0:00] 100.00%  37 / 37 packs
+no errors were found
+    real 1.295s

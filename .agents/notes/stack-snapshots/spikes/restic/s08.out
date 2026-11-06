@@ -1,0 +1,72 @@
+== 8a: wrong password (password file), --json
+  [exit=12] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":12,"message":"Fatal: wrong password or no key found"}
+== 8a': wrong password, non-json
+  [exit=12] stdout_bytes=0 stderr:
+    Fatal: wrong password or no key found
+== 8b: missing repository (local path)
+  [exit=10] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file: stat <scratchpad>/spikes/restic/work/s08-does-not-exist/config: no such file or directo
+== 8b': unreachable rest backend (server not running) -- bounded to 20 s here; full give-up time in s08b
+  [exit=124] stdout_bytes=0 stderr:
+    Stat(<config/>) returned error, retrying after 1.281436902s: Head "http://:***@127.0.0.1:18999/config": dial tcp 127.0.0.1:18999: connect: connection refused
+    Stat(<config/>) returned error, retrying after 1.844217651s: Head "http://:***@127.0.0.1:18999/config": dial tcp 127.0.0.1:18999: connect: connection refused
+    Stat(<config/>) returned error, retrying after 4.813564773s: Head "http://:***@127.0.0.1:18999/config": dial tcp 127.0.0.1:18999: connect: connection refused
+    Stat(<config/>) returned error, retrying after 11.299869752s: Head "http://:***@127.0.0.1:18999/config": dial tcp 127.0.0.1:18999: connect: connection refused
+    Stat(<config/>) returned error, retrying after 16.504944228s: Head "http://:***@127.0.0.1:18999/config": dial tcp 127.0.0.1:18999: connect: connection refused
+    signal terminated received, cleaning up 
+== 8b'': missing repository on a running rest-server (empty --path)
+  [exit=10] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file: \u003cconfig/\u003e does not exist\nIs there a repository at the following location?\nrest:http://127.0.0.1:18002/nope/"}
+  (rest-server 30903 stopped)
+== 8c: --password-command printing the right password
+  [exit=0] stdout_bytes=658 stderr:
+== 8c': --password-command via sh -c with a pipe
+  [exit=0] stdout_bytes=658 stderr:
+== 8c'': --password-command with a bare pipe (is it run by a shell?)
+  [exit=1] stdout_bytes=0 stderr:
+    cat: |: No such file or directory
+    cat: tr: No such file or directory
+    cat: -d: No such file or directory
+    cat: x: No such file or directory
+    {"message_type":"exit_error","code":1,"message":"Fatal: Resolving password failed: exit status 1"}
+== 8c''': RESTIC_PASSWORD_COMMAND env var
+  [exit=0] stdout_bytes=658 stderr:
+== 8d: --password-command printing a wrong password
+  [exit=12] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":12,"message":"Fatal: wrong password or no key found"}
+== 8e: --password-command that exits 1
+  [exit=1] stdout_bytes=0 stderr:
+    vault-down
+    {"message_type":"exit_error","code":1,"message":"Fatal: Resolving password failed: exit status 1"}
+== 8e': --password-command that prints nothing, exit 0
+  [exit=1] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":1,"message":"Fatal: an empty password is not allowed by default. Pass the flag `--insecure-no-password` to restic to disable this check"}
+== 8f: no password source at all (stdin = /dev/null)
+  [exit=1] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":1,"message":"Fatal: an empty password is not allowed by default. Pass the flag `--insecure-no-password` to restic to disable this check"}
+== 8f': both password file and password command set
+  [exit=1] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":1,"message":"Fatal: Resolving password failed: Fatal: Password file and command are mutually exclusive options"}
+== 8g: init on an existing repo
+  [exit=1] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":1,"message":"Fatal: Fatal: create repository at <scratchpad>/spikes/restic/work/s08-repo failed: config file already exists"}
+== 8h: dump unknown snapshot id
+  [exit=1] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":1,"message":"Fatal: failed to find snapshot: no matching ID found for prefix \"deadbeef\""}
+== 8i: SIGINT during backup
+  [exit=130]
+    signal interrupt received, cleaning up 
+    {"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: error flushing repository: context canceled"}
+== 8i': SIGTERM during backup
+  [exit=130]
+    signal terminated received, cleaning up 
+    {"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: error flushing repository: context canceled"}
+   locks left after SIGINT/SIGTERM: 0
+   snapshots: 1 (1 = only the setup snapshot)
+== 8j: invalid flag / usage error
+  [exit=1] stdout_bytes=0 stderr:
+    {"message_type":"exit_error","code":1,"message":"unknown flag: --bogus-flag"}
+== 8k: non-JSON stderr lines with --json on wrong password
+0
+  (^ number of non-JSON stderr lines)

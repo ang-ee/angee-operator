@@ -1,0 +1,103 @@
+######## compose ########
+---- 6a compose: docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N fail-mid-save 3<cfg >out
+exit=7 time=0.84s stdout_bytes=33554432 container_after=
+save-dying
+
+---- 6b1 compose: docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N cat-only 3<cfg | head -c 1000 >/dev/null   (512 MiB producer)
+client_exit=1 head_exit=0 time=0.24s container_after=Up Less than a second
+container_after_3s=Up 3 seconds
+write /dev/stdout: broken pipe
+---- 6b2 compose: endless producer, ... --name N stream 3<cfg | head -c 1000 >/dev/null
+client_exit=1 head_exit=0 time=0.31s container_after=Up Less than a second
+container_after_5s=Up 5 seconds
+docker rm -f angee-spike-s6-fbee6b3e: removed
+---- 6b3 compose: Go writer fails after 1 MiB (os/exec closes the pipe): gorun -wrap -out-fail-after 1048576 -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N stream
+exit=1 time=0.29s container_after=Up Less than a second
+gorun: exit=1 in=0 out=1048576 elapsed=274ms ctx=<nil> err=exit status 1
+container_after_5s=Up 5 seconds
+docker rm -f angee-spike-s6-6b81c765: removed
+---- 6c compose: cat p512 | docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N fail-mid-restore 3<cfg
+producer_exit=141 client_exit=9 time=0.44s container_after=
+restore-dying
+
+---- 6d-save compose (kill): gorun -cancel-after 3s  -config cfg -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N stream >/dev/null
+exit=137 time=3.03s container_now=Up 2 seconds
+gorun: exit=137 in=0 out=0 elapsed=3.002s ctx=context deadline exceeded err=signal: killed
+
+container_after_5s=Up 7 seconds
+docker rm -f angee-spike-s6-f6102d0d: removed
+---- 6d-restore compose (kill): cat /dev/zero | gorun -cancel-after 3s  -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N sink
+producer_exit=141 exit=137 time=3.03s container_now=Up 2 seconds
+gorun: exit=137 in=0 out=0 elapsed=3.003s ctx=context deadline exceeded err=signal: killed
+
+container_after_5s=
+docker rm -f angee-spike-s6-8c99f6ed: removed
+---- 6d-save compose (sigint): gorun -cancel-after 3s -cancel-sigint -config cfg -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N stream >/dev/null
+exit=130 time=3.03s container_now=Up 2 seconds
+
+gorun: exit=130 in=0 out=0 elapsed=3.004s ctx=context deadline exceeded err=exit status 130
+container_after_5s=Up 7 seconds
+docker rm -f angee-spike-s6-57520a91: removed
+---- 6d-restore compose (sigint): cat /dev/zero | gorun -cancel-after 3s -cancel-sigint -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N sink
+producer_exit=141 exit=130 time=3.03s container_now=Up 2 seconds
+
+gorun: exit=130 in=0 out=0 elapsed=3.004s ctx=context deadline exceeded err=exit status 130
+container_after_5s=
+docker rm -f angee-spike-s6-dab58461: removed
+---- 6e compose: restore source errors after 1 MiB: gorun -wrap -in-fail-after 1048576 -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name N restore-count < p64
+exit=125 time=0.41s
+restore-bytes=1048576
+gorun: exit=125 in=1048576 out=0 elapsed=387ms ctx=<nil> err=spike: peer gone
+
+######## process-compose ########
+---- 6a pc: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml fail-mid-save >out
+exit=7 time=0.12s stdout_bytes=33554475 (32 MiB + 43 title bytes expected)
+save-dying
+---- 6b1 pc: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml cat-only | head -c 1000 >/dev/null
+client_exit=255 head_exit=0 time=0.05s job=gone
+26-11-06 10:58:58.440 INF Process cat-only exited with code -1. Shutting down project...
+26-11-06 10:58:58.440 INF Scheduler stopped
+26-11-06 10:58:58.440 INF Thank you for using process-compose
+26-11-06 10:58:58.440 ERR error="project non-zero exit code: -1"
+---- 6b3 pc: Go writer fails after 1 MiB: gorun -wrap -pgid -out-fail-after 1048576 -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml cat-only
+exit=255 time=0.04s job=gone
+gorun: exit=255 in=0 out=1048619 elapsed=26ms ctx=<nil> err=exit status 255
+---- 6b4 pc: Go writer fails after 1 MiB on the endless shell loop (each cat dies of SIGPIPE, the loop goes on)
+exit=255 time=8.02s job=gone
+gorun: exit=255 in=0 out=1065003 elapsed=8.003s ctx=context deadline exceeded err=exit status 255
+---- 6c pc: cat p512 | process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml fail-mid-restore
+producer_exit=141 client_exit=9 time=0.04s
+restore-dying
+---- 6d-save pc (kill): gorun -pgid -wait-delay 11s -cancel-after 3s  -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml stream >/dev/null
+exit=137 time=3.03s job_now=RUNNING(1 procs)
+job_after_2s=RUNNING(1 procs)
+gorun: exit=137 in=0 out=0 elapsed=3.003s ctx=context deadline exceeded err=signal: killed
+pkill: cleaned leftover stream job
+---- 6d-restore pc (kill): cat /dev/zero | gorun -pgid -wait-delay 11s -cancel-after 3s  -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml sink
+producer_exit=141 exit=137 time=136.75s job_now=gone
+job_after_2s=gone
+gorun: exit=137 in=0 out=0 elapsed=3.003s ctx=context deadline exceeded err=signal: killed
+---- 6d-save pc (sigint): gorun -pgid -wait-delay 11s -cancel-after 3s -cancel-sigint -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml stream >/dev/null
+exit=255 time=3.03s job_now=gone
+job_after_2s=gone
+gorun: exit=255 in=0 out=0 elapsed=3.003s ctx=context deadline exceeded err=exit status 255
+26-11-06 11:01:33.649 INF Caught interrupt - Shutting down the running processes...
+26-11-06 11:01:33.649 INF Exited exit_code=-1 process=stream
+26-11-06 11:01:33.649 INF Process stream exited with code -1. Shutting down project...
+---- 6d-restore pc (sigint): cat /dev/zero | gorun -pgid -wait-delay 11s -cancel-after 3s -cancel-sigint -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml sink
+producer_exit=141 exit=255 time=3.03s job_now=gone
+job_after_2s=gone
+gorun: exit=255 in=0 out=0 elapsed=3.004s ctx=context deadline exceeded err=exit status 255
+---- 6e pc: restore source errors after 1 MiB: gorun -wrap -pgid -in-fail-after 1048576 -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-KHLLPx/process-compose.yaml restore-count < p64
+exit=125 time=0.28s
+restore-bytes=1048576
+gorun: exit=125 in=1048576 out=43 elapsed=255ms ctx=<nil> err=spike: peer gone
+---- leftovers
+angee-spike-db-pg17 Up 4 minutes
+angee-spike-db-pg16 Up 4 minutes
+angee-spike-db-dst5 Up 7 minutes
+angee-spike-db-dst4 Up 8 minutes
+angee-spike-db-dst3 Up 9 minutes
+angee-spike-db-src Up 13 minutes
+no leftover processes
+(end)

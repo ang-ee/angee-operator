@@ -1,0 +1,45 @@
+p512 sha=d45578d4e3e41ece7d1ba9167e8372461c75eeb288b650b766b56fb2fa3a9c41
+---- baselines
+host cat p512 >/dev/null: wall=0.03s user=0.00s sys=0.03s client_maxrss=1MiB
+host shasum -a 256 p512: wall=1.27s user=1.16s sys=0.08s client_maxrss=7MiB
+container reads bind-mounted p512 internally (no stream): wall=0.97s user=0.02s sys=0.01s client_maxrss=46MiB
+container sha256sum on bind mount: wall=3.50s user=0.01s sys=0.01s client_maxrss=46MiB
+plain docker run -i, stdin -> container: wall=1.36s user=0.12s sys=0.45s client_maxrss=46MiB
+plain docker run, container stdout -> host: wall=8.01s user=0.14s sys=0.60s client_maxrss=46MiB match=YES
+
+######## compose ########
+---- save compose-json-log: docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name angee-spike-s7-aede39e1 dump512  >out
+exit=0 wall=7.98s user=0.18s sys=0.64s client_maxrss=53MiB bytes=536870912 match=YES
+---- save compose-log-none: docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name angee-spike-s7-aeabf4e0 dump512-nolog  >out
+exit=0 wall=1.45s user=0.15s sys=0.57s client_maxrss=53MiB bytes=536870912 match=YES
+---- save compose-go-wrapped: <scratchpad>/spikes/runtime/bin/gorun -wrap -config <scratchpad>/spikes/runtime/cfg/compose-fail.yaml -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name angee-spike-s7-9ded5570 dump512-nolog  >out
+exit=0 wall=1.47s user=0.27s sys=0.96s client_maxrss=53MiB bytes=536870912 match=YES
+---- restore compose-sink: docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name angee-spike-s7-55e5c0ad sink  <p512
+exit=0 wall=4.27s user=0.20s sys=0.61s client_maxrss=53MiB sink-eof
+---- restore compose-sha: docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name angee-spike-s7-d66397f6 restore-sha  <p512
+exit=0 wall=3.49s user=0.22s sys=0.62s client_maxrss=52MiB job_sha_match=YES
+---- restore compose-go-wrapped-sink: <scratchpad>/spikes/runtime/bin/gorun -wrap -config <scratchpad>/spikes/runtime/cfg/compose-fail.yaml -- docker compose --project-directory <scratchpad>/spikes/runtime -f /dev/fd/3 run --rm --no-deps -T --name angee-spike-s7-247649fa sink  <p512
+exit=0 wall=2.29s user=0.36s sys=1.23s client_maxrss=53MiB sink-eof
+---- docker json-file log of a 512 MiB stdout job (no --rm, then inspect)
+log driver=json-file AutoRemove(with --rm it is set by compose? this run had none)=false
+LogPath=/var/lib/docker/containers/9db16623a2daae213241ab2501da8d8bf6f437b2e3a3feb2e566df9d7bf89325/9db16623a2daae213241ab2501da8d8bf6f437b2e3a3feb2e566df9d7bf89325-json.log
+docker logs replays stdout bytes=40231784
+on-disk json log size in the VM=8234893
+logging: driver none -> docker logs: Error response from daemon: configured logging driver does not support reading
+---- does compose run --rm set AutoRemove (daemon-side removal)?
+AutoRemove=true
+
+######## process-compose ########
+---- save pc-file: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.yaml dump512  >out
+exit=0 wall=0.28s user=0.02s sys=0.09s client_maxrss=52MiB bytes=536870955 match=YES (after stripping 43-byte title)
+---- save pc-go-wrapped-pgid: <scratchpad>/spikes/runtime/bin/gorun -wrap -pgid -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.yaml dump512  >out
+exit=0 wall=0.27s user=0.03s sys=0.29s client_maxrss=52MiB bytes=536870955 match=YES (after stripping 43-byte title)
+---- restore pc-sink: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.yaml sink  <p512
+exit=0 wall=0.27s user=0.03s sys=0.05s client_maxrss=53MiB sink-eof
+---- restore pc-sha: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.yaml restore-sha  <p512
+exit=0 wall=1.67s user=1.46s sys=0.13s client_maxrss=53MiB job_sha_match=YES
+---- restore pc-go-wrapped-pgid-sink: <scratchpad>/spikes/runtime/bin/gorun -wrap -pgid -- process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-Ajp2uh/process-compose.yaml sink  <p512
+exit=0 wall=0.26s user=0.04s sys=0.21s client_maxrss=53MiB sink-eof
+log_location/--log-file after the 512 MiB runs: native log bytes=761
+---- leftovers
+(end)

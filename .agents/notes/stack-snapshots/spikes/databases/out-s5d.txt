@@ -1,0 +1,8 @@
+
+===== kill under --stdin-from-command (gzip dump, SIGTERM after 1.5s) =====
+killed pg_dump pid 1206
+subprocess docker: pg_dump: terminated by user
+error: failed to save /databases/bigdb/bigdb.pgdump: Fatal: command failed: exit status 1
+error: no result
+Fatal: unable to save snapshot: failed to save /databases/bigdb/bigdb.pgdump: Fatal: command failed: exit status 1
+    restic exit=1

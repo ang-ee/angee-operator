@@ -1,0 +1,49 @@
+== 2a: directory with two FIFOs, writers attached (each writes 1 MiB then exits)
+[restic exit=0] (124 = killed by 30s timeout)
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":10,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":11,"data_added":5748,"data_added_packed":4119,"total_files_processed":1,"total_bytes_processed":8,"total_duration":0.739491917,"backup_start":"2026-11-06T10:47:03.061065-04:00","backup_end":"2026-11-06T10:47:03.800566-04:00","snapshot_id":"9bf746d58ecbec28e9e2f5c9ac0cc13b03eabfa21c68412fa9bcbf672a90c203"}
+{"name":"db1.pgdump","type":"fifo","path":"<scratchpad>/spikes/restic/work/s02-fifos/db1.pgdump","uid":501,"gid":0,"mode":33554852,"permissions":"prw-r--r--","mtime":"2026-11-06T10:47:02.983249181-04:00","atime":"2026-11-06T10:47:02.983249181-04:00","ctime":"2026-11-06T10:47:02.983286931-04:00","inode":559287555,"message_type":"node","struct_type":"node"}
+{"name":"db2.pgdump","type":"fifo","path":"<scratchpad>/spikes/restic/work/s02-fifos/db2.pgdump","uid":501,"gid":0,"mode":33554852,"permissions":"prw-r--r--","mtime":"2026-11-06T10:47:02.983338182-04:00","atime":"2026-11-06T10:47:02.983338182-04:00","ctime":"2026-11-06T10:47:02.983367391-04:00","inode":559287556,"message_type":"node","struct_type":"node"}
+{"name":"regular.txt","type":"file","path":"<scratchpad>/spikes/restic/work/s02-fifos/regular.txt","uid":501,"gid":0,"size":8,"mode":420,"permissions":"-rw-r--r--","mtime":"2026-11-06T10:47:02.983981815-04:00","atime":"2026-11-06T10:47:02.983981815-04:00","ctime":"2026-11-06T10:47:02.983981815-04:00","inode":559287557,"message_type":"node","struct_type":"node"}
+writers still blocked? jobs:
+[1]- 47867 Running                    ( head -c 1048576 /dev/urandom > "$DIR/db1.pgdump"; echo "writer1 finished rc=$?" ) &
+[2]+ 47868 Running                    ( head -c 1048576 /dev/urandom > "$DIR/db2.pgdump"; echo "writer2 finished rc=$?" ) &
+== 2a': FIFO given directly as a file argument, writer attached
+[restic exit=0]
+{"message_type":"summary","files_new":0,"files_changed":0,"files_unmodified":0,"dirs_new":10,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":0,"tree_blobs":11,"data_added":4907,"data_added_packed":3913,"total_files_processed":0,"total_bytes_processed":0,"total_duration":0.794800417,"backup_start":"2026-11-06T10:47:05.764131-04:00","backup_end":"2026-11-06T10:47:06.558942-04:00","snapshot_id":"c38d6cec58971a3b9491deabe5cc3c95fa8fecc87a4f2202e3fcf2a3c1b57de7"}
+{"name":"direct.pgdump","type":"fifo","path":"<scratchpad>/spikes/restic/work/s02-fifos/direct.pgdump","uid":501,"gid":0,"mode":33554852,"permissions":"prw-r--r--","mtime":"2026-11-06T10:47:05.701344236-04:00","atime":"2026-11-06T10:47:05.701344236-04:00","ctime":"2026-11-06T10:47:05.701389987-04:00","inode":559287671,"message_type":"node","struct_type":"node"}
+[2]  47868 Terminated: 15             ( head -c 1048576 /dev/urandom > "$DIR/db2.pgdump"; echo "writer2 finished rc=$?" )
+[3]+ 47911 Running                    ( head -c 1048576 /dev/urandom > "$DIR/direct.pgdump"; echo "writer-direct finished rc=$?" ) &
+== 2a'': /dev/fd/N of a process-substitution pipe as a file argument
+[restic exit=3]
+{"message_type":"summary","files_new":0,"files_changed":0,"files_unmodified":0,"dirs_new":2,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":0,"tree_blobs":3,"data_added":1007,"data_added_packed":852,"total_files_processed":0,"total_bytes_processed":0,"total_duration":0.805802584,"backup_start":"2026-11-06T10:47:08.567726-04:00","backup_end":"2026-11-06T10:47:09.373538-04:00","snapshot_id":"8ef465801a59ad1ac6130c88f20ce5fb05b4506365ae5d66a6778bff2c915182"}
+{"message_type":"error","error":{"message":"incomplete metadata for /dev/fd/3: xattr.list /dev/fd/3: operation not permitted"},"during":"archival","item":"/dev/fd/3"}
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}
+{"name":"dev","type":"dir","path":"/dev","uid":0,"gid":0,"mode":2147484013,"permissions":"dr-xr-xr-x","mtime":"2026-11-04T21:26:25-04:00","atime":"2026-11-04T21:26:25-04:00","ctime":"2026-11-04T21:26:25-04:00","inode":333,"message_type":"node","struct_type":"node"}
+{"name":"fd","type":"dir","path":"/dev/fd","uid":0,"gid":0,"mode":2147484013,"permissions":"dr-xr-xr-x","mtime":"2026-11-04T21:26:25-04:00","atime":"2026-11-04T21:26:25-04:00","ctime":"2026-11-04T21:26:25-04:00","inode":341,"message_type":"node","struct_type":"node"}
+{"name":"3","type":"fifo","path":"/dev/fd/3","uid":501,"gid":20,"mode":33554720,"permissions":"pr--r-----","mtime":"2026-11-06T10:47:08.497838862-04:00","atime":"2026-11-06T10:47:08.497838862-04:00","ctime":"2026-11-06T10:47:08.497838862-04:00","inode":206844686,"message_type":"node","struct_type":"node"}
+== 2b: --stdin twice / --stdin-filename twice
+[exit=0]
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":297,"data_added_packed":340,"total_files_processed":1,"total_bytes_processed":4,"total_duration":0.732023458,"backup_start":"2026-11-06T10:47:10.431711-04:00","backup_end":"2026-11-06T10:47:11.163743-04:00","snapshot_id":"b689a2290420f255ccfcea6a876a84d698f8ebf63a8cf98b8795642e99c4c541"}
+  path=/two.dump
+== 2b': --stdin plus file args
+[exit=1]
+{"message_type":"exit_error","code":1,"message":"Fatal: --stdin was specified and files/dirs were listed as arguments"}
+== 2b'': --stdin-from-command with two commands separated
+[exit=0]
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":295,"data_added_packed":341,"total_files_processed":1,"total_bytes_processed":4,"total_duration":0.816485667,"backup_start":"2026-11-06T10:47:12.199073-04:00","backup_end":"2026-11-06T10:47:13.015568-04:00","snapshot_id":"725a697bcea36681895b7649f53e8f5893bdce363748fb111c1bdbc998c61fa3"}
+one
+== 2b''': --stdin-from-command plus --files-from
+[exit=1]
+{"message_type":"exit_error","code":1,"message":"Fatal: --stdin and --files-from cannot be used together"}
+== 2c: rewrite cannot add files; check help for any merge/add capability
+exclude or include filters to control which files are included in the new
+The special tag 'rewrite' will be added to the new snapshots to distinguish
+When rewrite is called with one of the --exclude or --include options,
+  -e, --exclude pattern      exclude a pattern (can be specified multiple times)
+      --exclude-file file    read exclude patterns from a file (can be specified multiple times)
+      --iexclude pattern     same as --exclude pattern but ignores the casing of filenames
+      --iexclude-file file   same as --exclude-file but ignores casing of filenames in patterns
+      --iinclude pattern     same as --include pattern but ignores the casing of filenames
+      --iinclude-file file   same as --include-file but ignores casing of filenames in patterns
+  -i, --include pattern      include a pattern (can be specified multiple times)
+(no output above = no merge/add option)

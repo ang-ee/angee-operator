@@ -1,0 +1,25 @@
+== R1 page-identical backup + stale WAL, checkpoints happened after the backup
+   writer wal_autocheckpoint=1000, backup via py-backup, SIGKILLed writer left: {'app.db': 17235968, 'app.db-shm': 32768, 'app.db-wal': 4317792}
+   backup.db (what we meant to restore): {'integrity': 'ok', 'rows': 37900, 'meta': 37900}
+   old DB as the crash left it         : {'integrity': 'ok', 'rows': 76600, 'meta': 76600}
+   app.db after restore (stale -wal/-shm kept): {'integrity': '*** in database main ***\nTree 3 page 4150: btreeInitPage() returns error code 11\nTree 3 page 4132: btreeInitPage() returns error code 11\nTree 3 page 4114: btree', 'rows': 37900, 'meta': 76600}
+== R2 page-identical backup + stale WAL, no checkpoints at all (autocheckpoint=0)
+   writer wal_autocheckpoint=0, backup via py-backup, SIGKILLed writer left: {'app.db': 4096, 'app.db-shm': 131072, 'app.db-wal': 58578216}
+   backup.db (what we meant to restore): {'integrity': 'ok', 'rows': 37550, 'meta': 37550}
+   old DB as the crash left it         : {'integrity': 'ok', 'rows': 76050, 'meta': 76050}
+   app.db after restore (stale -wal/-shm kept): {'integrity': 'ok', 'rows': 76050, 'meta': 76050}
+== R3 VACUUM INTO backup (re-laid-out pages) + stale WAL
+   writer wal_autocheckpoint=1000, backup via vacuum-into, SIGKILLed writer left: {'app.db': 15962112, 'app.db-shm': 32768, 'app.db-wal': 4152992}
+   backup.db (what we meant to restore): {'integrity': 'ok', 'rows': 36450, 'meta': 36450}
+   old DB as the crash left it         : {'integrity': 'ok', 'rows': 75150, 'meta': 75150}
+   app.db after restore (stale -wal/-shm kept): {'error': 'DatabaseError: database disk image is malformed'}
+== R4 VACUUM INTO backup, -wal/-shm removed before opening
+   writer wal_autocheckpoint=1000, backup via vacuum-into, SIGKILLed writer left: {'app.db': 17186816, 'app.db-shm': 32768, 'app.db-wal': 4152992}
+   backup.db (what we meant to restore): {'integrity': 'ok', 'rows': 38100, 'meta': 38100}
+   old DB as the crash left it         : {'integrity': 'ok', 'rows': 76900, 'meta': 76900}
+   app.db after restore (+ removed -wal/-shm): {'integrity': 'ok', 'rows': 38100, 'meta': 38100}
+== R5 page-identical backup, -wal/-shm removed before opening
+   writer wal_autocheckpoint=1000, backup via py-backup, SIGKILLed writer left: {'app.db': 17186816, 'app.db-shm': 32768, 'app.db-wal': 4152992}
+   backup.db (what we meant to restore): {'integrity': 'ok', 'rows': 37150, 'meta': 37150}
+   old DB as the crash left it         : {'integrity': 'ok', 'rows': 76200, 'meta': 76200}
+   app.db after restore (+ removed -wal/-shm): {'integrity': 'ok', 'rows': 37150, 'meta': 37150}

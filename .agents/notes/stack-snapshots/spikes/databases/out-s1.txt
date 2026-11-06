@@ -1,0 +1,132 @@
+
+===== start source container angee-spike-db-src (pgvector/pgvector:pg17) =====
+postgres (PostgreSQL) 17.10 (Debian 17.10-1.pgdg12+1)
+
+===== setup roles/db/extension/table/grant =====
+ current_database | rows |  owner   |                      acl                       
+------------------+------+----------+------------------------------------------------
+ app              |    4 | appowner | {appowner=arwdDxtm/appowner,reader=r/appowner}
+(1 row)
+
+
+===== dumps =====
+pg_dump -Fc (no flags) -> exit=0
+pg_dump -Fc --no-owner -> exit=0
+pg_dump -Fc --no-acl -> exit=0
+pg_dump -Fc --no-owner --no-acl -> exit=0
+-rw-rw-rw-@ 1 user  wheel  3903 Nov  6 10:48 <scratchpad>/spikes/databases/dumps/s1-a-none.dump
+-rw-rw-rw-@ 1 user  wheel  3903 Nov  6 10:48 <scratchpad>/spikes/databases/dumps/s1-b-noowner.dump
+-rw-rw-rw-@ 1 user  wheel  3720 Nov  6 10:48 <scratchpad>/spikes/databases/dumps/s1-c-noacl.dump
+-rw-rw-rw-@ 1 user  wheel  3720 Nov  6 10:48 <scratchpad>/spikes/databases/dumps/s1-d-both.dump
+cb2607ca701f4906ab3fbdc217e21b7bc2481f070848f6993f640355405b0f32  <scratchpad>/spikes/databases/dumps/s1-a-none.dump
+cb2607ca701f4906ab3fbdc217e21b7bc2481f070848f6993f640355405b0f32  <scratchpad>/spikes/databases/dumps/s1-b-noowner.dump
+f442217313f4170ec25009f088e80ffd37a5ed9b587ec2c03020c188884aa0e9  <scratchpad>/spikes/databases/dumps/s1-c-noacl.dump
+f442217313f4170ec25009f088e80ffd37a5ed9b587ec2c03020c188884aa0e9  <scratchpad>/spikes/databases/dumps/s1-d-both.dump
+
+===== a-none: pg_dump (no flags) =====
+--- pg_restore -f - (no restore flags) | grep OWNER TO|GRANT|REVOKE
+ALTER TABLE public.items OWNER TO appowner;
+ALTER SEQUENCE public.items_id_seq OWNER TO appowner;
+GRANT SELECT ON TABLE public.items TO reader;
+--- pg_restore -l | grep ACL (ACL TOC entries)
+3606; 0 0 ACL public TABLE items appowner
+--- pg_restore -l | TABLE/SEQUENCE/INDEX/EXTENSION entries (last column = owner recorded in TOC)
+2; 3079 16387 EXTENSION - vector 
+3605; 0 0 COMMENT - EXTENSION vector 
+219; 1259 16716 TABLE public items appowner
+3606; 0 0 ACL public TABLE items appowner
+218; 1259 16715 SEQUENCE public items_id_seq appowner
+3607; 0 0 SEQUENCE OWNED BY public items_id_seq appowner
+3598; 0 16716 TABLE DATA public items appowner
+3608; 0 0 SEQUENCE SET public items_id_seq appowner
+3449; 1259 16724 INDEX public items_embedding_hnsw appowner
+
+===== b-noowner: pg_dump --no-owner =====
+--- pg_restore -f - (no restore flags) | grep OWNER TO|GRANT|REVOKE
+ALTER TABLE public.items OWNER TO appowner;
+ALTER SEQUENCE public.items_id_seq OWNER TO appowner;
+GRANT SELECT ON TABLE public.items TO reader;
+--- pg_restore -l | grep ACL (ACL TOC entries)
+3606; 0 0 ACL public TABLE items appowner
+--- pg_restore -l | TABLE/SEQUENCE/INDEX/EXTENSION entries (last column = owner recorded in TOC)
+2; 3079 16387 EXTENSION - vector 
+3605; 0 0 COMMENT - EXTENSION vector 
+219; 1259 16716 TABLE public items appowner
+3606; 0 0 ACL public TABLE items appowner
+218; 1259 16715 SEQUENCE public items_id_seq appowner
+3607; 0 0 SEQUENCE OWNED BY public items_id_seq appowner
+3598; 0 16716 TABLE DATA public items appowner
+3608; 0 0 SEQUENCE SET public items_id_seq appowner
+3449; 1259 16724 INDEX public items_embedding_hnsw appowner
+
+===== c-noacl: pg_dump --no-acl =====
+--- pg_restore -f - (no restore flags) | grep OWNER TO|GRANT|REVOKE
+ALTER TABLE public.items OWNER TO appowner;
+ALTER SEQUENCE public.items_id_seq OWNER TO appowner;
+--- pg_restore -l | grep ACL (ACL TOC entries)
+(no ACL entries)
+--- pg_restore -l | TABLE/SEQUENCE/INDEX/EXTENSION entries (last column = owner recorded in TOC)
+2; 3079 16387 EXTENSION - vector 
+3605; 0 0 COMMENT - EXTENSION vector 
+219; 1259 16716 TABLE public items appowner
+218; 1259 16715 SEQUENCE public items_id_seq appowner
+3606; 0 0 SEQUENCE OWNED BY public items_id_seq appowner
+3598; 0 16716 TABLE DATA public items appowner
+3607; 0 0 SEQUENCE SET public items_id_seq appowner
+3449; 1259 16724 INDEX public items_embedding_hnsw appowner
+
+===== d-both: pg_dump --no-owner --no-acl =====
+--- pg_restore -f - (no restore flags) | grep OWNER TO|GRANT|REVOKE
+ALTER TABLE public.items OWNER TO appowner;
+ALTER SEQUENCE public.items_id_seq OWNER TO appowner;
+--- pg_restore -l | grep ACL (ACL TOC entries)
+(no ACL entries)
+--- pg_restore -l | TABLE/SEQUENCE/INDEX/EXTENSION entries (last column = owner recorded in TOC)
+2; 3079 16387 EXTENSION - vector 
+3605; 0 0 COMMENT - EXTENSION vector 
+219; 1259 16716 TABLE public items appowner
+218; 1259 16715 SEQUENCE public items_id_seq appowner
+3606; 0 0 SEQUENCE OWNED BY public items_id_seq appowner
+3598; 0 16716 TABLE DATA public items appowner
+3607; 0 0 SEQUENCE SET public items_id_seq appowner
+3449; 1259 16724 INDEX public items_embedding_hnsw appowner
+
+===== full TOC of a-none =====
+;
+; Archive created at 2026-11-06 14:48:02 UTC
+;     dbname: app
+;     TOC Entries: 15
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 17.10 (Debian 17.10-1.pgdg12+1)
+;     Dumped by pg_dump version: 17.10 (Debian 17.10-1.pgdg12+1)
+;
+;
+; Selected TOC Entries:
+;
+2; 3079 16387 EXTENSION - vector 
+3605; 0 0 COMMENT - EXTENSION vector 
+219; 1259 16716 TABLE public items appowner
+3606; 0 0 ACL public TABLE items appowner
+218; 1259 16715 SEQUENCE public items_id_seq appowner
+3607; 0 0 SEQUENCE OWNED BY public items_id_seq appowner
+3448; 2604 16719 DEFAULT public items id appowner
+3598; 0 16716 TABLE DATA public items appowner
+3608; 0 0 SEQUENCE SET public items_id_seq appowner
+3451; 2606 16723 CONSTRAINT public items items_pkey appowner
+3449; 1259 16724 INDEX public items_embedding_hnsw appowner
+
+===== pg_restore-side flags applied to a-none archive =====
+--- pg_restore --no-owner -f - | grep
+GRANT SELECT ON TABLE public.items TO reader;
+--- pg_restore --no-acl -f - | grep
+ALTER TABLE public.items OWNER TO appowner;
+ALTER SEQUENCE public.items_id_seq OWNER TO appowner;
+--- pg_restore --no-owner --no-acl -f - | grep
+(none)
+
+===== plain-text format control: pg_dump -Fp --no-owner (text honours it) =====
+GRANT SELECT ON TABLE public.items TO reader;

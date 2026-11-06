@@ -1,0 +1,45 @@
+== 10a: init --json
+initialized => {"message_type": "initialized", "id": "e488d4b528d609f78a67c403f9d38a1480251e101a772a88a9312c06f9ad43df", "repository": "<scratchpad>/spikes/restic/work/s10-repo"}
+== 10b: backup --stdin --json (status + summary)
+status => {"message_type": "status", "seconds_remaining": 75527225026, "percent_done": 0, "total_files": 1, "bytes_done": 24432464, "current_files": ["/databases/app/app.pgdump"]}
+summary => {"message_type": "summary", "files_new": 1, "files_changed": 0, "files_unmodified": 0, "dirs_new": 2, "dirs_changed": 0, "dirs_unmodified": 0, "data_blobs": 24, "tree_blobs": 3, "data_added": 40002427, "data_added_packed": 40004618, "total_files_processed": 1, "total_bytes_processed": 40000000, "total_duration": 0.864463417, "backup_start": "2026-11-06T10:59:29.0014-04:00", "backup_end": "2026-11-06T10:59:29.865874-04:00", "snapshot_id": "6fc552f90f153fad0a7507d6e9a03b1906295103dff8d6170c72ce8f700eed11"}
+== 10b': backup dir --json -v (verbose_status per file)
+verbose_status => {"message_type": "verbose_status", "action": "scan_finished", "item": "", "duration": 0.001329, "data_size": 4, "data_size_in_repo": 0, "metadata_size": 0, "metadata_size_in_repo": 0, "total_files": 2}
+summary => {"message_type": "summary", "files_new": 2, "files_changed": 0, "files_unmodified": 0, "dirs_new": 11, "dirs_changed": 0, "dirs_unmodified": 0, "data_blobs": 2, "tree_blobs": 12, "data_added": 5884, "data_added_packed": 4575, "total_files_processed": 2, "total_bytes_processed": 4, "total_duration": 0.703088167, "backup_start": "2026-11-06T10:59:29.909087-04:00", "backup_end": "2026-11-06T10:59:30.612184-04:00", "snapshot_id": "b3b65735014bfe9f12f92d93386771df84776d365785196e633d40b624ddc52c"}
+== 10b'': same dir again (unchanged, parent used)
+summary => {"message_type": "summary", "files_new": 0, "files_changed": 0, "files_unmodified": 2, "dirs_new": 0, "dirs_changed": 0, "dirs_unmodified": 11, "data_blobs": 0, "tree_blobs": 0, "data_added": 0, "data_added_packed": 0, "total_files_processed": 2, "total_bytes_processed": 4, "total_duration": 0.6805815, "backup_start": "2026-11-06T10:59:30.652951-04:00", "backup_end": "2026-11-06T10:59:31.333541-04:00", "snapshot_id": "2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227"}
+== 10b''': --skip-if-unchanged on unchanged dir
+summary => {"message_type": "summary", "files_new": 0, "files_changed": 0, "files_unmodified": 2, "dirs_new": 0, "dirs_changed": 0, "dirs_unmodified": 11, "data_blobs": 0, "tree_blobs": 0, "data_added": 0, "data_added_packed": 0, "total_files_processed": 2, "total_bytes_processed": 4, "total_duration": 0.667809792, "backup_start": "2026-11-06T10:59:31.372461-04:00", "backup_end": "2026-11-06T10:59:32.040279-04:00"}
+== 10b4: --dry-run backup summary
+summary => {"message_type": "summary", "files_new": 1, "files_changed": 0, "files_unmodified": 0, "dirs_new": 0, "dirs_changed": 0, "dirs_unmodified": 0, "data_blobs": 1, "tree_blobs": 1, "data_added": 286, "data_added_packed": 333, "total_files_processed": 1, "total_bytes_processed": 3, "total_duration": 0.450249292, "backup_start": "2026-11-06T10:59:32.07022-04:00", "backup_end": "2026-11-06T10:59:32.520475-04:00", "snapshot_id": "48418b0f632b89cb08bc6732d3dd6650caa7d106ead5284764ad09a222f97fea", "dry_run": true}
+== 10c: snapshots --json
+<array element> => {"time": "2026-11-06T10:59:29.0014-04:00", "tree": "38be91334465d967a439e947fbc91f190202b53bab9610ecc1985967480ab430", "paths": ["/databases/app/app.pgdump"], "hostname": "stackA", "username": "user", "uid": 501, "gid": 20, "tags": ["angee.snapshot=s1", "angee.kind=member", "angee.service=app"], "program_version": "restic 0.19.1", "summary": {"backup_start": "2026-11-06T10:59:29.0014-04:00", "backup_end": "2026-11-06T10:59:29.865874-04:00", "files_new": 1, "files_changed": 0, "files_unmodified": 0, "dirs_new": 2, "dirs_changed": 0, "dirs_unmodified": 0, "data_blobs": 24, "tree_blobs": 3, "data_added": 40002427, "data_added_packed": 40004618, "total_files_processed": 1, "total_bytes_processed": 40000000}, "id": "6fc552f90f153fad0a7507d6e9a03b1906295103dff8d6170c72ce8f700eed11", "short_id": "6fc552f9"}
+== 10c': snapshots --json --group-by host
+list of ['group_key', 'snapshots'] group_key= {'hostname': 'stackA', 'paths': None, 'tags': None}
+== 10c'': snapshots --json --latest 1
+2 items
+== 10c''': snapshots --json on empty result
+[]
+
+== 10d: ls --json first lines
+snapshot => {"time": "2026-11-06T10:59:30.652951-04:00", "parent": "b3b65735014bfe9f12f92d93386771df84776d365785196e633d40b624ddc52c", "tree": "b30ed37301cef98044528134616f606ca49449eb5e1d5d13b3ed165d687f0e0b", "paths": ["<scratchpad>/spikes/restic/work/s10-src"], "hostname": "stackA", "username": "user", "uid": 501, "gid": 20, "program_version": "restic 0.19.1", "summary": {"backup_start": "2026-11-06T10:59:30.652951-04:00", "backup_end": "2026-11-06T10:59:31.333541-04:00", "files_new": 0, "files_changed": 0, "files_unmodified": 2, "dirs_new": 0, "dirs_changed": 0, "dirs_unmodified": 11, "data_blobs": 0, "tree_blobs": 0, "data_added": 0, "data_added_packed": 0, "total_files_processed": 2, "total_bytes_processed": 4}, "id": "2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227", "short_
+node => {"name": "private", "type": "dir", "path": "/private", "uid": 0, "gid": 0, "mode": 2147484141, "permissions": "drwxr-xr-x", "mtime": "2026-11-04T21:26:53.055750458-04:00", "atime": "2026-11-04T21:26:53.055750458-04:00", "ctime": "2026-11-04T21:26:53.055750458-04:00", "inode": 17495, "message_type": "node", "struct_type": "node"}
+== 10e: restore --json
+summary => {"message_type": "summary", "total_files": 13, "files_restored": 13, "total_bytes": 4, "bytes_restored": 4}
+== 10f: forget --json (non dry-run) and tag --json
+changed => {"message_type": "changed", "old_snapshot_id": "2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227", "new_snapshot_id": "19cebba819b198193f2a1310add7d2a8bdb5ee368df66e4282486b7788767db1"}
+summary => {"message_type": "summary", "changed_snapshots": 1}
+Load(<snapshot/2754c3caa9>, 0, 0) failed: open <scratchpad>/spikes/restic/work/s10-repo/snapshots/2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227: no such file or directory
+Load(<snapshot/2754c3caa9>, 0, 0) failed: open <scratchpad>/spikes/restic/work/s10-repo/snapshots/2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227: no such file or directory
+Ignoring "2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227": failed to load snapshot 2754c3ca: open <scratchpad>/spikes/restic/work/s10-repo/snapshots/2754c3caa9ecce51b15ef345c85c38bf08155402a23c7bb3fed92e847836e227: no such file or directory
+(forget with ids prints: above)
+== 10g: stats --json, check --json
+<array element> => {"total_size": 40000008, "total_file_count": 29, "snapshots_count": 3}
+<array element> => {"total_size": 40007440, "total_uncompressed_size": 40009623, "compression_ratio": 1.0000545648509378, "compression_progress": 100, "compression_space_saving": 0.0054561873777170256, "total_blob_count": 41, "snapshots_count": 3}
+summary => {"message_type": "summary", "num_errors": 0, "broken_packs": null, "suggest_repair_index": false, "suggest_prune": false}
+== 10h: find --json
+<array element> => {"matches": [{"path": "/databases/app/app.pgdump", "permissions": "-rw-r--r--", "type": "file", "mode": 420, "mtime": "2026-11-06T10:59:29.0014-04:00", "atime": "2026-11-06T10:59:29.0014-04:00", "ctime": "2026-11-06T10:59:29.0014-04:00", "uid": 501, "gid": 20, "size": 40000000}], "hits": 1, "snapshot": "6fc552f90f153fad0a7507d6e9a03b1906295103dff8d6170c72ce8f700eed11"}
+== 10i: version --json
+version => {"message_type": "version", "version": "0.19.1", "go_version": "go1.26.4", "go_os": "darwin", "go_arch": "arm64"}
+== 10j: cat snapshot (raw snapshot object, includes parent/original fields)
+{  "time": "2026-11-06T10:59:29.0014-04:00",  "tree": "38be91334465d967a439e947fbc91f190202b53bab9610ecc1985967480ab430",  "paths": [    "/databases/app/app.pgdump"  ],  "hostname": "stackA",  "username": "user",  "uid": 501,  "gid": 20,  "tags": [    "angee.snapshot=s1",    "angee.kind=member",    "angee.service=app"  ],  "program_version": "restic 0.19.1",  "summary": {    "backup_start": "2026-11-06T10:59:29.0014-04:00",    "backup_end": "2026-11-06T10:59:29.865874-04:00",    "files_new": 1,    "files_changed": 0,    "files_unmodified": 0,    "dirs_new": 2,    "dirs_changed": 0,    "dirs_unmodified": 0,    "data_blobs": 24,    "tree_blobs": 3,    "data_added": 40002427,    "data_added_packed": 40004618,    "total_files_processed": 1,    "total_bytes_processed": 40000000  }}
