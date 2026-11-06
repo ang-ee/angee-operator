@@ -1,0 +1,67 @@
+snapshots before: 0
+== 3a: plain --stdin, producer writes 10 MiB then exits 1
+[pipe status: producer=1 restic=0]
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":1,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":7,"tree_blobs":2,"data_added":10486760,"data_added_packed":10487323,"total_files_processed":1,"total_bytes_processed":10485760,"total_duration":0.885093458,"backup_start":"2026-11-06T10:48:00.564379-04:00","backup_end":"2026-11-06T10:48:01.449483-04:00","snapshot_id":"daab2e69cb7cb8eb1614de60c4d6d47ca2f123c7359e97213ae642d853e18561"}
+--- stderr:
+snapshots now: 1
+== 3a': plain --stdin with set -o pipefail (shell sees producer status; restic still commits)
+[pipeline exit=1 PIPESTATUS=1 0]
+snapshot created: db07da59
+snapshots now: 2
+== 3b: plain --stdin, EMPTY stdin
+[restic exit=3]
+{"message_type":"summary","files_new":0,"files_changed":0,"files_unmodified":0,"dirs_new":1,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":0,"tree_blobs":2,"data_added":310,"data_added_packed":350,"total_files_processed":0,"total_bytes_processed":0,"total_duration":0.778584291,"backup_start":"2026-11-06T10:48:04.072288-04:00","backup_end":"2026-11-06T10:48:04.850882-04:00","snapshot_id":"32588219f659cb3b8c7cf458d21b8b08994f034f28fcdc1ceb86e0347270ad22"}
+--- stderr:
+{"message_type":"error","error":{"message":"failed to save /db/empty.dump: read empty.dump: no data read"},"during":"archival","item":"/db/empty.dump"}
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}
+snapshots now: 3
+== 3c: --stdin-from-command, producer writes 10 MiB then exits 1
+[restic exit=1]
+--- stderr:
+{"message_type":"error","error":{"message":"failed to save /db/fail3.dump: Fatal: command failed: exit status 1"},"during":"archival","item":"/db/fail3.dump"}
+{"message_type":"error","error":{"message":"no result"},"during":"archival","item":""}
+{"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/fail3.dump: Fatal: command failed: exit status 1"}
+snapshots now: 3
+== 3c': --stdin-from-command, producer exits 2 with no output
+[restic exit=1]
+--- stderr:
+subprocess sh: boom
+{"message_type":"error","error":{"message":"failed to save /db/fail4.dump: Fatal: command failed: exit status 2"},"during":"archival","item":"/db/fail4.dump"}
+{"message_type":"error","error":{"message":"no result"},"during":"archival","item":""}
+{"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/fail4.dump: Fatal: command failed: exit status 2"}
+snapshots now: 3
+== 3c'': --stdin-from-command, producer killed by signal (SIGKILL self after 1 MiB)
+[restic exit=1]
+--- stderr:
+{"message_type":"error","error":{"message":"failed to save /db/fail5.dump: Fatal: command failed: signal: killed"},"during":"archival","item":"/db/fail5.dump"}
+{"message_type":"error","error":{"message":"no result"},"during":"archival","item":""}
+{"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/fail5.dump: Fatal: command failed: signal: killed"}
+snapshots now: 3
+== 3d: --stdin-from-command, producer succeeds with EMPTY output
+[restic exit=3]
+{"message_type":"summary","files_new":0,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":1,"dirs_unmodified":0,"data_blobs":0,"tree_blobs":1,"data_added":297,"data_added_packed":256,"total_files_processed":0,"total_bytes_processed":0,"total_duration":0.722392042,"backup_start":"2026-11-06T10:48:11.592949-04:00","backup_end":"2026-11-06T10:48:12.315349-04:00","snapshot_id":"f97ab3dc098476696a1de834063192565b0dd051e759b38abc490b4548fd8cda"}
+--- stderr:
+{"message_type":"error","error":{"message":"failed to save /db/empty2.dump: read empty2.dump: no data read"},"during":"archival","item":"/db/empty2.dump"}
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}
+snapshots now: 4
+== 3e: --stdin-from-command, producer succeeds with 5 MiB
+[restic exit=0]
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":1,"dirs_unmodified":0,"data_blobs":2,"tree_blobs":2,"data_added":5243542,"data_added_packed":5243720,"total_files_processed":1,"total_bytes_processed":5242880,"total_duration":0.765759541,"backup_start":"2026-11-06T10:48:13.107109-04:00","backup_end":"2026-11-06T10:48:13.872878-04:00","snapshot_id":"a4c5517a257aa1a46d30af6f4c1b98aea77ad93bd6193af71b80eafc55bf7d14"}
+snapshots now: 5
+== 3f: --stdin-from-command, producer stderr passthrough? (writes to stderr, exits 0)
+[restic exit=0]
+--- stderr:
+subprocess sh: producer-diagnostic
+== 3g: were packs from the refused 3c upload left behind? (unreferenced data -> prune would collect)
+{"message_type":"summary","num_errors":0,"broken_packs":null,"suggest_repair_index":false,"suggest_prune":false}
+to repack:             0 blobs / 0 B
+this removes:          0 blobs / 0 B
+to delete:             0 blobs / 0 B
+unused size after prune: 0 B (0.00% of remaining size)
+== final snapshot list
+daab2e69 ['case=3a'] ['/db/fail.dump'] 10485760
+db07da59 ['case=3a2'] ['/db/fail2.dump'] 1048576
+32588219 ['case=3b'] ['/db/empty.dump'] 0
+f97ab3dc ['case=3d'] ['/db/empty2.dump'] 0
+a4c5517a ['case=3e'] ['/db/ok.dump'] 5242880
+f3e35678 ['case=3f'] ['/db/ok2.dump'] 5

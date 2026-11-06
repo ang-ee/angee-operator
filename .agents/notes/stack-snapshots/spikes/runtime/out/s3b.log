@@ -1,0 +1,30 @@
+---- mac restore: gorun -config compose-rel.yaml -wrap -- docker compose --project-directory ROOT -f /dev/fd/3 run --rm --no-deps -T --name N restore-rel <p64
+rc=0
+bind-ok
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+gorun: exit=0 in=67108864 out=0 elapsed=636ms ctx=<nil> err=<nil>
+match=YES
+---- mac save: gorun -config compose.yaml -wrap -- docker compose --project-directory ROOT -f /dev/fd/3 run --rm --no-deps -T --name N dump >out
+rc=0 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+gorun: exit=0 in=0 out=67108864 elapsed=1.442s ctx=<nil> err=<nil>
+---- linux image build (alpine:3 + docker-cli docker-cli-compose)
+sha256:320f574468b70adf51935051aac7893df1237c077ee71e36b12378d7cc4d4910
+Docker version 29.9.3, build 5457199aa57c45e990c59c89cab5f02b817238d7
+Docker Compose version v5.6.1
+3.24.2
+---- linux restore, fd 3 = Go os.Pipe: gorun-linux -config compose-rel.yaml -wrap -- docker compose --project-directory ROOT -f /dev/fd/3 run ... restore-rel <p64
+rc=0
+bind-ok
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+gorun: exit=0 in=67108864 out=0 elapsed=545ms ctx=<nil> err=<nil>
+match=YES
+---- linux restore, fd 3 = regular file redirect: sh -c 'docker compose --project-directory ROOT -f /dev/fd/3 run ... restore-rel 3<cfg' <p64
+rc=0
+bind-ok
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+match=YES
+---- linux save, fd 3 = Go os.Pipe: gorun-linux -config compose.yaml -wrap -- docker compose --project-directory ROOT -f /dev/fd/3 run ... dump >out
+rc=0 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+gorun: exit=0 in=0 out=67108864 elapsed=1.558s ctx=<nil> err=<nil>
+---- leftover containers
+(end)

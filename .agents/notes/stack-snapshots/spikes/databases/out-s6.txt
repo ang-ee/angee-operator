@@ -1,0 +1,95 @@
+angee-spike-db-pg16: postgres (PostgreSQL) 16.14 (Debian 16.14-1.pgdg13+1) psql (PostgreSQL) 16.14 (Debian 16.14-1.pgdg13+1) 
+PostgreSQL 16.14 (Debian 16.14-1.pgdg13+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit|1000
+angee-spike-db-pg17: postgres (PostgreSQL) 17.10 (Debian 17.10-1.pgdg13+1) psql (PostgreSQL) 17.10 (Debian 17.10-1.pgdg13+1) 
+PostgreSQL 17.10 (Debian 17.10-1.pgdg13+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit|1000
+
+===== dumps =====
+pg_dump17 -Fc ok
+pg_dump17 -Fp ok
+pg_dump16 -Fc ok
+archive versions:
+;     Dump Version: 1.16-0
+;     Dumped from database version: 17.10 (Debian 17.10-1.pgdg13+1)
+;     Dumped by pg_dump version: 17.10 (Debian 17.10-1.pgdg13+1)
+;     Dump Version: 1.15-0
+;     Dumped from database version: 16.14 (Debian 16.14-1.pgdg13+1)
+;     Dumped by pg_dump version: 16.14 (Debian 16.14-1.pgdg13+1)
+SET lines in the 17 plain dump:
+5:\restrict 9kIrVauBrF4MLlhG89sk67buSDdvaaBM61cZK0O7Wo7i4mGlakFRRjZTZEgXJf3
+10:SET statement_timeout = 0;
+11:SET lock_timeout = 0;
+12:SET idle_in_transaction_session_timeout = 0;
+13:SET transaction_timeout = 0;
+14:SET client_encoding = 'UTF8';
+15:SET standard_conforming_strings = on;
+16:SELECT pg_catalog.set_config('search_path', '', false);
+17:SET check_function_bodies = false;
+18:SET xmloption = content;
+19:SET client_min_messages = warning;
+20:SET row_security = off;
+33:SET default_tablespace = '';
+35:SET default_table_access_method = heap;
+1107:\unrestrict 9kIrVauBrF4MLlhG89sk67buSDdvaaBM61cZK0O7Wo7i4mGlakFRRjZTZEgXJf3
+
+===== A1: 17 archive -> pg_restore 16 (client 16, server 16) =====
+pg_restore: error: unsupported version (1.16) in file header
+exit=1
+
+===== A2: 17 archive -> pg_restore 17 client -> 16 server, default error handling =====
+pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter "transaction_timeout"
+Command was: SET transaction_timeout = 0;
+pg_restore: warning: errors ignored on restore: 1
+exit=1
+  rows in 16 a2: 1000
+
+===== A2b: same, --single-transaction --exit-on-error =====
+pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter "transaction_timeout"
+Command was: SET transaction_timeout = 0;
+exit=1
+  rows in 16 a2b: MISSING
+
+===== A3: 17 plain SQL -> psql 16 =====
+psql:/tmp/v17.sql:13: ERROR:  unrecognized configuration parameter "transaction_timeout"
+ set_config 
+------------
+ 
+(1 row)
+
+ setval 
+--------
+   1000
+(1 row)
+
+exit=0
+  rows in 16 a3: 1000
+
+===== A3b: 17 plain SQL -> psql 16 with ON_ERROR_STOP=1 --single-transaction =====
+psql:/tmp/v17.sql:13: ERROR:  unrecognized configuration parameter "transaction_timeout"
+exit=3
+  rows in 16 a3b: MISSING
+
+===== B1: 16 archive -> pg_restore 17 -> 17 server, strict flags =====
+exit=0
+  rows in 17 b1: 1000  t_count(): 1000
+
+===== B2: 16 archive -> pg_restore 16 client -> 17 server, strict flags =====
+exit=0
+  rows in 17 b2: 1000
+
+===== C: client/server mismatch at dump time =====
+--- pg_dump 16 against 17 server
+pg_dump: error: aborting because of server version mismatch
+pg_dump: detail: server version: 17.10 (Debian 17.10-1.pgdg13+1); pg_dump version: 16.14 (Debian 16.14-1.pgdg13+1)
+exit=1
+--- pg_dump 17 against 16 server
+exit=0
+;     Dump Version: 1.16-0
+;     Dumped from database version: 16.14 (Debian 16.14-1.pgdg13+1)
+;     Dumped by pg_dump version: 17.10 (Debian 17.10-1.pgdg13+1)
+--- that 17-client archive of a 16 server -> pg_restore 16 into 16
+pg_restore: error: unsupported version (1.16) in file header
+exit=1
+
+===== A4: 17 archive rendered by pg_restore 17 -f -, SET transaction_timeout stripped, -> psql 16 -1 ON_ERROR_STOP =====
+exit=0
+  rows in 16 a4: 1000

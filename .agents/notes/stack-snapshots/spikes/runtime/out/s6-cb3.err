@@ -1,0 +1,4 @@
+ Container angee-spike-s6-b98042de Creating 
+ Container angee-spike-s6-b98042de Created 
+write /dev/stdout: broken pipe
+gorun: exit=1 in=0 out=1048576 elapsed=302ms ctx=<nil> err=exit status 1

@@ -1,0 +1,49 @@
+payload p64 sha256=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993   (empty input sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+---- a: cat p64 | docker compose -f cfg/compose.yaml run --rm --no-deps -T --name N restore   (no -i flag)
+exit=0 time=1.52s container_saw_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stdout bytes=0
+stderr:
+ Container angee-spike-s2-ef92fdff Creating 
+ Container angee-spike-s2-ef92fdff Created 
+restore-start
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+restore-done
+
+---- b: same with --interactive=false (to prove -i defaults to true)
+exit=0 time=0.85s container_saw_sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 match=NO(empty stdin)
+stdout bytes=0
+stderr:
+ Container angee-spike-s2-c2dd3b1f Creating 
+ Container angee-spike-s2-c2dd3b1f Created 
+restore-start
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -
+restore-done
+
+---- c: payload redirected from a file instead of a pipe: docker compose -f cfg run ... restore < p64
+exit=0 time=1.72s container_saw_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stdout bytes=0
+stderr:
+ Container angee-spike-s2-d4dcbb8b Creating 
+ Container angee-spike-s2-d4dcbb8b Created 
+restore-start
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+restore-done
+
+---- d: TODAY's Angee shape: docker compose -f - run ... restore < cfg  (what does the job's stdin see?)
+exit=0 time=0.89s container_saw_sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 match=NO(empty stdin)
+stdout bytes=0
+stderr:
+ Container angee-spike-s2-fbe0ba74 Creating 
+ Container angee-spike-s2-fbe0ba74 Created 
+restore-start
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -
+restore-done
+
+---- e: config then payload concatenated on one stdin (-f -)
+exit=1 time=0.22s container_saw_sha=none match=NO
+stdout bytes=0
+stderr:
+go-yaml load error in reader at <unknown position>: control characters are not allowed (value: 28)
+
+---- leftover containers
+(end)

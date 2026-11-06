@@ -1,0 +1,40 @@
+# Shaped like Angee's compiled local job: shutdown {timeout 10s, SIGTERM},
+# log_location run/logs/<name>.log with Angee's text log configuration.
+version: "0.5"
+processes:
+  dump:
+    command: 'echo pc-stderr-before >&2; cat "$PAYLOAD"; echo pc-stderr-after >&2; shasum -a 256 "$PAYLOAD" >&2'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p64
+    working_dir: <scratchpad>/spikes/runtime
+    shutdown:
+      timeout_seconds: 10
+      signal: 15
+    log_location: <scratchpad>/spikes/runtime/out/run/logs/dump.log
+    log_configuration:
+      flush_each_line: true
+      disable_json: true
+      no_color: true
+      no_metadata: true
+      add_timestamp: true
+      timestamp_format: "2006-01-02T15:04:05.000Z07:00"
+      rotation:
+        max_size_mb: 10
+        max_backups: 3
+  restore:
+    command: 'echo restore-start >&2; shasum -a 256 >&2; echo restore-done >&2'
+    working_dir: <scratchpad>/spikes/runtime
+    shutdown:
+      timeout_seconds: 10
+      signal: 15
+    log_location: <scratchpad>/spikes/runtime/out/run/logs/restore.log
+    log_configuration:
+      flush_each_line: true
+      disable_json: true
+      no_color: true
+      no_metadata: true
+      add_timestamp: true
+      timestamp_format: "2006-01-02T15:04:05.000Z07:00"
+      rotation:
+        max_size_mb: 10
+        max_backups: 3

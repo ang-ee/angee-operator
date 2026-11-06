@@ -1,0 +1,41 @@
+payload sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 empty sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+PC=process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-5sLfMW/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-5sLfMW/process-compose.yaml
+---- a: pipe: cat p64 | PC restore
+exit=0 time=0.24s job_saw_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+restore-start
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+restore-done
+
+---- b: file redirect: PC restore < p64
+exit=0 time=0.26s job_saw_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+restore-start
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+restore-done
+
+---- c: /dev/null: PC restore </dev/null
+exit=0 time=0.23s job_saw_sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 match=NO(empty stdin)
+stderr:
+restore-start
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -
+restore-done
+
+---- d: Go os/exec with wrapped stdin (own pipe + copy goroutine) and Setpgid like Angee's isolated foreground: gorun -wrap -pgid -- PC restore < p64
+exit=0 time=0.49s job_saw_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+restore-start
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  -
+restore-done
+gorun: exit=0 in=67108864 out=43 elapsed=224ms ctx=<nil> err=<nil>
+
+---- e: Go os/exec, stdin unset (Angee today: cmd.Stdin nil => /dev/null) is case c
+---- f: stdin is a TTY and the child is in its own process group (Setpgid) -> SIGTTIN? (10s timeout)
+exit=124 time=10.02s (124 = timed out / stopped)
+^D^H^H^[]0;process-compose: <host>/angee-job^G
+---- g: stdin is a TTY, same process group (no Setpgid): reads the terminal (expect a wait for input, 5s timeout)
+exit=0 time=0.29s
+^D^H^H^[]0;process-compose: <host>/angee-job^Grestore-bytes=0^M
+gorun: exit=0 in=0 out=0 elapsed=272ms ctx=<nil> err=<nil>^M
+
+(end)

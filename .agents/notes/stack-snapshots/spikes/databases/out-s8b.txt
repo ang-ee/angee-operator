@@ -1,0 +1,15 @@
+started with AOF on + restored dump.rdb: DBSIZE=0
+       15900 ./dump.rdb
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       0 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+after docker stop (SIGTERM -> shutdown save):
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       0 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+       88 ./dump.rdb
+      1:M 06 Nov 2026 15:06:33.023 * Saving the final RDB snapshot before exiting.
+      1:M 06 Nov 2026 15:06:33.026 * DB saved on disk
+      1:M 06 Nov 2026 15:06:33.026 # Redis is now ready to exit, bye bye...
+restart same volume with --appendonly no: DBSIZE=0
+cleaned up

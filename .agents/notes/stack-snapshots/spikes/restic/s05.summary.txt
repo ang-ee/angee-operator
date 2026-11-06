@@ -1,0 +1,13 @@
+Phase A (20 sequential stdin backups, 1 KiB..1 MiB, 0 ms):
+  wall mean=0.762s min=0.747s max=0.791s; requests per invocation: {13: 20}
+  per-invocation breakdown (sum over 20 / 20): {'DELETE locks': 1.0, 'GET config': 1.0, 'GET index(list)': 1.0, 'GET keys': 1.0, 'GET keys(list)': 1.0, 'GET locks(list)': 2.0, 'HEAD config': 1.0, 'POST data': 2.0, 'POST index': 1.0, 'POST locks': 1.0, 'POST snapshots': 1.0}
+
+operation                                         reqs inflight |       0ms      20ms      50ms     100ms | slope(RTTs)
+C.backup warm                                     [13]        2 |    0.945s    1.264s    1.521s    2.115s |  11.4
+C.backup manifest warm                        [12, 13]        2 |    0.947s    1.239s    1.490s    2.065s |  10.9
+C.snapshots --host --tag manifest              [9, 10]        1 |    0.957s    1.208s    1.342s    1.806s |   8.1
+C.snapshots --no-lock                              [5]        1 |    0.766s    0.831s    0.867s    1.152s |   3.8
+C.dump member file                                [10]        1 |    1.074s    1.163s    1.361s    1.838s |   7.8
+C.forget --dry-run manifest keep-last 3            [9]        1 |    1.026s    1.156s    1.325s    1.742s |   7.1
+C.backup COLD cache                          [217, 223, 229, 235]        5 |    1.068s    2.208s    3.887s    6.794s |  57.2
+C.backup warm rest.connections=1                  [14]        1 |    1.006s    1.211s    1.677s    2.352s |  13.7

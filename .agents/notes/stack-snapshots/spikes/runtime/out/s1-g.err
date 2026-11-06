@@ -1,0 +1,10 @@
+ Image busybox:1.36.1 Pulling 
+ 821d9dafb26d Pulling fs layer 0B
+ f015501df97a Download complete 0B
+ 821d9dafb26d Downloading 1.049MB
+ 821d9dafb26d Download complete 0B
+ 821d9dafb26d Pull complete 0B
+ Image busybox:1.36.1 Pulled 
+ Container angee-spike-s1-4887831b Creating 
+ Container angee-spike-s1-4887831b Created 
+pulled-stderr

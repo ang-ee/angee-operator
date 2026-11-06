@@ -1,0 +1,2 @@
+restore-bytes=1048576
+gorun: exit=125 in=1048576 out=43 elapsed=237ms ctx=<nil> err=spike: peer gone

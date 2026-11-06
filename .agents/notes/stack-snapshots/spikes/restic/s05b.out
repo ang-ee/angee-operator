@@ -1,0 +1,11 @@
+python3 startup overhead (timer itself):       0.035s  0.025s  0.024s 
+restic version (process start only):           0.054s  0.058s  0.052s 
+restic cat config (open repo = key KDF):       0.325s  0.310s  0.308s 
+restic key list --no-lock:                     0.303s  0.292s  0.293s 
+restic snapshots --no-lock:                    0.286s  0.273s  0.285s 
+restic snapshots (with lock):                  0.502s  0.485s  0.496s 
+restic backup --stdin 1 KiB (local repo):      0.528s  0.546s  0.542s 
+key KDF params (cat key of first key, metadata only):
+  kdf=scrypt N=32768 r=8 p=6
+user/sys CPU of one cat config:
+real 0.28 user 0.25 sys 0.02 

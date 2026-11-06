@@ -1,0 +1,28 @@
+cwd=<scratchpad>/spikes/runtime/out/elsewhere  project root=<scratchpad>/spikes/runtime  payload sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993
+---- a1: docker compose -f /dev/fd/3 run ... restore-rel 3<cfg <p64   (no --project-directory)
+resolved: source: /dev/fd/data
+exit=1 bind= stdin_sha=none payload_match=NO
+Error response from daemon: error while creating mount source path '/dev/fd/data': mkdir /dev/fd/data: no such file or directory
+---- a2: docker compose --project-directory ROOT -f /dev/fd/3 run ... restore-rel 3<cfg <p64
+resolved: source: <scratchpad>/spikes/runtime/data
+exit=0 bind=bind-ok stdin_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 payload_match=YES
+---- a3: same as a2 but fd 3 is a PIPE: 3< <(cat cfg)
+exit=0 bind=bind-ok stdin_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 payload_match=YES
+---- a4: project name when the config has no name: and comes from /dev/fd/3
+no --project-directory: name: fd
+with --project-directory ROOT: name: runtime
+---- b1: 0600 temp file in private dir, no --project-directory: docker compose -f PRIV/docker-compose.yaml run ... <p64
+resolved: source: <scratchpad>/spikes/runtime/out/angee-job-OxxuBG/data
+exit=0 bind=bind-MISSING stdin_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 payload_match=YES
+---- b2: 0600 temp file + --project-directory ROOT
+resolved: source: <scratchpad>/spikes/runtime/data
+exit=0 bind=bind-ok stdin_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 payload_match=YES
+---- c1: -f - with --project-directory ROOT, config on stdin (payload cannot ride along)
+resolved: source: <scratchpad>/spikes/runtime/data
+exit=0 bind=bind-ok stdin_sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 payload_match=NO(empty stdin)
+---- c2: -f - without --project-directory (today), cwd=<scratchpad>/spikes/runtime/out/elsewhere
+resolved: source: <scratchpad>/spikes/runtime/out/elsewhere/data
+---- c3: -f - without --project-directory, cwd=ROOT (Angee sets cmd.Dir=root)
+resolved: source: <scratchpad>/spikes/runtime/data
+---- leftover containers
+(end)

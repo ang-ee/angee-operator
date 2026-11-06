@@ -1,0 +1,29 @@
+
+===== pg_dump -Fc -Z0 bigdb killed mid-stream (SIGTERM after 0.7s) through a pipe =====
+killed pg_dump pid 1162
+pg_dump: terminated by user
+Added to the repository: 3.843 MiB (1.647 MiB stored)
+processed 1 files, 6.852 MiB in 0:00
+snapshot d36f749a saved
+    PIPESTATUS: docker-exec/pg_dump=1 restic=0
+d36f749a  2026-11-06 10:56:04  stackC      angee.snapshot=killed-pipe  /databases/bigdb/bigdb.pgdump  6.852 MiB
+1 snapshots
+--- restic dump killed-pipe | pg_restore --list
+    exit=0
+--- restic dump killed-pipe | pg_restore -f /dev/null
+pg_restore: error: could not read from input file: end of file
+    exit=1
+--- restic dump killed-pipe | pg_restore --no-owner --no-acl -1 -e into empty DB
+pg_restore: error: could not read from input file: end of file
+    exit=1  big rows: MISSING
+--- same partial snapshot, default pg_restore (no -1/-e)
+pg_restore: error: could not read from input file: end of file
+    exit=1  big rows: 0  small rows: 0
+
+===== same kill under --stdin-from-command =====
+Added to the repository: 814.663 KiB (344.105 KiB stored)
+processed 1 files, 217.605 MiB in 0:01
+snapshot cb72333b saved
+    restic exit=0
+cb72333b  2026-11-06 10:56:10  stackC      angee.snapshot=killed-cmd  /databases/bigdb/bigdb.pgdump  217.605 MiB
+1 snapshots

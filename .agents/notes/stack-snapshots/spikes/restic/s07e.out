@@ -1,0 +1,23 @@
+live backup pid=35732
+pid=35732 exclusive=False time=11:11:38
+doomed backup pid=35839
+locks before kill: 2
+pid=35839 exclusive=False time=11:11:40
+pid=35732 exclusive=False time=11:11:38
+doomed killed; alive? no; live alive? yes
+locks after kill: 2
+pid=35839 exclusive=False time=11:11:40
+pid=35732 exclusive=False time=11:11:38
+successfully removed 1 locks
+unlock [exit=0]
+locks after unlock: 1
+pid=35732 exclusive=False time=11:11:38
+live backup exit=0
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmod
+-- unlock --remove-all while a live backup runs:
+successfully removed 1 locks
+unlock --remove-all [exit=0] locks now: 0
+live backup exit=0
+Remove(<lock/f1fdc4ca24>) failed: remove <scratchpad>/spikes/restic/work/s07e-repo/locks/f1fdc4ca247544c083dae3ae9e1664100b12bf1843a841a767065908652c1855: no such file or directory
+error while unlocking: remove <scratchpad>/spikes/restic/work/s07e-repo/locks/f1fdc4ca247544c083dae3ae9e1664100b12bf1843a841a767065908652c1855: no such file or directory
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmod

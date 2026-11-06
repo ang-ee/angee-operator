@@ -1,0 +1,14 @@
+size=1048576 run=1 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+size=1048576 run=2 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+size=1048576 run=3 exit=130 last={"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: context canceled"}
+size=10485760 run=1 exit=130 last={"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: context canceled"}
+size=10485760 run=2 exit=130 last={"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: context canceled"}
+size=10485760 run=3 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+size=33554432 run=1 exit=130 last={"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: context canceled"}
+size=33554432 run=2 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+size=33554432 run=3 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+size=83886080 run=1 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+size=83886080 run=2 exit=130 last={"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: context canceled"}
+size=83886080 run=3 exit=1 last={"message_type":"exit_error","code":1,"message":"Fatal: unable to save snapshot: failed to save /db/x.dump: Fatal: command failed: exit status 1"}
+snapshots: []
+orphan data: 246436 KiB in       14 packs

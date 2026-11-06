@@ -1,0 +1,37 @@
+== big-zstd: diff of rendered SQL intact vs 1-byte flip
+rc=0
+/tmp/a.sql /tmp/b.sql differ: byte 46, line 5
+5c5
+< \restrict XTHLd99wtuFFO4DU5MeNfEyRneoE9vf2d7HbSZAthDzlejARchx7wBrHKdjopjJ
+---
+> \restrict eTabWfgA9WK5asjOo2PEhpPasvboHKKamVo4A2kakRxoXNR1mEvUHamPTvXN0a0
+1001768c1001768
+< 1001697	e0846d91bc283f8b2581ac10ab2a3847	6f06cfce901c0a679088710594f3a988	2026-01-12 14:14:57+00	[75,0.2,-53]
+3
+== big-lz4: diff of rendered SQL intact vs 1-byte flip
+rc=0
+/tmp/a.sql /tmp/b.sql differ: byte 46, line 5
+5c5
+< \restrict mzakIXkyuKMiw1CLwhrDmb2qSITrXCNPkpnAwLcLyi9iXpGln7GrDCfLg4NRbnw
+---
+> \restrict OlRnl0Xehl7bkMAUgyGJd9WGd5oFZond05AxC9PN1wtcpsBbL9PU2X157wChneA
+1000153c1000153
+< 1000082	b58351a1510a57132c43f24164951d26	db7d4b868335868c98e94b9fa200bde1	2026-01-12 13:48:02+00	[12,7.8,-15]
+3
+== big-zstd
+1001767c1001767
+< 1001697	e0846d91bc283f8b2581ac10ab2a3847	6f06cfce901c0a679088710594f3a988	2026-01-12 14:14:57+00	[75,0.2,-53]
+---
+> 100169d1f7544f57a,283f8b2581ac10ab2a3847	6f06cfce901c0a679088710594f3a988	2026-01-12 14:14:57+00	[75,0.2,-53]
+2001102c2001102
+< \unrestrict LlBj6gZdV4k64dVfbBqJLEcsezPmItS4oCdj3SDPD3kRjaKviUIQSwEDWwnOSxa
+---
+> \unrestrict WCZd8mrdseX24MbDSf5IFMEXolG0vLLPRHaeswaqFwFpecl32RrbKbhxarxJtgr
+== big-lz4
+grep: (standard input): binary file matches
+1000152d1000151
+< 1000082	b58351a1510a57132c43f24164951d26	db7d4b868335868c98e94b9fa200bde1	2026-01-12 13:48:02+00	[12,7.8,-15]
+2001102c2001101
+< \unrestrict OEI1Kbnhf8jAXNay22a0RCj1qkDQ4YTWMg5yLfCncDaXA2CF8qulHsvDHOhq0hD
+---
+> \unrestrict 8w7SMZ52fKNojdY3sGeoyx8WvwDkpJIKnQLU6CgFormmIoucfUQavbH8QfLimgt

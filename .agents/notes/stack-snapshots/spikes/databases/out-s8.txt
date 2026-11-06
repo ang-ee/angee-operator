@@ -1,0 +1,116 @@
+
+===== source: redis-server --appendonly yes =====
+Redis server v=7.4.9 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=5a23d515cf8f8935
+source DBSIZE=1001
+Background saving started
+rdb_last_bgsave_status:ok
+aof_enabled:1
+copied dump.rdb (15900 bytes); source /data:
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       37852 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+       15900 ./dump.rdb
+
+===== A: fresh data dir with ONLY dump.rdb, --appendonly yes =====
+    DBSIZE=0  marker=  other=  aof_enabled=aof_enabled:1
+    log:
+      1:M 06 Nov 2026 15:06:08.244 * Creating AOF base file appendonly.aof.1.base.rdb on server start
+      1:M 06 Nov 2026 15:06:08.247 * Creating AOF incr file appendonly.aof.1.incr.aof on server start
+      1:M 06 Nov 2026 15:06:08.247 * Ready to accept connections tcp
+    files in /data:
+       15900 ./dump.rdb
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       0 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+
+===== B: fresh data dir with ONLY dump.rdb, --appendonly no =====
+    DBSIZE=1001  marker=from-source  other=  aof_enabled=aof_enabled:0
+    log:
+      1:M 06 Nov 2026 15:06:09.402 * Loading RDB produced by version 7.4.9
+      1:M 06 Nov 2026 15:06:09.402 * RDB age 2 seconds
+      1:M 06 Nov 2026 15:06:09.402 * RDB memory usage when created 1.12 Mb
+      1:M 06 Nov 2026 15:06:09.402 * Done loading RDB, keys loaded: 1001, keys expired: 0.
+      1:M 06 Nov 2026 15:06:09.402 * DB loaded from disk: 0.000 seconds
+      1:M 06 Nov 2026 15:06:09.402 * Ready to accept connections tcp
+    files in /data:
+       15900 ./dump.rdb
+
+===== D: restore INTO an existing AOF data dir (target already ran with AOF, has key other=1) =====
+    target before restore:
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       54 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+       102 ./dump.rdb
+    (log below includes the first start too)
+    DBSIZE=1  marker=  other=1  aof_enabled=aof_enabled:1
+    log:
+      1:M 06 Nov 2026 15:06:10.266 * Creating AOF base file appendonly.aof.1.base.rdb on server start
+      1:M 06 Nov 2026 15:06:10.269 * Creating AOF incr file appendonly.aof.1.incr.aof on server start
+      1:M 06 Nov 2026 15:06:10.269 * Ready to accept connections tcp
+      1:M 06 Nov 2026 15:06:10.472 * Calling fsync() on the AOF file.
+      1:M 06 Nov 2026 15:06:10.473 * Saving the final RDB snapshot before exiting.
+      1:M 06 Nov 2026 15:06:10.477 # Redis is now ready to exit, bye bye...
+      1:M 06 Nov 2026 15:06:11.050 * Reading RDB base file on AOF loading...
+      1:M 06 Nov 2026 15:06:11.050 * Loading RDB produced by version 7.4.9
+      1:M 06 Nov 2026 15:06:11.050 * RDB age 1 seconds
+      1:M 06 Nov 2026 15:06:11.050 * RDB memory usage when created 0.94 Mb
+      1:M 06 Nov 2026 15:06:11.050 * RDB is base AOF
+      1:M 06 Nov 2026 15:06:11.050 * Done loading RDB, keys loaded: 0, keys expired: 0.
+      1:M 06 Nov 2026 15:06:11.050 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+      1:M 06 Nov 2026 15:06:11.050 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.000 seconds
+      1:M 06 Nov 2026 15:06:11.050 * DB loaded from append only file: 0.000 seconds
+      1:M 06 Nov 2026 15:06:11.050 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+      1:M 06 Nov 2026 15:06:11.050 * Ready to accept connections tcp
+    files in /data:
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       54 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+       15900 ./dump.rdb
+
+===== E: safe AOF restore: load RDB with --appendonly no, CONFIG SET appendonly yes, restart with --appendonly yes =====
+    loaded with AOF off: DBSIZE=1001
+OK
+    aof_enabled:1
+    aof_rewrite_in_progress:0
+    aof_last_bgrewrite_status:ok
+    after restart with --appendonly yes:
+    DBSIZE=1001  marker=from-source  other=  aof_enabled=aof_enabled:1
+    log:
+      1:M 06 Nov 2026 15:06:14.019 * Reading RDB base file on AOF loading...
+      1:M 06 Nov 2026 15:06:14.019 * Loading RDB produced by version 7.4.9
+      1:M 06 Nov 2026 15:06:14.019 * RDB age 2 seconds
+      1:M 06 Nov 2026 15:06:14.019 * RDB memory usage when created 1.10 Mb
+      1:M 06 Nov 2026 15:06:14.019 * RDB is base AOF
+      1:M 06 Nov 2026 15:06:14.019 * Done loading RDB, keys loaded: 1001, keys expired: 0.
+      1:M 06 Nov 2026 15:06:14.019 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+      1:M 06 Nov 2026 15:06:14.019 * DB loaded from append only file: 0.000 seconds
+      1:M 06 Nov 2026 15:06:14.019 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+      1:M 06 Nov 2026 15:06:14.019 * Ready to accept connections tcp
+    files in /data:
+       15900 ./appendonlydir/appendonly.aof.1.base.rdb
+       0 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+       15900 ./dump.rdb
+
+===== F: dump.rdb + appendonlydir copied together from the source (file-level copy of /data while stopped) =====
+    DBSIZE=1001  marker=from-source  other=  aof_enabled=aof_enabled:1
+    log:
+      1:M 06 Nov 2026 15:06:15.608 * Reading RDB base file on AOF loading...
+      1:M 06 Nov 2026 15:06:15.608 * Loading RDB produced by version 7.4.9
+      1:M 06 Nov 2026 15:06:15.608 * RDB age 9 seconds
+      1:M 06 Nov 2026 15:06:15.608 * RDB memory usage when created 0.94 Mb
+      1:M 06 Nov 2026 15:06:15.608 * RDB is base AOF
+      1:M 06 Nov 2026 15:06:15.608 * Done loading RDB, keys loaded: 0, keys expired: 0.
+      1:M 06 Nov 2026 15:06:15.608 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+      1:M 06 Nov 2026 15:06:15.608 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.001 seconds
+      1:M 06 Nov 2026 15:06:15.608 * DB loaded from append only file: 0.001 seconds
+      1:M 06 Nov 2026 15:06:15.608 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+      1:M 06 Nov 2026 15:06:15.608 * Ready to accept connections tcp
+    files in /data:
+       88 ./appendonlydir/appendonly.aof.1.base.rdb
+       37852 ./appendonlydir/appendonly.aof.1.incr.aof
+       88 ./appendonlydir/appendonly.aof.manifest
+       15900 ./dump.rdb
+
+===== cleanup =====
+removed redis spike containers and volumes

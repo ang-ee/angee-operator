@@ -1,0 +1,70 @@
+== create 10 stack snapshots, one per day (via --time), each 3 members + manifest written LAST
+total snapshots: 39
+
+== 6a: forget --dry-run --json over MANIFESTS, keep-last 3
+[exit=0]
+top-level type: list groups: 1
+group keys: ['tags', 'host', 'paths', 'keep', 'remove', 'reasons']
+group tags/host/paths: None stackA ['/angee/manifest.json']
+keep: [('cb78f5ac', ['angee.snapshot=s10']), ('ead6fe48', ['angee.snapshot=s09']), ('d8472a70', ['angee.snapshot=s08'])]
+remove: [('cf99d926', ['angee.snapshot=s07']), ('2d0a1cca', ['angee.snapshot=s06']), ('bc816cf0', ['angee.snapshot=s05']), ('b5feac38', ['angee.snapshot=s04']), ('09ee75b0', ['angee.snapshot=s03']), ('71864613', ['angee.snapshot=s02']), ('a2de90b1', ['angee.snapshot=s01'])]
+reasons[0]: {"snapshot": {"time": "2026-10-10T03:00:00-04:00", "tree": "5736e8ad843161aa2105880f762fdf48994bb6ef4364d5c85adf125efc8257d4", "paths": ["/angee/manifest.json"], "hostname": "stackA", "username": "user", "uid": 501, "gid": 20, "tags": ["angee.snapshot=s10", "angee.kind=manifest"], "program_version": "restic 0.19.1", "summary": {"backup_start": "2026-11-06T10:55:36.929983-04:00", "backup_end": "2
+keep[0] keys: ['time', 'tree', 'paths', 'hostname', 'username', 'uid', 'gid', 'tags', 'program_version', 'summary', 'id', 'short_id']
+-- raw JSON excerpt:
+[{"tags":null,"host":"stackA","paths":["/angee/manifest.json"],"keep":[{"time":"2026-10-10T03:00:00-04:00","tree":"5736e8ad843161aa2105880f762fdf48994bb6ef4364d5c85adf125efc8257d4","paths":["/angee/manifest.json"],"hostname":"stackA","username":"user","uid":501,"gid":20,"tags":["angee.snapshot=s10","angee.kind=manifest"],"program_version":"restic 0.19.1","summary":{"backup_start":"2026-11-06T10:55:36.929983-04:00","backup_end":"2026-11-06T10:55:37.687828-04:00","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":1,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":2,"data_added":569,"data_added_packed":597,"total_files_processed":1,"total_bytes_processed":12},"id":"cb78f5ac411dfdba45174e1471cae7e7d3c447a3fdb251dcdc3f4e19b5eb41ce","short_id":"cb78f5ac"},{"time":"2026-10-09T03:00:00-04:00","tree":"5ad0e74c4d24d5edc7ea13de35e5ee5442b75d1ba0fbfdffc3c781f9416ae90f"
+
+== 6b: keep-daily 3 + keep-weekly 2 over manifests (calendar policy)
+keep: ['angee.snapshot=s10', 'angee.snapshot=s09', 'angee.snapshot=s08', 'angee.snapshot=s04']
+reasons: [('angee.snapshot=s10', ['daily snapshot', 'weekly snapshot']), ('angee.snapshot=s09', ['daily snapshot']), ('angee.snapshot=s08', ['daily snapshot']), ('angee.snapshot=s04', ['weekly snapshot'])]
+
+== 6c: grouping behaviour over MEMBERS (paths differ per member)
+-- default group-by host,paths, members only, keep-last 3:
+  group paths=['/databases/redis/dump.rdb'] keep=['angee.snapshot=s10', 'angee.snapshot=s09', 'angee.snapshot=s08'] remove=6
+  group paths=['/databases/app/app.pgdump'] keep=['angee.snapshot=s10', 'angee.snapshot=s09', 'angee.snapshot=s08'] remove=7
+  group paths=['/files/media/media.tar'] keep=['angee.snapshot=s10', 'angee.snapshot=s09', 'angee.snapshot=s08'] remove=7
+-- --group-by host, members only, keep-last 3 (all members in ONE group => keeps only 3 member snapshots total):
+  group host=stackA paths=None keep=[('angee.snapshot=s10', '/databases/redis/dump.rdb'), ('angee.snapshot=s10', '/databases/app/app.pgdump'), ('angee.snapshot=s10', '/files/media/media.tar')] remove=26
+-- --group-by tags over manifests (each set has a unique angee.snapshot tag => every group keeps its one snapshot):
+  groups: 10 total kept: 10 total removed: 0
+-- --group-by host over manifests (same as default here because manifests share one path):
+  groups: 1 keep: ['angee.snapshot=s10', 'angee.snapshot=s09', 'angee.snapshot=s08']
+
+== 6d: tag filter semantics
+--tag angee.snapshot=s01,angee.kind=manifest  (comma)  => 1 ['angee.snapshot=s01']
+--tag angee.snapshot=s01 --tag angee.kind=manifest (repeat) => 13 ['angee.snapshot=s01', 'angee.snapshot=s02', 'angee.snapshot=s03', 'angee.snapshot=s04', 'angee.snapshot=s05', 'angee.snapshot=s06', 'angee.snapshot=s07', 'angee.snapshot=s08', 'angee.snapshot=s09', 'angee.snapshot=s10']
+--tag angee.snapshot=s01 --tag angee.snapshot=s02 (repeat) => 8 ['angee.snapshot=s01', 'angee.snapshot=s02']
+--tag angee.snapshot=s01,angee.snapshot=s02 (comma) => 0 []
+--tag angee.snapshot=s0 (prefix, no wildcard)  => 0 []
+--tag 'angee.snapshot=s0*' (glob?)  => 0 []
+--tag '' (untagged only) => 0 []
+
+== 6e: forget a dropped set by tag
+dropped sets: s07 s06 s05 s04 s03 s02 s01
+-- forget --tag angee.snapshot=s01 with NO policy and NO ids:
+{"message_type":"exit_error","code":1,"message":"Fatal: no policy was specified, no snapshots will be removed"}
+[exit=1]
+   remaining with tag s01: 4 ['angee.snapshot=s01']
+-- forget --tag angee.snapshot=s01 --keep-last 0:
+{"message_type":"exit_error","code":1,"message":"Fatal: no policy was specified, no snapshots will be removed"}
+[exit=1]
+-- forget --tag angee.snapshot=s01 --group-by '' --keep-tag nonexistent (policy that matches nothing):
+{"message_type":"exit_error","code":1,"message":"refusing to delete last snapshot of snapshot group \"\""}
+[exit=1]
+-- forget --tag angee.snapshot=s01 --unsafe-allow-remove-all --group-by '' --keep-last 0 (dry-run):
+  groups=1 remove=['04689151', 'ee25e9f6', 'a2de90b1', '5c15e950'] keep=0
+-- recommended: resolve ids by tag, then forget explicit ids (manifest FIRST, then members)
+manifest ids:        7   member ids:       20
+
+[exit=0]
+
+[exit=0]
+-- forget output with explicit ids (non-dry-run, non-json):
+remaining sets: 12 snapshots; {'angee.snapshot=s08': 4, 'angee.snapshot=s09': 4, 'angee.snapshot=s10': 4}
+-- forget a nonexistent id:
+Ignoring "deadbeef": no matching ID found for prefix "deadbeef"
+[exit=0]
+-- forget mix of valid + already-forgotten id:
+Load(<snapshot/cf99d92659>, 0, 0) failed: open <scratchpad>/spikes/restic/work/s06-repo/snapshots/cf99d92659d74f22416d9a063a40c1295498f3f0148dc3980ae5be3ee8121836: no such file or directory
+Load(<snapshot/cf99d92659>, 0, 0) failed: open <scratchpad>/spikes/restic/work/s06-repo/snapshots/cf99d92659d74f22416d9a063a40c1295498f3f0148dc3980ae5be3ee8121836: no such file or directory
+Ignoring "cf99d92659d74f22416d9a063a40c1295498f3f0148dc3980ae5be3ee8121836": failed to load snapshot cf99d926: open <scratchpad>/spikes/restic/work/s06-repo/snapshots/cf99d92659d74f22416d9a063a40c1295498f3f0148dc3980ae5be3ee8121836: no such file or directory
+[exit=0]

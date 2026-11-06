@@ -1,0 +1,54 @@
+# Extra local jobs for spikes 4b, 5, 6 and 7. `name:` pins the project part of
+# process-compose's unconditional terminal-title escape.
+version: "0.5"
+name: angee-job
+processes:
+  dump:
+    command: 'echo pc-stderr-before >&2; cat "$PAYLOAD"; echo pc-stderr-after >&2'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p64
+    shutdown: {timeout_seconds: 10, signal: 15}
+  dump512:
+    command: 'cat "$PAYLOAD"'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p512
+    shutdown: {timeout_seconds: 10, signal: 15}
+  # Artifact on an inherited fd 3 instead of stdout.
+  fd3dump:
+    command: 'cat "$PAYLOAD" >&3; echo fd3-done >&2'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p64
+    shutdown: {timeout_seconds: 10, signal: 15}
+  restore:
+    command: 'echo restore-start >&2; shasum -a 256 >&2; echo restore-done >&2'
+    shutdown: {timeout_seconds: 10, signal: 15}
+  restore-count:
+    command: 'echo "restore-bytes=$(wc -c | tr -d " ")" >&2'
+    shutdown: {timeout_seconds: 10, signal: 15}
+  restore-sha:
+    command: 'shasum -a 256 >&2'
+    shutdown: {timeout_seconds: 10, signal: 15}
+  fail-mid-save:
+    command: 'head -c 33554432 "$PAYLOAD"; echo save-dying >&2; exit 7'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p64
+    shutdown: {timeout_seconds: 10, signal: 15}
+  fail-mid-restore:
+    command: 'head -c 1048576 >/dev/null; echo restore-dying >&2; exit 9'
+    shutdown: {timeout_seconds: 10, signal: 15}
+  # A single cat of a large file: a SIGPIPE kills the job's only writer.
+  cat-only:
+    command: 'exec cat "$PAYLOAD"'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p512
+    shutdown: {timeout_seconds: 10, signal: 15}
+  # Endless stream for the cancel test; $0 marks it for pgrep.
+  stream:
+    command: 'exec sh -c "while :; do cat \"\$PAYLOAD\"; done" angee-spike-stream'
+    environment:
+      - PAYLOAD=<scratchpad>/spikes/runtime/data/p64
+    shutdown: {timeout_seconds: 10, signal: 15}
+  # Endless reader for the restore cancel test.
+  sink:
+    command: 'exec sh -c "cat >/dev/null; echo sink-eof >&2" angee-spike-sink'
+    shutdown: {timeout_seconds: 10, signal: 15}

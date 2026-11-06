@@ -1,0 +1,5 @@
+start 11:08:54
+end 11:23:46 exit=1 elapsed=892s (124 = outer 25 min timeout hit)
+retries: 21
+Stat(<config/>) failed: Head "http://:***@127.0.0.1:18999/config": dial tcp 127.0.0.1:18999: connect: connection refused
+{"message_type":"exit_error","code":1,"message":"Fatal: unable to open config file: Head \"http://:***@127.0.0.1:18999/config\": dial tcp 127.0.0.1:18999: connect: connection refused\nrest:http://127.0.0.1:18999/"}

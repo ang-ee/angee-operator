@@ -1,0 +1,51 @@
+payload p64 sha256=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993
+---- a-stdin-devnull:  process-compose --no-server --log-file PRIV/process-compose.log --log-no-color run --no-deps --config PRIV/process-compose.yaml dump </dev/null >out 2>err
+exit=0 time=0.41s stdout_bytes=67108905 match=NO
+stderr:
+pc-stderr-before
+pc-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  <scratchpad>/spikes/runtime/data/p64
+
+native --log-file bytes=797; log_location files: 
+log_location head:
+
+native log tail:
+26-11-06 10:52:38.748 INF Scheduler started
+26-11-06 10:52:38.750 INF Started command=["bash","-c","echo pc-stderr-before >&2; cat \"$PAYLOAD\"; echo pc-stderr-after >&2; shasum -a 256 \"$PAYLOAD\" >&2"] process=dump
+26-11-06 10:52:38.908 INF Exited exit_code=0 process=dump
+26-11-06 10:52:38.908 INF Process dump exited with code 0. Shutting down project...
+26-11-06 10:52:38.908 INF Scheduler stopped
+26-11-06 10:52:38.908 INF Thank you for using process-compose
+---- b-go-wrapped-pgid: <scratchpad>/spikes/runtime/bin/gorun -wrap -pgid -- process-compose --no-server --log-file PRIV/process-compose.log --log-no-color run --no-deps --config PRIV/process-compose.yaml dump </dev/null >out 2>err
+exit=0 time=0.43s stdout_bytes=67108905 match=NO
+stderr:
+pc-stderr-before
+pc-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  <scratchpad>/spikes/runtime/data/p64
+gorun: exit=0 in=0 out=67108905 elapsed=266ms ctx=<nil> err=<nil>
+
+native --log-file bytes=797; log_location files: 
+log_location head:
+
+native log tail:
+26-11-06 10:52:39.199 INF Scheduler started
+26-11-06 10:52:39.202 INF Started command=["bash","-c","echo pc-stderr-before >&2; cat \"$PAYLOAD\"; echo pc-stderr-after >&2; shasum -a 256 \"$PAYLOAD\" >&2"] process=dump
+26-11-06 10:52:39.388 INF Exited exit_code=0 process=dump
+26-11-06 10:52:39.388 INF Process dump exited with code 0. Shutting down project...
+26-11-06 10:52:39.388 INF Scheduler stopped
+26-11-06 10:52:39.388 INF Thank you for using process-compose
+---- c: stdout is a pipe (| cat >out) instead of a file
+exit=0 match=NO
+stderr:
+pc-stderr-before
+pc-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  <scratchpad>/spikes/runtime/data/p64
+
+---- d: stderr is a pty (script), stdout to a file
+exit=0 match=NO
+pty:
+^D^H^Hpc-stderr-before^M
+pc-stderr-after^M
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  <scratchpad>/spikes/runtime/data/p64^M
+
+(end)

@@ -1,0 +1,17 @@
+packs before:      511
+[restic exit=130]
+{"message_type":"exit_error","code":130,"message":"Fatal: unable to save snapshot: context canceled"}
+packs after failed run:        4, bytes: 73044 KiB
+snapshots: []
+index files:        0
+searching used packs...
+collecting packs for deletion and repacking
+[0:00]          0 packs processed
+this removes:          0 blobs / 0 B
+to delete:             0 blobs / 71.321 MiB
+unused size after prune: 0 B ( of remaining size)
+== check
+This is non-critical, you can run `restic prune` to correct this.
+check snapshots, trees and blobs
+[0:00]          0 snapshots
+no errors were found

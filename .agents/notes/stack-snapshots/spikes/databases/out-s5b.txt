@@ -1,0 +1,57 @@
+
+===== dedup with a localised change (1000 contiguous rows updated, host stackB) =====
+--- gzip baseline g1
+Added to the repository: 99.224 MiB (97.909 MiB stored)
+snapshot c5bb3dcf saved
+--- -Z0 baseline n1
+Added to the repository: 814.729 KiB (348.946 KiB stored)
+snapshot 008b4276 saved
+--- gzip after change g2
+Added to the repository: 51.709 MiB (51.050 MiB stored)
+snapshot 2f43162c saved
+--- -Z0 after change n2
+Added to the repository: 3.354 MiB (1.418 MiB stored)
+snapshot 3ff3c1ff saved
+--- gzip after 1000-row append g3
+Added to the repository: 2.083 MiB (2.064 MiB stored)
+snapshot 4423993b saved
+--- -Z0 after 1000-row append n3
+Added to the repository: 1.056 MiB (424.773 KiB stored)
+snapshot b1edc449 saved
+
+===== pg_dump killed mid-stream (SIGTERM after ~1s) through a pipe =====
+OCI runtime exec failed: exec failed: unable to start container process: exec: "pkill": executable file not found in $PATH
+Added to the repository: 1.459 MiB (1.443 MiB stored)
+snapshot c994ca86 saved
+    PIPESTATUS: docker-exec/pg_dump=0 restic=0
+c994ca86  2026-11-06 10:55:26  stackB      angee.snapshot=killed-pipe  /databases/bigdb/bigdb.pgdump  99.244 MiB
+1 snapshots
+--- restic dump killed-pipe | pg_restore --list
+    exit=0
+--- restic dump killed-pipe | pg_restore -f /dev/null
+    exit=0
+--- restic dump killed-pipe | pg_restore --no-owner --no-acl -1 -e into empty DB
+    exit=0  big rows: 2001000
+
+===== same kill under --stdin-from-command =====
+OCI runtime exec failed: exec failed: unable to start container process: exec: "pkill": executable file not found in $PATH
+Added to the repository: 1.459 MiB (1.443 MiB stored)
+snapshot c92588f2 saved
+    restic exit=0
+1 snapshots
+
+===== repo totals =====
+539M	<scratchpad>/spikes/databases/restic-repo
+ID        Time                 Host        Tags                        Paths                          Size
+-----------------------------------------------------------------------------------------------------------------
+c5bb3dcf  2026-11-06 10:55:08  stackB      angee.snapshot=g1           /databases/bigdb/bigdb.pgdump  99.219 MiB
+008b4276  2026-11-06 10:55:13  stackB      angee.snapshot=n1           /databases/bigdb/bigdb.pgdump  217.493 MiB
+2f43162c  2026-11-06 10:55:14  stackB      angee.snapshot=g2           /databases/bigdb/bigdb.pgdump  99.219 MiB
+3ff3c1ff  2026-11-06 10:55:19  stackB      angee.snapshot=n2           /databases/bigdb/bigdb.pgdump  217.493 MiB
+4423993b  2026-11-06 10:55:20  stackB      angee.snapshot=g3           /databases/bigdb/bigdb.pgdump  99.244 MiB
+b1edc449  2026-11-06 10:55:24  stackB      angee.snapshot=n3           /databases/bigdb/bigdb.pgdump  217.605 MiB
+c994ca86  2026-11-06 10:55:26  stackB      angee.snapshot=killed-pipe  /databases/bigdb/bigdb.pgdump  99.244 MiB
+c92588f2  2026-11-06 10:55:36  stackB      angee.snapshot=killed-cmd   /databases/bigdb/bigdb.pgdump  99.244 MiB
+-----------------------------------------------------------------------------------------------------------------
+Timestamps shown in local time
+8 snapshots

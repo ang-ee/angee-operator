@@ -1,0 +1,16 @@
+---- a: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-hAjxHm/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-hAjxHm/process-compose.yaml dump </dev/null >out
+exit=0 stdout_bytes=67108907 expected_prefix_bytes=43 prefix_escaped=^[]0;process-compose: <host>/angee-job^G
+prefix matches exactly
+after stripping prefix: sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+pc-stderr-before
+pc-stderr-after
+
+---- b: no name:, cwd=/ : title follows cwd basename
+^[]0;process-compose: <host>//^G^\M-2l^TM-oM-[TM-v^CM-SM-?zM-^QM-a:>M-^KM-/TM-^GM-lM-M3@M-^X
+---- c: artifact on inherited fd 3: process-compose --no-server --log-file <scratchpad>/spikes/runtime/out/angee-process-job-hAjxHm/process-compose.log --log-no-color run --no-deps --config <scratchpad>/spikes/runtime/out/angee-process-job-hAjxHm/process-compose.yaml fd3dump 3>fd3.out >stdout.out
+exit=0 fd3_bytes=67108864 fd3_match=YES stdout_bytes=43 stdout=^[]0;process-compose: <host>/angee-job^G
+stderr:
+fd3-done
+
+(end)
