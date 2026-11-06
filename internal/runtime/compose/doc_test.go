@@ -16,6 +16,7 @@ func TestMarshalNetworksAndLabelsRoundTrip(t *testing.T) {
 				Labels:     map[string]string{"caddy": "route"},
 				ExtraHosts: []string{"host.docker.internal:host-gateway"},
 				Networks:   []string{"edge"},
+				Logging:    &Logging{Driver: "local", Options: map[string]string{"max-size": "1m"}},
 			},
 		},
 		Networks: map[string]Network{
@@ -40,6 +41,9 @@ func TestMarshalNetworksAndLabelsRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(text, "edge: {}") {
 		t.Fatalf("Marshal() output missing empty network object:\n%s", text)
+	}
+	if !strings.Contains(text, "logging:") || !strings.Contains(text, "max-size: 1m") {
+		t.Fatalf("Marshal() output missing logging configuration:\n%s", text)
 	}
 
 	var got File
