@@ -18,6 +18,7 @@ import (
 	"github.com/ang-ee/angee-operator/internal/copierx"
 	"github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/manifest"
+	"github.com/ang-ee/angee-operator/internal/restic"
 	"github.com/ang-ee/angee-operator/internal/service"
 	"github.com/ang-ee/angee-operator/internal/stackroot"
 	"github.com/ang-ee/angee-operator/internal/vcs/jjdriver"
@@ -152,7 +153,7 @@ func (t doctorTool) binary() string {
 func doctorTools() []doctorTool {
 	return []doctorTool{
 		{name: "git", args: []string{"--version"}, hint: "Required for source and workspace commands.", short: gitBelowJJFloor},
-		{name: "go", args: []string{"version"}, hint: "Required to build angee-go and to auto-install process-compose."},
+		{name: "go", args: []string{"version"}, hint: "Required to build angee-go and to auto-install process-compose or restic."},
 		{name: "uv", args: []string{"--version"}, hint: "Required by the bundled Django dev stack."},
 		{name: "node", args: []string{"--version"}, hint: "Required by the bundled React/Vite dev stack."},
 		{name: "pnpm", args: []string{"--version"}, hint: "Required by the bundled React/Vite dev stack."},
@@ -166,6 +167,11 @@ func doctorTools() []doctorTool {
 			missingHint: "Required for container runtime services; install Docker, which provides `docker compose`.",
 		},
 		{name: "process-compose", args: []string{"version"}, hint: "Required for local dev runtime services; angee can prompt to install it when needed."},
+		{
+			name: "restic", args: []string{"version"},
+			hint:  "Required for stack snapshots; install it with `go install " + restic.InstallPackage + "`.",
+			short: resticBelowFloor,
+		},
 	}
 }
 
@@ -211,6 +217,14 @@ func gitBelowJJFloor(version string) (string, string) {
 	}
 	return fmt.Sprintf("%s is older than %s, which jj slots need", version, git.RelativeWorktreesVersion),
 		"Upgrade git to " + git.RelativeWorktreesVersion + " or later before using jj slots."
+}
+
+func resticBelowFloor(version string) (string, string) {
+	if restic.VersionAtLeast(version, restic.MinVersion) {
+		return "", ""
+	}
+	return fmt.Sprintf("%s is older than %s, which stack snapshots need", version, restic.MinVersion),
+		"Install restic " + restic.MinVersion + " or later with `go install " + restic.InstallPackage + "`."
 }
 
 // jjDoctorCheck reports the jj that jj slots would run, whether it can
