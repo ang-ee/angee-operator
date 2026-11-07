@@ -2573,6 +2573,297 @@ func TestTransientNativeDiagnosticsDropTerminalControls(t *testing.T) {
 	}
 }
 
+func TestRunJobStreamsUsesFD3ForSaveAndKeepsNativeOutputAsDiagnostics(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	capturedConfig := filepath.Join(root, "captured.yaml")
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncp \"$8\" %q\nprintf 'artifact\\000bytes' >&3\nprintf 'native diagnostic\\n' >&2\n", capturedConfig)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"capture": {Command: "printf original"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	var artifact bytes.Buffer
+	diagnostics, err := backend.RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "capture", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: &artifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(artifact.Bytes(), []byte("artifact\x00bytes")) {
+		t.Fatalf("artifact = %q", artifact.Bytes())
+	}
+	if string(diagnostics) != "native diagnostic\n" {
+		t.Fatalf("diagnostics = %q", diagnostics)
+	}
+	compiled, err := os.ReadFile(capturedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compiled), "command: exec 1>&3 3>&-; printf original") {
+		t.Fatalf("compiled configuration does not route stdout to fd 3:\n%s", compiled)
+	}
+}
+
+func TestRunJobStreamsRoutesNonSaveStdoutThroughFD3(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	capturedConfig := filepath.Join(root, "captured.yaml")
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncp \"$8\" %q\nprintf checked >&3\n", capturedConfig)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"check": {Command: "printf original"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	var stdout bytes.Buffer
+	_, err = backend.RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "check", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleCheck, Stdout: &stdout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "checked" {
+		t.Fatalf("stdout = %q, want checked", stdout.String())
+	}
+	compiled, err := os.ReadFile(capturedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compiled), "command: exec 1>&3 3>&-; printf original") {
+		t.Fatalf("compiled configuration does not route stdout to fd 3:\n%s", compiled)
+	}
+}
+
+func TestRunJobStreamsLeavesNonSaveCommandUntouchedWithoutStdout(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	capturedConfig := filepath.Join(root, "captured.yaml")
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncp \"$8\" %q\n", capturedConfig)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"check": {Command: "printf original"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	_, err = backend.RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "check", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleCheck})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := os.ReadFile(capturedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(compiled), "1>&3") || !strings.Contains(string(compiled), "command: printf original") {
+		t.Fatalf("non-save command was changed:\n%s", compiled)
+	}
+}
+
+type localReadError struct{ err error }
+
+func (r localReadError) Read([]byte) (int, error) { return 0, r.err }
+
+func TestRunJobStreamsReturnsStdinCopyError(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\ncat >/dev/null\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"restore": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readErr := errors.New("stdin failed")
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	_, err = backend.RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "restore", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleRestore, Stdin: localReadError{err: readErr}})
+	if !errors.Is(err, readErr) {
+		t.Fatalf("RunJobStreams() error = %v, want %v", err, readErr)
+	}
+}
+
+func TestRunJobStreamsBoundsAnInheritedFDHeldByABackgroundChild(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nsleep 30 >/dev/null 2>&1 &\nprintf done >&3\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"save": {
+		Command: "sleep 30 & printf done", Shutdown: &Shutdown{TimeoutSeconds: 1},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	started := time.Now()
+	var stdout bytes.Buffer
+	_, err = (Backend{LookupPath: func(string) (string, error) { return binary, nil }}).RunJobStreams(ctx, runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "save", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: &stdout})
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunJobStreams() error = %v, want success or the context deadline", err)
+	}
+	if stdout.String() != "done" {
+		t.Fatalf("stdout = %q, want done", stdout.String())
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("RunJobStreams() returned after %s, want within context deadline plus wait delay", elapsed)
+	}
+}
+
+type firstWriteStall struct {
+	delay time.Duration
+	once  sync.Once
+	bytes.Buffer
+}
+
+func (w *firstWriteStall) Write(data []byte) (int, error) {
+	w.once.Do(func() { time.Sleep(w.delay) })
+	return w.Buffer.Write(data)
+}
+
+func TestRunJobStreamsDoesNotCountASlowConsumerWriteAsIdleOutput(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	binary := filepath.Join(root, "fake-process-compose")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nhead -c 20000 /dev/zero >&3\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"save": {
+		Command: "head -c 20000 /dev/zero", Shutdown: &Shutdown{TimeoutSeconds: 1},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := &firstWriteStall{delay: 4 * time.Second}
+	_, err = (Backend{LookupPath: func(string) (string, error) { return binary, nil }}).RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "save", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: consumer})
+	if err != nil {
+		t.Fatalf("RunJobStreams() error = %v, want the slow consumer to receive a complete save", err)
+	}
+	if consumer.Len() != 20000 {
+		t.Fatalf("consumer received %d bytes, want 20000", consumer.Len())
+	}
+}
+
+func TestCopyForegroundOutputBoundsAnIdleReadAfterProcessExit(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	defer write.Close()
+	var processExited atomic.Bool
+	processExited.Store(true)
+	started := time.Now()
+	err = copyForegroundOutput(io.Discard, read, &processExited, 10*time.Millisecond)
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("copyForegroundOutput() error = %v, want idle-read deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("idle read returned after %s, want the bounded deadline", elapsed)
+	}
+}
+
+func TestRunJobStreamsValidatesRole(t *testing.T) {
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"capture": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []runtime.StreamRole{"", "unknown"} {
+		_, err := NewBackend().RunJobStreams(t.Context(), runtime.Target{}, runtime.JobSpec{Name: "capture", Configuration: configuration, Transient: true}, runtime.JobStreams{Role: role})
+		if err == nil || !strings.Contains(err.Error(), "unknown streaming job role") {
+			t.Fatalf("role %q error = %v, want validation error", role, err)
+		}
+	}
+}
+
+func TestRunJobStreamsPassesStdinWithoutATerminal(t *testing.T) {
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	received := filepath.Join(root, "received")
+	binary := filepath.Join(root, "fake-process-compose")
+	script := fmt.Sprintf("#!/bin/sh\ncat > %q\nprintf 'restore diagnostic\\n' >&2\n", received)
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"restore": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := Backend{LookupPath: func(string) (string, error) { return binary, nil }}
+	payload := []byte("binary\x00restore")
+	diagnostics, err := backend.RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "restore", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleRestore, Stdin: bytes.NewReader(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) || string(diagnostics) != "restore diagnostic\n" {
+		t.Fatalf("received = %q, diagnostics = %q", got, diagnostics)
+	}
+	diagnostics, err = backend.RunJobStreams(t.Context(), runtime.Target{Root: root}, runtime.JobSpec{
+		Name: "restore", Configuration: configuration, Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleRestore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 || string(diagnostics) != "restore diagnostic\n" {
+		t.Fatalf("nil stdin delivered %q, diagnostics = %q; want /dev/null", got, diagnostics)
+	}
+}
+
+func TestRunJobStreamsRefusesSharedLocalJob(t *testing.T) {
+	configuration, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"capture": {Command: "unused"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewBackend().RunJobStreams(t.Context(), runtime.Target{}, runtime.JobSpec{Name: "capture", Configuration: configuration}, runtime.JobStreams{Role: runtime.StreamRoleSave})
+	var capability *runtime.JobCapabilityError
+	if !errors.As(err, &capability) {
+		t.Fatalf("RunJobStreams() error = %v, want JobCapabilityError", err)
+	}
+}
+
 // A transient job stays out of the registration path that serves a process the
 // supervisor has not loaded (addMissingProcess): it runs under its own
 // foreground supervisor, so the shared one gets no request at all, let alone a

@@ -17,6 +17,18 @@ latest tag.
   fails strict loading. Any leftover backup receipts in `state/job-runs/` with
   `root_job` set to `"backup"` can be deleted.
 
+### Fixed
+
+- **Failed or cancelled one-off jobs no longer leave their workloads
+  running.** On cancellation, the Docker client's whole process group is
+  killed. After any failure or cancellation, the named one-off container is
+  removed once with its anonymous volumes, and its removal is confirmed from
+  Docker's event stream. Cancellation uses a bounded create-detection window;
+  a create observed as that window closes, the residual late-create
+  uncertainty, event-stream failures and removals that cannot be confirmed are
+  reported. A cancelled local transient job has its whole process group killed
+  after the grace period, so child processes do not remain behind.
+
 ## v0.27.3 — 2026-10-30
 
 ### Changed

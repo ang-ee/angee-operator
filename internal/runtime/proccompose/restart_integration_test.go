@@ -21,12 +21,10 @@ import (
 // past the next backoff. process-compose marks a process it was asked to stop,
 // and its restart loop honours the mark (v1.120.0, isRestartable).
 func TestRestartPolicyHonoursStopAndDown(t *testing.T) {
-	if _, err := exec.LookPath("process-compose"); err != nil {
-		t.Skip("process-compose is not installed")
-	}
 	if testing.Short() {
 		t.Skip("runs a process-compose supervisor")
 	}
+	requireProcessComposeIntegration(t)
 	for _, tt := range []struct {
 		name string
 		stop func(context.Context, Backend, runtime.Target) error

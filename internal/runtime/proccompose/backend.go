@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
@@ -551,13 +552,9 @@ func (b Backend) ValidateJob(job runtime.JobSpec) error {
 
 func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.JobSpec) ([]byte, error) {
 	name := job.Name
-	var document File
-	if err := yaml.Unmarshal(job.Configuration, &document); err != nil {
-		return nil, fmt.Errorf("decode process-compose job configuration: %w", err)
-	}
-	process, ok := document.Processes[name]
-	if !ok {
-		return nil, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", name)
+	process, err := processForJob(job)
+	if err != nil {
+		return nil, err
 	}
 	if job.Transient {
 		return b.runTransientJob(ctx, target, name, process)
@@ -678,6 +675,37 @@ func (b Backend) RunJob(ctx context.Context, target runtime.Target, job runtime.
 			}
 		}
 	}
+}
+
+// RunJobStreams runs a transient local job under its private foreground
+// process-compose instance. When Stdout is set, job stdout bypasses
+// process-compose's terminal title through inherited fd 3; all native stdout
+// and stderr remain diagnostics. Save output is discarded through fd 3 when no
+// consumer is provided.
+func (b Backend) RunJobStreams(ctx context.Context, target runtime.Target, job runtime.JobSpec, streams runtime.JobStreams) ([]byte, error) {
+	if !job.Transient {
+		return nil, &runtime.JobCapabilityError{Reason: "streaming local jobs require a transient job; shared process-compose jobs cannot expose isolated byte streams"}
+	}
+	if err := streams.Role.Validate(); err != nil {
+		return nil, err
+	}
+	process, err := processForJob(job)
+	if err != nil {
+		return nil, err
+	}
+	return b.runTransientJobStreams(ctx, target, job.Name, process, streams)
+}
+
+func processForJob(job runtime.JobSpec) (Process, error) {
+	var document File
+	if err := yaml.Unmarshal(job.Configuration, &document); err != nil {
+		return Process{}, fmt.Errorf("decode process-compose job configuration: %w", err)
+	}
+	process, ok := document.Processes[job.Name]
+	if !ok {
+		return Process{}, fmt.Errorf("process-compose job %s is absent from compiled runtime configuration", job.Name)
+	}
+	return process, nil
 }
 
 // isTerminalState reports whether a process-compose status is one it treats as
@@ -1635,9 +1663,11 @@ func (b Backend) run(ctx context.Context, root string, envFile string, args ...s
 }
 
 type foregroundOptions struct {
-	prompt    bool
-	isolated  bool
-	waitDelay time.Duration
+	prompt      bool
+	isolated    bool
+	waitDelay   time.Duration
+	stdin       io.Reader
+	extraOutput io.Writer
 }
 
 func (b Backend) runForeground(ctx context.Context, root string, envFile string, stdout io.Writer, stderr io.Writer, options foregroundOptions, args ...string) error {
@@ -1654,20 +1684,73 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 	cmd.Env = runtime.ChildEnviron(env)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.WaitDelay = options.waitDelay
+	cmd.Stdin = options.stdin
+	stopGroup := func() {}
 	if options.isolated {
-		if err := isolateForegroundCommand(cmd); err != nil {
+		stopGroup, err = isolateForegroundCommand(cmd, options.waitDelay)
+		if err != nil {
 			return err
 		}
-	}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
+	} else {
+		cmd.WaitDelay = options.waitDelay
+		cmd.Cancel = func() error {
+			if cmd.Process == nil {
+				return nil
+			}
+			return cmd.Process.Signal(os.Interrupt)
 		}
-		return cmd.Process.Signal(os.Interrupt)
+	}
+	var (
+		extraRead  *os.File
+		extraWrite *os.File
+	)
+	if options.extraOutput != nil {
+		extraRead, extraWrite, err = os.Pipe()
+		if err != nil {
+			return fmt.Errorf("open local artifact pipe: %w", err)
+		}
+		cmd.ExtraFiles = []*os.File{extraWrite}
 	}
 	trace := logctx.TraceExec(ctx, name, args, root, slog.Any("env", logctx.EnvKeys(env)))
-	runErr := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		if extraRead != nil {
+			_ = extraRead.Close()
+			_ = extraWrite.Close()
+		}
+		stopGroup()
+		trace(nil, err)
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	var copied chan error
+	var processExited atomic.Bool
+	if extraWrite != nil {
+		_ = extraWrite.Close()
+		copied = make(chan error, 1)
+		go func() {
+			copyErr := copyForegroundOutput(options.extraOutput, extraRead, &processExited, options.waitDelay)
+			closeErr := extraRead.Close()
+			if copyErr != nil && cmd.Cancel != nil {
+				_ = cmd.Cancel()
+			}
+			copied <- errors.Join(copyErr, closeErr)
+		}()
+	}
+	runErr := cmd.Wait()
+	processExited.Store(true)
+	if extraRead != nil {
+		// Wake a Read that was already blocked when the process exited. The copy
+		// loop re-arms this deadline immediately before every later Read, so time
+		// spent blocked in the consumer's Write never counts as output idleness.
+		_ = extraRead.SetReadDeadline(time.Now().Add(options.waitDelay))
+	}
+	stopGroup()
+	if copied != nil {
+		copyErr := <-copied
+		if errors.Is(copyErr, os.ErrDeadlineExceeded) {
+			copyErr = fmt.Errorf("local job stdout pipe remained open for %s after process-compose exited: %w", options.waitDelay, copyErr)
+		}
+		runErr = errors.Join(runErr, copyErr)
+	}
 	trace(nil, runErr)
 	if runErr != nil {
 		if ctx.Err() != nil {
@@ -1676,6 +1759,33 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), runErr)
 	}
 	return nil
+}
+
+func copyForegroundOutput(dst io.Writer, src *os.File, processExited *atomic.Bool, idleTimeout time.Duration) error {
+	buffer := make([]byte, 32<<10)
+	for {
+		if processExited.Load() {
+			if err := src.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+				return fmt.Errorf("bound local job stdout idle read: %w", err)
+			}
+		}
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			written, writeErr := dst.Write(buffer[:n])
+			if writeErr != nil {
+				return writeErr
+			}
+			if written != n {
+				return io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
+		}
+	}
 }
 
 func (b Backend) processComposeBinary(ctx context.Context, stdin io.Reader, stdout io.Writer, stderr io.Writer, prompt bool) (string, error) {
@@ -1830,10 +1940,22 @@ func effectiveControlPort(controlPort int) int {
 // or updating any process in the shared supervisor. Prerequisites were checked
 // by the Platform; native --no-deps prevents a second copy of them being started.
 func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, name string, process Process) ([]byte, error) {
+	return b.runTransientJobWithStreams(ctx, target, name, process, nil)
+}
+
+func (b Backend) runTransientJobStreams(ctx context.Context, target runtime.Target, name string, process Process, streams runtime.JobStreams) ([]byte, error) {
+	return b.runTransientJobWithStreams(ctx, target, name, process, &streams)
+}
+
+func (b Backend) runTransientJobWithStreams(ctx context.Context, target runtime.Target, name string, process Process, streams *runtime.JobStreams) ([]byte, error) {
 	if err := b.ValidateJob(runtime.JobSpec{Name: name, Transient: true}); err != nil {
 		return nil, err
 	}
 	process.DependsOn = nil
+	routeStdout := streams != nil && (streams.Stdout != nil || streams.Role == runtime.StreamRoleSave)
+	if routeStdout {
+		process.Command = "exec 1>&3 3>&-; " + process.Command
+	}
 	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{name: process}})
 	if err != nil {
 		return nil, err
@@ -1853,7 +1975,17 @@ func (b Backend) runTransientJob(ctx context.Context, target runtime.Target, nam
 		shutdown = time.Duration(process.Shutdown.TimeoutSeconds) * time.Second
 	}
 	args := []string{"--no-server", "--log-file", filepath.Join(directory, "process-compose.log"), "--log-no-color", "run", "--no-deps", "--config", config, name}
-	err = b.runForeground(ctx, target.Root, target.EnvFile, output, output, foregroundOptions{isolated: true, waitDelay: shutdown + time.Second}, args...)
+	options := foregroundOptions{isolated: true, waitDelay: shutdown + time.Second}
+	if streams != nil {
+		options.stdin = streams.Stdin
+		if routeStdout {
+			options.extraOutput = streams.Stdout
+			if options.extraOutput == nil {
+				options.extraOutput = io.Discard
+			}
+		}
+	}
+	err = b.runForeground(ctx, target.Root, target.EnvFile, output, output, options, args...)
 	// Strip terminal controls (the window title names the host) before redacting,
 	// so a secret an escape sequence splits is masked whole.
 	safeOutput := logctx.RedactText(runtime.StripTerminalControls(output.String()))

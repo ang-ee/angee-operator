@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,15 +13,13 @@ import (
 )
 
 func TestTransientJobUsesNativeForegroundWithoutRestartingSupervisorProcesses(t *testing.T) {
-	if err := transientJobSupport(); err != nil {
-		t.Skip(err)
-	}
-	if _, err := exec.LookPath("process-compose"); err != nil {
-		t.Skip("process-compose unavailable")
-	}
 	if testing.Short() {
 		t.Skip("native supervisor integration")
 	}
+	if err := transientJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	requireProcessComposeIntegration(t)
 	root := t.TempDir()
 	t.Setenv("PC_LOG_FILE", filepath.Join(root, "supervisor.log"))
 	document, err := Marshal(File{Version: "0.5", Processes: map[string]Process{"operator": {Command: "sleep 60", Shutdown: &Shutdown{TimeoutSeconds: 2, Signal: 15}}}})

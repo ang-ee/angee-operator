@@ -4,6 +4,7 @@ package proccompose
 
 import (
 	"os/exec"
+	"time"
 
 	"github.com/ang-ee/angee-operator/internal/runtime"
 )
@@ -14,4 +15,7 @@ import (
 func transientJobSupport() error {
 	return &runtime.JobCapabilityError{Reason: "transient local jobs are unavailable on Windows until native process-tree cancellation is supported; use a container job"}
 }
-func isolateForegroundCommand(_ *exec.Cmd) error { return transientJobSupport() }
+
+func isolateForegroundCommand(_ *exec.Cmd, _ time.Duration) (func(), error) {
+	return nil, transientJobSupport()
+}

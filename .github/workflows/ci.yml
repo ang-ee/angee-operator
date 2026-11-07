@@ -97,7 +97,15 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Install process-compose
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go install github.com/f1bonacc1/process-compose@v1.122.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Test (race + coverage)
+        env:
+          ANGEE_REQUIRE_PROCESS_COMPOSE: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload coverage to Codecov
