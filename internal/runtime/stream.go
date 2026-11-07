@@ -229,6 +229,7 @@ func LimitLogBytes(text string, maxBytes int) string {
 // LimitLogBytes of everything added.
 type LimitedLogRead struct {
 	maxBytes int
+	mu       sync.Mutex
 	buf      []byte
 }
 
@@ -240,6 +241,12 @@ func NewLimitedLogRead(maxBytes int) *LimitedLogRead {
 
 // Add appends the next chunk of the read, dropping what no longer counts.
 func (r *LimitedLogRead) Add(chunk string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.add(chunk)
+}
+
+func (r *LimitedLogRead) add(chunk string) {
 	if r.maxBytes <= 0 {
 		r.buf = append(r.buf, chunk...)
 		return
@@ -259,6 +266,8 @@ func (r *LimitedLogRead) Add(chunk string) {
 
 // String returns the read so far, kept within maxBytes by LimitLogBytes.
 func (r *LimitedLogRead) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	text := r.buf
 	if keep := r.maxBytes + 1; r.maxBytes > 0 && len(text) > keep {
 		text = text[len(text)-keep:]

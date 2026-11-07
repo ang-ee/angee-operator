@@ -168,13 +168,22 @@ func TestJobRunRetentionEvictsOnlyMemory(t *testing.T) {
 
 	p.jobRunsMu.RLock()
 	retained := len(p.jobRunOrder)
+	remembered := len(p.jobRuns)
 	_, stillInMemory := p.jobRuns["run-000"]
+	newestID := fmt.Sprintf("run-%03d", maxRetainedJobRuns)
+	newest, newestInMemory := p.jobRuns[newestID]
 	p.jobRunsMu.RUnlock()
 	if retained != maxRetainedJobRuns {
 		t.Fatalf("retained receipts = %d, want %d", retained, maxRetainedJobRuns)
 	}
+	if remembered != retained {
+		t.Fatalf("jobRuns has %d receipts and jobRunOrder has %d", remembered, retained)
+	}
 	if stillInMemory {
 		t.Fatal("oldest receipt remained in memory")
+	}
+	if !newestInMemory || newest.ID != newestID || newest.Status != api.JobRunSucceeded {
+		t.Fatalf("newest receipt in memory = %#v, present %t; want %s succeeded", newest, newestInMemory, newestID)
 	}
 	evicted, err := p.JobRunGet(t.Context(), "run-000")
 	if err != nil {
