@@ -6,6 +6,7 @@ Requirements:
 - Docker, for container services and compose-backed tests
 - git 2.24+
 - process-compose, for local-process services
+- restic 0.19.1+, for stack snapshots
 
 ## Make Targets
 

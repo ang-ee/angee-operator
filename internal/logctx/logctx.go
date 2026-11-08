@@ -266,7 +266,8 @@ func needsQuoting(value string) bool {
 // parse is masked as free text (RedactText), since it may still carry a
 // credential.
 func RedactURL(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
+	prefix, nested := splitNestedURL(rawURL)
+	parsed, err := url.Parse(nested)
 	if err != nil {
 		return RedactText(rawURL)
 	}
@@ -281,15 +282,68 @@ func RedactURL(rawURL string) string {
 		parsed.RawQuery = strings.ReplaceAll(query.Encode(), "%2A%2A%2A", "***")
 	}
 	if parsed.User == nil {
-		return parsed.String()
+		return prefix + parsed.String()
 	}
 	parsed.User = nil
 	redacted := parsed.String()
-	prefix := parsed.Scheme + "://"
-	if parsed.Scheme != "" && strings.HasPrefix(redacted, prefix) {
-		return prefix + "***@" + strings.TrimPrefix(redacted, prefix)
+	schemePrefix := parsed.Scheme + "://"
+	if parsed.Scheme != "" && strings.HasPrefix(redacted, schemePrefix) {
+		return prefix + schemePrefix + "***@" + strings.TrimPrefix(redacted, schemePrefix)
 	}
-	return redacted
+	return prefix + redacted
+}
+
+// URLCredentials returns a URL username, all password/query values for exact
+// per-call redaction, and the subset safe to register process-wide. The latter
+// contains the URL password and values whose query keys look credential-like.
+// It understands backend-prefixed URLs such as rest:https://....
+func URLCredentials(rawURL string) (string, []string, []string) {
+	_, nested := splitNestedURL(rawURL)
+	parsed, err := url.Parse(nested)
+	if err != nil {
+		return "", nil, nil
+	}
+	var username string
+	var values, secrets []string
+	if parsed.User != nil {
+		username = parsed.User.Username()
+		if password, ok := parsed.User.Password(); ok {
+			values = append(values, password)
+			secrets = append(secrets, password)
+		}
+	}
+	query := parsed.Query()
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		values = append(values, query[key]...)
+		if credentialQueryKey(key) {
+			secrets = append(secrets, query[key]...)
+		}
+	}
+	return username, values, secrets
+}
+
+func credentialQueryKey(key string) bool {
+	key = strings.ToLower(key)
+	for _, marker := range []string{"token", "secret", "password", "passwd", "key", "sig", "signature", "credential", "auth"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitNestedURL(rawURL string) (string, string) {
+	separator := strings.Index(rawURL, "://")
+	if separator < 0 {
+		return "", rawURL
+	}
+	prefixEnd := strings.LastIndex(rawURL[:separator], ":") + 1
+	return rawURL[:prefixEnd], rawURL[prefixEnd:]
 }
 
 var credentialURLPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@`)

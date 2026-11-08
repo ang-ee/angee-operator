@@ -173,6 +173,20 @@ func TestDoctorProbesProcessComposeWithVersionSubcommand(t *testing.T) {
 	}
 }
 
+func TestDoctorProbesResticAndWarnsBelowFloor(t *testing.T) {
+	tool := doctorToolNamed(t, "restic")
+	if got := strings.Join(tool.args, " "); got != "version" {
+		t.Fatalf("args = %q, want version", got)
+	}
+	if detail, hint := tool.short("restic 0.19.1 compiled with go1.26"); detail != "" || hint != "" {
+		t.Fatalf("short(supported) = %q, %q", detail, hint)
+	}
+	detail, hint := tool.short("restic 0.18.0 compiled with go1.24")
+	if !strings.Contains(detail, "older than 0.19.1") || !strings.Contains(hint, "github.com/restic/restic/cmd/restic@v0.19.1") {
+		t.Fatalf("short(old) = %q, %q", detail, hint)
+	}
+}
+
 func TestDoctorToolsDefaultBinaryToName(t *testing.T) {
 	for _, tool := range doctorTools() {
 		if tool.bin == "" && tool.binary() != tool.name {

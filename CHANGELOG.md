@@ -6,6 +6,13 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **Stack snapshot prerequisites are ready for the snapshot commands arriving
+  in later phases.** `angee doctor` reports restic and warns below 0.19.1, the
+  operator image ships the pinned restic 0.19.1 binary, and Angee can offer to
+  install that release with `go install` when a snapshot operation needs it.
+
 ### Removed
 
 - **Manual backups are removed.** `POST /backups/preview`, `POST /backups` and

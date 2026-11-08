@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -163,12 +164,14 @@ func TestRedactURL(t *testing.T) {
 		in   string
 		want string
 	}{
-		{name: "username and password", in: "https://alexis:secret@example.com/repo?q=1", want: "https://***@example.com/repo?q=***"},
+		{name: "username and password", in: "https://user:secret@example.com/repo?q=1", want: "https://***@example.com/repo?q=***"},
 		{name: "query token", in: "https://example.com/repo.git?access_token=abc123&ref=main", want: "https://example.com/repo.git?access_token=***&ref=***"},
 		{name: "username", in: "ssh://git@example.com/repo", want: "ssh://***@example.com/repo"},
 		{name: "no userinfo", in: "https://example.com/repo", want: "https://example.com/repo"},
 		{name: "invalid", in: "://%", want: "://%"},
 		{name: "invalid with credential", in: "https://user:p%zzword@example.com/x.git", want: "https://***@example.com/x.git"},
+		{name: "rest backend prefix", in: "rest:http://user:secret@example.com/repo?q=1", want: "rest:http://***@example.com/repo?q=***"},
+		{name: "s3 backend prefix", in: "s3:https://user:secret@example.com/bucket?token=abc", want: "s3:https://***@example.com/bucket?token=***"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -176,6 +179,13 @@ func TestRedactURL(t *testing.T) {
 				t.Fatalf("RedactURL(%q) = %q, want %q", test.in, got, test.want)
 			}
 		})
+	}
+}
+
+func TestURLCredentialsHandlesBackendPrefix(t *testing.T) {
+	username, values, secrets := URLCredentials("rest:https://user:p%40ss@example.com/repo?token=abc&ref=main")
+	if username != "user" || !slices.Equal(values, []string{"p@ss", "main", "abc"}) || !slices.Equal(secrets, []string{"p@ss", "abc"}) {
+		t.Fatalf("URLCredentials() = %q, %q, %q", username, values, secrets)
 	}
 }
 
@@ -218,7 +228,7 @@ func TestTraceExecLogsRedactedCommandAndCompletion(t *testing.T) {
 	complete := TraceExec(ctx, "deploy", []string{
 		"--token", "secret-token",
 		"--env", "API_TOKEN=env-secret",
-		"https://alexis:password@example.com/repo",
+		"https://user:password@example.com/repo",
 	}, "/tmp/work", slog.String("component", "test"))
 	exitErr := exec.Command("sh", "-c", "exit 7").Run()
 	complete([]byte(strings.Repeat("x", 4100)), exitErr)
@@ -236,7 +246,7 @@ func TestTraceExecLogsRedactedCommandAndCompletion(t *testing.T) {
 			t.Fatalf("trace output = %q, want %q", got, want)
 		}
 	}
-	for _, secret := range []string{"secret-token", "env-secret", "alexis", "password"} {
+	for _, secret := range []string{"secret-token", "env-secret", "user", "password"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("trace output leaked %q: %q", secret, got)
 		}
@@ -250,7 +260,7 @@ func TestTraceHTTPLogsRedactedURLAndCompletion(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
 	ctx := With(t.Context(), logger)
-	complete := TraceHTTP(ctx, "get", "https://alexis:secret@example.com/v1/status")
+	complete := TraceHTTP(ctx, "get", "https://user:secret@example.com/v1/status")
 	complete(0, &url.Error{
 		Op:  "Get",
 		URL: "https://transport-user:transport-password@example.com/v1/status",
@@ -265,7 +275,7 @@ func TestTraceHTTPLogsRedactedURLAndCompletion(t *testing.T) {
 		!strings.Contains(got, "https://***@example.com/v1/status") {
 		t.Fatalf("trace output = %q", got)
 	}
-	for _, secret := range []string{"alexis", "secret", "transport-user", "transport-password"} {
+	for _, secret := range []string{"user", "secret", "transport-user", "transport-password"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("trace output leaked URL userinfo %q: %q", secret, got)
 		}
@@ -447,7 +457,7 @@ func TestRegisterSecretsMasksLoggedText(t *testing.T) {
 }
 
 func TestRedactText(t *testing.T) {
-	in := "origin\thttps://alexis:secret@example.com/repo (fetch)\nssh://git@host/x and plain text user@example.com"
+	in := "origin\thttps://user:secret@example.com/repo (fetch)\nssh://git@host/x and plain text user@example.com"
 	want := "origin\thttps://***@example.com/repo (fetch)\nssh://***@host/x and plain text user@example.com"
 	if got := RedactText(in); got != want {
 		t.Fatalf("RedactText = %q, want %q", got, want)
@@ -458,7 +468,7 @@ func TestTraceExecScrubsCapturedOutput(t *testing.T) {
 	var output synchronizedBuffer
 	logger := slog.New(NewCLIHandler(&output, slog.LevelDebug))
 	done := TraceExec(With(context.Background(), logger), "git", []string{"remote", "-v"}, "")
-	done([]byte("origin https://alexis:secret@example.com/repo (fetch)\n"), nil)
+	done([]byte("origin https://user:secret@example.com/repo (fetch)\n"), nil)
 	got := output.String()
 	if strings.Contains(got, "secret") || !strings.Contains(got, "https://***@example.com/repo") {
 		t.Fatalf("captured output was not scrubbed: %q", got)
