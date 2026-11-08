@@ -1,0 +1,12 @@
+== writer: wal_autocheckpoint=0, 20.0s, sleep 0.005s/txn; 40 iterations per method
+writer done: 3111 txns, last txn 3111
+== iterations completed: 16; final live rows 155550; wal size 0
+-- cp db, then -wal later: {'n': 16, 'ok': 16}
+-- cp -wal, then db later: {'n': 16, 'ok': 16}
+-- cp db only (no -wal): {'n': 16, 'open/query error': 16}
+     e.g. {'iter': 0, 'live_rows_before': 11650, 'ok': False, 'error': 'OperationalError: no such table: t'}
+     e.g. {'iter': 0, 'live_rows_before': 11650, 'ok': False, 'error': 'OperationalError: no such table: t'}
+     e.g. {'iter': 1, 'live_rows_before': 15200, 'ok': False, 'error': 'OperationalError: no such table: t'}
+-- sqlite3 .backup: {'n': 16, 'ok': 16, 'max secs x1000': 6860}
+-- sqlite3 VACUUM INTO: {'n': 16, 'ok': 16, 'max secs x1000': 134}
+-- python Connection.backup(): {'n': 16, 'ok': 16}

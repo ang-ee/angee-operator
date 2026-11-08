@@ -1,0 +1,32 @@
+== iteration 1
+  PL=44407 PD=44689
+  before kill:
+   lock pid=44407 exclusive=False
+   lock pid=44689 exclusive=False
+  pgrep matches for pkill -f 'head -c 20971520' -P 44689 (before kill): 44247 44251 44407 44689 
+  pgrep matches for pkill -f 'head -c 20971520' -P 44689 (after kill): 44247 44251 44407 
+  all 'head -c 20971520' procs with parents: 44407<-44044 
+  after kill:
+   lock pid=44407 exclusive=False
+   lock pid=44689 exclusive=False
+successfully removed 1 locks
+  unlock exit=0
+  after unlock:
+   lock pid=44407 exclusive=False
+  live exit=0
+== iteration 2
+  PL=45379 PD=45713
+  before kill:
+   lock pid=45713 exclusive=False
+   lock pid=45379 exclusive=False
+  pgrep matches for pkill -f 'head -c 20971520' -P 45713 (before kill): 45379 45713 
+  pgrep matches for pkill -f 'head -c 20971520' -P 45713 (after kill): 45379 
+  all 'head -c 20971520' procs with parents: 45379<-44044 
+  after kill:
+   lock pid=45713 exclusive=False
+   lock pid=45379 exclusive=False
+successfully removed 1 locks
+  unlock exit=0
+  after unlock:
+   lock pid=45379 exclusive=False
+  live exit=0

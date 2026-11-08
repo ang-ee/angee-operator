@@ -4,21 +4,127 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	"github.com/ang-ee/angee-operator/internal/runtime"
+	"gopkg.in/yaml.v3"
 )
+
+func TestDockerEventArgsReplayTheSubscriptionStartupWindow(t *testing.T) {
+	since := time.Date(2026, time.November, 6, 12, 34, 56, 789, time.UTC)
+	want := []string{
+		"events", "--format", "{{json .}}", "--since", "2026-11-06T12:34:56.000000789Z",
+		"--filter", "type=container", "--filter", "container=angee-job-123",
+	}
+	if got := dockerEventArgs("angee-job-123", since); !reflect.DeepEqual(got, want) {
+		t.Fatalf("dockerEventArgs() = %q, want %q", got, want)
+	}
+}
+
+func TestDockerContainerEventsParsesActionAndStatus(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fake docker script requires a Unix shell")
+	}
+	installFakeDocker(t, "printf '%s\\n' '{\"Action\":\"create\"}' '{\"status\":\"destroy\"}'")
+	events, err := (ExecRunner{}).subscribeContainerEvents(t.Context(), t.TempDir(), nil, "angee-job-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.stop()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if created, err := events.waitCreated(ctx); !created || err != nil {
+		t.Fatalf("waitCreated() = %t, %v; want the Action create event", created, err)
+	}
+	if destroyed, err := events.waitDestroyed(ctx); !destroyed || err != nil {
+		t.Fatalf("waitDestroyed() = %t, %v; want the status destroy event", destroyed, err)
+	}
+}
+
+func TestDockerContainerEventsReportsExitBeforeAnyEvent(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fake docker script requires a Unix shell")
+	}
+	installFakeDocker(t, "exit 7")
+	events, err := (ExecRunner{}).subscribeContainerEvents(t.Context(), t.TempDir(), nil, "angee-job-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.stop()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if created, err := events.waitCreated(ctx); created || err == nil {
+		t.Fatalf("waitCreated() = %t, %v; want the event process exit", created, err)
+	}
+}
+
+func TestDockerContainerEventsStopEndsTheProcess(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fake docker script requires a Unix shell")
+	}
+	installFakeDocker(t, "printf '%s\\n' '{\"Action\":\"create\"}'; exec sleep 30")
+	events, err := (ExecRunner{}).subscribeContainerEvents(t.Context(), t.TempDir(), nil, "angee-job-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if created, err := events.waitCreated(ctx); !created || err != nil {
+		t.Fatalf("waitCreated() = %t, %v", created, err)
+	}
+	started := time.Now()
+	events.stop()
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("stop() returned after %s, want the subscription process ended promptly", elapsed)
+	}
+	select {
+	case <-events.(*dockerContainerEvents).done:
+	default:
+		t.Fatal("stop() returned before the subscription process ended")
+	}
+	// stop is idempotent and must not signal a recycled process id.
+	events.stop()
+}
+
+func TestDockerContainerEventsCancelsAndReportsScannerErrors(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("fake docker script requires a Unix shell")
+	}
+	installFakeDocker(t, "dd if=/dev/zero bs=1048577 count=1 2>/dev/null | tr '\\000' x; sleep 30")
+	events, err := (ExecRunner{}).subscribeContainerEvents(t.Context(), t.TempDir(), nil, "angee-job-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.stop()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	if created, err := events.waitCreated(ctx); created || err == nil || !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("waitCreated() after %s = %t, %v; want the scanner error", time.Since(started), created, err)
+	}
+}
+
+func installFakeDocker(t *testing.T, body string) {
+	t.Helper()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "docker")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 // A failed command's error carries the last lines of its output, within
 // maxErrorOutputBytes, cut on a line boundary, rather than all of it: a failed
@@ -61,6 +167,65 @@ func TestExecRunnerTracesCommandWithRedactedArgs(t *testing.T) {
 	}
 	if strings.Contains(got, "env-secret") {
 		t.Fatalf("trace output leaked env value: %q", got)
+	}
+}
+
+func TestExecRunnerRunStreamsSeparatesArtifactOnlyWhenStdoutIsSet(t *testing.T) {
+	if err := streamJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	diagnostics, err := (ExecRunner{}).RunStreams(t.Context(), "", nil, []byte("services: {}\n"), nil, nil, "sh", "-c", "cat <&3 >/dev/null; printf stdout; printf stderr >&2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(diagnostics) != "stdoutstderr" {
+		t.Fatalf("combined diagnostics = %q, want stdout and stderr", diagnostics)
+	}
+	var artifact bytes.Buffer
+	diagnostics, err = (ExecRunner{}).RunStreams(t.Context(), "", nil, []byte("services: {}\n"), nil, &artifact, "sh", "-c", "cat <&3 >/dev/null; printf stdout; printf stderr >&2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.String() != "stdout" || string(diagnostics) != "stderr" {
+		t.Fatalf("artifact = %q, diagnostics = %q", artifact.String(), diagnostics)
+	}
+}
+
+type testReadError struct{ err error }
+
+func (r testReadError) Read([]byte) (int, error) { return 0, r.err }
+
+type testWriteError struct{ err error }
+
+func (w testWriteError) Write([]byte) (int, error) { return 0, w.err }
+
+func TestExecRunnerRunStreamsReturnsStdinAndStdoutCopyErrors(t *testing.T) {
+	if err := streamJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	stdinErr := errors.New("stdin failed")
+	_, err := (ExecRunner{}).RunStreams(t.Context(), "", nil, []byte("services: {}\n"), testReadError{err: stdinErr}, io.Discard, "sh", "-c", "cat <&3 >/dev/null; cat >/dev/null")
+	if !errors.Is(err, stdinErr) {
+		t.Fatalf("stdin error = %v, want %v", err, stdinErr)
+	}
+
+	stdoutErr := errors.New("consumer failed")
+	_, err = (ExecRunner{}).RunStreams(t.Context(), "", nil, []byte("services: {}\n"), nil, testWriteError{err: stdoutErr}, "sh", "-c", "cat <&3 >/dev/null; printf artifact")
+	if !errors.Is(err, stdoutErr) {
+		t.Fatalf("stdout error = %v, want %v", err, stdoutErr)
+	}
+}
+
+func TestExecRunnerRunStreamsBoundsDiagnostics(t *testing.T) {
+	if err := streamJobSupport(); err != nil {
+		t.Skip(err)
+	}
+	diagnostics, err := (ExecRunner{}).RunStreams(t.Context(), "", nil, []byte("services: {}\n"), nil, io.Discard, "sh", "-c", "cat <&3 >/dev/null; yes x | head -c 2097152 >&2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diagnostics) > maxJobOutputBytes {
+		t.Fatalf("diagnostics = %d bytes, want at most %d", len(diagnostics), maxJobOutputBytes)
 	}
 }
 
@@ -329,13 +494,17 @@ func argsContainPair(args []string, flag, value string) bool {
 }
 
 // jobRunner fakes the docker client for RunJob: RunInput answers the compose
-// commands through answer, Run answers `docker rm -f` through remove, and
-// every command is recorded with its input.
+// commands through answer, Run answers `docker rm -f -v` through remove or,
+// by default, echoes the removed name like Docker, and every command is
+// recorded with its input.
 type jobRunner struct {
-	mu       sync.Mutex
-	commands []jobCommand
-	answer   func(ctx context.Context, args []string) ([]byte, error)
-	remove   func(ctx context.Context, args []string) ([]byte, error)
+	mu           sync.Mutex
+	commands     []jobCommand
+	answer       func(ctx context.Context, args []string) ([]byte, error)
+	streamAnswer func(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) ([]byte, error)
+	remove       func(ctx context.Context, args []string) ([]byte, error)
+	events       containerEventSubscription
+	subscribed   []string
 }
 
 type jobCommand struct {
@@ -347,6 +516,9 @@ type jobCommand struct {
 func (r *jobRunner) Run(ctx context.Context, _ string, _ []string, name string, args ...string) ([]byte, error) {
 	r.record(name, args, nil)
 	if r.remove == nil {
+		if len(args) != 0 && args[0] == "rm" {
+			return []byte(args[len(args)-1] + "\n"), nil
+		}
 		return nil, nil
 	}
 	return r.remove(ctx, args)
@@ -360,6 +532,28 @@ func (r *jobRunner) RunInput(ctx context.Context, _ string, _ []string, input []
 	return r.answer(ctx, args)
 }
 
+func (r *jobRunner) RunTransientInput(ctx context.Context, dir string, env []string, input []byte, name string, args ...string) ([]byte, error) {
+	return r.RunInput(ctx, dir, env, input, name, args...)
+}
+
+func (r *jobRunner) RunStreams(ctx context.Context, _ string, _ []string, input []byte, stdin io.Reader, stdout io.Writer, name string, args ...string) ([]byte, error) {
+	r.record(name, args, input)
+	if r.streamAnswer == nil {
+		return nil, nil
+	}
+	return r.streamAnswer(ctx, args, stdin, stdout)
+}
+
+func (r *jobRunner) subscribeContainerEvents(_ context.Context, _ string, _ []string, container string) (containerEventSubscription, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.subscribed = append(r.subscribed, container)
+	if r.events != nil {
+		return r.events, nil
+	}
+	return observedContainerEvents(), nil
+}
+
 func (r *jobRunner) record(name string, args []string, input []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -370,6 +564,179 @@ func (r *jobRunner) recorded() []jobCommand {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.commands)
+}
+
+type fakeContainerEvents struct {
+	created      chan struct{}
+	destroyed    chan struct{}
+	createErr    error
+	destroyErr   error
+	onStop       func()
+	stopOnce     sync.Once
+	mu           sync.Mutex
+	stops        int
+	destroyWaits int
+}
+
+func observedContainerEvents() *fakeContainerEvents {
+	events := &fakeContainerEvents{created: make(chan struct{}), destroyed: make(chan struct{})}
+	close(events.created)
+	close(events.destroyed)
+	return events
+}
+
+func (e *fakeContainerEvents) waitCreated(ctx context.Context) (bool, error) {
+	if e.createErr != nil {
+		return false, e.createErr
+	}
+	return waitFakeContainerEvent(ctx, e.created)
+}
+
+func (e *fakeContainerEvents) waitDestroyed(ctx context.Context) (bool, error) {
+	e.mu.Lock()
+	e.destroyWaits++
+	e.mu.Unlock()
+	if e.destroyErr != nil {
+		return false, e.destroyErr
+	}
+	return waitFakeContainerEvent(ctx, e.destroyed)
+}
+
+func (e *fakeContainerEvents) seenCreate() bool {
+	select {
+	case <-e.created:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *fakeContainerEvents) eventError() error { return e.createErr }
+
+func waitFakeContainerEvent(ctx context.Context, event <-chan struct{}) (bool, error) {
+	select {
+	case <-event:
+		return true, nil
+	default:
+	}
+	select {
+	case <-event:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (e *fakeContainerEvents) stop() {
+	e.stopOnce.Do(func() {
+		if e.onStop != nil {
+			e.onStop()
+		}
+		e.mu.Lock()
+		e.stops++
+		e.mu.Unlock()
+	})
+}
+
+func (e *fakeContainerEvents) destroyWaitCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.destroyWaits
+}
+
+func TestBackendCleanupFailedContainerClassifiesRemovalOutput(t *testing.T) {
+	const container = "notes-1a2b3c4d-capture-run-0123456789ab"
+	removeExit := errors.New("exit status 1")
+	dockerUnavailable := errors.New("docker daemon unavailable")
+	tests := []struct {
+		name             string
+		output           string
+		removeErr        error
+		wantDestroyWaits int
+		wantErr          error
+	}{
+		{name: "removed name line", output: container + "\n", wantDestroyWaits: 1},
+		{name: "warning before name line", output: "WARNING: Error loading config file: permission denied\n" + container + "\n", wantDestroyWaits: 1},
+		{name: "name line before warning", output: container + "\nWARNING: Error loading config file: permission denied\n", wantDestroyWaits: 1},
+		{name: "name line with CRLF", output: container + "\r\n", wantDestroyWaits: 1},
+		{name: "successful empty output"},
+		{name: "successful Docker 28 missing container", output: "Error response from daemon: No such container: " + container + "\n"},
+		{name: "failed missing container", output: "ERROR RESPONSE FROM DAEMON: NO SUCH CONTAINER: " + container + "\n", removeErr: removeExit},
+		{name: "removal already in progress", output: "Error response from daemon: removal of container " + container + " is already in progress\n", removeErr: removeExit},
+		{name: "name inside another output line", output: "note: " + container + " handled\n"},
+		{name: "other removal failure", output: "Cannot connect to the Docker daemon\n", removeErr: dockerUnavailable, wantErr: dockerUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := observedContainerEvents()
+			runner := &jobRunner{remove: func(context.Context, []string) ([]byte, error) {
+				return []byte(test.output), test.removeErr
+			}}
+			err := (Backend{Runner: runner}).cleanupFailedContainer(t.Context(), runtime.Target{Root: "/stack"}, "capture", container, false, events)
+			if test.wantErr == nil && err != nil {
+				t.Fatalf("cleanupFailedContainer() error = %v, want nil", err)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("cleanupFailedContainer() error = %v, want %v", err, test.wantErr)
+			}
+			if got := events.destroyWaitCount(); got != test.wantDestroyWaits {
+				t.Fatalf("destroy event waits = %d, want %d", got, test.wantDestroyWaits)
+			}
+		})
+	}
+}
+
+func TestBackendTransientJobsAcceptDocker28MissingContainerOutput(t *testing.T) {
+	runExit := errors.New("invalid compose configuration")
+	tests := []struct {
+		name string
+		run  func(*testing.T, Backend) error
+	}{
+		{
+			name: "RunJobStreams",
+			run: func(t *testing.T, backend Backend) error {
+				_, err := backend.RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+					Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+				}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+				return err
+			},
+		},
+		{
+			name: "RunJob",
+			run: func(t *testing.T, backend Backend) error {
+				_, err := backend.RunJob(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+					Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := observedContainerEvents()
+			events.destroyErr = errors.New("destroy event must not be awaited")
+			runner := &jobRunner{
+				events: events,
+				answer: func(context.Context, []string) ([]byte, error) {
+					return nil, runExit
+				},
+				streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+					return nil, runExit
+				},
+				remove: func(_ context.Context, args []string) ([]byte, error) {
+					container := args[len(args)-1]
+					return []byte("Error response from daemon: No such container: " + container + "\n"), nil
+				},
+			}
+			err := test.run(t, Backend{Runner: runner})
+			if !errors.Is(err, runExit) || strings.Contains(err.Error(), "may remain") {
+				t.Fatalf("transient job error = %v, want only the job failure", err)
+			}
+			if got := events.destroyWaitCount(); got != 0 {
+				t.Fatalf("destroy event waits = %d, want none", got)
+			}
+		})
+	}
 }
 
 // captureConfiguration is a compiled compose document with one job service.
@@ -451,13 +818,318 @@ func TestBackendRunJobReportsATransientJobsFailure(t *testing.T) {
 	if string(out) != "pg_dump: error: connection refused\n" {
 		t.Fatalf("RunJob() output = %q, want the run's output", out)
 	}
-	if commands := runner.recorded(); len(commands) != 1 {
-		t.Fatalf("commands = %+v, want the run alone, nothing removed", commands)
+	commands := runner.recorded()
+	if len(commands) != 2 {
+		t.Fatalf("commands = %+v, want the failed run followed by one removal", commands)
+	}
+	container := commands[0].args[slices.Index(commands[0].args, "--name")+1]
+	if !reflect.DeepEqual(commands[1].args, []string{"rm", "-f", "-v", container}) {
+		t.Fatalf("commands = %+v, want the failed run followed by one removal", commands)
 	}
 }
 
-// A transient job's output, which a backup receipt keeps, carries no terminal
-// controls: a capture's colours and titles are dropped and its text kept.
+func TestBackendRunJobStreamsKeepsArtifactOutOfDiagnosticsAndDisablesSaveLogging(t *testing.T) {
+	artifact := []byte{0, 1, 2, 3, 0xff}
+	input := []byte("restore-input")
+	runner := &jobRunner{streamAnswer: func(_ context.Context, _ []string, stdin io.Reader, stdout io.Writer) ([]byte, error) {
+		got, err := io.ReadAll(stdin)
+		if err != nil || !bytes.Equal(got, input) {
+			t.Fatalf("stdin = %q, %v; want %q", got, err, input)
+		}
+		if _, err := stdout.Write(artifact); err != nil {
+			t.Fatal(err)
+		}
+		return []byte("save diagnostic\n"), nil
+	}}
+	var output bytes.Buffer
+	diagnostics, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack", EnvFile: "/stack/.env"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdin: bytes.NewReader(input), Stdout: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(output.Bytes(), artifact) || string(diagnostics) != "save diagnostic\n" {
+		t.Fatalf("artifact = %v, diagnostics = %q", output.Bytes(), diagnostics)
+	}
+	command := runner.recorded()[0]
+	want := []string{"compose", "-f", "/dev/fd/3", "--project-directory", "/stack", "--env-file", "/stack/.env", "run", "--rm", "--no-deps", "-T", "--name", "", "capture"}
+	want[12] = command.args[12]
+	if command.name != "docker" || !reflect.DeepEqual(command.args, want) {
+		t.Fatalf("command = %s %v, want docker %v", command.name, command.args, want)
+	}
+	var document File
+	if err := yaml.Unmarshal(command.input, &document); err != nil {
+		t.Fatal(err)
+	}
+	logging := document.Services["capture"].Logging
+	if logging == nil || logging.Driver != "none" || len(logging.Options) != 0 {
+		t.Fatalf("save logging = %#v, want driver none", logging)
+	}
+}
+
+func TestBackendRunJobStreamsLeavesNonSaveConfigurationUntouched(t *testing.T) {
+	runner := &jobRunner{streamAnswer: func(_ context.Context, _ []string, _ io.Reader, stdout io.Writer) ([]byte, error) {
+		_, err := io.WriteString(stdout, "checked")
+		return nil, err
+	}}
+	var stdout bytes.Buffer
+	_, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleCheck, Stdout: &stdout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "checked" {
+		t.Fatalf("stdout = %q, want checked", stdout.String())
+	}
+	if got := runner.recorded()[0].input; !bytes.Equal(got, []byte(captureConfiguration)) {
+		t.Fatalf("non-save configuration changed:\n%s", got)
+	}
+}
+
+func TestBackendRunJobStreamsValidatesRoleAndTransientLifecycle(t *testing.T) {
+	backend := Backend{Runner: &jobRunner{}}
+	job := runtime.JobSpec{Name: "capture", Configuration: []byte(captureConfiguration), Transient: true}
+	for _, role := range []runtime.StreamRole{"", "unknown"} {
+		_, err := backend.RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, job, runtime.JobStreams{Role: role})
+		if err == nil || !strings.Contains(err.Error(), "unknown streaming job role") {
+			t.Fatalf("role %q error = %v, want validation error", role, err)
+		}
+	}
+	job.Transient = false
+	_, err := backend.RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, job, runtime.JobStreams{Role: runtime.StreamRoleSave})
+	var capability *runtime.JobCapabilityError
+	if !errors.As(err, &capability) {
+		t.Fatalf("shared stream job error = %v, want JobCapabilityError", err)
+	}
+}
+
+func TestBackendRunJobStreamsRemovesFailedContainerExactlyOnce(t *testing.T) {
+	exit := errors.New("consumer closed")
+	runner := &jobRunner{streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+		return []byte("diagnostic\n"), exit
+	}}
+	diagnostics, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if !errors.Is(err, exit) || string(diagnostics) != "diagnostic\n" {
+		t.Fatalf("RunJobStreams() = %q, %v", diagnostics, err)
+	}
+	commands := runner.recorded()
+	if len(commands) != 2 {
+		t.Fatalf("commands = %+v, want run and exactly one removal", commands)
+	}
+	container := commands[0].args[slices.Index(commands[0].args, "--name")+1]
+	if !reflect.DeepEqual(commands[1].args, []string{"rm", "-f", "-v", container}) {
+		t.Fatalf("removal = %v, want one rm -f -v %s", commands[1].args, container)
+	}
+}
+
+func TestBackendRunJobStreamsWaitsForCreateBeforeItsSingleRemoval(t *testing.T) {
+	exit := errors.New("signal: killed")
+	events := &fakeContainerEvents{created: make(chan struct{}), destroyed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			go close(events.created)
+			cancel()
+			return nil, exit
+		},
+		remove: func(context.Context, []string) ([]byte, error) {
+			close(events.destroyed)
+			return nil, nil
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(ctx, runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunJobStreams() error = %v, want cancellation", err)
+	}
+	commands := runner.recorded()
+	if len(commands) != 2 || !reflect.DeepEqual(commands[1].args[:3], []string{"rm", "-f", "-v"}) {
+		t.Fatalf("commands = %+v, want the run followed by one removal", commands)
+	}
+	events.mu.Lock()
+	stops := events.stops
+	events.mu.Unlock()
+	if stops != 1 {
+		t.Fatalf("event subscription stopped %d times, want once", stops)
+	}
+}
+
+func TestBackendRunJobStreamsReportsAnUnconfirmedRemovalByContainerName(t *testing.T) {
+	events := observedContainerEvents()
+	events.destroyErr = errors.New("event stream ended")
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			return nil, errors.New("exit status 1")
+		},
+		remove: func(_ context.Context, args []string) ([]byte, error) {
+			return []byte(args[len(args)-1] + "\n"), nil
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "notes-1a2b3c4d-capture-run-") || !strings.Contains(err.Error(), "removal could not be confirmed") {
+		t.Fatalf("RunJobStreams() error = %v, want the unconfirmed container named", err)
+	}
+}
+
+func TestBackendRunJobStreamsAcceptsAlreadyRemovedContainer(t *testing.T) {
+	for _, detail := range []string{
+		"Error response from daemon: No such container: capture",
+		"Error response from daemon: removal of container capture is already in progress",
+	} {
+		t.Run(detail, func(t *testing.T) {
+			exit := errors.New("exit status 7")
+			runner := &jobRunner{
+				streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) { return nil, exit },
+				remove: func(context.Context, []string) ([]byte, error) {
+					return []byte(detail), errors.New("exit status 1")
+				},
+			}
+			_, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+				Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+			}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+			if !errors.Is(err, exit) || strings.Contains(err.Error(), "may remain") {
+				t.Fatalf("RunJobStreams() error = %v, want only the job failure", err)
+			}
+			if commands := runner.recorded(); len(commands) != 2 {
+				t.Fatalf("commands = %+v, want run and one removal", commands)
+			}
+		})
+	}
+}
+
+func TestBackendRunJobStreamsAcceptsSuccessfulRemovalWithNoContainerOutput(t *testing.T) {
+	exit := errors.New("invalid compose configuration")
+	events := observedContainerEvents()
+	events.destroyErr = errors.New("destroy event must not be awaited")
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			return nil, exit
+		},
+		remove: func(context.Context, []string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if !errors.Is(err, exit) || strings.Contains(err.Error(), "may remain") {
+		t.Fatalf("RunJobStreams() error = %v, want only the pre-create job failure", err)
+	}
+	if commands := runner.recorded(); len(commands) != 2 {
+		t.Fatalf("commands = %+v, want the run and one removal", commands)
+	}
+}
+
+func TestBackendRunJobStreamsDoesNotAwaitDestroyAfterOrdinaryRemovalFailure(t *testing.T) {
+	exit := errors.New("invalid compose configuration")
+	removeErr := errors.New("docker daemon unavailable")
+	events := observedContainerEvents()
+	events.destroyErr = errors.New("destroy event must not be awaited")
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			return nil, exit
+		},
+		remove: func(context.Context, []string) ([]byte, error) {
+			return nil, removeErr
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if !errors.Is(err, exit) || !errors.Is(err, removeErr) || strings.Contains(err.Error(), "may remain") {
+		t.Fatalf("RunJobStreams() error = %v, want the job and immediate removal failures", err)
+	}
+}
+
+func TestBackendRunJobStreamsDoesNotRemoveWhenKilledClientHasNoCreateWithinWindow(t *testing.T) {
+	originalTimeout := transientCreateTimeout
+	transientCreateTimeout = time.Millisecond
+	t.Cleanup(func() { transientCreateTimeout = originalTimeout })
+
+	events := &fakeContainerEvents{created: make(chan struct{}), destroyed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			cancel()
+			return nil, errors.New("signal: killed")
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(ctx, runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunJobStreams() error = %v, want cancellation", err)
+	}
+	if commands := runner.recorded(); len(commands) != 1 {
+		t.Fatalf("commands = %+v, want the run and no removal without a create event", commands)
+	}
+}
+
+func TestBackendRunJobStreamsReportsCreateObservedWhileClosingExpiredWindow(t *testing.T) {
+	originalTimeout := transientCreateTimeout
+	transientCreateTimeout = time.Millisecond
+	t.Cleanup(func() { transientCreateTimeout = originalTimeout })
+
+	events := &fakeContainerEvents{created: make(chan struct{}), destroyed: make(chan struct{})}
+	events.onStop = func() { close(events.created) }
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			cancel()
+			return nil, errors.New("signal: killed")
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(ctx, runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "reported its create after the bounded") {
+		t.Fatalf("RunJobStreams() error = %v, want the late create reported", err)
+	}
+	if commands := runner.recorded(); len(commands) != 1 {
+		t.Fatalf("commands = %+v, want no removal after the create window expired", commands)
+	}
+}
+
+func TestBackendRunJobStreamsRemovesAndReportsWhenEventsEndBeforeCreate(t *testing.T) {
+	events := &fakeContainerEvents{
+		created: make(chan struct{}), destroyed: make(chan struct{}),
+		createErr: errors.New("docker events exited"),
+	}
+	runner := &jobRunner{
+		events: events,
+		streamAnswer: func(context.Context, []string, io.Reader, io.Writer) ([]byte, error) {
+			return nil, errors.New("invalid compose configuration")
+		},
+	}
+	_, err := (Backend{Runner: runner}).RunJobStreams(t.Context(), runtime.Target{Root: "/stack"}, runtime.JobSpec{
+		Name: "capture", Configuration: []byte(captureConfiguration), Transient: true,
+	}, runtime.JobStreams{Role: runtime.StreamRoleSave, Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "removal could not be confirmed") || !strings.Contains(err.Error(), "docker events exited") {
+		t.Fatalf("RunJobStreams() error = %v, want the event-stream failure reported", err)
+	}
+	commands := runner.recorded()
+	if len(commands) != 2 || !reflect.DeepEqual(commands[1].args[:3], []string{"rm", "-f", "-v"}) {
+		t.Fatalf("commands = %+v, want one removal despite the missing create event", commands)
+	}
+}
+
+// A transient job's output, which a job receipt keeps, carries no terminal
+// controls: a job's colours and titles are dropped and its text kept.
 func TestBackendRunJobDropsTerminalControlsFromATransientJobsOutput(t *testing.T) {
 	runner := &jobRunner{answer: func(context.Context, []string) ([]byte, error) {
 		return []byte("\x1b]0;db.internal\apg_dump: \x1b[31merror\x1b[0m: connection refused\n"), errors.New("exit status 1")
@@ -495,50 +1167,29 @@ func TestBackendRunJobKeepsTheRedactedTailOfATransientJobsOutput(t *testing.T) {
 	}
 }
 
-// Cancelling a transient job kills the docker client, which leaves the
-// container running: RunJob removes the container by its name, with a context
-// of its own, until the client has exited and once more after.
+// Cancellation waits for the client to exit, then removes its named container
+// exactly once with a context independent of the canceled caller.
 func TestBackendRunJobRemovesTheContainerOfACanceledTransientJob(t *testing.T) {
-	interval := transientRemoveInterval
-	transientRemoveInterval = 10 * time.Millisecond
-	t.Cleanup(func() { transientRemoveInterval = interval })
 	type removal struct {
-		args      []string
-		ctxErr    error
-		afterExit bool
+		args   []string
+		ctxErr error
 	}
 	var (
 		mu       sync.Mutex
 		removals []removal
-		exited   atomic.Bool
 	)
-	started, gone := make(chan struct{}), make(chan struct{})
+	started := make(chan struct{})
 	var once sync.Once
 	runner := &jobRunner{
 		answer: func(ctx context.Context, _ []string) ([]byte, error) {
 			once.Do(func() { close(started) })
 			<-ctx.Done()
-			// An attached client holds on until its container is gone. One that
-			// nothing removes would hold on for good, so the fake gives up.
-			select {
-			case <-gone:
-			case <-time.After(5 * time.Second):
-			}
-			exited.Store(true)
 			return []byte("partial\n"), errors.New("signal: killed")
 		},
 		remove: func(ctx context.Context, args []string) ([]byte, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			removals = append(removals, removal{args: args, ctxErr: ctx.Err(), afterExit: exited.Load()})
-			// The first removal finds nothing, as when the container is still
-			// being created; the second removes the one the client then started.
-			if len(removals) == 2 {
-				close(gone)
-			}
-			if len(removals) == 1 {
-				return []byte("Error response from daemon: No such container: x"), errors.New("exit status 1")
-			}
+			removals = append(removals, removal{args: args, ctxErr: ctx.Err()})
 			return nil, nil
 		},
 	}
@@ -559,12 +1210,12 @@ func TestBackendRunJobRemovesTheContainerOfACanceledTransientJob(t *testing.T) {
 	container := run[slices.Index(run, "--name")+1]
 	mu.Lock()
 	defer mu.Unlock()
-	if len(removals) < 3 || !removals[len(removals)-1].afterExit {
-		t.Fatalf("removals = %+v, want removals until the client exited and one after", removals)
+	if len(removals) != 1 {
+		t.Fatalf("removals = %+v, want exactly one after the client exited", removals)
 	}
 	for _, removal := range removals {
-		if !reflect.DeepEqual(removal.args, []string{"rm", "-f", container}) || removal.ctxErr != nil {
-			t.Fatalf("removal = %+v, want rm -f %s under a live context", removal, container)
+		if !reflect.DeepEqual(removal.args, []string{"rm", "-f", "-v", container}) || removal.ctxErr != nil {
+			t.Fatalf("removal = %+v, want rm -f -v %s under a live context", removal, container)
 		}
 	}
 }

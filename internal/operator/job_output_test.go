@@ -69,6 +69,30 @@ func TestOperatorJobRunReturnsAcceptedReceiptAndForwardsPlan(t *testing.T) {
 	}
 }
 
+func TestOperatorJobRunDecodesLeniently(t *testing.T) {
+	fake := &jobRunAPI{startedOperation: api.JobRunOperation{ID: "run-1"}}
+	server := &Server{platform: fake}
+	req := httptest.NewRequest(http.MethodPost, "/jobs/codegen/run", strings.NewReader(`{"inputs":{"target":"web"},"chained_restart":true,"unknown":true} {"trailing":true}`))
+	req.SetPathValue("name", "codegen")
+	res := httptest.NewRecorder()
+
+	server.jobRun(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+	if fake.name != "codegen" || !fake.chainedRestart || !reflect.DeepEqual(fake.inputs, map[string]string{"target": "web"}) {
+		t.Fatalf("forwarded request = name %q inputs %v chained %v", fake.name, fake.inputs, fake.chainedRestart)
+	}
+}
+
+func TestDecodeStrictRejectsTrailingValue(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/workspaces/ws/sources/app/migrate", strings.NewReader(`{"to":"jj"} {"to":"worktree"}`))
+	if _, err := decodeStrict[api.WorkspaceSourceMigrateRequest](req); err == nil || !strings.Contains(err.Error(), "exactly one JSON value") {
+		t.Fatalf("decodeStrict() error = %v, want trailing-value refusal", err)
+	}
+}
+
 func TestOperatorJobRunGetReturnsStoredOperation(t *testing.T) {
 	startedAt := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
 	fake := &jobRunAPI{storedOperation: api.JobRunOperation{

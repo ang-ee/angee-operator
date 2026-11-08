@@ -1,0 +1,35 @@
+packs before prune: 22  index files: 2
+== 7d: SIGKILL prune mid-repack (throttled to 1 MiB/s)
+prune SIGKILLed while running; last output:
+remaining:           281 blobs / 200.032 MiB
+unused size after prune: 0 B (0.00% of remaining size)
+repacking packs
+locks after prune kill: 1
+{  "time": "2026-11-06T11:07:38.882425-04:00",  "exclusive": true,  "hostname": "<host>",  "username": "user",  "pid": 12867,  "uid": 501,  "gid": 20}
+-- backup with a stale EXCLUSIVE lock (dead PID, same host):
+  [exit=11] {"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked exclusively by PID 12867 on <host> by user (UID 501, GID 20)\nlock was created at 2026-11-06 11:07:38 (9.067995s ago)\nstorage ID e6bb2706\n
+-- same with --retry-lock 10s:
+  [exit=11] {"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked exclusively by PID 12867 on <host> by alex
+-- check with the stale lock (check takes a non-exclusive lock):
+  [exit=11] repo already locked, waiting up to 0s for the lock
+-- unlock while a LIVE backup is running (should remove only the stale lock)
+successfully removed 1 locks
+  unlock [exit=0] locks now: 0
+  locks (1 live + 1 stale): 1
+{  "time": "2026-11-06T11:08:02.537227-04:00",  "exclusive": false,  "hostname": "<host>",  "username": "user",  "pid": 14741,  "uid": 501,  "gid": 20}
+successfully removed 1 locks
+  unlock [exit=0] locks now: 0
+  live backup exit=130
+-- integrity after killed prune:
+This is non-critical, you can run `restic prune` to correct this.
+check snapshots, trees and blobs
+[0:00] 100.00%  1 / 1 snapshots
+no errors were found
+[0:00] 100.00%  22 / 22 packs
+no errors were found
+packs now: 28  index files: 2
+-- re-run prune to completion:
+removing 14 old packs
+[0:00] 100.00%  14 / 14 files deleted
+done
+no errors were found

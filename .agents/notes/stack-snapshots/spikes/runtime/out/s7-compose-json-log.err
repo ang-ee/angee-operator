@@ -1,0 +1,20 @@
+ Container angee-spike-s7-aede39e1 Creating 
+ Container angee-spike-s7-aede39e1 Created 
+        7.98 real         0.18 user         0.64 sys
+            55394304  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                8355  page reclaims
+                1672  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  16  messages sent
+               75277  messages received
+                 242  signals received
+                 188  voluntary context switches
+               97129  involuntary context switches
+           187412548  instructions retired
+            91253302  cycles elapsed
+            14533352  peak memory footprint

@@ -7,11 +7,11 @@
 // 8 and 9 of .agents/plans/jj-native-operator.md lay out. A jj slot is never
 // pulled, and never has a merge or rebase in progress to abort or continue: those
 // verbs report vcs.ErrUnsupported. The service selects it for a slot whose
-// mode is jj. Source captures also use it as the vcs.BackupLayer over a Git
+// mode is jj. Source snapshots also use it as the vcs.SnapshotLayer over a Git
 // checkout, which plans nothing unless colocated JJ metadata is present.
 //
 // jj owns the slot: the lifecycle, status, diff and verbs run the jj CLI and
-// interpret what it prints through the templates in templates.go. BackupLayerPlan additionally
+// interpret what it prints through the templates in templates.go. SnapshotLayerPlan additionally
 // reads repository pointer files to validate portable topology without
 // changing them.
 // The driver never writes JJ metadata directly.

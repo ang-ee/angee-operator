@@ -1,0 +1,116 @@
+== 11a: absolute argument
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app']
+  node /private
+  node /private/tmp
+  node <tmp>
+  node <tmp>
+  node <tmp>
+  node <scratchpad>
+  node <scratchpad>/spikes
+  node <scratchpad>/spikes/restic
+  node <scratchpad>/spikes/restic/work
+  node <scratchpad>/spikes/restic/work/s11-rootA
+  node <scratchpad>/spikes/restic/work/s11-rootA/state
+  node <scratchpad>/spikes/restic/work/s11-rootA/state/snapshots
+  node <scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1
+  node <scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases
+  node <scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app
+  node <scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app/app.pgdump
+  node <scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app/meta.json
+== 11b: cwd=staging, relative argument databases/app
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app']
+  node /databases
+  node /databases/app
+  node /databases/app/app.pgdump
+  node /databases/app/meta.json
+  summary: files_new=2 files_unmodified=0 dirs_new=2 data_added=0 total_bytes_processed=3145733
+  parent = 20013ef3
+== 11b': cwd=staging, argument .
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1']
+  node /databases
+  node /databases/app
+  node /databases/app/app.pgdump
+  node /databases/app/meta.json
+== 11b'': cwd=staging/databases/app, argument . (member dir itself)
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app']
+  node /app.pgdump
+  node /meta.json
+== 11b''': cwd=stack root, relative persist path data/media + staged member in one call
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/data/media']
+  node /data
+  node /data/media
+  node /data/media/img
+  node /data/media/img/photo.jpg
+== 11b4: relative arg with ../ (does it escape to absolute?)
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/data/media']
+  node /data
+  node /data/media
+  node /data/media/img
+  node /data/media/img/photo.jpg
+== 11c: path-rewrite flags in 0.19.1 help?
+  -g, --group-by group                         group snapshots by host, paths and/or tags, separated by comma (disable grouping with '') (default host,paths)
+The snapshots to rewrite are specified using the --host, --tag and --path options,
+      --path path            only consider snapshots including this (absolute) path (can be specified multiple times, snapshots must include all specified paths)
+      --tls-client-cert file             path to a file containing PEM encoded TLS client certificate and private key (default: $RESTIC_TLS_CLIENT_CERT)
+== 11d: restore subtree into different location (snapshot:subfolder) from 11b snapshot
+{"message_type":"summary","total_files":2,"files_restored":2,"total_bytes":3145733,"bytes_restored":3145733}
+[exit=0]
+./state/restore-target/app.pgdump
+./state/restore-target/meta.json
+-- restore whole 11b snapshot into new target
+{"message_type":"summary","total_files":4,"files_restored":4,"total_bytes":3145733,"bytes_restored":3145733}
+./databases/app/app.pgdump
+./databases/app/meta.json
+-- restore 11a (absolute) snapshot via snap:<abs subpath> into new target
+{"message_type":"summary","total_files":2,"files_restored":2,"total_bytes":3145733,"bytes_restored":3145733}
+[exit=0]
+./app.pgdump
+./meta.json
+-- restore 11a (absolute) without subfolder: full host path recreated under target
+{"message_type":"summary","total_files":17,"files_restored":17,"total_bytes":3145733,"bytes_restored":3145733}
+  .<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app/app.pgdump
+  .<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app/meta.json
+== 11d': dump -a tar of a subpath
+-rw-r--r--  0 user wheel 3145728 Nov  6 10:50 databases/app/app.pgdump
+-rw-r--r--  0 user wheel       5 Nov  6 10:50 databases/app/meta.json
+[exit=0]
+-- dump -a tar snap:subfolder /
+-rw-r--r--  0 user wheel 3145728 Nov  6 10:50 app.pgdump
+-rw-r--r--  0 user wheel       5 Nov  6 10:50 meta.json
+[exit=0]
+-- dump -a tar of 11a at its absolute subpath
+<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app/app.pgdump
+<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap1/databases/app/meta.json
+[exit=0]
+== 11e: same relative staging from a DIFFERENT absolute root: parent detection & dedup
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootB/deeper/state/snapshots/snap1/databases/app']
+  node /databases
+  node /databases/app
+  node /databases/app/app.pgdump
+  node /databases/app/meta.json
+  summary: files_new=2 files_unmodified=0 dirs_new=2 data_added=2048 total_bytes_processed=3145733
+  parent = none
+-- same again from ROOT1 (expect parent = 11b, files_unmodified)
+[exit=0]
+  summary: files_new=2 files_unmodified=0 dirs_new=2 data_added=0 total_bytes_processed=3145733
+  parent = e5ea9c31
+-- from ROOT2 with --group-by host (paths ignored for parent selection)
+[exit=0]
+  summary: files_new=0 files_unmodified=0 dirs_new=0 data_added=0 total_bytes_processed=3145733
+  parent = 15533a96
+-- from ROOT2 with explicit --parent of 11b snapshot
+[exit=0]
+  summary: files_new=0 files_unmodified=0 dirs_new=0 data_added=0 total_bytes_processed=3145733
+  parent = 3871fc4f
+-- per-attempt staging dir (snap2) with same content, same root: parent? dedup?
+[exit=0]
+  snapshot.paths = ['<scratchpad>/spikes/restic/work/s11-rootA/state/snapshots/snap2/databases/app']
+  summary: files_new=2 files_unmodified=0 dirs_new=2 data_added=2054 total_bytes_processed=3145733
+  parent = none

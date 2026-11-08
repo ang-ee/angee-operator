@@ -1,0 +1,41 @@
+name: angee-spike-rt
+x-data: &data
+  - <scratchpad>/spikes/runtime/data:/data:ro
+services:
+  fail-mid-save:
+    image: alpine:3
+    volumes: *data
+    command: ["sh", "-c", "head -c 33554432 /data/p64; echo save-dying >&2; exit 7"]
+  cat-only:
+    image: alpine:3
+    volumes: *data
+    command: ["sh", "-c", "exec cat /data/p512"]
+  stream:
+    image: alpine:3
+    volumes: *data
+    command: ["sh", "-c", "while :; do cat /data/p64 || exit 3; done"]
+  fail-mid-restore:
+    image: alpine:3
+    command: ["sh", "-c", "head -c 1048576 >/dev/null; echo restore-dying >&2; exit 9"]
+  sink:
+    image: alpine:3
+    command: ["sh", "-c", "cat >/dev/null; echo sink-eof >&2"]
+  restore-count:
+    image: alpine:3
+    command: ["sh", "-c", "echo restore-bytes=$$(wc -c) >&2"]
+  restore-sha:
+    image: alpine:3
+    command: ["sh", "-c", "sha256sum >&2"]
+  restore-sha-nolog:
+    image: alpine:3
+    logging: {driver: none}
+    command: ["sh", "-c", "sha256sum >&2"]
+  dump512:
+    image: alpine:3
+    volumes: *data
+    command: ["sh", "-c", "cat /data/p512"]
+  dump512-nolog:
+    image: alpine:3
+    logging: {driver: none}
+    volumes: *data
+    command: ["sh", "-c", "cat /data/p512"]

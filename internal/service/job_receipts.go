@@ -23,7 +23,7 @@ var operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // retains runtime snapshots or commands from untrusted transport requests.
 func (p *Platform) persistJobReceipt(op api.JobRunOperation) error {
 	if !operationIDPattern.MatchString(op.ID) {
-		return &InvalidInputError{Field: "request_id", Reason: "must be 1..128 letters, digits, underscores or hyphens"}
+		return &InvalidInputError{Field: "id", Reason: "must be 1..128 letters, digits, underscores or hyphens"}
 	}
 	root, err := os.OpenRoot(p.root)
 	if err != nil {
@@ -110,17 +110,8 @@ func (p *Platform) readJobReceipt(ctx context.Context, id string, rootLocked boo
 		now := time.Now().UTC()
 		op.Status = api.JobRunFailed
 		op.EndedAt = &now
-		op.Error = "operator stopped before operation completion; no completed artifact was published"
+		op.Error = "operator stopped before operation completion"
 		op.ErrorCode = CodeJobFailed
-		// An interrupted backup never ran its own cleanup. A removal that fails,
-		// as on files a capture left that the operator may not unlink, would fail
-		// again on every read, so the receipt fails anyway and names what is left.
-		if IsBackupReceipt(op) {
-			if cleanupErr := removeInterruptedBackup(root, id); cleanupErr != nil {
-				logctx.From(ctx).WarnContext(ctx, "interrupted backup cleanup failed", "id", id, "error", logctx.RedactText(cleanupErr.Error()))
-				op.Error += "; its files could not be removed: remove " + backupStagingDirectory + "/" + id + " and " + backupArchiveDirectory + "/" + id + ".zip"
-			}
-		}
 		for i := range op.Nodes {
 			if op.Nodes[i].Status == api.JobRunPending || op.Nodes[i].Status == api.JobRunRunning {
 				op.Nodes[i].Status = api.JobRunFailed
@@ -172,9 +163,7 @@ func (p *Platform) jobOperations(ctx context.Context) ([]api.JobRunOperation, er
 		if err != nil {
 			return nil, err
 		}
-		if !IsBackupReceipt(op) {
-			operations = append(operations, op)
-		}
+		operations = append(operations, op)
 	}
 	return operations, nil
 }

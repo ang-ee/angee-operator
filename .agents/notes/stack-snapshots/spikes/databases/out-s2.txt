@@ -1,0 +1,194 @@
+
+===== generate ~200 MB of table data (2,000,000 rows) in bigdb =====
+NOTICE:  database "bigdb" does not exist, skipping
+ big_total | big_heap | db_size 
+-----------+----------+---------
+ 299 MB    | 257 MB   | 307 MB
+(1 row)
+
+    real 7.018s
+COPY text size of big (bytes):
+218037244
+
+===== dumps of bigdb =====
+pg_dump -Fc (gzip default) to file:
+    real 11.348s
+pg_dump -Fc -Z0 (uncompressed) to file:
+    real 1.864s
+pg_dump -Fc to stdout (pipe, non-seekable) -> host file:
+    real 9.608s
+-rw-r--r--@ 1 user  wheel  104042452 Nov  6 10:49 <scratchpad>/spikes/databases/dumps/big-pipe.dump
+-rw-rw-rw-@ 1 user  wheel  228057889 Nov  6 10:49 <scratchpad>/spikes/databases/dumps/big-z0.dump
+-rw-rw-rw-@ 1 user  wheel  104042452 Nov  6 10:49 <scratchpad>/spikes/databases/dumps/big.dump
+
+===== costs on the intact gzip dump =====
+pg_restore --list:
+    real 0.088s
+    exit=0
+pg_restore -f /dev/null:
+    real 1.331s
+    exit=0
+pg_restore -f /dev/null (-Z0 dump):
+    real 0.209s
+    exit=0
+pg_restore -f - | wc -c (bytes of rendered SQL):
+218052128
+sha256sum of the dump file (checksum-only alternative):
+6d105cddb39e8e63a1effefe3b8b2972b498eb5ed07c9d408e5cdcdd21d14a6e  /tmp/big.dump
+    real 0.440s
+real restore into empty DB r_ok (--no-owner --no-acl --single-transaction --exit-on-error):
+NOTICE:  database "r_ok" does not exist, skipping
+    real 3.682s
+    exit=0
+big=2000000 small=1000 
+
+===== TOC offsets: file dump vs piped dump =====
+file dump  TOC header:
+;     TOC Entries: 12
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 17.10 (Debian 17.10-1.pgdg12+1)
+;     Dumped by pg_dump version: 17.10 (Debian 17.10-1.pgdg12+1)
+;
+piped dump pg_restore -l exit:
+    exit=0
+piped dump -f /dev/null:
+    real 1.280s
+    exit=0
+
+===== make corrupted copies =====
+flipped 16 bytes at offset 52021226 of 104042452
+flipped 1 bytes at offset 52021226 of 104042452
+truncated to 62425471 of 104042452 bytes
+piped dump truncated to 62425471 of 104042452 bytes
+replaced b'4' with b'0' at offset 114028957 of 228057889
+row before: 8258519e8006	45c6e5e2a486cdba0f46f979a04f5fe6	2026-01-12 15:08:35+00	[92,1.6,-34]
+flipped 16 bytes at offset 114028944 of 228057889
+
+===== corrupted: big-flip16 =====
+--- pg_restore --list
+    exit=0
+--- pg_restore -f /dev/null
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1
+--- real restore, default error handling (--no-owner --no-acl) into empty r_big_flip16
+NOTICE:  database "r_big_flip16" does not exist, skipping
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1
+big=0 small=0 
+--- real restore, --single-transaction --exit-on-error into empty r_big_flip16_st
+NOTICE:  database "r_big_flip16_st" does not exist, skipping
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1
+ERROR:  relation "big" does not exist
+LINE 1: ...ct 'big=' || coalesce((select count(*)::text from big), 'n/a...
+                                                             ^
+
+
+===== corrupted: big-flip1 =====
+--- pg_restore --list
+    exit=0
+--- pg_restore -f /dev/null
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1
+--- real restore, default error handling (--no-owner --no-acl) into empty r_big_flip1
+NOTICE:  database "r_big_flip1" does not exist, skipping
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1
+big=0 small=0 
+--- real restore, --single-transaction --exit-on-error into empty r_big_flip1_st
+NOTICE:  database "r_big_flip1_st" does not exist, skipping
+pg_restore: error: could not uncompress data: incorrect data check
+    exit=1
+ERROR:  relation "big" does not exist
+LINE 1: ...ct 'big=' || coalesce((select count(*)::text from big), 'n/a...
+                                                             ^
+
+
+===== corrupted: big-trunc60 =====
+--- pg_restore --list
+    exit=0
+--- pg_restore -f /dev/null
+pg_restore: error: could not read from input file: end of file
+    exit=1
+--- real restore, default error handling (--no-owner --no-acl) into empty r_big_trunc60
+NOTICE:  database "r_big_trunc60" does not exist, skipping
+pg_restore: error: could not read from input file: end of file
+    exit=1
+big=0 small=0 
+--- real restore, --single-transaction --exit-on-error into empty r_big_trunc60_st
+NOTICE:  database "r_big_trunc60_st" does not exist, skipping
+pg_restore: error: could not read from input file: end of file
+    exit=1
+ERROR:  relation "big" does not exist
+LINE 1: ...ct 'big=' || coalesce((select count(*)::text from big), 'n/a...
+                                                             ^
+
+
+===== corrupted: big-pipe-trunc60 =====
+--- pg_restore --list
+    exit=0
+--- pg_restore -f /dev/null
+pg_restore: error: could not read from input file: end of file
+    exit=1
+--- real restore, default error handling (--no-owner --no-acl) into empty r_big_pipe_trunc60
+NOTICE:  database "r_big_pipe_trunc60" does not exist, skipping
+pg_restore: error: could not read from input file: end of file
+    exit=1
+big=0 small=0 
+--- real restore, --single-transaction --exit-on-error into empty r_big_pipe_trunc60_st
+NOTICE:  database "r_big_pipe_trunc60_st" does not exist, skipping
+pg_restore: error: could not read from input file: end of file
+    exit=1
+ERROR:  relation "big" does not exist
+LINE 1: ...ct 'big=' || coalesce((select count(*)::text from big), 'n/a...
+                                                             ^
+
+
+===== corrupted: big-z0-flip16 =====
+--- pg_restore --list
+    exit=0
+--- pg_restore -f /dev/null
+    exit=0
+--- real restore, default error handling (--no-owner --no-acl) into empty r_big_z0_flip16
+NOTICE:  database "r_big_z0_flip16" does not exist, skipping
+pg_restore: error: COPY failed for table "big": ERROR:  invalid byte sequence for encoding "UTF8": 0x9d
+CONTEXT:  COPY big, line 1004915
+pg_restore: warning: errors ignored on restore: 1
+    exit=1
+big=0 small=1000 
+--- real restore, --single-transaction --exit-on-error into empty r_big_z0_flip16_st
+NOTICE:  database "r_big_z0_flip16_st" does not exist, skipping
+pg_restore: error: COPY failed for table "big": ERROR:  invalid byte sequence for encoding "UTF8": 0x9d
+CONTEXT:  COPY big, line 1004915
+    exit=1
+ERROR:  relation "big" does not exist
+LINE 1: ...ct 'big=' || coalesce((select count(*)::text from big), 'n/a...
+                                                             ^
+
+
+===== corrupted: big-z0-hex =====
+--- pg_restore --list
+    exit=0
+--- pg_restore -f /dev/null
+    exit=0
+--- real restore, default error handling (--no-owner --no-acl) into empty r_big_z0_hex
+NOTICE:  database "r_big_z0_hex" does not exist, skipping
+    exit=0
+big=2000000 small=1000 
+--- real restore, --single-transaction --exit-on-error into empty r_big_z0_hex_st
+NOTICE:  database "r_big_z0_hex_st" does not exist, skipping
+    exit=0
+big=2000000 small=1000 
+
+===== silent corruption check for big-z0-hex: compare restored data with source =====
+bigdb md5(all big rows) = 6a85fe4d2483bcb1eb55d9c65e2e853d
+r_big_z0_hex md5(all big rows) = 66411a6913c90c40ca56547181c98957
+rows that differ:
+1004915c1004915
+< 1004915	81c99613ff4e9feefb388258519e8006	45c6e5e2a486cdba0f46f979a04f5fe6
+---
+> 1004915	81c99613ff4e9feefb388258519e8006	05c6e5e2a486cdba0f46f979a04f5fe6

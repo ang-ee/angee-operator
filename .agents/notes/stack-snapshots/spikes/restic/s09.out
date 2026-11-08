@@ -1,0 +1,72 @@
+stdin snapshot=7786220cf1be3518a8576cb3594d29f291becdd668703893fd5f6021e6570360 dir snapshot=e82d6ba93fc535db7a474fda4d295968ec849215466045513224664dde2eb65f
+== 9a: dump -a zip <stdin snap> /
+[exit=0]
+Archive:  <scratchpad>/spikes/restic/work/s09-1.zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+        0  11-06-2026 10:59   databases/
+        0  11-06-2026 10:59   databases/app/
+   200000  11-06-2026 10:59   databases/app/app.pgdump
+---------                     -------
+   200000                     3 files
+== 9b: dump -a zip <dir snap> /
+[exit=0]
+Archive:  <scratchpad>/spikes/restic/work/s09-2.zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+        0  11-06-2026 10:59   files/
+        0  11-06-2026 10:59   files/media/
+        0  11-06-2026 10:59   files/media/img/
+    50000  11-06-2026 10:59   files/media/img/a.jpg
+        0  11-06-2026 10:59   files/media/img/sub/
+    70000  11-06-2026 10:59   files/media/img/sub/b.jpg
+       10  11-06-2026 10:59   files/media/link.txt
+        6  11-06-2026 10:59   files/media/readme.txt
+---------                     -------
+   120016                     8 files
+Central directory entry #1:
+  file system or operating system of origin:      Unix
+  Unix file attributes (040755 octal):            drwxr-xr-x
+Central directory entry #2:
+  file system or operating system of origin:      Unix
+  Unix file attributes (040755 octal):            drwxr-xr-x
+Central directory entry #3:
+  file system or operating system of origin:      Unix
+  Unix file attributes (040755 octal):            drwxr-xr-x
+Central directory entry #4:
+  file system or operating system of origin:      Unix
+  Unix file attributes (100644 octal):            -rw-r--r--
+== 9b': dump -a zip <dir snap>:files/media / (re-rooted)
+[exit=0]
+Archive:  <scratchpad>/spikes/restic/work/s09-3.zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+        0  11-06-2026 10:59   img/
+    50000  11-06-2026 10:59   img/a.jpg
+        0  11-06-2026 10:59   img/sub/
+    70000  11-06-2026 10:59   img/sub/b.jpg
+       10  11-06-2026 10:59   link.txt
+        6  11-06-2026 10:59   readme.txt
+---------                     -------
+   120016                     6 files
+== 9c: dump -a tar <dir snap> / (symlink preserved?)
+drwxr-xr-x  0 user wheel       0 Nov  6 10:59 files/
+drwxr-xr-x  0 user wheel       0 Nov  6 10:59 files/media/
+drwxr-xr-x  0 user wheel       0 Nov  6 10:59 files/media/img/
+-rw-r--r--  0 user wheel   50000 Nov  6 10:59 files/media/img/a.jpg
+drwxr-xr-x  0 user wheel       0 Nov  6 10:59 files/media/img/sub/
+-rw-r--r--  0 user wheel   70000 Nov  6 10:59 files/media/img/sub/b.jpg
+lrwxr-xr-x  0 user wheel       0 Nov  6 10:59 files/media/link.txt -> readme.txt
+-rw-r--r--  0 user wheel       6 Nov  6 10:59 files/media/readme.txt
+[exit=0]
+== 9d: dump of a single FILE with -a zip: raw bytes or zip?
+[exit=0] size=  200000 same-as-source=yes file-type=data
+== 9e: dump with TWO snapshot ids in one call
+[exit=1] Fatal: no file and no snapshot ID specified
+== 9e': dump latest --tag filter
+[exit=1] (latest = newest snapshot of host; here the dir snapshot, which lacks the path) Fatal: cannot dump file: path "/databases" not found in snapshot
+== 9f: dump --target writes file
+[exit=0] same=yes
+== 9g: dump | consumer that fails early (EPIPE) -> restic exit?
+[restic exit=141]
+[restic exit (30 MB file, consumer reads 10 B)=141] 

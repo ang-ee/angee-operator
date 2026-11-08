@@ -1,0 +1,25 @@
+---- script -q /dev/null bash -c 'docker compose -f - run --rm --no-deps -T pulled <cfg >out'  (stderr is a pty)
+exit=0 stdout_bytes=67108864 match=YES
+pty (compose stderr) bytes=507, first 600 chars escaped:
+^D^H^HImage busybox:1.36.1 ^[[32mPulling^[[0m ^M
+821d9dafb26d ^[[32mPulling fs layer^[[0m 0B^M
+821d9dafb26d ^[[32mDownloading^[[0m 1.049MB^M
+821d9dafb26d ^[[32mDownloading^[[0m 1.896MB^M
+821d9dafb26d ^[[32mDownload complete^[[0m 0B^M
+821d9dafb26d ^[[32mPull complete^[[0m 0B^M
+f015501df97a ^[[32mDownloading^[[0m 2.026kB^M
+f015501df97a ^[[32mDownload complete^[[0m 0B^M
+Image busybox:1.36.1 ^[[32mPulled^[[0m ^M
+Container angee-spike-s1b-b117e25c ^[[32mCreating^[[0m ^M
+Container angee-spike-s1b-b117e25c ^[[32mCreated^[[0m ^M
+pulled-stderr^M
+
+---- script -q /dev/null bash -c 'docker compose -f - run --rm --no-deps -T dump <cfg >out'  (stderr is a pty)
+exit=0 stdout_bytes=67108864 match=YES
+pty (compose stderr) bytes=239, first 600 chars escaped:
+^D^H^HContainer angee-spike-s1b-9f91efee ^[[32mCreating^[[0m ^M
+Container angee-spike-s1b-9f91efee ^[[32mCreated^[[0m ^M
+container-stderr-before^M
+container-stderr-after^M
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  /data/p64^M
+

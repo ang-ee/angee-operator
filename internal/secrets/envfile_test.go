@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -65,5 +66,33 @@ func TestResolveDeclarationsGeneratesAndImports(t *testing.T) {
 	}
 	if again["generated"] != resolved["generated"] {
 		t.Fatal("generated secret was not stable across resolutions")
+	}
+}
+
+func TestReadDeclarationsReturnsStoredValuesAndNeverGenerates(t *testing.T) {
+	backend := NewEnvFileBackend(filepath.Join(t.TempDir(), ".env"))
+	ctx := t.Context()
+	if err := backend.Set(ctx, "stored", "declared-value"); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := ReadDeclarations(ctx, backend, map[string]manifest.Secret{
+		"stored": {Generated: true, Length: 24},
+	})
+	if err != nil {
+		t.Fatalf("ReadDeclarations(stored): %v", err)
+	}
+	if resolved["stored"] != "declared-value" {
+		t.Fatalf("stored value = %q, want declared-value", resolved["stored"])
+	}
+
+	_, err = ReadDeclarations(ctx, backend, map[string]manifest.Secret{
+		"missing": {Generated: true, Length: 24},
+	})
+	if err == nil || !strings.Contains(err.Error(), `original secret "missing" is missing`) {
+		t.Fatalf("ReadDeclarations(missing) error = %v", err)
+	}
+	if _, ok, getErr := backend.Get(ctx, "missing"); getErr != nil || ok {
+		t.Fatalf("missing secret after read = present %t, error %v; want absent", ok, getErr)
 	}
 }

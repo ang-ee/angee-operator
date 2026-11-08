@@ -1,0 +1,80 @@
+payload p64 sha256=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993
+---- a-present-fresh-network: docker compose -f - run --rm --no-deps -T  --name angee-spike-s1-ebc42faf dump  <cfg >out 2>err
+exit=0 time=4.15s stdout_bytes=67108864 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+ Network angee-spike-rt_default Creating 
+ Network angee-spike-rt_default Creating 
+ Network angee-spike-rt_default Created 
+ Network angee-spike-rt_default Created 
+ Container angee-spike-s1-ebc42faf Creating 
+ Container angee-spike-s1-ebc42faf Created 
+container-stderr-before
+container-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  /data/p64
+
+---- b-present: docker compose -f - run --rm --no-deps -T  --name angee-spike-s1-7ecc0d49 dump  <cfg >out 2>err
+exit=0 time=4.44s stdout_bytes=67108864 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+ Container angee-spike-s1-7ecc0d49 Creating 
+ Container angee-spike-s1-7ecc0d49 Created 
+container-stderr-before
+container-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  /data/p64
+
+---- c-present-quiet-pull: docker compose -f - run --rm --no-deps -T --quiet-pull --name angee-spike-s1-3d3711a9 dump  <cfg >out 2>err
+exit=0 time=4.05s stdout_bytes=67108864 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+ Container angee-spike-s1-3d3711a9 Creating 
+ Container angee-spike-s1-3d3711a9 Created 
+container-stderr-before
+container-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  /data/p64
+
+---- d-pull-default: docker compose -f - run --rm --no-deps -T  --name angee-spike-s1-694b6a93 pulled  <cfg >out 2>err
+exit=0 time=8.19s stdout_bytes=67108864 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+ Image busybox:1.36.1 Pulling 
+ 821d9dafb26d Pulling fs layer 0B
+ f015501df97a Download complete 0B
+ 821d9dafb26d Downloading 1.049MB
+ 821d9dafb26d Downloading 1.896MB
+ 821d9dafb26d Download complete 0B
+ 821d9dafb26d Extracting 1B
+ 821d9dafb26d Pull complete 0B
+ Image busybox:1.36.1 Pulled 
+ Container angee-spike-s1-694b6a93 Creating 
+ Container angee-spike-s1-694b6a93 Created 
+pulled-stderr
+
+---- e-pull-quiet: docker compose -f - run --rm --no-deps -T --quiet-pull --name angee-spike-s1-61c872eb pulled  <cfg >out 2>err
+exit=0 time=7.19s stdout_bytes=67108864 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+ Image busybox:1.36.1 Pulling 
+ Image busybox:1.36.1 Pulled 
+ Container angee-spike-s1-61c872eb Creating 
+ Container angee-spike-s1-61c872eb Created 
+pulled-stderr
+
+---- f-run-q: docker compose -f - run --rm --no-deps -T -q --name angee-spike-s1-23476fe5 dump  <cfg >out 2>err
+exit=0 time=4.06s stdout_bytes=67108864 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+container-stderr-before
+container-stderr-after
+80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993  /data/p64
+
+---- g-pull-progress-plain: docker compose --progress plain -f - run ... pulled
+exit=0 stdout_sha=80d6fa0d4531f26d71d3f4e46bec44e4f4368eca78a81729e237c3161dbe7993 match=YES
+stderr:
+ Image busybox:1.36.1 Pulling 
+ 821d9dafb26d Pulling fs layer 0B
+ f015501df97a Download complete 0B
+ 821d9dafb26d Downloading 1.049MB
+ 821d9dafb26d Download complete 0B
+ 821d9dafb26d Pull complete 0B
+ Image busybox:1.36.1 Pulled 
+ Container angee-spike-s1-4887831b Creating 
+ Container angee-spike-s1-4887831b Created 
+pulled-stderr
+
+---- leftover containers
+(end)

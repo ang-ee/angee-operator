@@ -1,0 +1,100 @@
+
+===== fresh target angee-spike-db-dst3 (no appowner / reader roles) =====
+postgres
+
+===== pg_restore  -> t_default =====
+pg_restore: error: could not execute query: ERROR:  role "appowner" does not exist
+Command was: ALTER TABLE public.items OWNER TO appowner;
+
+pg_restore: error: could not execute query: ERROR:  role "appowner" does not exist
+Command was: ALTER SEQUENCE public.items_id_seq OWNER TO appowner;
+
+pg_restore: error: could not execute query: ERROR:  role "reader" does not exist
+Command was: GRANT SELECT ON TABLE public.items TO reader;
+
+
+pg_restore: warning: errors ignored on restore: 3
+    exit=1
+    state of t_default:
+      extensions: plpgsql,vector
+      tables: items(owner=postgres)
+      items rows: 4
+
+===== pg_restore --exit-on-error -> t_exit =====
+pg_restore: error: could not execute query: ERROR:  role "appowner" does not exist
+Command was: ALTER TABLE public.items OWNER TO appowner;
+
+    exit=1
+    state of t_exit:
+      extensions: plpgsql,vector
+      tables: items(owner=postgres)
+      items rows: 0
+
+===== pg_restore --single-transaction -> t_single =====
+pg_restore: error: could not execute query: ERROR:  role "appowner" does not exist
+Command was: ALTER TABLE public.items OWNER TO appowner;
+
+    exit=1
+    state of t_single:
+      extensions: plpgsql
+      tables: (none)
+      items rows: MISSING
+
+===== pg_restore --no-owner -> t_noowner_only =====
+pg_restore: error: could not execute query: ERROR:  role "reader" does not exist
+Command was: GRANT SELECT ON TABLE public.items TO reader;
+
+
+pg_restore: warning: errors ignored on restore: 1
+    exit=1
+    state of t_noowner_only:
+      extensions: plpgsql,vector
+      tables: items(owner=postgres)
+      items rows: 4
+
+===== pg_restore --no-owner --no-acl --single-transaction --exit-on-error -> t_clean =====
+    exit=0
+    state of t_clean:
+      extensions: plpgsql,vector
+      tables: items(owner=postgres)
+      items rows: 4
+    vectors in t_clean:
+1|alpha|[1,2,3]
+2|beta|[0.5,-1.25,3.75]
+3|gamma|[0.001,250,-7]
+4|delta|[0,0,0]
+
+===== extra: restore as a NON-superuser database owner (clean flags) =====
+--- t_nonsu: extension not pre-created
+pg_restore: error: could not execute query: ERROR:  permission denied to create extension "vector"
+HINT:  Must be superuser to create this extension.
+Command was: CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+
+
+    exit=1
+--- t_nonsu_ext: superuser pre-created the extension, restore as appuser
+pg_restore: error: could not execute query: ERROR:  must be owner of extension vector
+Command was: COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
+
+
+    exit=1
+--- t_nonsu_ext again, default error handling (no -1/-e)
+pg_restore: error: could not execute query: ERROR:  must be owner of extension vector
+Command was: COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
+
+
+pg_restore: warning: errors ignored on restore: 1
+    exit=1
+      items rows: 4
+
+===== what the archive emits for the extension =====
+-- Name: vector; Type: EXTENSION; Schema: -; Owner: -
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+-- Name: EXTENSION vector; Type: COMMENT; Schema: -; Owner: 
+COMMENT ON EXTENSION vector IS 'vector data type and ivfflat and hnsw access methods';
+===== extra: non-superuser + pre-created extension + pg_restore --no-comments =====
+  -e, --exit-on-error          exit on error, default is to continue
+  -1, --single-transaction     restore as a single transaction
+  --no-comments                do not restore comments
+    exit=0
+4|appuser

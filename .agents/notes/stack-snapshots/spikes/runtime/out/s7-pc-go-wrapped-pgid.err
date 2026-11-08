@@ -1,0 +1,19 @@
+gorun: exit=0 in=0 out=536870955 elapsed=265ms ctx=<nil> err=<nil>
+        0.27 real         0.03 user         0.29 sys
+            54689792  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                5377  page reclaims
+                 104  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  12  messages sent
+                  10  messages received
+                 100  signals received
+               14343  voluntary context switches
+                2247  involuntary context switches
+          1583571936  instructions retired
+           665475146  cycles elapsed
+             3490368  peak memory footprint

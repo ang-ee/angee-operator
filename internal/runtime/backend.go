@@ -146,6 +146,53 @@ type JobBackend interface {
 	RunJob(ctx context.Context, target Target, job JobSpec) ([]byte, error)
 }
 
+// StreamRole identifies the snapshot operation a streaming job performs. A
+// backend may use the role to select transport details that are invisible to
+// the job, such as disabling container logging for an artifact producer.
+type StreamRole string
+
+const (
+	// StreamRoleSave identifies a snapshot artifact producer.
+	StreamRoleSave StreamRole = "save"
+	// StreamRoleVerify identifies a snapshot artifact verifier.
+	StreamRoleVerify StreamRole = "verify"
+	// StreamRoleCheck identifies a snapshot precondition check.
+	StreamRoleCheck StreamRole = "check"
+	// StreamRoleReset identifies a snapshot reset operation.
+	StreamRoleReset StreamRole = "reset"
+	// StreamRoleRestore identifies a snapshot artifact consumer.
+	StreamRoleRestore StreamRole = "restore"
+)
+
+// Validate reports whether the role is one of the streaming operations the
+// runtime contract defines.
+func (r StreamRole) Validate() error {
+	switch r {
+	case StreamRoleSave, StreamRoleVerify, StreamRoleCheck, StreamRoleReset, StreamRoleRestore:
+		return nil
+	default:
+		return fmt.Errorf("unknown streaming job role %q", r)
+	}
+}
+
+// JobStreams carries the byte streams of a one-shot job. A nil Stdin means
+// the null device. os/exec copies a non-*os.File Stdin with a goroutine, so it
+// must be a non-terminal stream whose read eventually completes or fails.
+// Stdout, when set, receives the job's stdout and is never included in the
+// returned diagnostics. It must keep making progress and must not block
+// forever, because command completion waits for the stdout copy to finish.
+type JobStreams struct {
+	Role   StreamRole
+	Stdin  io.Reader
+	Stdout io.Writer
+}
+
+// StreamJobBackend optionally executes a job with independent artifact and
+// diagnostic streams. The returned bytes are a redacted diagnostics tail.
+type StreamJobBackend interface {
+	RunJobStreams(ctx context.Context, target Target, job JobSpec, streams JobStreams) ([]byte, error)
+}
+
 // JobValidator optionally reports platform-specific job constraints before execution.
 // A backend without additional constraints needs only JobBackend.
 type JobValidator interface{ ValidateJob(job JobSpec) error }

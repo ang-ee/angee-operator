@@ -1,0 +1,75 @@
+== setup: 300 x 1 MiB files, backup, replace half, backup, forget first => half-used packs for prune to repack
+repo data: 451 MiB
+
+== 7a: two concurrent backups (each ~6 s, throttled)
+locks while both run: 2
+{  "time": "2026-11-06T11:03:57.416442-04:00",  "exclusive": false,  "hostname": "<host>",  "username": "user",  "pid": 87699,  "uid": 501,  "gid": 20}
+{  "time": "2026-11-06T11:03:57.416164-04:00",  "exclusive": false,  "hostname": "<host>",  "username": "user",  "pid": 87700,  "uid": 501,  "gid": 20}
+backup1 exit=0 backup2 exit=0 wall=5.9s
+  snapshot 82a2e4be
+  snapshot 1ad26e27
+
+== 7b: prune (exclusive) running, then backup without and with --retry-lock
+prune holds lock after 1.1s:
+{  "time": "2026-11-06T11:04:03.332313-04:00",  "exclusive": true,  "hostname": "<host>",  "username": "user",  "pid": 88278,  "uid": 501,  "gid": 20}
+-- backup without --retry-lock:
+  [exit=11] took 0.5s
+{"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked exclusively by PID 88278 on <host> by user (UID 501, GID 20)\nlock was created at 2026-11-06 11:04:03 (3.172547s ago)\nstorage ID cf086e8a\nthe `unlock` command can be used to remove stale locks"}
+-- snapshots (read-only, takes non-exclusive lock) without --retry-lock:
+  [exit=11] {"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked exclusively by PID 88278 on <host> by user (UID 501, GID 20)\nlock was created at 2026-11-06 11:04:03 (3.797599s ago)\nstorage ID cf086e8a\nthe `unlock` command can be used to remo
+-- snapshots --no-lock during prune:
+  [exit=0] 
+-- backup with --retry-lock 5s (expect to give up if prune still running):
+  [exit=11] took 5.6s
+{"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked exclusively by PID 88278 on <host> by user (UID 501, GID 20)\nlock was created at 2026-11-06 11:04:03 (10.03217s ago)\nstorage ID cf086e8a\nthe `unlock` command can be used to remove stale locks"}
+  prune still running? yes
+-- backup with --retry-lock 5m (expect to wait for prune and succeed):
+  [exit=0] took 15.8s; prune exit=0 prune total=26.4s
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":297,"data_added_packed":341,"total_files_processed":1,"total_bytes_processed":6,"total_duration":15.7166795,"backup_start":"2026
+  prune output tail:
+rebuilding index
+[0:00] 100.00%  5 / 5 indexes processed
+[0:00] 100.00%  5 / 5 old indexes deleted
+removing 20 old packs
+[0:00] 100.00%  20 / 20 files deleted
+done
+
+== 7b': backup running, then prune (exclusive) without/with --retry-lock
+prune --dry-run during backup: [exit=11] repo already locked, waiting up to 0s for the lock
+unable to create lock in backend: repository is already locked by PID 90712 on <host> by user (UID 501, GID 20)
+prune during backup: [exit=11] repo already locked, waiting up to 0s for the lock
+unable to create lock in backend: repository is already locked by PID 90712 on <host> by user (UID 501, GID 20)
+lock was created at 2026-11-06 11:04:29 (2.875685s ago)
+forget during backup: [exit=11] {"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked by PID 90712 on <host> by user (UID 501, GID 20)\nlock was created at 2026-11-06 11:04:29 (3.639219s ago)\nstorage ID 9d7da28b\nthe `unlock` command can be used to remove stale loc
+backup exit=0
+
+== 7c: kill -9 a backup mid-way -> stale lock
+killed backup (pid 91081) with SIGKILL
+locks after kill: 1
+{  "time": "2026-11-06T11:04:36.378148-04:00",  "exclusive": false,  "hostname": "<host>",  "username": "user",  "pid": 91081,  "uid": 501,  "gid": 20}
+-- new backup (non-exclusive) with the stale lock present:
+  [exit=0] {"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":306,"data_added_packed":348,
+-- exclusive op (prune --dry-run takes exclusive lock? and real prune) with the stale lock present:
+  prune [exit=11] repo already locked, waiting up to 0s for the lock
+unable to create lock in backend: repository is already locked by PID 91081 on <host> by user (UID 501, GID 20)
+lock was created at 2026-11-06 11:04:36 (5.998939s ago)
+locks now: 1
+-- kill -9 again, then restic unlock
+locks after kill: 2
+successfully removed 2 locks
+  unlock [exit=0]
+locks after unlock: 0
+-- check after kills (orphan packs from killed uploads?)
+check snapshots, trees and blobs
+[0:00] 100.00%  6 / 6 snapshots
+no errors were found
+to delete:             0 blobs / 0 B
+unused size after prune: 0 B (0.00% of remaining size)
+-- kill -9 a PRUNE mid-way, then backup
+<scratchpad>/spikes/restic/s07_locks.sh: line 101: kill: (91976) - No such process
+killed prune
+locks after prune kill: 0
+  backup after killed prune [exit=0] {"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":0,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":1,"data_added":313,"data_added_packed":356,
+check snapshots, trees and blobs
+[0:00] 100.00%  7 / 7 snapshots
+no errors were found

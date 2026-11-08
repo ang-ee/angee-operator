@@ -1,0 +1,21 @@
+ Container angee-spike-s7-9ded5570 Creating 
+ Container angee-spike-s7-9ded5570 Created 
+gorun: exit=0 in=0 out=536870912 elapsed=1.467s ctx=<nil> err=<nil>
+        1.47 real         0.27 user         0.96 sys
+            55345152  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                8922  page reclaims
+                1673  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  16  messages sent
+               80660  messages received
+                 247  signals received
+                 471  voluntary context switches
+              128237  involuntary context switches
+          2264764866  instructions retired
+          1955327800  cycles elapsed
+             3260992  peak memory footprint

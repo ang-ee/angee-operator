@@ -633,18 +633,16 @@ type JobRunNodeKind string
 const (
 	JobRunNodeKindJob     JobRunNodeKind = "JOB"
 	JobRunNodeKindService JobRunNodeKind = "SERVICE"
-	JobRunNodeKindBackup  JobRunNodeKind = "BACKUP"
 )
 
 var AllJobRunNodeKind = []JobRunNodeKind{
 	JobRunNodeKindJob,
 	JobRunNodeKindService,
-	JobRunNodeKindBackup,
 }
 
 func (e JobRunNodeKind) IsValid() bool {
 	switch e {
-	case JobRunNodeKindJob, JobRunNodeKindService, JobRunNodeKindBackup:
+	case JobRunNodeKindJob, JobRunNodeKindService:
 		return true
 	}
 	return false

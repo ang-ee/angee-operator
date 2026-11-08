@@ -1,0 +1,69 @@
+src sha: dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  -
+== 1a: --stdin with nested filename
+[exit=0]
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":2,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":3,"data_added":300893,"data_added_packed":300865,"total_files_processed":1,"total_bytes_processed":300000,"total_duration":0.670094084,"backup_start":"2026-11-06T10:46:04.21134-04:00","backup_end":"2026-11-06T10:46:04.881443-04:00","snapshot_id":"c1567cee72166a22e4c18f791641ee456f81cc19d0b3f191440219a61ab07c1c"}
+snap=c1567cee72166a22e4c18f791641ee456f81cc19d0b3f191440219a61ab07c1c
+== ls --json
+{"time":"2026-11-06T10:46:04.21134-04:00","tree":"77cf40b1d2d86acbf4e3e4e3b293656d043bb50e060556183c8f6948cd4a6c0b","paths":["/databases/app/app.pgdump"],"hostname":"stackA","username":"user","uid":501,"gid":20,"tags":["angee.snapshot=s1","angee.kind=member","angee.service=app"],"program_version":"restic 0.19.1","summary":{"backup_start":"2026-11-06T10:46:04.21134-04:00","backup_end":"2026-11-06T10:46:04.881443-04:00","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":2,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":3,"data_added":300893,"data_added_packed":300865,"total_files_processed":1,"total_bytes_processed":300000},"id":"c1567cee72166a22e4c18f791641ee456f81cc19d0b3f191440219a61ab07c1c","short_id":"c1567cee","message_type":"snapshot","struct_type":"snapshot"}
+{"name":"databases","type":"dir","path":"/databases","uid":501,"gid":20,"mode":2147484141,"permissions":"drwxr-xr-x","mtime":"2026-11-06T10:46:04.21134-04:00","atime":"2026-11-06T10:46:04.21134-04:00","ctime":"2026-11-06T10:46:04.21134-04:00","message_type":"node","struct_type":"node"}
+{"name":"app","type":"dir","path":"/databases/app","uid":501,"gid":20,"mode":2147484141,"permissions":"drwxr-xr-x","mtime":"2026-11-06T10:46:04.21134-04:00","atime":"2026-11-06T10:46:04.21134-04:00","ctime":"2026-11-06T10:46:04.21134-04:00","message_type":"node","struct_type":"node"}
+{"name":"app.pgdump","type":"file","path":"/databases/app/app.pgdump","uid":501,"gid":20,"size":300000,"mode":420,"permissions":"-rw-r--r--","mtime":"2026-11-06T10:46:04.21134-04:00","atime":"2026-11-06T10:46:04.21134-04:00","ctime":"2026-11-06T10:46:04.21134-04:00","message_type":"node","struct_type":"node"}
+[exit=0]
+== snapshots --json (paths)
+[{"time":"2026-11-06T10:46:04.21134-04:00","tree":"77cf40b1d2d86acbf4e3e4e3b293656d043bb50e060556183c8f6948cd4a6c0b","paths":["/databases/app/app.pgdump"],"hostname":"stackA","username":"user","uid":501,"gid":20,"tags":["angee.snapshot=s1","angee.kind=member","angee.service=app"],"program_version":"restic 0.19.1","summary":{"backup_start":"2026-11-06T10:46:04.21134-04:00","backup_end":"2026-11-06T10:46:04.881443-04:00","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":2,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":3,"data_added":300893,"data_added_packed":300865,"total_files_processed":1,"total_bytes_processed":300000},"id":"c1567cee72166a22e4c18f791641ee456f81cc19d0b3f191440219a61ab07c1c","short_id":"c1567cee"}]
+
+[exit=0]
+== dump with leading slash
+dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  -
+[exit=0]
+== dump without leading slash
+dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  -
+[exit=0]
+== dump nonexistent path
+Fatal: cannot dump file: path "/databases/app/nope.pgdump" not found in snapshot
+       0
+[exit=1]
+== dump subdir as tar
+drwxr-xr-x  0 501    20          0 Nov  6 10:46 databases/app/
+-rw-r--r--  0 501    20     300000 Nov  6 10:46 databases/app/app.pgdump
+[exit=0]
+== dump snap:subfolder syntax
+dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  -
+[exit=0]
+== restore --include
+{"message_type":"summary","total_files":1,"files_restored":3,"total_bytes":300000,"bytes_restored":300000}
+[exit=0]
+dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  <scratchpad>/spikes/restic/work/s01-restore1/databases/app/app.pgdump
+== restore snap:subfolder
+{"message_type":"summary","total_files":1,"files_restored":1,"total_bytes":300000,"bytes_restored":300000}
+[exit=0]
+dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  <scratchpad>/spikes/restic/work/s01-restore2/app.pgdump
+total 592
+drwx------@ 3 user  wheel      96 Nov  6 10:46 .
+drwxr-xr-x@ 8 user  wheel     256 Nov  6 10:46 ..
+-rw-r--r--@ 1 user  staff  300000 Nov  6 10:46 app.pgdump
+== 1b: --stdin-from-command with nested filename
+[exit=0]
+{"message_type":"summary","files_new":1,"files_changed":0,"files_unmodified":0,"dirs_new":1,"dirs_changed":1,"dirs_unmodified":0,"data_blobs":0,"tree_blobs":3,"data_added":904,"data_added_packed":777,"total_files_processed":1,"total_bytes_processed":300000,"total_duration":0.655553292,"backup_start":"2026-11-06T10:46:11.279462-04:00","backup_end":"2026-11-06T10:46:11.935023-04:00","snapshot_id":"ae58937a26420c68282c5f4bc6d987f468c6ee7e3d44dc31cc412da461ee9785"}
+{"name":"databases","type":"dir","path":"/databases","uid":501,"gid":20,"mode":2147484141,"permissions":"drwxr-xr-x","mtime":"2026-11-06T10:46:11.279462-04:00","atime":"2026-11-06T10:46:11.279462-04:00","ctime":"2026-11-06T10:46:11.279462-04:00","message_type":"node","struct_type":"node"}
+{"name":"app2","type":"dir","path":"/databases/app2","uid":501,"gid":20,"mode":2147484141,"permissions":"drwxr-xr-x","mtime":"2026-11-06T10:46:11.279462-04:00","atime":"2026-11-06T10:46:11.279462-04:00","ctime":"2026-11-06T10:46:11.279462-04:00","message_type":"node","struct_type":"node"}
+{"name":"app2.pgdump","type":"file","path":"/databases/app2/app2.pgdump","uid":501,"gid":20,"size":300000,"mode":420,"permissions":"-rw-r--r--","mtime":"2026-11-06T10:46:11.279462-04:00","atime":"2026-11-06T10:46:11.279462-04:00","ctime":"2026-11-06T10:46:11.279462-04:00","message_type":"node","struct_type":"node"}
+dac4ed135a43056d5f4e9f6bd31dc58833740083c9f1e3b12cea557980bd4a4f  -
+== 1c: edge-case filenames
+filename=/abs/leading.dump exit=0 snap=b853cdc40cfe3189cd4eb959c4ebdfa4db7f51fa6cea007e30a6d36919bdcff8 err=
+  path=/abs
+  path=/abs/leading.dump
+  paths=["/abs/leading.dump"]
+filename=../escape.dump exit=0 snap=0dbcbb749dae5e03e43cfbe1a5db1af33e5c5833215f7aa00114895a659705f7 err=
+  path=/escape.dump
+  paths=["/escape.dump"]
+filename=a/../b.dump exit=0 snap=839c1bac41ddca8ba83d0924f450f32e5d377cc53ccfd2e0b0b0f66e6a62ec60 err=
+  path=/b.dump
+  paths=["/b.dump"]
+filename=trailing/ exit=0 snap=b57f8532b8419446b54fb26b0d524e2fb0a8d13a1e57c4fc74bf0f2aa852d5e2 err=
+  path=/trailing
+  paths=["/trailing"]
+filename=a//b.dump exit=0 snap=9ce079bc034a77ac04556e767d5c0ab37902cbc3f856ee1abe6bd5605eef3784 err=
+  path=/a
+  path=/a/b.dump
+  paths=["/a/b.dump"]

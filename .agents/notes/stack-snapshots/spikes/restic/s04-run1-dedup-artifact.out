@@ -1,0 +1,42 @@
+== 4-append: mutation: head -c 1048576 /dev/urandom >> "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.45 bytes_done=242781780 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=537919494 snapshot=67caa761
+  stored node: size=537919488 mtime=2026-11-06T10:49:52.517527064-04:00
+  sha16: stored=49c1b5c426d40f0d original=821ddee01fb701c0 on-disk-after=49c1b5c426d40f0d
+== 4-inplace: mutation: dd if=/dev/urandom of="$SRC/data/big.bin" bs=1048576 count=4 conv=notrunc 2>/dev/null
+  progress at mutation: percent_done=1.00 bytes_done=536870918 current=None
+  [restic exit=0] wall=3.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=623d0060
+  stored node: size=536870912 mtime=2026-11-06T10:50:10.260909298-04:00
+  sha16: stored=821ddee01fb701c0 original=821ddee01fb701c0 on-disk-after=50b61bec9ba27d95
+== 4-inplace_tail: mutation: dd if=/dev/urandom of="$SRC/data/big.bin" bs=1048576 seek=500 count=4 conv=notrunc 2>/dev/null
+  progress at mutation: percent_done=0.96 bytes_done=517782565 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=3.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=df47514c
+  stored node: size=536870912 mtime=2026-11-06T10:50:20.331763952-04:00
+  sha16: stored=821ddee01fb701c0 original=821ddee01fb701c0 on-disk-after=12ea04e0b9996857
+== 4-truncate: mutation: : > "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.99 bytes_done=533031461 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=3.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=477dfd17
+  stored node: size=536870912 mtime=2026-11-06T10:50:32.033706892-04:00
+  sha16: stored=821ddee01fb701c0 original=821ddee01fb701c0 on-disk-after=e3b0c44298fc1c14
+== 4-delete: mutation: rm -f "$SRC/data/big.bin"
+  progress at mutation: percent_done=1.00 bytes_done=536870918 current=None
+  [restic exit=0] wall=3.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=6ad87a6c
+  stored node: size=536870912 mtime=2026-11-06T10:50:41.12528203-04:00
+  sha16: stored=821ddee01fb701c0 original=821ddee01fb701c0 on-disk-after=absent
+== 4-rename: mutation: head -c 2097152 /dev/urandom > "$SRC/data/.big.new" && mv "$SRC/data/.big.new" "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.99 bytes_done=533031461 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=3.2s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=62662a4c
+  stored node: size=536870912 mtime=2026-11-06T10:50:52.548178182-04:00
+  sha16: stored=821ddee01fb701c0 original=821ddee01fb701c0 on-disk-after=a2fab491bbc507eb
+== 4-delete_small_before_read: mutation: rm -f "$SRC/data/small.txt"
+  progress at mutation: percent_done=1.00 bytes_done=536870918 current=None
+  [restic exit=0] wall=3.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=5fac1964
+  stored node: size=536870912 mtime=2026-11-06T10:51:01.826483692-04:00
+  sha16: stored=821ddee01fb701c0 original=821ddee01fb701c0 on-disk-after=821ddee01fb701c0

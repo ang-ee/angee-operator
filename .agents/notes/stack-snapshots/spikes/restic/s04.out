@@ -1,0 +1,50 @@
+== 4-append: mutation: head -c 1048576 /dev/urandom >> "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.44 bytes_done=235333743 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=537919494 snapshot=8c9374fc
+  stored node: size=537919488 mtime=2026-11-06T10:51:57.571586946-04:00
+  sha16: stored=ee4d4b9b4db47998 original=1eb11b2e84c7dae8 on-disk-after=ee4d4b9b4db47998
+== 4-inplace: mutation: dd if=/dev/urandom of="$SRC/data/big.bin" bs=1048576 count=4 conv=notrunc 2>/dev/null
+  progress at mutation: percent_done=0.45 bytes_done=240696783 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=99a75344
+  stored node: size=536870912 mtime=2026-11-06T10:52:13.74858195-04:00
+  sha16: stored=6046a745c43f2c72 original=6046a745c43f2c72 on-disk-after=5efd4a7346446d3b
+== 4-inplace_tail: mutation: dd if=/dev/urandom of="$SRC/data/big.bin" bs=1048576 seek=500 count=4 conv=notrunc 2>/dev/null
+  progress at mutation: percent_done=0.46 bytes_done=245813151 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=435c955f
+  stored node: size=536870912 mtime=2026-11-06T10:52:29.906742144-04:00
+  sha16: stored=850198fba0fa1e5a original=b8d81da73db6a9a1 on-disk-after=850198fba0fa1e5a
+== 4-truncate: mutation: : > "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.41 bytes_done=222161648 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=4.3s
+  summary: files_new=2 files_changed=0 total_bytes_processed=224395270 snapshot=3587f4b0
+  stored node: size=224395264 mtime=2026-11-06T10:52:47.008302789-04:00
+  sha16: stored=6be390740f39c579 original=5c3bcf918bb6e535 on-disk-after=e3b0c44298fc1c14
+== 4-delete: mutation: rm -f "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.45 bytes_done=241684656 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=766254b6
+  stored node: size=536870912 mtime=2026-11-06T10:52:55.952696398-04:00
+  sha16: stored=1dccde170d26d053 original=1dccde170d26d053 on-disk-after=absent
+== 4-rename: mutation: head -c 2097152 /dev/urandom > "$SRC/data/.big.new" && mv "$SRC/data/.big.new" "$SRC/data/big.bin"
+  progress at mutation: percent_done=0.43 bytes_done=231012392 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.2s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=642d6c37
+  stored node: size=536870912 mtime=2026-11-06T10:53:11.495319959-04:00
+  sha16: stored=53a9641a5ce164cd original=53a9641a5ce164cd on-disk-after=16a76987eb2b1715
+== 4-torn: mutation: dd if=/dev/urandom of="$SRC/data/big.bin" bs=1048576 count=4 conv=notrunc 2>/dev/null; dd if=/dev/urandom of="$SRC/data/big.bin" bs=1048576 seek=500 count=4 conv=notrunc 2>/dev/null
+  progress at mutation: percent_done=0.41 bytes_done=220979289 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=0] wall=10.1s
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=e8c25ab7
+  stored node: size=536870912 mtime=2026-11-06T10:53:26.780679212-04:00
+  sha16: stored=982ce36bb8b20a81 original=b5c2d11b75625341 on-disk-after=1d6e5089e90a35cb
+== 4-delete_small_before_read: mutation: rm -f "$SRC/data/small.txt"
+  progress at mutation: percent_done=0.45 bytes_done=240742953 current=['<scratchpad>/spikes/restic/work/s04-src/data/big.bin']
+  [restic exit=3] wall=10.1s
+{"message_type":"error","error":{"message":"incomplete metadata for <scratchpad>/spikes/restic/work/s04-src/data/small.txt: xattr.list <scratchpad>/spikes/restic/work/s04-src/data/small.txt: no such file or directory"},"during":"archival","item":"<scratchpad>/spikes/restic/work/s04-src/data/small.txt"}
+{"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}
+  summary: files_new=2 files_changed=0 total_bytes_processed=536870918 snapshot=ede733b9
+  stored node: size=536870912 mtime=2026-11-06T10:53:42.998157993-04:00
+  sha16: stored=23d926bba3bd61fd original=23d926bba3bd61fd on-disk-after=23d926bba3bd61fd
