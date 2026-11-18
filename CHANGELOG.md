@@ -8,6 +8,13 @@ latest tag.
 
 ## v0.28.0 — 2026-11-18
 
+### Security
+
+- **Built with Go 1.26.11.** Binaries and images are built with Go 1.26.11
+  (`golang:1.26.11-alpine3.24`). Go 1.26.10's `net/http` has an HTTP/1 server
+  crash from a `MaxBytesReader` header race (GO-2026-6859), fixed in 1.26.11,
+  which govulncheck reports as reachable from the operator's HTTP server.
+
 ### Added
 
 - **A stack takes its repositories as inputs.** `angee init`,
