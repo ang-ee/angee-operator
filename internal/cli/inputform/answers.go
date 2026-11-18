@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ang-ee/angee-operator/internal/copierx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -64,7 +65,7 @@ func LoadAnswersFile(path string) (map[string]string, error) {
 // answerValue converts a YAML node into the string (scalar) or []any (list)
 // shape the answers map uses. A list of strings and lists keeps its members'
 // text; one that holds a mapping, at any depth, is read whole as a
-// structured answer (structuredValue).
+// structured answer (copierx.StructuredAnswer).
 func answerValue(node *yaml.Node) (any, error) {
 	node = resolveAlias(node)
 	switch node.Kind {
@@ -74,8 +75,8 @@ func answerValue(node *yaml.Node) (any, error) {
 		}
 		return node.Value, nil
 	case yaml.SequenceNode:
-		if holdsMapping(node) {
-			return structuredValue(node)
+		if copierx.AnswerHoldsMapping(node) {
+			return copierx.StructuredAnswer(node)
 		}
 		items := make([]any, len(node.Content))
 		for i, item := range node.Content {
@@ -88,64 +89,6 @@ func answerValue(node *yaml.Node) (any, error) {
 		return items, nil
 	case yaml.MappingNode:
 		return nil, fmt.Errorf("is a mapping; only scalars and lists are supported")
-	default:
-		return nil, fmt.Errorf("has an unsupported YAML node kind")
-	}
-}
-
-// holdsMapping reports whether the list node holds a mapping, in itself or
-// in a list it holds.
-func holdsMapping(node *yaml.Node) bool {
-	for _, item := range node.Content {
-		item = resolveAlias(item)
-		if item.Kind == yaml.MappingNode || item.Kind == yaml.SequenceNode && holdsMapping(item) {
-			return true
-		}
-	}
-	return false
-}
-
-// structuredValue reads a node of a structured answer as the JSON value it
-// records: a boolean, a number or a null as such, any other scalar as its
-// text, a list as an array and a mapping with plain keys as an object.
-func structuredValue(node *yaml.Node) (any, error) {
-	node = resolveAlias(node)
-	switch node.Kind {
-	case yaml.ScalarNode:
-		switch node.Tag {
-		case "!!null":
-			return nil, nil
-		case "!!bool", "!!int", "!!float":
-			var value any
-			if err := node.Decode(&value); err != nil {
-				return nil, fmt.Errorf("holds a value that cannot be read: %w", err)
-			}
-			return value, nil
-		}
-		return node.Value, nil
-	case yaml.SequenceNode:
-		items := make([]any, len(node.Content))
-		for i, item := range node.Content {
-			var err error
-			if items[i], err = structuredValue(item); err != nil {
-				return nil, err
-			}
-		}
-		return items, nil
-	case yaml.MappingNode:
-		entries := make(map[string]any, len(node.Content)/2)
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			key := resolveAlias(node.Content[i])
-			if key.Kind != yaml.ScalarNode || key.Tag == "!!merge" {
-				return nil, fmt.Errorf("holds a mapping whose keys are not plain scalars")
-			}
-			value, err := structuredValue(node.Content[i+1])
-			if err != nil {
-				return nil, err
-			}
-			entries[key.Value] = value
-		}
-		return entries, nil
 	default:
 		return nil, fmt.Errorf("has an unsupported YAML node kind")
 	}

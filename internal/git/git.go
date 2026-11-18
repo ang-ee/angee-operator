@@ -124,42 +124,72 @@ func WithEnv(env []string, entries ...string) []string {
 }
 
 // SSHKeyCommand is the GIT_SSH_COMMAND value that makes git, and the git jj
-// runs, reach an SSH remote with the private key in keyFile and no other:
-// IdentitiesOnly keeps ssh from offering the agent's keys, since a host that
-// knows one of them accepts it and then refuses the repository (a GitHub
-// deploy key opens one repository only). The host keys it meets are recorded
-// in knownHosts, and a host it has not met is trusted on first use.
-// BatchMode keeps ssh from prompting. For the usual paths the value reads
+// runs, reach an SSH remote with the private key in keyFile and no other.
+// For the usual paths it reads
 //
-//	ssh -o IdentityFile=<keyFile> -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<knownHosts> -o StrictHostKeyChecking=accept-new
+//	ssh -F /dev/null -o IdentityFile=<keyFile> -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile=<knownHosts> ~/.ssh/known_hosts' -o StrictHostKeyChecking=accept-new
 //
-// The key is named by the IdentityFile option, not by -i: ssh looks for -i's
-// file when it reads its arguments, and without it warns, drops the argument
-// and offers the user's default keys instead, so a key file that is missing
-// would silently lift the pin. A missing IdentityFile fails the
-// authentication.
+// What each part is for:
+//
+//   - `-F /dev/null` keeps ssh from reading the user's and the system's
+//     configuration, whose IdentityFile lines for the host would be offered
+//     too. Nothing else of that configuration applies either: no Host alias,
+//     Port, HostName or ProxyJump.
+//   - IdentitiesOnly keeps ssh from offering the agent's keys: a host that
+//     knows one of them accepts it and then refuses the repository (a GitHub
+//     deploy key opens one repository only).
+//   - The key is named by the IdentityFile option, not by -i: ssh looks for
+//     -i's file when it reads its arguments, and without it warns, drops the
+//     argument and offers the user's default keys instead, so a key file
+//     that is missing would silently lift the pin. A missing IdentityFile
+//     fails the authentication.
+//   - A host key is looked up in knownHosts and then in the user's own
+//     ~/.ssh/known_hosts, so a host the user has verified is not trusted
+//     anew. A host neither file has is trusted on first use and recorded in
+//     knownHosts, the first of the two; one whose key has changed is
+//     refused.
+//   - BatchMode keeps ssh from prompting.
 func SSHKeyCommand(keyFile, knownHosts string) string {
-	return "ssh " + sshPathOption("IdentityFile", keyFile) +
-		" -o IdentitiesOnly=yes -o BatchMode=yes " +
-		sshPathOption("UserKnownHostsFile", knownHosts) +
+	return "ssh -F /dev/null" +
+		" -o " + shellArg("IdentityFile="+sshConfigPath(keyFile)) +
+		" -o IdentitiesOnly=yes -o BatchMode=yes" +
+		" -o " + shellArg("UserKnownHostsFile="+sshConfigPath(knownHosts)+" ~/.ssh/known_hosts") +
 		" -o StrictHostKeyChecking=accept-new"
 }
 
-// sshPathOption is `-o name=path` for GIT_SSH_COMMAND. git hands the command
-// to the shell, and ssh then reads the option's value as its configuration:
-// it splits it on spaces, expands % tokens in it and reads quotes. A path of
-// plain characters is written as it is. Any other is double-quoted for ssh,
-// with its backslashes and double quotes escaped and each % doubled, and the
-// whole option single-quoted for the shell.
-func sshPathOption(name, path string) string {
+// sshConfigPath writes path as the value of an ssh option, which ssh reads
+// as it reads its configuration: it splits it on spaces, expands % tokens in
+// it and reads quotes. A path of plain characters is written as it is; any
+// other is double-quoted, with its backslashes and double quotes escaped and
+// each % doubled.
+func sshConfigPath(path string) string {
+	if plainArg(path) {
+		return path
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(path) + `"`
+}
+
+// shellArg writes arg for the shell git hands GIT_SSH_COMMAND to: one of
+// plain characters as it is, any other single-quoted.
+func shellArg(arg string) string {
+	if plainArg(arg) {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+// plainArg reports whether arg holds only characters that neither the shell
+// nor ssh's reading of an option gives a meaning to.
+func plainArg(arg string) bool {
 	plain := func(r rune) bool {
 		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+=:@", r)
 	}
-	if path != "" && !strings.ContainsFunc(path, func(r rune) bool { return !plain(r) }) {
-		return "-o " + name + "=" + path
+	for _, r := range arg {
+		if !plain(r) {
+			return false
+		}
 	}
-	value := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(path)
-	return "-o '" + strings.ReplaceAll(name+`="`+value+`"`, "'", `'\''`) + "'"
+	return arg != ""
 }
 
 // RunIsolated runs git in dir in IsolatedEnv(extraEnv...), so it never

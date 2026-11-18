@@ -22,9 +22,10 @@ latest tag.
   replay changes nothing. A flag with `--input` for the same input, a list
   for an input the template does not declare, a name that is not
   `^[a-z0-9][a-z0-9-]*$`, a repository listed twice or in both lists, a ref
-  git would not take, and a URL that carries a password, or a user name
-  under a scheme other than ssh, are refused before anything renders. See
-  *Repositories as inputs* in the templates guide.
+  git would not take, and a URL that carries a password, a user name under
+  a scheme other than ssh, or a query string or fragment, are refused before
+  anything renders, and no refusal quotes a credential. See *Repositories as
+  inputs* in the templates guide.
 - **A workspace gets a slot per marked source.** `sources.<name>.slot: true`
   marks a source, and a workspace template's `_angee.source_slot` (a slot's
   `mode`, `branch`, `ref` and `optional`, with no source or subpath) is the
@@ -34,24 +35,31 @@ latest tag.
   and one slot per marked source, named after the source and at that
   subpath. A marked source the template already checks out, under any slot
   name, keeps that slot alone; a declared slot of the source's name that
-  checks out another source, or one at that path, is an error. Slots are
-  cut at create only: `workspace update` adds none.
+  checks out another source, or one at that path, is an error, unless it is
+  an optional slot that is skipped. Slots are cut at create only:
+  `workspace update` adds none.
 - **A git source can have its own SSH key.** `sources.<name>.auth.ssh_key_secret`
   names the stack secret that holds a private key, such as a deploy key.
   Every git and jj command angee runs for that source (its cache's clone and
   fetch, `source pull` and `source push`, and its workspace slots' creation,
   fetch, pull, push, publish and sync-base, jj slots included) then runs with
-  `GIT_SSH_COMMAND="ssh -o IdentityFile=<root>/run/ssh/<source> -o
-  IdentitiesOnly=yes -o BatchMode=yes -o
-  UserKnownHostsFile=<root>/run/ssh/known_hosts -o
+  `GIT_SSH_COMMAND="ssh -F /dev/null -o IdentityFile=<root>/run/ssh/<source>
+  -o IdentitiesOnly=yes -o BatchMode=yes -o
+  'UserKnownHostsFile=<root>/run/ssh/known_hosts ~/.ssh/known_hosts' -o
   StrictHostKeyChecking=accept-new"`, so two private repositories on one host
-  need no `~/.ssh/config` aliases. The key file is the secret, written with
-  mode `0600` and a final newline before the remote is reached, and
-  rewritten only when the secret changes; a bring-up removes the key files
-  no source has any more. A key that is not set stops the operation before
-  git runs (`PRECONDITION_FAILED`, new cause `source_key_missing`), on
-  `angee up` before any source is cloned. The secret cannot be declared
-  `generated`. A source without `auth` behaves as before.
+  need no `~/.ssh/config` aliases; that configuration is not read at all for
+  such a source. The key file is the secret, written with mode `0600` and a
+  final newline before the remote is reached, and rewritten only when the
+  secret changes; a bring-up removes the key files no source has any more.
+  A key that is not set stops what needs the remote before git runs
+  (`PRECONDITION_FAILED`, new cause `source_key_missing`), on `angee up`
+  before any source is cloned; a best-effort refresh of a cache that exists
+  is skipped with a warning instead, so a stack comes up again without its
+  keys. The key is the operator's alone: it is not resolved for services and
+  jobs, not written to `run/secrets.env`, and with the env-file backend the
+  runtimes read `run/runtime.env`, a copy of the env file without it. The
+  secret cannot be declared `generated`, and the source must have a remote
+  reached over ssh. A source without `auth` behaves as before.
 
 ### Changed
 

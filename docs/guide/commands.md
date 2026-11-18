@@ -544,9 +544,9 @@ fast-forwards the cached source's tracking ref. `source fetch` and
 `angee.yaml` (see [Sources](/cli/manifest#sources)).
 
 A source that names an SSH key of its own (`auth.ssh_key_secret`) is cloned,
-fetched, pulled and pushed with that key, not with the ssh agent's keys or
-the user's default ones, and so are the workspace slots cut from it. While
-the secret is not set, these commands stop before git runs, with cause
+fetched, pulled and pushed with that key and no other, without the user's
+ssh configuration, and so are the workspace slots cut from it. While the
+secret is not set, these commands stop before git runs, with cause
 `source_key_missing`; see [A key of its own](./manifest.md#a-key-of-its-own).
 
 The per-source `diff` and per-slot convergence operations (`merge`,

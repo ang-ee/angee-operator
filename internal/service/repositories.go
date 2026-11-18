@@ -59,9 +59,6 @@ var (
 	repositoryNameRE   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 )
 
-// sshSchemes are the URL schemes git reaches over ssh.
-var sshSchemes = map[string]bool{"ssh": true, "git+ssh": true, "ssh+git": true}
-
 // parseRepository reads one repository as `<repo>[@<ref>]`. <repo> is, in the
 // order tried:
 //
@@ -81,42 +78,66 @@ var sshSchemes = map[string]bool{"ssh": true, "git+ssh": true, "ssh+git": true}
 // URL's. A path that itself holds an `@` cannot be given.
 //
 // A URL is written to angee.yaml and to the answers file, so one that carries
-// credentials is refused: a password under any scheme, and any user under a
-// scheme other than ssh, where a user name is often a token. No refusal
-// quotes them.
+// credentials is refused: a password under any scheme, any user under a
+// scheme other than ssh, where a user name is often a token, and, in any
+// form, a `?` or a `#` and what follows it. No refusal quotes them.
 func parseRepository(spec string) (repositoryEntry, error) {
 	var entry repositoryEntry
 	if spec == "" {
 		return entry, fmt.Errorf("a repository is empty")
 	}
-	// shown is the repository as a refusal quotes it.
+	// shown is the repository as a refusal quotes it: without what may be a
+	// credential, a URL's user and what follows a `?` or a `#`.
 	shown := spec
+	if cut := strings.IndexAny(shown, "?#"); cut >= 0 {
+		shown = shown[:cut] + "…"
+	}
 	var prefix, repoPath string
 	switch {
 	case repositorySchemeRE.MatchString(spec):
 		scheme, rest, _ := strings.Cut(spec, "://")
 		scheme = strings.ToLower(scheme)
 		authority, pathPart, _ := strings.Cut(rest, "/")
+		authority, _, _ = strings.Cut(authority, "?")
+		authority, _, _ = strings.Cut(authority, "#")
+		user, host := "", authority
 		if at := strings.LastIndex(authority, "@"); at >= 0 {
-			masked := scheme + "://***" + authority[at:] + "/" + pathPart
-			switch {
-			case strings.Contains(authority[:at], ":"):
-				return entry, fmt.Errorf("repository %q carries a password in its URL, which would be written to angee.yaml and to the answers file; give the URL without it, and the credential through the source's auth (sources.<name>.auth)", masked)
-			case !sshSchemes[scheme]:
-				return entry, fmt.Errorf("repository %q carries a user in its URL, which over %s is often a token, and would be written to angee.yaml and to the answers file; give the URL without it", masked, scheme)
-			}
+			user, host = authority[:at], authority[at+1:]
+		}
+		masked := scheme + "://" + host + "/" + pathPart
+		if user != "" {
+			masked = scheme + "://***@" + host + "/" + pathPart
+		}
+		if cut := strings.IndexAny(masked, "?#"); cut >= 0 {
+			masked = masked[:cut] + "…"
+		}
+		shown = masked
+		switch {
+		case strings.Contains(user, ":"):
+			return entry, fmt.Errorf("repository %q carries a password in its URL, which would be written to angee.yaml and to the answers file; give the URL without it, and the credential through the source's auth (sources.<name>.auth)", shown)
+		case user != "" && !manifest.IsSSHScheme(scheme):
+			return entry, fmt.Errorf("repository %q carries a user in its URL, which over %s is often a token, and would be written to angee.yaml and to the answers file; give the URL without it", shown, scheme)
+		}
+		// An ssh URL's user, which is no credential, is quoted as given.
+		if user != "" {
+			shown = strings.Replace(shown, "://***@", "://"+user+"@", 1)
 		}
 		if pathPart == "" {
 			return entry, fmt.Errorf("repository %q has no path after its host", shown)
 		}
 		prefix, repoPath = scheme+"://"+authority, "/"+pathPart
-		entry.SSH = sshSchemes[scheme]
+		entry.SSH = manifest.IsSSHScheme(scheme)
 	case !strings.HasPrefix(spec, "/") && !strings.Contains(spec, "://") && !manifest.IsRelativeURL(spec):
 		host, rest, _ := strings.Cut(spec, ":")
 		prefix, repoPath = host+":", rest
 		entry.SSH = true
 	default:
 		repoPath = spec
+	}
+	// A URL's query or fragment is where a token is sometimes passed, and
+	// git reads neither in the other forms.
+	if strings.ContainsAny(spec, "?#") {
+		return entry, fmt.Errorf("repository %q holds a '?' or a '#': what follows one is no part of a repository, would be written to angee.yaml and to the answers file, and in a URL is often a token; give it without", shown)
 	}
 	if strings.ContainsFunc(spec, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return entry, fmt.Errorf("repository %q contains a space or a control character", shown)

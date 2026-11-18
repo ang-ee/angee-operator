@@ -72,6 +72,42 @@ func TestKeySecretIsNotGenerated(t *testing.T) {
 	}
 }
 
+// Two sources that each name a key have their key files side by side, named
+// after them: names that differ only in case would be one file where the
+// file system folds case.
+func TestKeyedSourceNamesDifferByMoreThanCase(t *testing.T) {
+	two := strings.Replace(slotAndKeyManifest, "  plain:\n", "  Angee-ARP:\n    kind: git\n    repo: git@github.com:fork/angee-arp.git\n    auth:\n      ssh_key_secret: other-key\n  plain:\n", 1)
+	_, err := loadManifestString(t, two)
+	want := `sources "Angee-ARP" and "angee-arp" each name an SSH key (auth.ssh_key_secret) and differ only in case, so their key files would be one; rename one of them`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("LoadFile() error = %v, want %q", err, want)
+	}
+	// Without a key of its own the second is as free as before.
+	if _, err := loadManifestString(t, strings.Replace(two, "    auth:\n      ssh_key_secret: other-key\n", "", 1)); err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+}
+
+func TestIsSSHURL(t *testing.T) {
+	for url, want := range map[string]bool{
+		"git@github.com:acme/app.git":         true,
+		"deploy:app":                          true,
+		"ssh://git@github.com/acme/app.git":   true,
+		"git+ssh://git@example.com/a/app.git": true,
+		"SSH://git@example.com/a/app.git":     true,
+		"https://github.com/acme/app.git":     false,
+		"file:///srv/git/app.git":             false,
+		"/srv/git/app.git":                    false,
+		"../app":                              false,
+		"app":                                 false,
+		"":                                    false,
+	} {
+		if got := IsSSHURL(url); got != want {
+			t.Errorf("IsSSHURL(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
 func TestValidateSourceAuth(t *testing.T) {
 	git := func(name string) Source {
 		return Source{Kind: "git", Repo: "git@example.com:acme/app.git", Auth: SourceAuth{SSHKeySecret: name}}
@@ -89,9 +125,18 @@ func TestValidateSourceAuth(t *testing.T) {
 		{name: "app", source: git("deploy key"), want: `source "app": auth.ssh_key_secret "deploy key" is not a secret name`},
 		{name: "app", source: git("../key"), want: `source "app": auth.ssh_key_secret "../key" is not a secret name`},
 		{name: "app", source: git("--"), want: `source "app": auth.ssh_key_secret "--" is not a secret name`},
-		{name: "known_hosts", source: git("key"), want: `source "known_hosts": a source with auth.ssh_key_secret cannot have this name, which its key file would take; rename the source`},
-		{name: "Known_Hosts", source: git("key"), want: `source "Known_Hosts": a source with auth.ssh_key_secret cannot have this name`},
-		{name: "..", source: git("key"), want: `source "..": a source with auth.ssh_key_secret cannot have this name`},
+		{name: "known_hosts", source: git("key"), want: `source "known_hosts": a source with auth.ssh_key_secret has its key file named after it, so its name cannot be "." or ".." or start with "known_hosts"; rename the source`},
+		{name: "Known_Hosts", source: git("key"), want: `source "Known_Hosts": a source with auth.ssh_key_secret has its key file named after it`},
+		{name: "known_hosts.old", source: git("key"), want: `source "known_hosts.old": a source with auth.ssh_key_secret has its key file named after it`},
+		// The key is read only over ssh.
+		{name: "app", source: Source{Kind: "git", Repo: "https://example.com/acme/app.git", Auth: SourceAuth{SSHKeySecret: "key"}}, want: `source "app": auth.ssh_key_secret is set, but none of its remotes is reached over ssh (git@host:path or ssh://…), so the key would never be used`},
+		{name: "app", source: Source{Kind: "git", Repo: "/srv/git/app.git", Auth: SourceAuth{SSHKeySecret: "key"}}, want: `none of its remotes is reached over ssh`},
+		{name: "app", source: Source{Kind: "git", Auth: SourceAuth{SSHKeySecret: "key"}}, want: `none of its remotes is reached over ssh`},
+		{name: "app", source: Source{Kind: "git", Repo: "ssh://git@example.com/acme/app.git", Auth: SourceAuth{SSHKeySecret: "key"}}},
+		{name: "app", source: Source{Kind: "git", Repo: "GIT+SSH://git@example.com/acme/app.git", Auth: SourceAuth{SSHKeySecret: "key"}}},
+		// One ssh remote among several is enough: the key is for that one.
+		{name: "app", source: Source{Kind: "git", Remotes: map[string]SourceRemote{"origin": {URL: "git@example.com:me/app.git"}, "upstream": {URL: "https://example.com/acme/app.git", Canonical: true}}, Auth: SourceAuth{SSHKeySecret: "key"}}},
+		{name: "..", source: git("key"), want: `source "..": a source with auth.ssh_key_secret has its key file named after it`},
 		// Without a key the name is as free as before.
 		{name: "known_hosts", source: Source{Kind: "git", Repo: "git@example.com:acme/app.git"}},
 	} {

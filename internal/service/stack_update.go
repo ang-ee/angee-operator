@@ -729,7 +729,7 @@ func parseTemplateAnswers(path string, data []byte) (srcPath string, inputs copi
 // recordedAnswerValue reads a recorded answer: a scalar as its text, and a
 // list as a list of its items, read the same way. A list that holds a
 // mapping, at any depth, is read whole as a structured answer
-// (structuredAnswerValue). A mapping as the answer itself is refused.
+// (copierx.StructuredAnswer). A mapping as the answer itself is refused.
 func recordedAnswerValue(node *yaml.Node) (any, error) {
 	for node.Kind == yaml.AliasNode && node.Alias != nil {
 		node = node.Alias
@@ -741,8 +741,8 @@ func recordedAnswerValue(node *yaml.Node) (any, error) {
 		}
 		return node.Value, nil
 	case yaml.SequenceNode:
-		if holdsMapping(node) {
-			return structuredAnswerValue(node)
+		if copierx.AnswerHoldsMapping(node) {
+			return copierx.StructuredAnswer(node)
 		}
 		items := make([]any, len(node.Content))
 		for i, item := range node.Content {
@@ -755,68 +755,5 @@ func recordedAnswerValue(node *yaml.Node) (any, error) {
 		return items, nil
 	default:
 		return nil, fmt.Errorf("only scalars and lists are supported")
-	}
-}
-
-// holdsMapping reports whether the list node holds a mapping, in itself or
-// in a list it holds.
-func holdsMapping(node *yaml.Node) bool {
-	for _, item := range node.Content {
-		for item.Kind == yaml.AliasNode && item.Alias != nil {
-			item = item.Alias
-		}
-		if item.Kind == yaml.MappingNode || item.Kind == yaml.SequenceNode && holdsMapping(item) {
-			return true
-		}
-	}
-	return false
-}
-
-// structuredAnswerValue reads a node of a structured answer as the JSON
-// value it records: a boolean, a number or a null as such, any other scalar
-// as its text, a list as an array and a mapping with plain keys as an
-// object.
-func structuredAnswerValue(node *yaml.Node) (any, error) {
-	for node.Kind == yaml.AliasNode && node.Alias != nil {
-		node = node.Alias
-	}
-	switch node.Kind {
-	case yaml.ScalarNode:
-		switch node.Tag {
-		case "!!null":
-			return nil, nil
-		case "!!bool", "!!int", "!!float":
-			var value any
-			if err := node.Decode(&value); err != nil {
-				return nil, err
-			}
-			return value, nil
-		}
-		return node.Value, nil
-	case yaml.SequenceNode:
-		items := make([]any, len(node.Content))
-		for i, item := range node.Content {
-			var err error
-			if items[i], err = structuredAnswerValue(item); err != nil {
-				return nil, err
-			}
-		}
-		return items, nil
-	case yaml.MappingNode:
-		entries := make(map[string]any, len(node.Content)/2)
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			key := node.Content[i]
-			if key.Kind != yaml.ScalarNode || key.Tag == "!!merge" {
-				return nil, fmt.Errorf("a mapping in a list takes plain keys only")
-			}
-			value, err := structuredAnswerValue(node.Content[i+1])
-			if err != nil {
-				return nil, err
-			}
-			entries[key.Value] = value
-		}
-		return entries, nil
-	default:
-		return nil, fmt.Errorf("only scalars, lists and mappings are supported in a list")
 	}
 }

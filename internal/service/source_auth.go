@@ -78,24 +78,39 @@ func (p *Platform) sourceGitClient(name string, source manifest.Source) gitx.Cli
 	return client
 }
 
-// ensureSourceKeys is ensureSourceKey for every source of stack, in name
-// order, stopping at the first that fails, as a bring-up runs it before it
-// reaches any source's remote. It first removes the key files no source of
-// the stack has any more (pruneSourceKeys).
-func (p *Platform) ensureSourceKeys(ctx context.Context, stack *manifest.Stack) error {
-	p.pruneSourceKeys(ctx, stack)
-	for _, name := range sortedKeys(stack.Sources) {
-		if err := p.ensureSourceKey(ctx, stack, name); err != nil {
-			return err
-		}
+// prepareSourceKey sees to the key of source name before its cache is cloned
+// or refreshed, and reports whether the cache can then reach its remote. It
+// writes the key file (ensureSourceKey). A key that cannot be had, because
+// it is not set or the secrets cannot be read, is an error when the cache
+// has to be cloned, and when the refresh is not best effort. For a best
+// effort refresh of a cache that exists, as a bring-up and the cutting of a
+// slot make, it is what a refresh that fails is: warned of, and skipped, so
+// that a stack does not need its secrets to come up again.
+func (p *Platform) prepareSourceKey(ctx context.Context, stack *manifest.Stack, name string, bestEffortRefresh bool) (reachable bool, err error) {
+	err = p.ensureSourceKey(ctx, stack, name)
+	if err == nil {
+		return true, nil
 	}
-	return nil
+	source := stack.Sources[name]
+	if !bestEffortRefresh || ctx.Err() != nil {
+		return false, err
+	}
+	if _, statErr := os.Stat(filepath.Join(p.sourcePath(name, source), ".git")); statErr != nil {
+		return false, err
+	}
+	reason := err.Error()
+	if opErr := AsOperationError(err); opErr != nil && opErr.Summary != "" {
+		reason = opErr.Summary
+	}
+	logctx.From(ctx).Warn(fmt.Sprintf("could not refresh source %q; using the existing cache: %s", name, reason))
+	return false, nil
 }
 
 // pruneSourceKeys removes from sourceSSHDir what no keyed source of stack
 // accounts for: the key file of a source that was removed or renamed, or
-// that names no key any more, so no private key outlives its use there. The
-// known-hosts file, and whatever ssh keeps beside it under its name, stay. A
+// that names no key any more, so no private key outlives its use there. A
+// bring-up runs it. The known-hosts file, and whatever ssh keeps beside it
+// under its name (no keyed source has a name that starts with it), stay. A
 // staging file writeSourceKey left is removed once it is an hour old, so one
 // another process is writing now is not. It is best effort: what cannot be
 // removed is warned of.
@@ -130,13 +145,13 @@ func (p *Platform) pruneSourceKeys(ctx context.Context, stack *manifest.Stack) {
 // ensureSourceKey writes the key file of keyed source name from its secret,
 // where sourceSSHCommand points ssh at it; for any other source it does
 // nothing. The callers are the operations that reach a source's remote, each
-// before it does: a bring-up, before it clones or fetches any cache; the
-// source verbs fetch, pull and push; the creation and repair of a workspace,
-// before any slot is cut; and the slot verbs fetch, pull, push, publish and
-// sync-base. A read (status, diff, the commit list) runs no ssh, and needs
-// no key. The file is rewritten only when the secret's value differs from
-// it, so a key set again with `angee secret set` is used from the next such
-// operation on.
+// before it does: the source verbs fetch, pull and push; the slot verbs
+// fetch, pull, push, publish and sync-base; the cloning of a clone slot; and,
+// through prepareSourceKey, the cloning or refresh of a cache by a bring-up
+// or for a new slot. A read (status, diff, the commit list) runs no ssh, and
+// needs no key. The file is rewritten only when the secret's value differs
+// from it, so a key set again with `angee secret set` is used from the next
+// such operation on.
 //
 // A key that is not set is a precondition failure (CauseSourceKeyMissing)
 // that names the source and the secret, before git is run; a key file an
@@ -194,12 +209,25 @@ func (p *Platform) sourceKey(ctx context.Context, stack *manifest.Stack, secret 
 	return resolved[secret], nil
 }
 
+// sourceKeySecrets names the secrets that are the SSH keys of stack's
+// sources.
+func sourceKeySecrets(stack *manifest.Stack) map[string]bool {
+	var keys map[string]bool
+	for _, source := range stack.Sources {
+		if secret := source.Auth.SSHKeySecret; secret != "" {
+			if keys == nil {
+				keys = map[string]bool{}
+			}
+			keys[secret] = true
+		}
+	}
+	return keys
+}
+
 // writeSourceKey makes file, in dir, hold key, readable by its owner only:
 // ssh refuses a key file others can read. dir is made private too. A key
 // without a final newline gets one, since ssh refuses a key file that ends
-// mid-line, and a secret set from standard input loses its last newline. The
-// file is replaced, not written into, and only when its content differs, so
-// a command reading it never sees half a key.
+// mid-line, and a secret set from standard input loses its last newline.
 func writeSourceKey(dir, file, key string) error {
 	if !strings.HasSuffix(key, "\n") {
 		key += "\n"
@@ -214,8 +242,16 @@ func writeSourceKey(dir, file, key string) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
+	return writePrivateFile(file, key)
+}
+
+// writePrivateFile makes file hold content, readable and writable by its
+// owner only. The file is replaced, not written into, and only when its
+// content differs, so a command reading it never sees half of it, and an
+// unchanged file keeps its time. Its directory must exist.
+func writePrivateFile(file, content string) error {
 	if info, err := os.Lstat(file); err == nil && info.Mode().IsRegular() {
-		if current, err := os.ReadFile(file); err == nil && string(current) == key {
+		if current, err := os.ReadFile(file); err == nil && string(current) == content {
 			if info.Mode().Perm() == 0o600 {
 				return nil
 			}
@@ -223,12 +259,12 @@ func writeSourceKey(dir, file, key string) error {
 		}
 	}
 	// os.CreateTemp makes the file readable by its owner only.
-	staged, err := os.CreateTemp(dir, "."+filepath.Base(file)+".new-")
+	staged, err := os.CreateTemp(filepath.Dir(file), "."+filepath.Base(file)+".new-")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(staged.Name()) }()
-	if _, err := staged.WriteString(key); err != nil {
+	if _, err := staged.WriteString(content); err != nil {
 		_ = staged.Close()
 		return err
 	}

@@ -313,7 +313,7 @@ func modeNoun(mode string) string {
 // migrateToJJ makes the worktree slot m a jj slot (plan phase 9, steps 1 to
 // 6), under the cache's lock: the slot's registrations change throughout.
 func (p *Platform) migrateToJJ(ctx context.Context, m *migration) (string, error) {
-	client := p.sourceGitClient(m.sourceName, m.source)
+	client := p.gitClient()
 	worktree := withEffectiveMode(m.stack, m.wsSource)
 	gitDriver, gitSlot := p.workspaceSlotDriver(m.path, m.source, worktree)
 	if err := requireSlotReady(ctx, gitDriver, gitSlot, vcs.VerbMigrate, m.workspaceName, m.slot, m.sourceName); err != nil {
@@ -558,7 +558,7 @@ func (m *migration) finishToJJ(ctx context.Context, client git.Client) {
 // migrateToWorktree makes the jj slot m a git worktree of its cache (plan
 // phase 9, the reverse direction), under the cache's lock.
 func (p *Platform) migrateToWorktree(ctx context.Context, m *migration) (string, error) {
-	client := p.sourceGitClient(m.sourceName, m.source)
+	client := p.gitClient()
 	jjSource := withEffectiveMode(m.stack, m.wsSource)
 	jjSlot := p.workspaceLifecycleSlot(m.path, m.source, jjSource)
 	jj, ok := p.slotDriver(jjSlot).(jjMigrator)

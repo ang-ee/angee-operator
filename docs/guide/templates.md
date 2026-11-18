@@ -249,8 +249,8 @@ are the ones its `repo` gives; any other key is refused.
 
 A list is refused, before anything renders, when:
 
-- an entry is none of the forms above, holds a space or a control
-  character, or starts with `-`;
+- an entry is none of the forms above, holds a space, a control character,
+  a `?` or a `#`, or starts with `-`;
 - a name does not match the pattern (uppercase letters, `.` and `_` are
   out), or is listed twice in one list, or once in each;
 - a ref is empty or `@`, holds a space, a control character, `..`, `//`,
@@ -258,10 +258,11 @@ A list is refused, before anything renders, when:
   `.`, or has an element that starts with `.` or ends with `.lock`;
 - a URL carries credentials, which would be written to `angee.yaml` and the
   answers file: a password (`https://user:token@host/…`) under any scheme,
-  and any user name under a scheme other than ssh (`https://token@host/…`),
-  where it is often a token. No refusal quotes them. Give the URL without
-  them and the credential through the source's
-  [`auth`](./manifest.md#a-key-of-its-own).
+  any user name under a scheme other than ssh (`https://token@host/…`),
+  where it is often a token, and a query string or fragment
+  (`…/name.git?token=…`). No refusal quotes them: a user is shown as `***`,
+  and what follows a `?` or `#` as `…`. Give the URL without them and the
+  credential through the source's [`auth`](./manifest.md#a-key-of-its-own).
 
 copier records a `type: json` answer as YAML, so the answers file holds each
 list as a sequence of mappings. `angee stack update --template` reads that
@@ -359,7 +360,9 @@ and is otherwise cut, recorded and rolled back as a declared slot is.
   the slot's name, keeps that slot: it is cut once, by the declared slot's
   own rule. Otherwise a declared slot that has the source's name checks out
   another source, which is an error, and so is a declared slot at the path
-  the marked source's slot would take.
+  the marked source's slot would take. An optional declared slot that is
+  skipped, its source not being declared, takes neither the name nor the
+  path.
 - The slots are cut when the workspace is created. `angee workspace update`
   and `angee workspace repair` do not add a slot for a source marked since.
 

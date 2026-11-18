@@ -24,7 +24,7 @@ func (p *Platform) SourceDiff(ctx context.Context, name, ref string) ([]api.Diff
 	if source.Kind != "git" {
 		return nil, &InvalidInputError{Field: "name", Reason: fmt.Sprintf("source %q is %s, only git sources can be diffed", name, source.Kind)}
 	}
-	return gitdriver.New(p.sourceGitClient(name, source)).Diff(ctx, vcs.Slot{Path: p.sourcePath(name, source)}, ref)
+	return gitdriver.New(p.gitClient()).Diff(ctx, vcs.Slot{Path: p.sourcePath(name, source)}, ref)
 }
 
 // WorkspaceSourceDiff returns the unified-diff hunks for a per-workspace

@@ -527,13 +527,12 @@ angee secret set deploy-key-angee-omelas --stdin < ~/keys/omelas
 ```
 
 Every git and jj command angee runs for that source then reaches its remotes
-with that key, and not with the ssh agent's keys or the user's default ones:
-cloning and fetching its cache, `source pull` and `source push`, and cutting,
-fetching, pulling, pushing, publishing and syncing the workspace slots cut
-from it. Each command runs with
+with that key and no other: cloning and fetching its cache, `source pull` and
+`source push`, and cutting, fetching, pulling, pushing, publishing and
+syncing the workspace slots cut from it. Each command runs with
 
 ```text
-GIT_SSH_COMMAND="ssh -o IdentityFile=<root>/run/ssh/<source> -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<root>/run/ssh/known_hosts -o StrictHostKeyChecking=accept-new"
+GIT_SSH_COMMAND="ssh -F /dev/null -o IdentityFile=<root>/run/ssh/<source> -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile=<root>/run/ssh/known_hosts ~/.ssh/known_hosts' -o StrictHostKeyChecking=accept-new"
 ```
 
 where `<root>` is the stack root. A path that holds a space or another
@@ -543,6 +542,11 @@ character the shell or ssh would read is quoted for both.
   `~/.ssh/config` aliases. A host accepts the first key it knows, and GitHub
   then refuses the repository when that key is another repository's deploy
   key. With it, ssh offers the source's own key, and not the agent's.
+- **`-F /dev/null`** keeps ssh from reading the user's and the system's ssh
+  configuration, whose `IdentityFile` lines for the host would be offered as
+  well. Nothing else of that configuration applies to a keyed source either:
+  no `Host` alias, `Port`, `HostName` or `ProxyJump`. Name the real host in
+  the source's URL, and a port there too (`ssh://git@host:2222/owner/name.git`).
 - **`IdentityFile`**, not `-i`, names the key: ssh drops an `-i` whose file is
   missing and offers the user's default keys instead, which would lift the
   pin without a word. A missing `IdentityFile` fails the authentication.
@@ -556,21 +560,42 @@ character the shell or ssh would read is quoted for both.
   path segment is (`team/app` is `team%2Fapp`). A bring-up removes the key
   files no source has any more, and a key file whose secret was deleted goes
   at the next operation that asks for it.
-- **Host keys** are recorded in the stack's own `run/ssh/known_hosts`. A host
-  met for the first time is trusted and recorded (`accept-new`); a host whose
-  key has changed since is refused.
-- **A key that is not set** stops the operation before git runs, with code
-  `PRECONDITION_FAILED` and cause `source_key_missing`, naming the source and
-  the secret. On `angee up` that is before any source is cloned.
+- **Host keys** are looked up in the stack's own `run/ssh/known_hosts` and
+  then in the user's `~/.ssh/known_hosts`, so a host you have verified is not
+  trusted anew. A host neither file has is trusted on first use and recorded
+  in the stack's file (`accept-new`); a host whose key has changed is
+  refused.
+- **A key that is not set** stops what needs the source's remote before git
+  runs, with code `PRECONDITION_FAILED` and cause `source_key_missing`,
+  naming the source and the secret: cloning the source's cache (on
+  `angee up`, before any source is cloned), `source fetch`, `pull` and
+  `push`, a slot's fetch, pull, push, publish and sync-base, and cutting a
+  clone slot. Where a refresh is best effort, it is skipped with a warning
+  instead, as a refresh that fails is: a bring-up, and the cutting of a
+  worktree or jj slot, go on from the cache the source has. A stack
+  therefore comes up again without its keys.
+- **The key is angee's alone.** It is not one of the secrets the stack's
+  services and jobs are made with: `${secret.<name>}` of it does not compile,
+  it is not written to `run/secrets.env`, and with the env-file backend,
+  whose file holds every secret, the runtimes (docker compose, and
+  process-compose with the processes it starts) read `run/runtime.env`, a
+  copy of that file without the keys. When the backend's file is the stack
+  root's `.env`, which process-compose would also load by itself, the copy
+  tells it not to (`PC_DISABLE_DOTENV=1`). `required: true` on the key's
+  secret is not enforced when the stack is compiled, only where the key is
+  needed.
 - The secret is read as the stack's other secrets are (an `import: env:NAME`
   is taken from the environment). It cannot be declared `generated`, which
   the manifest refuses: a random string is no key. It holds the private key
   as its file has it, and the key must have no passphrase, since ssh runs
   without a prompt (`BatchMode`).
 
-A source without `auth` is unchanged. `auth.ssh_key_secret` is for git
-sources, and a source that has it cannot be named `known_hosts`.
-`auth.token_secret` is reserved and not read yet.
+A source without `auth` is unchanged. `auth.ssh_key_secret` is for a git
+source one of whose remotes is reached over ssh (`git@host:path` or
+`ssh://…`): anywhere else the key would never be used, and the manifest
+refuses it. Each key file is named after its source, so the name of a source
+that has a key cannot start with `known_hosts`, and two such sources cannot
+differ only in case. `auth.token_secret` is reserved and not read yet.
 
 ### Remotes
 

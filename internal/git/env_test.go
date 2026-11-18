@@ -16,7 +16,7 @@ import (
 // process or a caller gives.
 func TestClientEnvIsSetOnEveryCommand(t *testing.T) {
 	const print = `printf '%s|%s|%s' "${GIT_SSH_COMMAND-unset}" "${GIT_TERMINAL_PROMPT-unset}" "${OTHER-unset}"`
-	keyed := "ssh -o IdentityFile=/stack/run/ssh/app -o IdentitiesOnly=yes"
+	keyed := "ssh -F /dev/null -o IdentityFile=/stack/run/ssh/app -o IdentitiesOnly=yes"
 	for _, tc := range []struct {
 		name           string
 		ambient        string // the process's GIT_SSH_COMMAND; "" unsets it
@@ -77,15 +77,15 @@ func TestSSHKeyCommand(t *testing.T) {
 	}{
 		{
 			name: "plain paths", key: "/srv/omelas/run/ssh/angee-arp", knownHosts: "/srv/omelas/run/ssh/known_hosts",
-			want: "ssh -o IdentityFile=/srv/omelas/run/ssh/angee-arp -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=/srv/omelas/run/ssh/known_hosts -o StrictHostKeyChecking=accept-new",
+			want: "ssh -F /dev/null -o IdentityFile=/srv/omelas/run/ssh/angee-arp -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile=/srv/omelas/run/ssh/known_hosts ~/.ssh/known_hosts' -o StrictHostKeyChecking=accept-new",
 		},
 		{
 			name: "a root with a space", key: "/Users/me/My Stacks/omelas/run/ssh/angee-arp", knownHosts: "/Users/me/My Stacks/omelas/run/ssh/known_hosts",
-			want: `ssh -o 'IdentityFile="/Users/me/My Stacks/omelas/run/ssh/angee-arp"' -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile="/Users/me/My Stacks/omelas/run/ssh/known_hosts"' -o StrictHostKeyChecking=accept-new`,
+			want: `ssh -F /dev/null -o 'IdentityFile="/Users/me/My Stacks/omelas/run/ssh/angee-arp"' -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile="/Users/me/My Stacks/omelas/run/ssh/known_hosts" ~/.ssh/known_hosts' -o StrictHostKeyChecking=accept-new`,
 		},
 		{
 			name: "an apostrophe, a percent sign, a quote and a backslash", key: `/srv/it's/run/ssh/a%2Fb`, knownHosts: `/srv/it's/a "b"\c/known_hosts`,
-			want: `ssh -o 'IdentityFile="/srv/it'\''s/run/ssh/a%%2Fb"' -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile="/srv/it'\''s/a \"b\"\\c/known_hosts"' -o StrictHostKeyChecking=accept-new`,
+			want: `ssh -F /dev/null -o 'IdentityFile="/srv/it'\''s/run/ssh/a%%2Fb"' -o IdentitiesOnly=yes -o BatchMode=yes -o 'UserKnownHostsFile="/srv/it'\''s/a \"b\"\\c/known_hosts" ~/.ssh/known_hosts' -o StrictHostKeyChecking=accept-new`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,9 +131,10 @@ func TestSSHKeyCommandReachesSSHWhole(t *testing.T) {
 	}
 	args := strings.Split(strings.TrimSpace(string(recorded)), "\n")
 	want := []string{
+		"-F", "/dev/null",
 		"-o", `IdentityFile="` + strings.ReplaceAll(key, "%", "%%") + `"`,
 		"-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-		"-o", `UserKnownHostsFile="` + strings.ReplaceAll(knownHosts, "%", "%%") + `"`,
+		"-o", `UserKnownHostsFile="` + strings.ReplaceAll(knownHosts, "%", "%%") + `" ~/.ssh/known_hosts`,
 		"-o", "StrictHostKeyChecking=accept-new",
 	}
 	if len(args) < len(want) || strings.Join(args[:len(want)], "\n") != strings.Join(want, "\n") {
@@ -148,7 +149,11 @@ func TestSSHKeyCommandReachesSSHWhole(t *testing.T) {
 	}
 	// The real ssh, given those options and a server that only says hello:
 	// once connected it names the identity files it takes, and it must name
-	// the key file, by its real name, and no default key of the user's.
+	// the key file, by its real name, and no other: not a default key of the
+	// user's, and not one that the ssh configuration of whoever runs this
+	// test names for the host, which -F /dev/null keeps it from reading. (ssh
+	// finds that configuration through the password database, so the test
+	// cannot plant one.)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("no loopback listener: %v", err)
@@ -174,7 +179,7 @@ func TestSSHKeyCommandReachesSSHWhole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	sshArgs := append([]string{"-v", "-F", "/dev/null"}, args[:len(want)]...)
+	sshArgs := append([]string{"-v"}, args[:len(want)]...)
 	sshArgs = append(sshArgs, "-o", "ConnectTimeout=5", "-p", port, "git@127.0.0.1", "true")
 	out, _ := exec.CommandContext(ctx, realSSH, sshArgs...).CombinedOutput()
 	var identities []string
@@ -192,9 +197,19 @@ func TestSSHKeyCommandReachesSSHWhole(t *testing.T) {
 	if strings.Contains(string(out), "invalid quotes") || strings.Contains(string(out), "Bad configuration option") {
 		t.Fatalf("ssh could not read the options:\n%s", out)
 	}
-	// The known-hosts file is read back by its real name too.
-	config, err := exec.Command(realSSH, append(append([]string{"-G", "-F", "/dev/null"}, args[:len(want)]...), "example.invalid")...).Output()
-	if err != nil || !strings.Contains(string(config), "userknownhostsfile "+knownHosts+"\n") {
-		t.Fatalf("ssh -G does not report the known-hosts file %s (%v):\n%s", knownHosts, err, config)
+	// The stack's known-hosts file is read back by its real name too, first,
+	// with the user's own after it.
+	config, err := exec.Command(realSSH, append(append([]string{"-G"}, args[:len(want)]...), "example.invalid")...).Output()
+	if err != nil {
+		t.Fatalf("ssh -G: %v", err)
+	}
+	var files string
+	for _, line := range strings.Split(string(config), "\n") {
+		if rest, ok := strings.CutPrefix(line, "userknownhostsfile "); ok {
+			files = rest
+		}
+	}
+	if rest, ok := strings.CutPrefix(files, knownHosts+" "); !ok || !strings.HasSuffix(rest, "/.ssh/known_hosts") || strings.Contains(rest, "~") {
+		t.Fatalf("ssh -G reports the known-hosts files %q, want %s and then the user's own:\n%s", files, knownHosts, config)
 	}
 }

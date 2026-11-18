@@ -324,24 +324,27 @@ func TestMarkedSourceAndADeclaredSlotOfItsName(t *testing.T) {
 		f.assertNothingCut("a")
 	})
 
-	t.Run("another source that is not declared is refused too", func(t *testing.T) {
+	t.Run("a skipped optional slot takes no name", func(t *testing.T) {
 		f := newSourceSlotFixture(t)
 		f.source("x", true)
 		f.save()
 		// The declared slot is optional and its source undeclared, so it is
-		// skipped; its name is still its own.
+		// skipped: the marked source of its name gets its own slot.
 		template := f.template("src", `  sources:
     x:
       source: elsewhere
       mode: worktree
       ref: main
+      subpath: elsewhere
       optional: true
 `+sourceSlotPrototype)
-		_, err := f.platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: template, Name: "a"})
-		if err == nil || !strings.Contains(err.Error(), `the template's slot "x" checks out source "elsewhere"`) {
+		if _, err := f.platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{Template: template, Name: "a"}); err != nil {
 			t.Fatalf("WorkspaceCreate() error = %v", err)
 		}
-		f.assertNothingCut("a")
+		got := f.slots("a")
+		if want := (manifest.WorkspaceSource{Source: "x", Mode: "worktree", Branch: "dev/a", Subpath: "x"}); len(got) != 1 || got["x"] != want {
+			t.Fatalf("recorded slots = %+v, want the marked source's own slot %+v", got, want)
+		}
 	})
 
 	t.Run("another slot at its path is refused", func(t *testing.T) {

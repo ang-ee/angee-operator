@@ -358,6 +358,23 @@ func IsRelativeURL(url string) bool {
 	return !scpLike
 }
 
+// sshSchemes are the URL schemes git reaches over ssh.
+var sshSchemes = map[string]bool{"ssh": true, "git+ssh": true, "ssh+git": true}
+
+// IsSSHScheme reports whether git reaches a URL of that scheme over ssh.
+func IsSSHScheme(scheme string) bool {
+	return sshSchemes[strings.ToLower(scheme)]
+}
+
+// IsSSHURL reports whether git reaches the remote URL over ssh: an ssh URL
+// (`ssh://…`), or the scp-like `[user@]host:path`.
+func IsSSHURL(url string) bool {
+	if scheme, _, ok := strings.Cut(url, "://"); ok {
+		return IsSSHScheme(scheme)
+	}
+	return url != "" && !filepath.IsAbs(url) && !IsRelativeURL(url)
+}
+
 // remoteNamePattern is a conservative subset of git's remote names: it keeps
 // every name usable as a config section and a ref path component.
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -376,7 +393,9 @@ func checkRemoteURL(url string) error {
 }
 
 // ValidateSource checks a source's remotes and its auth:
-//   - `auth.ssh_key_secret` is set on a git source only, and is a secret name;
+//   - `auth.ssh_key_secret` is set on a git source only, one of whose remotes
+//     is reached over ssh, and is a secret name; the source's name can name
+//     its key file;
 //   - `repo:` and `remotes:` are not both set;
 //   - every URL, `repo:` included, has no control character or surrounding
 //     spaces;
@@ -400,9 +419,18 @@ func ValidateSource(name string, s Source) error {
 			return fmt.Errorf("source %q: auth.ssh_key_secret %q is not a secret name (letters, digits, '.', '_' and '-')", name, key)
 		}
 		// The key is kept in a file named after the source, beside the
-		// known-hosts file, on a file system that may fold case.
-		if name == "." || name == ".." || strings.EqualFold(name, SourceKnownHostsName) {
-			return fmt.Errorf("source %q: a source with auth.ssh_key_secret cannot have this name, which its key file would take; rename the source", name)
+		// known-hosts file and what ssh keeps under its name, on a file
+		// system that may fold case.
+		if name == "." || name == ".." || strings.HasPrefix(strings.ToLower(name), SourceKnownHostsName) {
+			return fmt.Errorf("source %q: a source with auth.ssh_key_secret has its key file named after it, so its name cannot be \".\" or \"..\" or start with %q; rename the source", name, SourceKnownHostsName)
+		}
+		// ssh reads the key only when git reaches a remote over ssh.
+		overSSH := false
+		for _, remote := range s.DeclaredRemotes() {
+			overSSH = overSSH || IsSSHURL(remote.URL)
+		}
+		if !overSSH {
+			return fmt.Errorf("source %q: auth.ssh_key_secret is set, but none of its remotes is reached over ssh (git@host:path or ssh://…), so the key would never be used", name)
 		}
 	}
 	if err := checkRemoteURL(s.Repo); err != nil {
@@ -493,7 +521,8 @@ var SecretNameAlphaNum = regexp.MustCompile(`[A-Za-z0-9]`)
 
 // SourceKnownHostsName is the file, beside the key files of the sources that
 // name an SSH key, in which their connections record host keys. Each key
-// file is named after its source, so no such source has this name.
+// file is named after its source, so no such source has a name that starts
+// with it, whatever its case.
 const SourceKnownHostsName = "known_hosts"
 
 type SourceGit struct {
@@ -1087,15 +1116,25 @@ func (s *Stack) ValidateExtended() error {
 			seenHolds[held] = true
 		}
 	}
+	keyed := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(s.Sources)) {
 		if err := ValidateSource(name, s.Sources[name]); err != nil {
 			return err
 		}
-		// A generated secret is a random string, which is no key: wherever
-		// the stack's secrets are resolved it would be made and kept as one.
-		if key := s.Sources[name].Auth.SSHKeySecret; key != "" && s.Secrets[key].Generated {
-			return fmt.Errorf("secret %q is the SSH key of source %q (auth.ssh_key_secret), so it cannot be generated: set it to the private key, and declare it required", key, name)
+		key := s.Sources[name].Auth.SSHKeySecret
+		if key == "" {
+			continue
 		}
+		// A generated secret is a random string, which is no key.
+		if s.Secrets[key].Generated {
+			return fmt.Errorf("secret %q is the SSH key of source %q (auth.ssh_key_secret), so it cannot be generated: set it to the private key", key, name)
+		}
+		// Each key is kept in a file named after its source, and a file
+		// system that folds case would give two such sources one file.
+		if other, taken := keyed[strings.ToLower(name)]; taken {
+			return fmt.Errorf("sources %q and %q each name an SSH key (auth.ssh_key_secret) and differ only in case, so their key files would be one; rename one of them", other, name)
+		}
+		keyed[strings.ToLower(name)] = name
 	}
 	for name, workspace := range s.Workspaces {
 		for slot, source := range workspace.Sources {

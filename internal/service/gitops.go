@@ -64,7 +64,7 @@ func (p *Platform) GitOpsTopologyWithCommits(ctx context.Context, withCommits in
 			}
 		}
 		if withCommits > 0 && source.Kind == "git" && state.Exists {
-			commits, cerr := p.sourceCommits(ctx, p.sourceGitClient(name, source), state.Path, withCommits)
+			commits, cerr := p.sourceCommits(ctx, state.Path, withCommits)
 			switch {
 			case cerr == nil:
 				state.Commits = commits

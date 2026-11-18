@@ -201,9 +201,6 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws, stack.EffectiveSourceMode(ws)); err != nil {
 		return err
 	}
-	if err := p.ensureSourceKey(ctx, stack, ws.Source); err != nil {
-		return err
-	}
 	cleanup := &workspaceSourceCleanup{}
 	defer func() {
 		if retErr == nil {
@@ -224,7 +221,7 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 			return err
 		}
 	}
-	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false, jj); err != nil {
+	if err := p.materializeWorkspaceSlot(ctx, cleanup, stack, source, ws, dest, false, jj); err != nil {
 		return err
 	}
 	// The verbs refuse a slot off its branch, so do not leave one behind.

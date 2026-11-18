@@ -369,7 +369,7 @@ choices: [one, 2, true]
 	}
 	for body, wantErr := range map[string]string{
 		"config: {key: value}\n":      "key config: only scalars and lists are supported",
-		"config: [{[a, b]: value}]\n": "key config: a mapping in a list takes plain keys only",
+		"config: [{[a, b]: value}]\n": "key config: holds a mapping whose keys are not plain scalars",
 		"config: [{ratio: .nan}]\n":   "key config: json: unsupported value: NaN",
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

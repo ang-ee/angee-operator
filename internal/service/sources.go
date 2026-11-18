@@ -22,18 +22,27 @@ import (
 )
 
 // materializeReferencedSources brings the cache of every source of stack up
-// to date (materializeSource). The key of every source that names one is
-// written first (ensureSourceKeys), so a key that is not set refuses the
-// bring-up before any source is cloned.
+// to date (materializeSource), as a bring-up does. The key of every source
+// that names one is seen to first (prepareSourceKey), so a key that is not
+// set refuses the bring-up before any source is cloned. A source whose cache
+// exists and whose key cannot be had is left as it is, with a warning: a
+// stack comes up again from the caches it has.
 func (p *Platform) materializeReferencedSources(ctx context.Context, stack *manifest.Stack) error {
 	seen, err := referencedSourceNames(stack)
 	if err != nil {
 		return err
 	}
-	if err := p.ensureSourceKeys(ctx, stack); err != nil {
-		return err
+	p.pruneSourceKeys(ctx, stack)
+	reachable := map[string]bool{}
+	for _, name := range seen {
+		if reachable[name], err = p.prepareSourceKey(ctx, stack, name, true); err != nil {
+			return err
+		}
 	}
 	for _, name := range seen {
+		if !reachable[name] {
+			continue
+		}
 		if err := p.materializeSource(ctx, name, stack.Sources[name], true); err != nil {
 			return err
 		}
@@ -636,7 +645,7 @@ func (p *Platform) reportCloneSlotRemotes(ctx context.Context, workspace, slot, 
 		return
 	}
 	holder := cloneSlotRemotes(workspace, slot, wsSource.Source, path)
-	if err := syncSourceRemotes(ctx, p.sourceGitClient(wsSource.Source, source), holder, path, source, remoteSyncReport); err != nil {
+	if err := syncSourceRemotes(ctx, p.gitClient(), holder, path, source, remoteSyncReport); err != nil {
 		logctx.From(ctx).Warn(fmt.Sprintf("could not check the remotes of %s: %v", holder.label, err))
 	}
 }
@@ -887,7 +896,7 @@ func (p *Platform) sourceState(ctx context.Context, stack *manifest.Stack, name 
 		// A cache is not a slot, but the git driver reads any git checkout, so
 		// the cache and its slots share one status rule, and one mapping to
 		// the API (setSlotStatus).
-		read, err := gitdriver.New(p.sourceGitClient(name, source)).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef, BaseRemote: sourceBaseRemote(source)})
+		read, err := gitdriver.New(p.gitClient()).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef, BaseRemote: sourceBaseRemote(source)})
 		if err != nil {
 			return state, err
 		}
@@ -901,7 +910,7 @@ func (p *Platform) sourceState(ctx context.Context, stack *manifest.Stack, name 
 	if !info.IsDir() {
 		return state, nil
 	}
-	workspaces, err := p.sourceJJWorkspaces(ctx, stack, path, p.sourceSSHCommand(name, source))
+	workspaces, err := p.sourceJJWorkspaces(ctx, stack, path)
 	switch {
 	case err == nil:
 		state.Workspaces = workspaces
