@@ -1536,7 +1536,7 @@ func (b Backend) streamProcessLogs(ctx context.Context, req runtime.LogsRequest,
 	if err != nil {
 		return nil, err
 	}
-	env, err := runtime.ReadEnvFile(req.EnvFile)
+	env, err := childEnv(req.Root, req.EnvFile)
 	if err != nil {
 		return nil, err
 	}
@@ -1643,6 +1643,26 @@ func procHealth(entry processListEntry) string {
 	return ""
 }
 
+// childEnv is the env file's entries for a process-compose command run in
+// root. process-compose also loads `.env` from its working directory on its
+// own. An env file the operator writes under run/ (the copy of the env file
+// without the stack's source keys, or OpenBao's secrets.env) is the whole
+// environment, so for one of those that load is switched off: a copy that
+// could not be written then leaves the processes without its entries instead
+// of handing them the root `.env`, source keys included.
+func childEnv(root, envFile string) ([]string, error) {
+	env, err := runtime.ReadEnvFile(envFile)
+	if err != nil {
+		return nil, err
+	}
+	if envFile != "" {
+		if rel, relErr := filepath.Rel(filepath.Join(root, "run"), envFile); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			env = append(env, "PC_DISABLE_DOTENV=1")
+		}
+	}
+	return env, nil
+}
+
 func (b Backend) run(ctx context.Context, root string, envFile string, args ...string) ([]byte, error) {
 	if b.Runner == nil {
 		b.Runner = ExecRunner{}
@@ -1655,7 +1675,7 @@ func (b Backend) run(ctx context.Context, root string, envFile string, args ...s
 			return nil, err
 		}
 	}
-	env, err := runtime.ReadEnvFile(envFile)
+	env, err := childEnv(root, envFile)
 	if err != nil {
 		return nil, err
 	}
@@ -1675,7 +1695,7 @@ func (b Backend) runForeground(ctx context.Context, root string, envFile string,
 	if err != nil {
 		return err
 	}
-	env, err := runtime.ReadEnvFile(envFile)
+	env, err := childEnv(root, envFile)
 	if err != nil {
 		return err
 	}

@@ -579,13 +579,20 @@ character the shell or ssh would read is quoted for both.
   it is not written to `run/secrets.env`, and with the env-file backend,
   whose file holds every secret, the runtimes (docker compose, and
   process-compose with the processes it starts) read `run/runtime.env`, a
-  copy of that file without the keys. When the backend's file is the stack
-  root's `.env`, which process-compose would also load by itself, the copy
-  tells it not to (`PC_DISABLE_DOTENV=1`). `required: true` on the key's
-  secret is not enforced when the stack is compiled, only where the key is
-  needed.
-- The secret is read as the stack's other secrets are (an `import: env:NAME`
-  is taken from the environment). It cannot be declared `generated`, which
+  copy of that file without the keys. process-compose, which would also load
+  the stack root's `.env` by itself, is told not to for every env file
+  angee writes under `run/` (`PC_DISABLE_DOTENV=1`), so a copy that cannot be
+  written leaves its processes without secrets rather than with the keys.
+  `required: true` on the key's secret is not enforced when the stack is
+  compiled, only where the key is needed.
+- Only a key named by `ssh_key_secret` is withheld. When a key is rotated to
+  another secret, or its source loses `auth`, delete the old secret
+  (`angee secret delete <name>`); otherwise it is an ordinary secret again
+  and reaches the runtimes.
+- The secret is read as the stack's other secrets are. Prefer
+  `angee secret set <name> --stdin`: an `import: env:NAME` works, but the
+  variable then also sits in the environment of the process that runs
+  angee, which its runtimes inherit. It cannot be declared `generated`, which
   the manifest refuses: a random string is no key. It holds the private key
   as its file has it, and the key must have no passphrase, since ssh runs
   without a prompt (`BatchMode`).

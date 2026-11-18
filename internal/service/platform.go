@@ -366,9 +366,11 @@ func (p *Platform) resolveRuntimeSecrets(ctx context.Context, stack *manifest.St
 // (runtimeEnvCopy), written again whenever the file has changed.
 //
 // process-compose also loads `.env` from the directory it runs in, the stack
-// root, on its own. When that is the backend's file, the copy tells it not
-// to (PC_DISABLE_DOTENV): its processes then get the copy's entries, which
-// are the file's but for the keys, from the supervisor's environment alone.
+// root, on its own. The process-compose backend switches that off for any
+// env file under run/ (proccompose.childEnv), and the copy says so itself
+// (PC_DISABLE_DOTENV): its processes then get the copy's entries, which are
+// the file's but for the keys, from the supervisor's environment alone, and
+// a copy that could not be written leaves them without those entries.
 func (p *Platform) runtimeEnvFile(stack *manifest.Stack) string {
 	if stack.SecretsBackend.Type == "openbao" {
 		return filepath.Join(p.root, "run", "secrets.env")
