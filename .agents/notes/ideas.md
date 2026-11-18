@@ -260,6 +260,13 @@ loopback-binding check on `auth.mode: host` either.
 **Decision needed.** Implement per Phase 5a. Without it, no private
 repo can be a source — which is most real workspaces.
 
+**Since.** `auth.ssh_key_secret` is read: the key is written to
+`<root>/run/ssh/<source>` (0600) and pinned with `GIT_SSH_COMMAND` on every
+git and jj command of the source (`internal/service/source_auth.go`,
+`git.SSHKeyCommand`; docs/guide/manifest.md, "A key of its own").
+`auth.mode` was removed unread, so there is no `host` mode to bind-check;
+`auth.token_secret` is still declared and unread.
+
 ### 2.14. Push pre-flight checks
 
 **PLAN.md Phase 5b §2.** Refuse push on dirty/untracked worktrees;

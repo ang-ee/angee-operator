@@ -406,7 +406,7 @@ func (p *Platform) checkJJPrimary(sourceName string, source manifest.Source, pri
 // primary's lock (plan phase 6 step 3). populated reports that dest holds a
 // non-empty directory, which only --sync lets through. It reports kept when
 // the slot was there already and is left as it is.
-func (p *Platform) materializeJJSlot(ctx context.Context, destGuard *copierx.GuardedPath, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, target jjSlotTarget, populated, sync bool) (vcs.Driver, vcs.Slot, bool, error) {
+func (p *Platform) materializeJJSlot(ctx context.Context, stack *manifest.Stack, destGuard *copierx.GuardedPath, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, target jjSlotTarget, populated, sync bool) (vcs.Driver, vcs.Slot, bool, error) {
 	slot := p.workspaceLifecycleSlot(dest, source, ws)
 	slot.Name = target.name
 	driver := p.slotDriver(slot)
@@ -432,7 +432,7 @@ func (p *Platform) materializeJJSlot(ctx context.Context, destGuard *copierx.Gua
 	kept := false
 	err = withPrimaryLock(ctx, slot.Primary, func() error {
 		var err error
-		kept, err = p.addJJSlot(ctx, driver, slot, destGuard, sourceName, source, target.recorded, populated, sync)
+		kept, err = p.addJJSlot(ctx, stack, driver, slot, destGuard, sourceName, source, target.recorded, populated, sync)
 		return err
 	})
 	return driver, slot, kept, err
@@ -452,14 +452,20 @@ func (p *Platform) materializeJJSlot(ctx context.Context, destGuard *copierx.Gua
 //     (Elsewhere); otherwise the name is another's, and refused (D13);
 //   - the path holds anything else: refused;
 //   - otherwise the slot is added.
-func (p *Platform) addJJSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath, sourceName string, source manifest.Source, recorded, populated, sync bool) (bool, error) {
+func (p *Platform) addJJSlot(ctx context.Context, stack *manifest.Stack, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath, sourceName string, source manifest.Source, recorded, populated, sync bool) (bool, error) {
 	jj, ok := driver.(jjLifecycle)
 	if !ok {
 		return false, fmt.Errorf("the driver of jj slot %s cannot make jj workspaces", slot.Path)
 	}
 	if source.Kind == "git" {
-		if err := p.materializeSourceLocked(ctx, sourceName, source, true); err != nil {
+		reachable, err := p.prepareSourceKey(ctx, stack, sourceName, true)
+		if err != nil {
 			return false, err
+		}
+		if reachable {
+			if err := p.materializeSourceLocked(ctx, sourceName, source, true); err != nil {
+				return false, err
+			}
 		}
 		if err := jj.EnsurePrimary(ctx, slot.Primary); err != nil {
 			return false, err

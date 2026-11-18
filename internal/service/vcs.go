@@ -12,21 +12,24 @@ import (
 var _ vcs.Dest = (*copierx.GuardedPath)(nil)
 
 // slotDriver returns the driver for slot: the jj driver for a jj slot, the
-// git driver for every other.
+// git driver for every other. Its git and jj commands reach a remote with
+// slot.SSHCommand, the one of the slot's source (sourceSSHCommand).
 func (p *Platform) slotDriver(slot vcs.Slot) vcs.Driver {
 	if p.slotDrivers != nil {
 		return p.slotDrivers(slot)
 	}
+	client := p.gitClient()
+	client.Env = sshCommandEnv(slot.SSHCommand)
 	if slot.Mode == vcs.ModeJJ {
-		return jjdriver.New(p.gitClient())
+		return jjdriver.New(client)
 	}
-	return gitdriver.New(p.gitClient())
+	return gitdriver.New(client)
 }
 
 // workspaceSlotDriver returns the driver for the workspace slot checked out at
 // path, with the slot it is to be handed.
 func (p *Platform) workspaceSlotDriver(path string, source manifest.Source, wsSource manifest.WorkspaceSource) (vcs.Driver, vcs.Slot) {
-	slot := workspaceVCSSlot(path, source, wsSource)
+	slot := p.workspaceVCSSlot(path, source, wsSource)
 	return p.slotDriver(slot), slot
 }
 
@@ -35,9 +38,10 @@ func (p *Platform) workspaceSlotDriver(path string, source manifest.Source, wsSo
 // worktree slot that names a branch must be on it
 // (workspaceSourceRequiresBranch). A jj slot's mode selects the jj driver,
 // and its branch is the bookmark the jj driver counts its upstream and its
-// current ref by.
-func workspaceVCSSlot(path string, source manifest.Source, wsSource manifest.WorkspaceSource) vcs.Slot {
-	slot := vcs.Slot{Path: path, BaseRef: workspaceSourceBaseRef(source, wsSource), BaseRemote: sourceBaseRemote(source)}
+// current ref by. Its commands reach a remote as its source's do
+// (sourceSSHCommand).
+func (p *Platform) workspaceVCSSlot(path string, source manifest.Source, wsSource manifest.WorkspaceSource) vcs.Slot {
+	slot := vcs.Slot{Path: path, BaseRef: workspaceSourceBaseRef(source, wsSource), BaseRemote: sourceBaseRemote(source), SSHCommand: p.sourceSSHCommand(wsSource.Source, source)}
 	switch {
 	case wsSource.Mode == manifest.WorkspaceSourceModeJJ:
 		slot.Mode = vcs.ModeJJ
@@ -56,7 +60,7 @@ func workspaceVCSSlot(path string, source manifest.Source, wsSource manifest.Wor
 // cache; any other git slot, an omitted mode included, is a clone from the
 // source's clone remote.
 func (p *Platform) workspaceLifecycleSlot(path string, source manifest.Source, wsSource manifest.WorkspaceSource) vcs.Slot {
-	slot := workspaceVCSSlot(path, source, wsSource)
+	slot := p.workspaceVCSSlot(path, source, wsSource)
 	switch wsSource.Mode {
 	case manifest.WorkspaceSourceModeJJ:
 		slot.Primary = p.sourcePath(wsSource.Source, source)

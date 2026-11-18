@@ -38,6 +38,9 @@ const (
 	CauseBranchMismatch     = "branch_mismatch"
 	CauseDetachedHead       = "detached_head"
 	CauseSourceCacheMissing = "source_cache_missing"
+	// CauseSourceKeyMissing: a source names the secret that holds its SSH key
+	// (auth.ssh_key_secret), and the secret is not set.
+	CauseSourceKeyMissing   = "source_key_missing"
 	CauseStackRootExists    = "stack_root_exists"
 	CauseTemplateTooNew     = "template_too_new"
 	CauseGitUnavailable     = "git_unavailable"

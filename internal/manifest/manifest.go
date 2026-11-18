@@ -190,14 +190,19 @@ type Source struct {
 	// PushDefault names the declared remote a push goes to when nothing more
 	// specific (a branch's pushRemote) says otherwise. It becomes the cache's
 	// remote.pushDefault.
-	PushDefault string     `yaml:"push_default,omitempty" json:"push_default,omitempty"`
-	URL         string     `yaml:"url,omitempty" json:"url,omitempty"`
-	Path        string     `yaml:"path,omitempty" json:"path,omitempty"`
-	DefaultRef  string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
-	CachePath   string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
-	Auth        SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
-	Git         SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
-	Checksum    string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+	PushDefault string `yaml:"push_default,omitempty" json:"push_default,omitempty"`
+	URL         string `yaml:"url,omitempty" json:"url,omitempty"`
+	Path        string `yaml:"path,omitempty" json:"path,omitempty"`
+	DefaultRef  string `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
+	CachePath   string `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
+	// Slot marks a source that every workspace whose template declares
+	// `_angee.source_slot` checks out: such a workspace gets one slot per
+	// marked source, named after the source and at that subpath, beside its
+	// template's own slots.
+	Slot     bool       `yaml:"slot,omitempty" json:"slot,omitempty"`
+	Auth     SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Git      SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
+	Checksum string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
 }
 
 // DefaultRemote is the remote a source's `repo:` declares.
@@ -353,6 +358,23 @@ func IsRelativeURL(url string) bool {
 	return !scpLike
 }
 
+// sshSchemes are the URL schemes git reaches over ssh.
+var sshSchemes = map[string]bool{"ssh": true, "git+ssh": true, "ssh+git": true}
+
+// IsSSHScheme reports whether git reaches a URL of that scheme over ssh.
+func IsSSHScheme(scheme string) bool {
+	return sshSchemes[strings.ToLower(scheme)]
+}
+
+// IsSSHURL reports whether git reaches the remote URL over ssh: an ssh URL
+// (`ssh://…`), or the scp-like `[user@]host:path`.
+func IsSSHURL(url string) bool {
+	if scheme, _, ok := strings.Cut(url, "://"); ok {
+		return IsSSHScheme(scheme)
+	}
+	return url != "" && !filepath.IsAbs(url) && !IsRelativeURL(url)
+}
+
 // remoteNamePattern is a conservative subset of git's remote names: it keeps
 // every name usable as a config section and a ref path component.
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -370,7 +392,10 @@ func checkRemoteURL(url string) error {
 	return nil
 }
 
-// ValidateSource checks a source's remotes:
+// ValidateSource checks a source's remotes and its auth:
+//   - `auth.ssh_key_secret` is set on a git source only, one of whose remotes
+//     is reached over ssh, and is a secret name; the source's name can name
+//     its key file;
 //   - `repo:` and `remotes:` are not both set;
 //   - every URL, `repo:` included, has no control character or surrounding
 //     spaces;
@@ -385,6 +410,28 @@ func ValidateSource(name string, s Source) error {
 	}
 	if (len(s.Remotes) > 0 || s.PushDefault != "") && s.Kind != "git" {
 		return fmt.Errorf("source %q: remotes and push_default require kind: git", name)
+	}
+	if key := s.Auth.SSHKeySecret; key != "" {
+		if s.Kind != "git" {
+			return fmt.Errorf("source %q: auth.ssh_key_secret requires kind: git", name)
+		}
+		if !SecretNamePattern.MatchString(key) || !SecretNameAlphaNum.MatchString(key) {
+			return fmt.Errorf("source %q: auth.ssh_key_secret %q is not a secret name (letters, digits, '.', '_' and '-')", name, key)
+		}
+		// The key is kept in a file named after the source, beside the
+		// known-hosts file and what ssh keeps under its name, on a file
+		// system that may fold case.
+		if name == "." || name == ".." || strings.HasPrefix(strings.ToLower(name), SourceKnownHostsName) {
+			return fmt.Errorf("source %q: a source with auth.ssh_key_secret has its key file named after it, so its name cannot be \".\" or \"..\" or start with %q; rename the source", name, SourceKnownHostsName)
+		}
+		// ssh reads the key only when git reaches a remote over ssh.
+		overSSH := false
+		for _, remote := range s.DeclaredRemotes() {
+			overSSH = overSSH || IsSSHURL(remote.URL)
+		}
+		if !overSSH {
+			return fmt.Errorf("source %q: auth.ssh_key_secret is set, but none of its remotes is reached over ssh (git@host:path or ssh://…), so the key would never be used", name)
+		}
 	}
 	if err := checkRemoteURL(s.Repo); err != nil {
 		return fmt.Errorf("source %q: repo %w", name, err)
@@ -444,11 +491,39 @@ func ValidateSource(name string, s Source) error {
 	return nil
 }
 
+// SourceAuth is how the operator authenticates to a git source's remotes.
+// Without it git and jj use what the operator's environment gives them: the
+// user's ssh agent, keys and credential helpers.
 type SourceAuth struct {
-	Mode         string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// SSHKeySecret names the stack secret that holds the source's SSH private
+	// key, such as a deploy key. Every git and jj command the operator runs
+	// for the source, on its cache and on the workspace slots cut from it,
+	// then reaches its remotes with that key and no other.
 	SSHKeySecret string `yaml:"ssh_key_secret,omitempty" json:"ssh_key_secret,omitempty"`
-	TokenSecret  string `yaml:"token_secret,omitempty" json:"token_secret,omitempty"`
+	// TokenSecret is reserved: it is declared, and nothing reads it yet.
+	TokenSecret string `yaml:"token_secret,omitempty" json:"token_secret,omitempty"`
 }
+
+// SecretNamePattern bounds the names a stack secret can have, as the
+// operator's secrets API accepts them and as a source names its key
+// (auth.ssh_key_secret). Same charset env-file's validateKey accepts;
+// rejects path-traversal, shell metacharacters, and anything OpenBao would
+// surprise on. Length cap (256) keeps the request body bounded.
+var SecretNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,256}$`)
+
+// SecretNameAlphaNum enforces "at least one alphanumeric character"
+// independently of SecretNamePattern. Without this, names like `..`,
+// `--`, `_`, etc. all map through substitute.SecretEnvName (which
+// rewrites non-alphanum to `_` and trims trailing underscores) to the
+// same storage key `ANGEE_SECRET`, silently colliding distinct
+// manifest entries on env-file backends.
+var SecretNameAlphaNum = regexp.MustCompile(`[A-Za-z0-9]`)
+
+// SourceKnownHostsName is the file, beside the key files of the sources that
+// name an SSH key, in which their connections record host keys. Each key
+// file is named after its source, so no such source has a name that starts
+// with it, whatever its case.
+const SourceKnownHostsName = "known_hosts"
 
 type SourceGit struct {
 	UserName  string `yaml:"user_name,omitempty" json:"user_name,omitempty"`
@@ -1041,10 +1116,25 @@ func (s *Stack) ValidateExtended() error {
 			seenHolds[held] = true
 		}
 	}
+	keyed := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(s.Sources)) {
 		if err := ValidateSource(name, s.Sources[name]); err != nil {
 			return err
 		}
+		key := s.Sources[name].Auth.SSHKeySecret
+		if key == "" {
+			continue
+		}
+		// A generated secret is a random string, which is no key.
+		if s.Secrets[key].Generated {
+			return fmt.Errorf("secret %q is the SSH key of source %q (auth.ssh_key_secret), so it cannot be generated: set it to the private key", key, name)
+		}
+		// Each key is kept in a file named after its source, and a file
+		// system that folds case would give two such sources one file.
+		if other, taken := keyed[strings.ToLower(name)]; taken {
+			return fmt.Errorf("sources %q and %q each name an SSH key (auth.ssh_key_secret) and differ only in case, so their key files would be one; rename one of them", other, name)
+		}
+		keyed[strings.ToLower(name)] = name
 	}
 	for name, workspace := range s.Workspaces {
 		for slot, source := range workspace.Sources {

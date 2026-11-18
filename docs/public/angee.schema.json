@@ -512,6 +512,9 @@
         "cache_path": {
           "type": "string"
         },
+        "slot": {
+          "type": "boolean"
+        },
         "auth": {
           "$ref": "#/$defs/SourceAuth"
         },
@@ -530,9 +533,6 @@
     },
     "SourceAuth": {
       "properties": {
-        "mode": {
-          "type": "string"
-        },
         "ssh_key_secret": {
           "type": "string"
         },

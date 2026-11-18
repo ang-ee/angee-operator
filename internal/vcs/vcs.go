@@ -54,6 +54,11 @@ type Slot struct {
 	// BaseRemote is the remote BaseRef comes from: the source's clone remote.
 	// Empty lets the driver pick (git: origin).
 	BaseRemote string
+	// SSHCommand is the GIT_SSH_COMMAND every git and jj command on the
+	// checkout runs with, when the slot's source names its own SSH key
+	// (git.SSHKeyCommand). Empty leaves ssh to the operator's environment.
+	// The service builds the slot's driver with it (git.Client.Env).
+	SSHCommand string
 }
 
 // Dest is the capability a driver makes every write to a slot's path

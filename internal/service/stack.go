@@ -42,6 +42,9 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err != nil {
 		return StackInitResult{}, err
 	}
+	if err := canonicalizeRepositoryInputs(template, templatePath, mergedInputs, false); err != nil {
+		return StackInitResult{}, err
+	}
 	preparedRoot := expectedStackRoot(targetPath, mergedInputs)
 	if !force {
 		nonEmpty, err := pathExistsNonEmpty(preparedRoot)

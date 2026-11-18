@@ -221,7 +221,7 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 			return err
 		}
 	}
-	if err := p.materializeWorkspaceSlot(ctx, cleanup, source, ws, dest, false, jj); err != nil {
+	if err := p.materializeWorkspaceSlot(ctx, cleanup, stack, source, ws, dest, false, jj); err != nil {
 		return err
 	}
 	// The verbs refuse a slot off its branch, so do not leave one behind.

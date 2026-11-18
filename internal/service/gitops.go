@@ -194,6 +194,9 @@ func (p *Platform) WorkspaceSourceFetch(ctx context.Context, workspaceName, slot
 	if err := p.requireJJSlot(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
+	if err := p.ensureSourceKey(ctx, stack, wsSource.Source); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
 	step := gitStep{action: "fetching", object: fmt.Sprintf("source %q", wsSource.Source), remote: driver.FetchURL(ctx, target), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
 	if err := driver.Fetch(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
@@ -223,6 +226,9 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 		}
 		return api.WorkspaceSourceStatus{}, err
 	}
+	if err := p.ensureSourceKey(ctx, stack, wsSource.Source); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
 	step := gitStep{action: "pulling", object: fmt.Sprintf("source slot %q", slot), remote: driver.FetchURL(ctx, target), cause: CauseFetchFailed, slot: slot, source: wsSource.Source}
 	if err := driver.Pull(ctx, target); err != nil {
 		return api.WorkspaceSourceStatus{}, gitFailure(err, step)
@@ -249,6 +255,9 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 		return api.WorkspaceSourceStatus{}, err
 	}
 	if err := requireSlotReady(ctx, driver, target, vcs.VerbPush, workspaceName, slot, wsSource.Source); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
+	if err := p.ensureSourceKey(ctx, stack, wsSource.Source); err != nil {
 		return api.WorkspaceSourceStatus{}, err
 	}
 	plan, err := planWorkspaceGitPush(ctx, driver, target, source, workspaceName, slot, wsSource, ref)

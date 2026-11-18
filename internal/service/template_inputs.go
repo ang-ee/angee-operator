@@ -16,7 +16,14 @@ func (p *Platform) StackTemplateInputs(ctx context.Context) (api.TemplateInputsR
 	if err != nil {
 		return api.TemplateInputsResponse{}, err
 	}
-	return describeRecordedTemplateInputs("stack", origin.Ref, origin.Path, origin.Answers)
+	// A recorded repository list is shown in the canonical form an update
+	// replays it in; one that no longer reads is shown as recorded, to be
+	// replaced.
+	answers, err := recordedRepositoryLists(origin.Ref, origin.Path, origin.Answers, nil)
+	if err != nil {
+		answers = origin.Answers
+	}
+	return describeRecordedTemplateInputs("stack", origin.Ref, origin.Path, answers)
 }
 
 // WorkspaceTemplateInputs returns inherited stack defaults overlaid with the

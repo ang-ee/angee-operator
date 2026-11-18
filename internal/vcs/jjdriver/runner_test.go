@@ -74,6 +74,59 @@ func TestRunnerRunsJJInTheSlot(t *testing.T) {
 	}
 }
 
+// A driver's jj runs get its git client's Env: the git that jj runs to fetch
+// and push reads GIT_SSH_COMMAND from jj's environment, so a slot of a source
+// with its own SSH key reaches the remote with that key, whatever ssh command
+// the operator's environment carries. The identity given to a run that may
+// record commits comes with it, not instead of it.
+func TestDriverRunsJJWithItsClientsEnv(t *testing.T) {
+	home := fakeTools(t, map[string]string{"jj-version": "jj 0.0.0\n"})
+	t.Setenv("GIT_SSH_COMMAND", "ssh -F /home/me/.ssh/config")
+	keyed := git.SSHKeyCommand("/stack/run/ssh/app", "/stack/run/ssh/known_hosts")
+	client := git.New()
+	client.NonInteractive = true
+	client.Env = []string{"GIT_SSH_COMMAND=" + keyed}
+	slot := t.TempDir()
+	ctx := context.Background()
+	keyedDriver := New(client)
+	if err := keyedDriver.Fetch(ctx, vcs.Slot{Path: slot}); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if _, err := keyedDriver.jj.store(ctx, slot, "workspace", "list"); err != nil {
+		t.Fatalf("store() error = %v", err)
+	}
+	if _, err := keyedDriver.git.Run(ctx, slot, "status"); err != nil {
+		t.Fatalf("git Run() error = %v", err)
+	}
+	runs := fakeRuns(t, home)
+	if len(runs) < 3 {
+		t.Fatalf("the fake tools ran %d times, want jj twice and git once", len(runs))
+	}
+	for i, run := range runs {
+		var ssh []string
+		for _, entry := range run.Env {
+			if strings.HasPrefix(entry, "GIT_SSH_COMMAND=") {
+				ssh = append(ssh, strings.TrimPrefix(entry, "GIT_SSH_COMMAND="))
+			}
+		}
+		if !slices.Equal(ssh, []string{keyed}) {
+			t.Errorf("run %d (%s %q) has GIT_SSH_COMMAND %q, want the client's alone", i, run.Tool, run.Args, ssh)
+		}
+		if run.Tool == "jj" && !slices.Contains(run.Env, "JJ_EDITOR=true") {
+			t.Errorf("run %d (jj %q) lost the environment every jj run gets", i, run.Args)
+		}
+	}
+
+	// A driver whose client has no Env keeps the operator's own ssh command.
+	if err := New(git.New()).Fetch(ctx, vcs.Slot{Path: slot}); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	runs = fakeRuns(t, home)
+	if last := runs[len(runs)-1]; last.Tool != "jj" || !slices.Contains(last.Env, "GIT_SSH_COMMAND=ssh -F /home/me/.ssh/config") {
+		t.Fatalf("an unkeyed fetch ran %s with %q, want the operator's ssh command", last.Tool, last.Env)
+	}
+}
+
 // TestRunnerRefusesAnEmptySlot never runs jj in the process's working
 // directory: a slot command with no slot, a read without its snapshot's
 // operation, and a command with no directory are refused before jj runs.

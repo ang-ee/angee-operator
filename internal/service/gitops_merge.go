@@ -110,7 +110,7 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		return api.GitOpResult{}, err
 	}
 	defer release()
-	_, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "publish", workspace, slot)
+	stack, wsSource, source, path, err := p.workspaceSourceTarget(ctx, "publish", workspace, slot)
 	if err != nil {
 		return api.GitOpResult{}, err
 	}
@@ -119,6 +119,9 @@ func (p *Platform) WorkspaceSourcePublish(ctx context.Context, workspace, slot, 
 		return api.GitOpResult{}, err
 	}
 	if err := requireSlotReady(ctx, driver, target, vcs.VerbPublish, workspace, slot, wsSource.Source); err != nil {
+		return api.GitOpResult{}, err
+	}
+	if err := p.ensureSourceKey(ctx, stack, wsSource.Source); err != nil {
 		return api.GitOpResult{}, err
 	}
 	intent := vcs.PublishIntent{Remote: remote, Branch: branch, Explicit: branch != "", Unmanaged: source.Kind != "git"}

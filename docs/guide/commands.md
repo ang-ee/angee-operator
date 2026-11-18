@@ -56,9 +56,9 @@ templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
 
 ```sh
 angee doctor
-angee init [path] [--template <ref>] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
-angee stack init <template> [path] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
-angee stack update [--template [-i] [--answers <file> ...] [--input key=value ...] [--skip <path-or-pattern> ...]] [--dry-run] [--overwrite]
+angee init [path] [--template <ref>] [--repository <repo>[@<ref>] ...] [--extra-source <repo>[@<ref>] ...] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
+angee stack init <template> [path] [--repository <repo>[@<ref>] ...] [--extra-source <repo>[@<ref>] ...] [--answers <file> ...] [--input key=value ...] [--yes] [--force]
+angee stack update [--template [-i] [--repository <repo>[@<ref>] ...] [--extra-source <repo>[@<ref>] ...] [--answers <file> ...] [--input key=value ...] [--skip <path-or-pattern> ...]] [--dry-run] [--overwrite]
 angee stack destroy [--purge]
 angee status
 ```
@@ -103,6 +103,39 @@ or `ANGEE_TEMPLATE_REGISTRY`). See
 [Template References](/cli/templates#template-references) for an example of
 each form.
 
+### Repositories
+
+A stack template that takes the stack's repositories as inputs is given them
+with two repeatable flags:
+
+```sh
+angee init /srv/omelas -t <template> --yes \
+  --repository git@github.com:phro-gg/angee-omelas.git \
+  --extra-source git@github.com:ang-ee/angee-arp.git \
+  --extra-source ang-ee/angee-messaging-bridges@main
+```
+
+`--repository` fills the template's `repositories` input and `--extra-source`
+its `extra_sources` input; what each list means is the template's (typically:
+repositories whose addons the stack runs, and repositories it only checks
+out). `<repo>` is a URL, the scp-like `git@host:owner/name.git`, an absolute
+path, or a GitHub `owner/name`; `@<ref>` names a branch or tag, and may hold a
+`/`. The template renders one source per repository, named after the last
+element of its path, and a workspace template with a slot prototype checks
+each one out; see [Repositories as inputs](./templates.md#repositories-as-inputs)
+for the accepted forms, what is refused and what the template receives.
+
+- A flag is sugar for `--input repositories=<JSON array>` (or
+  `extra_sources`), so giving both for one input is an error.
+- A flag for an input the template does not declare is an error that names
+  the input: `stack template "dev" declares no input "repositories", so it
+  takes no --repository`.
+- On `angee stack update --template`, the flags replace the recorded list.
+  Without them the recorded lists are replayed. A source the template no
+  longer renders stays in `angee.yaml`, and its slots stay where they are.
+- A repository reached over ssh can be given a key of its own; see
+  [A key of its own](./manifest.md#a-key-of-its-own).
+
 ### Template answers files
 
 `angee init`, `angee stack init`, `angee workspace create`, and
@@ -124,8 +157,12 @@ Scalars become strings using the same conversion as template defaults
 (`fmt.Sprint`): `true` becomes `"true"`, and `8080` becomes `"8080"`. Lists
 become JSON array strings, so the example's `features` is passed as
 `["api","worker"]`, the multiselect encoding. Scalar list members are also
-converted to strings. Nested mappings are rejected with the file and key name;
-non-mapping documents are rejected with the file name.
+converted to strings. A list that holds a mapping is a structured answer, as
+Copier records a `type: json` one such as a [repository list](#repositories):
+it is passed as the JSON it was, each mapping an object with its keys sorted,
+and its booleans, numbers and nulls kept as such, so an answers file that
+holds one replays. A mapping as an answer itself is rejected with the file
+and key name; non-mapping documents are rejected with the file name.
 
 Values are layered from lowest to highest priority:
 
@@ -505,6 +542,12 @@ the top-level "update from upstream" operation: it fetches and
 fast-forwards the cached source's tracking ref. `source fetch` and
 `source pull` first point the cache's `origin` at the source's `repo` in
 `angee.yaml` (see [Sources](/cli/manifest#sources)).
+
+A source that names an SSH key of its own (`auth.ssh_key_secret`) is cloned,
+fetched, pulled and pushed with that key and no other, without the user's
+ssh configuration, and so are the workspace slots cut from it. While the
+secret is not set, these commands stop before git runs, with cause
+`source_key_missing`; see [A key of its own](./manifest.md#a-key-of-its-own).
 
 The per-source `diff` and per-slot convergence operations (`merge`,
 `rebase`, `merge-abort`, `rebase-abort`, `rebase-continue`, `publish`)

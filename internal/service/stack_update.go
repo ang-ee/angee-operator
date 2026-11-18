@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,8 +61,18 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	if err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
-	templatePath, renderTarget, answers := origin.Path, origin.RenderTarget, origin.Answers
-	if err := validateImmutableTemplateInputs(origin.Ref, templatePath, answers, opts.Inputs); err != nil {
+	templatePath, renderTarget := origin.Path, origin.RenderTarget
+	// A repository list given now, and the recorded ones, are compared and
+	// rendered in their canonical form.
+	given := maps.Clone(opts.Inputs)
+	if err := canonicalizeRepositoryInputs(origin.Ref, templatePath, given, false); err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	answers, err := recordedRepositoryLists(origin.Ref, templatePath, origin.Answers, given)
+	if err != nil {
+		return StackUpdateTemplateResult{}, err
+	}
+	if err := validateImmutableTemplateInputs(origin.Ref, templatePath, answers, given); err != nil {
 		return StackUpdateTemplateResult{}, err
 	}
 
@@ -76,12 +87,17 @@ func (p *Platform) StackUpdateFromTemplate(ctx context.Context, opts StackUpdate
 	recorded := copierx.Inputs{}
 	for key, value := range answers {
 		renderInputs[key] = value
-		if override, overridden := opts.Inputs[key]; !overridden || override == value {
+		if override, overridden := given[key]; !overridden || override == value {
 			recorded[key] = value
 		}
 	}
-	for key, value := range opts.Inputs {
+	for key, value := range given {
 		renderInputs[key] = value
+	}
+	// Once more over both lists together: a repository given now in one list
+	// may be recorded in the other.
+	if err := canonicalizeRepositoryInputs(origin.Ref, templatePath, renderInputs, true); err != nil {
+		return StackUpdateTemplateResult{}, err
 	}
 
 	mergedInputs, err := copierx.TemplateInputs(templatePath, renderInputs)
@@ -657,7 +673,10 @@ func answersMapping(data []byte) (*yaml.Node, error) {
 
 // readTemplateAnswers parses a Copier answers file, returning its recorded
 // template path and non-metadata answers. Scalars retain their source text;
-// lists use the JSON array encoding accepted by template input forms.
+// lists use the JSON array encoding accepted by template input forms. A list
+// that holds a mapping is a structured answer, as copier records a
+// `type: json` one (a repository list, say): it is encoded as the JSON it
+// was, with YAML's own booleans, numbers and nulls.
 func readTemplateAnswers(path string) (srcPath string, inputs copierx.Inputs, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -692,7 +711,10 @@ func parseTemplateAnswers(path string, data []byte) (srcPath string, inputs copi
 		if scalar, ok := value.(string); ok {
 			text = scalar
 		} else {
-			encoded, _ := json.Marshal(value) // recordedAnswerValue returns only strings and lists.
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("answers file %s: key %s: %w", path, key, err)
+			}
 			text = string(encoded)
 		}
 		if key == "_src_path" {
@@ -704,6 +726,10 @@ func parseTemplateAnswers(path string, data []byte) (srcPath string, inputs copi
 	return srcPath, inputs, nil
 }
 
+// recordedAnswerValue reads a recorded answer: a scalar as its text, and a
+// list as a list of its items, read the same way. A list that holds a
+// mapping, at any depth, is read whole as a structured answer
+// (copierx.StructuredAnswer). A mapping as the answer itself is refused.
 func recordedAnswerValue(node *yaml.Node) (any, error) {
 	for node.Kind == yaml.AliasNode && node.Alias != nil {
 		node = node.Alias
@@ -715,6 +741,9 @@ func recordedAnswerValue(node *yaml.Node) (any, error) {
 		}
 		return node.Value, nil
 	case yaml.SequenceNode:
+		if copierx.AnswerHoldsMapping(node) {
+			return copierx.StructuredAnswer(node)
+		}
 		items := make([]any, len(node.Content))
 		for i, item := range node.Content {
 			var err error

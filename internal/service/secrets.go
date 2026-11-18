@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 
 	"github.com/ang-ee/angee-operator/api"
 	"github.com/ang-ee/angee-operator/internal/manifest"
@@ -13,21 +12,6 @@ import (
 	"github.com/ang-ee/angee-operator/internal/secrets"
 	"github.com/ang-ee/angee-operator/internal/substitute"
 )
-
-// secretNamePattern bounds names accepted by the operator-side CRUD API.
-// Same charset env-file's validateKey accepts; rejects path-traversal,
-// shell metacharacters, and anything OpenBao would surprise on. Length
-// cap (256) keeps the request body bounded.
-var secretNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,256}$`)
-
-// secretNameAlphaNum enforces "at least one alphanumeric character"
-// independently of secretNamePattern. Without this, names like `..`,
-// `--`, `_`, etc. all map through substitute.SecretEnvName (which
-// rewrites non-alphanum to `_` and trims trailing underscores) to the
-// same storage key `ANGEE_SECRET`, silently colliding distinct
-// manifest entries on env-file backends. Reject the degenerate forms
-// at the API boundary so callers see a typed error instead.
-var secretNameAlphaNum = regexp.MustCompile(`[A-Za-z0-9]`)
 
 // maxSecretValueBytes caps a single secret's value size. The REST body
 // limit (1 MiB) is generous for typical secrets; a Platform-level cap
@@ -39,10 +23,10 @@ func validateSecretName(name string) error {
 	if name == "" {
 		return &InvalidInputError{Field: "name", Reason: "secret name is required"}
 	}
-	if !secretNamePattern.MatchString(name) {
+	if !manifest.SecretNamePattern.MatchString(name) {
 		return &InvalidInputError{Field: "name", Reason: "secret name must match ^[A-Za-z0-9._-]{1,256}$"}
 	}
-	if !secretNameAlphaNum.MatchString(name) {
+	if !manifest.SecretNameAlphaNum.MatchString(name) {
 		return &InvalidInputError{Field: "name", Reason: "secret name must contain at least one alphanumeric character"}
 	}
 	return nil

@@ -322,11 +322,7 @@ func (p *Platform) compileStackArtifacts(ctx context.Context, stack *manifest.St
 }
 
 func (p *Platform) compileStackArtifactsWithJobInputs(ctx context.Context, stack *manifest.Stack, jobInputs map[string]map[string]string, resolveProcessSecrets bool) (*CompiledStack, map[string]string, error) {
-	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
-	if err != nil {
-		return nil, nil, err
-	}
-	resolvedSecrets, err := secrets.ResolveDeclarations(ctx, backend, stack.Secrets, os.LookupEnv)
+	resolvedSecrets, err := p.resolveRuntimeSecrets(ctx, stack)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -337,14 +333,133 @@ func (p *Platform) compileStackArtifactsWithJobInputs(ctx context.Context, stack
 	return compiled, resolvedSecrets, nil
 }
 
+// resolveRuntimeSecrets resolves the secrets the stack's runtime is made
+// with: what its services and jobs may refer to, and what the runtimes are
+// given. That is every declared secret but the SSH keys of its sources
+// (sourceKeySecrets), which are the operator's alone: it reads one when it
+// reaches the source's remote (ensureSourceKey), and that is where a key
+// that is not set is reported. A key is therefore not resolved here, not
+// even to require it, never written to run/secrets.env, and a service that
+// refers to one fails to compile.
+func (p *Platform) resolveRuntimeSecrets(ctx context.Context, stack *manifest.Stack) (map[string]string, error) {
+	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
+	if err != nil {
+		return nil, err
+	}
+	declarations := stack.Secrets
+	if keys := sourceKeySecrets(stack); len(keys) > 0 {
+		declarations = make(map[string]manifest.Secret, len(stack.Secrets))
+		for name, spec := range stack.Secrets {
+			if !keys[name] {
+				declarations[name] = spec
+			}
+		}
+	}
+	return secrets.ResolveDeclarations(ctx, backend, declarations, os.LookupEnv)
+}
+
+// runtimeEnvFile is the env file the runtime backends export to what they
+// run (docker compose, process-compose and its processes): run/secrets.env
+// under OpenBao, else the env-file backend's own file. That file is where
+// the backend keeps every secret, the SSH keys of the stack's sources
+// included, so a stack that has such keys gets a copy of it without them
+// (runtimeEnvCopy), written again whenever the file has changed.
+//
+// process-compose also loads `.env` from the directory it runs in, the stack
+// root, on its own. The process-compose backend switches that off for any
+// env file under run/ (proccompose.childEnv), and the copy says so itself
+// (PC_DISABLE_DOTENV): its processes then get the copy's entries, which are
+// the file's but for the keys, from the supervisor's environment alone, and
+// a copy that could not be written leaves them without those entries.
 func (p *Platform) runtimeEnvFile(stack *manifest.Stack) string {
 	if stack.SecretsBackend.Type == "openbao" {
 		return filepath.Join(p.root, "run", "secrets.env")
 	}
-	return stack.EnvFilePath(p.root)
+	stored := stack.EnvFilePath(p.root)
+	keys := sourceKeySecrets(stack)
+	if len(keys) == 0 {
+		return stored
+	}
+	withheld := make(map[string]bool, len(keys))
+	for name := range keys {
+		withheld[substitute.SecretEnvName(name)] = true
+	}
+	return writeRuntimeEnvCopy(stored, p.runtimeEnvCopy(stack), withheld, p.activeEnvFileUsesPath(stack, filepath.Join(p.root, ".env")))
+}
+
+// runtimeEnvCopy is where the copy of the env file that the runtimes read
+// in place of it is kept: run/runtime.env, or run/runtime.services.env for
+// a stack whose env file is that very file.
+func (p *Platform) runtimeEnvCopy(stack *manifest.Stack) string {
+	copyPath := filepath.Join(p.root, "run", "runtime.env")
+	if p.activeEnvFileUsesPath(stack, copyPath) {
+		copyPath = filepath.Join(p.root, "run", "runtime.services.env")
+	}
+	return copyPath
+}
+
+// processComposeNoDotenv is the entry that keeps process-compose from loading
+// `.env` from its working directory itself.
+const processComposeNoDotenv = "PC_DISABLE_DOTENV"
+
+// runtimeEnvCopyHeader is the first line of the copy: it says what the file
+// is, and is how a bring-up knows a copy it may remove.
+const runtimeEnvCopyHeader = "# Written by angee: the stack's env file without the SSH keys of its sources, for the runtimes. Do not edit.\n"
+
+// writeRuntimeEnvCopy makes copyPath hold the env file stored without the
+// entries whose names are withheld, under runtimeEnvCopyHeader, and returns
+// the file the runtimes are to read: the copy, or stored itself when it does
+// not exist and so has nothing to withhold. With noDotenv the copy also sets
+// processComposeNoDotenv, unless stored says otherwise. Should the copy not
+// be writable, its path is returned all the same, with a warning: the
+// runtimes then fail on a missing file, or read an older copy, but are never
+// handed what is withheld.
+func writeRuntimeEnvCopy(stored, copyPath string, withheld map[string]bool, noDotenv bool) string {
+	data, err := os.ReadFile(stored)
+	if errors.Is(err, fs.ErrNotExist) {
+		return stored
+	}
+	if err == nil {
+		var out strings.Builder
+		out.WriteString(runtimeEnvCopyHeader)
+		for line := range strings.Lines(string(data)) {
+			name, _, ok := strings.Cut(line, "=")
+			name = strings.TrimSpace(name)
+			if ok && withheld[name] {
+				continue
+			}
+			if ok && name == processComposeNoDotenv {
+				noDotenv = false
+			}
+			out.WriteString(line)
+		}
+		if noDotenv {
+			if !strings.HasSuffix(out.String(), "\n") {
+				out.WriteByte('\n')
+			}
+			out.WriteString(processComposeNoDotenv + "=1\n")
+		}
+		if err = os.MkdirAll(filepath.Dir(copyPath), 0o755); err == nil {
+			err = writePrivateFile(copyPath, out.String())
+		}
+	}
+	if err != nil {
+		logctx.From(context.Background()).Warn(fmt.Sprintf("could not write %s, the env file the runtimes read without the SSH keys of the stack's sources: %v", copyPath, err))
+	}
+	return copyPath
 }
 
 func (p *Platform) writeRuntimeEnv(stack *manifest.Stack, resolved map[string]string) error {
+	if stack.SecretsBackend.Type == "openbao" || len(sourceKeySecrets(stack)) == 0 {
+		// No copy of the env file is read any more (runtimeEnvFile): one an
+		// earlier manifest left holds secrets, and goes.
+		copyPath := p.runtimeEnvCopy(stack)
+		if data, err := os.ReadFile(copyPath); err == nil && strings.HasPrefix(string(data), runtimeEnvCopyHeader) {
+			if err := os.Remove(copyPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+	}
 	openBaoPath := filepath.Join(p.root, "run", "secrets.env")
 	if stack.SecretsBackend.Type != "openbao" || len(resolved) == 0 {
 		return p.removeObsoleteOpenBaoRuntimeEnv(stack, openBaoPath)
@@ -353,14 +468,27 @@ func (p *Platform) writeRuntimeEnv(stack *manifest.Stack, resolved map[string]st
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(path, runtimeSecretsEnv(resolved), 0o600)
+}
+
+// runtimeSecretsEnv is the content of run/secrets.env, the env file the
+// runtimes read a stack's resolved OpenBao secrets from: one KEY=value line
+// per secret, sorted by name. A value that holds a line break, as a private
+// key does, is written quoted, as the env-file backend writes its values, so
+// it stays one entry; any other is written as it is.
+func runtimeSecretsEnv(resolved map[string]string) []byte {
 	var out strings.Builder
 	for _, key := range sortedKeys(resolved) {
+		value := resolved[key]
+		if strings.ContainsAny(value, "\n\r") {
+			value = strconv.Quote(value)
+		}
 		out.WriteString(substitute.SecretEnvName(key))
 		out.WriteByte('=')
-		out.WriteString(resolved[key])
+		out.WriteString(value)
 		out.WriteByte('\n')
 	}
-	return os.WriteFile(path, []byte(out.String()), 0o600)
+	return []byte(out.String())
 }
 
 func (p *Platform) retainActiveEnvFile(stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, error) {
@@ -496,14 +624,7 @@ func (p *Platform) runtimeArtifactDocuments(renderTarget string, stack *manifest
 	}
 	openBaoPath := filepath.Join(p.root, "run", "secrets.env")
 	if stack.SecretsBackend.Type == "openbao" && len(resolved) != 0 {
-		var out strings.Builder
-		for _, key := range sortedKeys(resolved) {
-			out.WriteString(substitute.SecretEnvName(key))
-			out.WriteByte('=')
-			out.WriteString(resolved[key])
-			out.WriteByte('\n')
-		}
-		if err := add(openBaoPath, []byte(out.String()), 0o600); err != nil {
+		if err := add(openBaoPath, runtimeSecretsEnv(resolved), 0o600); err != nil {
 			return nil, nil, nil, err
 		}
 	} else if !p.activeEnvFileUsesPath(stack, openBaoPath) {
@@ -548,11 +669,7 @@ func (p *Platform) StackCompile(ctx context.Context) (*CompiledStack, error) {
 	if err != nil {
 		return nil, err
 	}
-	backend, err := secrets.FromManifest(p.root, stack.SecretsBackend, substitute.SecretEnvName)
-	if err != nil {
-		return nil, err
-	}
-	resolvedSecrets, err := secrets.ResolveDeclarations(ctx, backend, stack.Secrets, os.LookupEnv)
+	resolvedSecrets, err := p.resolveRuntimeSecrets(ctx, stack)
 	if err != nil {
 		return nil, err
 	}

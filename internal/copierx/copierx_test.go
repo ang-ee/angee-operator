@@ -459,12 +459,25 @@ func TestParseMetadata(t *testing.T) {
 			t.Fatalf("IncludeRoot = %q, want ../..", metadata.IncludeRoot)
 		}
 	})
+	t.Run("reads the prototype of marked sources' slots", func(t *testing.T) {
+		metadata, err := ParseMetadata([]byte("_angee:\n  kind: workspace\n  name: src\n  sources:\n    angee: {source: angee, subpath: angee}\n  source_slot: {mode: \"${inputs.slot_mode}\", branch: \"${inputs.branch_prefix}/${name | slug}\"}\n"))
+		if err != nil {
+			t.Fatalf("ParseMetadata: %v", err)
+		}
+		want := TemplateSource{Mode: "${inputs.slot_mode}", Branch: "${inputs.branch_prefix}/${name | slug}"}
+		if metadata.SourceSlot == nil || !reflect.DeepEqual(*metadata.SourceSlot, want) {
+			t.Fatalf("SourceSlot = %+v, want %+v", metadata.SourceSlot, want)
+		}
+		if len(metadata.Sources) != 1 {
+			t.Fatalf("Sources = %+v, want the template's own slot", metadata.Sources)
+		}
+	})
 	t.Run("absent angee block is zero", func(t *testing.T) {
 		metadata, err := ParseMetadata([]byte("_subdirectory: template\n"))
 		if err != nil {
 			t.Fatalf("ParseMetadata: %v", err)
 		}
-		if metadata.Kind != "" || metadata.IncludeRoot != "" {
+		if metadata.Kind != "" || metadata.IncludeRoot != "" || metadata.SourceSlot != nil {
 			t.Fatalf("metadata = %+v, want the zero value", metadata)
 		}
 	})

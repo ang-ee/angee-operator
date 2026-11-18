@@ -39,6 +39,9 @@ func validateWorkspaceTemplate(templatePath, templateRef string) (copierx.Metada
 	if err := RefuseWorkspaceChain(templateRef, metadata); err != nil {
 		return copierx.Metadata{}, err
 	}
+	if err := validateSourceSlot(templateRef, metadata); err != nil {
+		return copierx.Metadata{}, err
+	}
 	return metadata, nil
 }
 
@@ -453,7 +456,7 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 	if !jjSlot && wsSource.Mode != manifest.WorkspaceSourceModeWorktree {
 		p.reportCloneSlotRemotes(ctx, workspaceName, slot, path, source, wsSource)
 	}
-	target := workspaceVCSSlot(path, source, wsSource)
+	target := p.workspaceVCSSlot(path, source, wsSource)
 	read, err := p.slotDriver(target).Status(ctx, target)
 	setSlotStatus(&status, read, err)
 	return status
@@ -783,7 +786,7 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		}
 		// A jj slot's status snapshots its working copy first, so an edit no
 		// jj command has recorded yet counts as uncommitted (plan D7).
-		target := workspaceVCSSlot(path, source, wsSource)
+		target := p.workspaceVCSSlot(path, source, wsSource)
 		read, err := p.slotDriver(target).Status(ctx, target)
 		// A slot whose base no longer resolves, such as a deleted branch, can
 		// still be let go, when the driver decided Pushed without counting.
@@ -1287,6 +1290,11 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) (states 
 			return nil, err
 		}
 	}
+	for _, target := range targets {
+		if err := p.ensureSourceKey(ctx, stack, target.wsSource.Source); err != nil {
+			return nil, err
+		}
+	}
 	plans := make([]workspaceGitPush, len(targets))
 	for i, target := range targets {
 		if err := requireSlotReady(ctx, drivers[i], slots[i], vcs.VerbPush, name, target.slot, target.wsSource.Source); err != nil {
@@ -1698,6 +1706,11 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 			}
 		}
 	}
+	for _, target := range targets {
+		if err := p.ensureSourceKey(ctx, stack, target.wsSource.Source); err != nil {
+			return nil, err
+		}
+	}
 	// Fetch every slot and resolve its base before syncing any, so a remote
 	// that fails or lacks the base refuses the sync with no slot changed.
 	syncRefs := make([]string, len(targets))
@@ -1980,18 +1993,26 @@ func restoreEmptyDir(dest *copierx.GuardedPath, mode fs.FileMode) error {
 	return dest.MkdirAll(mode)
 }
 
+// materializeWorkspaceSources cuts the slots of a workspace being created:
+// the ones its template declares (`_angee.sources`) and, for a template that
+// declares `_angee.source_slot`, one per stack source marked `slot: true`
+// (markedSourceSlots). Both kinds are resolved and cut the same way.
 func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int, sync bool) (map[string]manifest.WorkspaceSource, *workspaceSourceCleanup, error) {
 	result := map[string]manifest.WorkspaceSource{}
 	cleanup := &workspaceSourceCleanup{}
 	items := []workspaceSourceMaterialization{}
-	for _, slot := range sortedKeys(metadata.Sources) {
-		spec := metadata.Sources[slot]
+	// declared maps each slot the template declares, and that resolves to a
+	// source, to that source; an optional slot that is skipped for want of
+	// one takes no name. subpaths maps each resolved slot's path to the slot.
+	declared := map[string]string{}
+	subpaths := map[string]string{}
+	resolveSlot := func(slot string, spec copierx.TemplateSource, marked bool) error {
 		// The slot's source name is input-substitutable (e.g. an opt-in
 		// work-state slot names its source through an input; empty + optional
 		// skips the slot below).
 		sourceName, err := substitute.Resolve(spec.Source, substitute.Context{Inputs: inputs, Name: workspaceName, Alloc: alloc})
 		if err != nil {
-			return nil, cleanup, fmt.Errorf("workspace source %q name: %w", slot, err)
+			return fmt.Errorf("workspace source %q name: %w", slot, err)
 		}
 		if sourceName == "" {
 			sourceName = slot
@@ -2001,11 +2022,11 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			var err error
 			source, err = resolveWorkspaceTemplateSource(spec, inputs, workspaceName, alloc)
 			if err != nil {
-				return nil, cleanup, err
+				return err
 			}
 			if source.Kind != "" {
 				if err := manifest.ValidateSource(sourceName, source); err != nil {
-					return nil, cleanup, fmt.Errorf("workspace source %q: %w", slot, err)
+					return fmt.Errorf("workspace source %q: %w", slot, err)
 				}
 				if stack.Sources == nil {
 					stack.Sources = map[string]manifest.Source{}
@@ -2016,24 +2037,33 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		}
 		if !ok {
 			if spec.Optional {
-				continue
+				return nil
 			}
-			return nil, cleanup, fmt.Errorf("workspace source %q references undeclared source %q", slot, sourceName)
+			return fmt.Errorf("workspace source %q references undeclared source %q", slot, sourceName)
+		}
+		if !marked {
+			declared[slot] = sourceName
 		}
 		resolved, err := p.resolveWorkspaceSource(spec, sourceName, inputs, workspaceName, alloc)
 		if err != nil {
-			return nil, cleanup, fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
 		}
 		if err := checkWorkspaceSlotBase(workspaceName, slot, source, resolved, stack.EffectiveSourceMode(resolved)); err != nil {
-			return nil, cleanup, err
+			return err
 		}
 		if resolved.Subpath == "" {
 			resolved.Subpath = slot
 		}
 		resolved.Subpath, err = normalizeWorkspaceSubpath(resolved.Subpath)
 		if err != nil {
-			return nil, cleanup, fmt.Errorf("workspace source %q subpath: %w", slot, err)
+			return fmt.Errorf("workspace source %q subpath: %w", slot, err)
 		}
+		// A marked source's slot is at the source's name, where a slot the
+		// template declares under another name may already be.
+		if other, taken := subpaths[resolved.Subpath]; taken && marked {
+			return fmt.Errorf("workspace %q: source %q is marked slot: true, but the template's slot %q is checked out at %s, where its slot would be; rename the source, or remove the mark", workspaceName, slot, other, resolved.Subpath)
+		}
+		subpaths[resolved.Subpath] = slot
 		items = append(items, workspaceSourceMaterialization{
 			slot:       slot,
 			sourceName: sourceName,
@@ -2041,6 +2071,21 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 			resolved:   resolved,
 			optional:   spec.Optional,
 		})
+		return nil
+	}
+	for _, slot := range sortedKeys(metadata.Sources) {
+		if err := resolveSlot(slot, metadata.Sources[slot], false); err != nil {
+			return nil, cleanup, err
+		}
+	}
+	marked, err := markedSourceSlots(stack, workspaceName, metadata, declared)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	for _, slot := range marked {
+		if err := resolveSlot(slot.name, slot.spec, true); err != nil {
+			return nil, cleanup, err
+		}
 	}
 	orderedItems, err := orderWorkspaceSourceMaterializations(items)
 	if err != nil {
@@ -2055,7 +2100,7 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		finish := logctx.Step(ctx, "materializing source "+item.sourceName)
 		// The record keeps the mode as written; the slot is cut in the mode
 		// it is checked out in.
-		if err := p.materializeWorkspaceSlot(ctx, cleanup, item.source, withEffectiveMode(stack, item.resolved), dest, sync, jjTargets[item.slot]); err != nil {
+		if err := p.materializeWorkspaceSlot(ctx, cleanup, stack, item.source, withEffectiveMode(stack, item.resolved), dest, sync, jjTargets[item.slot]); err != nil {
 			if item.optional {
 				// An optional source that cannot be materialized is skipped by
 				// design, so the phase completes normally rather than as a failure.
@@ -2098,6 +2143,75 @@ func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, 
 	return nil
 }
 
+// markedSlot is the slot a workspace gets for one stack source marked
+// `slot: true`: its name, the source's, and the spec it is cut by.
+type markedSlot struct {
+	name string
+	spec copierx.TemplateSource
+}
+
+// markedSourceSlots lists, in name order, the slots a workspace cut from a
+// template that declares `_angee.source_slot` gets beyond the template's
+// own: one per stack source marked `slot: true`, named after the source,
+// checking it out at that subpath, in the mode and on the branch and ref the
+// prototype gives. A template without the prototype gets none.
+//
+// declared maps each slot the template declares itself, and that resolved to
+// a source, to that source. A marked source the template already checks out,
+// in a slot of the source's name or of any other, keeps that slot and gets
+// no second one: the template's own rule for the source wins. Otherwise a
+// declared slot that has the source's name checks out another source, and is
+// refused: the name would be two slots. An optional declared slot that was
+// skipped, its source not being declared, is in neither's way.
+func markedSourceSlots(stack *manifest.Stack, workspaceName string, metadata copierx.Metadata, declared map[string]string) ([]markedSlot, error) {
+	if metadata.SourceSlot == nil {
+		return nil, nil
+	}
+	checkedOut := map[string]bool{}
+	for _, source := range declared {
+		checkedOut[source] = true
+	}
+	var slots []markedSlot
+	for _, name := range sortedKeys(stack.Sources) {
+		if !stack.Sources[name].Slot || checkedOut[name] {
+			continue
+		}
+		if source, taken := declared[name]; taken {
+			return nil, fmt.Errorf("workspace %q: source %q is marked slot: true, but the template's slot %q checks out source %q; rename one of them, or remove the mark", workspaceName, name, name, source)
+		}
+		spec := *metadata.SourceSlot
+		spec.Source, spec.Subpath = name, name
+		slots = append(slots, markedSlot{name: name, spec: spec})
+	}
+	return slots, nil
+}
+
+// validateSourceSlot refuses a workspace template whose `_angee.source_slot`
+// says more than how the slots of marked sources are cut: which source a slot
+// checks out, and where, are the marked source's name, and the source itself
+// is the stack's to declare.
+func validateSourceSlot(templateRef string, metadata copierx.Metadata) error {
+	prototype := metadata.SourceSlot
+	if prototype == nil {
+		return nil
+	}
+	set := map[string]bool{
+		"source": prototype.Source != "", "subpath": prototype.Subpath != "",
+		"kind": prototype.Kind != "", "repo": prototype.Repo != "", "remotes": len(prototype.Remotes) > 0,
+		"push_default": prototype.PushDefault != "", "url": prototype.URL != "", "path": prototype.Path != "",
+		"default_ref": prototype.DefaultRef != "", "cache_path": prototype.CachePath != "",
+	}
+	for _, field := range sortedKeys(set) {
+		if set[field] {
+			return &InvalidInputError{
+				Field:  "template",
+				Reason: fmt.Sprintf("workspace template %q: _angee.source_slot sets %s, but it takes only mode, branch, ref and optional: each slot checks out the stack source of its own name, at that subpath", templateRef, field),
+			}
+		}
+	}
+	return nil
+}
+
 // materializeWorkspaceSlot cuts one source slot at dest and records what it
 // created in cleanup, so the caller can roll it back with the rest of its
 // work. It is the one step that materializes a slot, for WorkspaceCreate and
@@ -2105,8 +2219,8 @@ func checkWorkspaceSlotBase(workspaceName, slot string, source manifest.Source, 
 // workspace a jj slot is made as. On failure it records nothing;
 // materializeWorkspaceSource removes what it staged or installed at dest
 // before returning.
-func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *workspaceSourceCleanup, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool, jj jjSlotTarget) error {
-	entry, err := p.materializeWorkspaceSource(ctx, ws.Source, source, ws, dest, sync, jj)
+func (p *Platform) materializeWorkspaceSlot(ctx context.Context, cleanup *workspaceSourceCleanup, stack *manifest.Stack, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool, jj jjSlotTarget) error {
+	entry, err := p.materializeWorkspaceSource(ctx, stack, ws.Source, source, ws, dest, sync, jj)
 	if err != nil {
 		return err
 	}
@@ -2281,7 +2395,7 @@ func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceNam
 	return manifest.WorkspaceSource{Source: sourceName, Mode: mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
 }
 
-func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool, jj jjSlotTarget) (*workspaceSourceCleanupEntry, error) {
+func (p *Platform) materializeWorkspaceSource(ctx context.Context, stack *manifest.Stack, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string, sync bool, jj jjSlotTarget) (*workspaceSourceCleanupEntry, error) {
 	rel, err := filepath.Rel(p.root, dest)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("workspace source destination %q escapes stack root", dest)
@@ -2324,7 +2438,7 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 	}
 	switch {
 	case jjSlot:
-		driver, slot, kept, err := p.materializeJJSlot(ctx, destGuard, sourceName, source, ws, dest, jj, destExists && !destEmpty, sync)
+		driver, slot, kept, err := p.materializeJJSlot(ctx, stack, destGuard, sourceName, source, ws, dest, jj, destExists && !destEmpty, sync)
 		if !destEmpty {
 			destMode = 0
 		}
@@ -2349,7 +2463,7 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 				return nil, fmt.Errorf("workspace source cache path %s cannot be inside destination %s", slot.Primary, dest)
 			}
 			if err := withPrimaryLock(ctx, slot.Primary, func() error {
-				return p.addWorktreeSlot(ctx, driver, slot, destGuard, sourceName, source, destExists && !destEmpty)
+				return p.addWorktreeSlot(ctx, stack, driver, slot, destGuard, sourceName, source, destExists && !destEmpty)
 			}); err != nil {
 				return nil, err
 			}
@@ -2361,6 +2475,10 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		// source for errors.
 		configure := func(ctx context.Context, checkout string) error {
 			return syncSourceRemotes(ctx, p.gitClient(), remoteHolder{source: sourceName}, checkout, source, remoteSyncFresh)
+		}
+		// A clone is made from the remote itself, so it needs the source's key.
+		if err := p.ensureSourceKey(ctx, stack, sourceName); err != nil {
+			return nil, err
 		}
 		if err := driver.Add(ctx, slot, destGuard, configure); err != nil {
 			return nil, err
@@ -2381,14 +2499,21 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 }
 
 // addWorktreeSlot cuts a worktree slot under its cache's primary lock: it
-// refreshes the cache, settles what an earlier create left at the slot path,
-// and has the driver add the worktree. A worktree the cache still lists at
-// the path is a leftover, deregistered with whatever is left of its checkout
-// (populated reaches here only with --sync). A populated directory the cache
-// does not list is not a leftover, and is refused.
-func (p *Platform) addWorktreeSlot(ctx context.Context, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath, sourceName string, source manifest.Source, populated bool) error {
-	if err := p.materializeSourceLocked(ctx, sourceName, source, true); err != nil {
+// refreshes the cache (unless the cache exists and its source's key cannot
+// be had, prepareSourceKey), settles what an earlier create left at the slot
+// path, and has the driver add the worktree. A worktree the cache still
+// lists at the path is a leftover, deregistered with whatever is left of its
+// checkout (populated reaches here only with --sync). A populated directory
+// the cache does not list is not a leftover, and is refused.
+func (p *Platform) addWorktreeSlot(ctx context.Context, stack *manifest.Stack, driver vcs.Driver, slot vcs.Slot, dest *copierx.GuardedPath, sourceName string, source manifest.Source, populated bool) error {
+	reachable, err := p.prepareSourceKey(ctx, stack, sourceName, true)
+	if err != nil {
 		return err
+	}
+	if reachable {
+		if err := p.materializeSourceLocked(ctx, sourceName, source, true); err != nil {
+			return err
+		}
 	}
 	registered, err := driver.Exists(ctx, slot)
 	if err != nil {

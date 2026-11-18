@@ -37,7 +37,7 @@ func (p *Platform) WorkspaceSourceDiff(ctx context.Context, workspace, slot, ref
 	if err != nil {
 		return nil, err
 	}
-	target := workspaceVCSSlot(path, source, wsSource)
+	target := p.workspaceVCSSlot(path, source, wsSource)
 	if err := p.requireJJSlot(ctx, target); err != nil {
 		return nil, err
 	}

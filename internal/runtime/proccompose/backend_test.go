@@ -3225,3 +3225,37 @@ func TestNativeGenerationChangesOnManualRestartPID(t *testing.T) {
 		t.Fatal("manual restart reused native generation despite changed PID")
 	}
 }
+
+func TestChildEnvKeepsProcessComposeOffTheRootDotenvForOperatorEnvFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("ANGEE_SECRET_DEPLOY_KEY=private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "run"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(root, "run", "runtime.env")
+	if err := os.WriteFile(copyPath, []byte("ANGEE_SECRET_DB_PASSWORD=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := childEnv(root, copyPath)
+	if err != nil || !slices.Equal(env, []string{"ANGEE_SECRET_DB_PASSWORD=x", "PC_DISABLE_DOTENV=1"}) {
+		t.Fatalf("copy: env = %q, err = %v", env, err)
+	}
+	// A copy that could not be written still keeps process-compose off the root .env.
+	env, err = childEnv(root, filepath.Join(root, "run", "missing.env"))
+	if err != nil || !slices.Equal(env, []string{"PC_DISABLE_DOTENV=1"}) {
+		t.Fatalf("missing copy: env = %q, err = %v", env, err)
+	}
+	// The root .env itself, or a file outside run/, keeps process-compose's own loading.
+	env, err = childEnv(root, filepath.Join(root, ".env"))
+	if err != nil || !slices.Equal(env, []string{"ANGEE_SECRET_DEPLOY_KEY=private"}) {
+		t.Fatalf("root .env: env = %q, err = %v", env, err)
+	}
+	if env, err = childEnv(root, filepath.Join(root, "runner.env")); err != nil || slices.Contains(env, "PC_DISABLE_DOTENV=1") {
+		t.Fatalf("outside run/: env = %q, err = %v", env, err)
+	}
+	if env, err = childEnv(root, ""); err != nil || env != nil {
+		t.Fatalf("no env file: env = %q, err = %v", env, err)
+	}
+}
