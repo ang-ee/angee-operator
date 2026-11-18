@@ -6,6 +6,8 @@ latest tag.
 
 ## Unreleased
 
+## v0.28.0 — 2026-11-18
+
 ### Added
 
 - **A stack takes its repositories as inputs.** `angee init`,
