@@ -6,8 +6,68 @@ latest tag.
 
 ## Unreleased
 
+### Added
+
+- **A stack takes its repositories as inputs.** `angee init`,
+  `angee stack init` and `angee stack update --template` take repeatable
+  `--repository <repo>[@<ref>]` and `--extra-source <repo>[@<ref>]` flags,
+  sugar for the stack template inputs `repositories` and `extra_sources`.
+  `<repo>` is a URL, `git@host:owner/name.git`, an absolute path or a GitHub
+  `owner/name`; the ref follows the first `@` of the path and may hold a `/`.
+  Whatever way a list is given (a flag, `--input`, `--answers`, the API or
+  the answers an earlier render recorded), the service reads and checks it
+  and hands the template one canonical value: a JSON array sorted by name of
+  `{"name", "ref", "repo", "ssh"}` objects, which a `type: json` question
+  loops over. Encoding a recorded list again yields the same bytes, so a
+  replay changes nothing. A flag with `--input` for the same input, a list
+  for an input the template does not declare, a name that is not
+  `^[a-z0-9][a-z0-9-]*$`, a repository listed twice or in both lists, a ref
+  git would not take, and a URL that carries a password, or a user name
+  under a scheme other than ssh, are refused before anything renders. See
+  *Repositories as inputs* in the templates guide.
+- **A workspace gets a slot per marked source.** `sources.<name>.slot: true`
+  marks a source, and a workspace template's `_angee.source_slot` (a slot's
+  `mode`, `branch`, `ref` and `optional`, with no source or subpath) is the
+  prototype its slot is cut by. A workspace cut from such a template, by
+  `angee workspace create` or as a stack-declared workspace on the first
+  `angee up` or `angee dev`, gets the template's own `_angee.sources` slots
+  and one slot per marked source, named after the source and at that
+  subpath. A marked source the template already checks out, under any slot
+  name, keeps that slot alone; a declared slot of the source's name that
+  checks out another source, or one at that path, is an error. Slots are
+  cut at create only: `workspace update` adds none.
+- **A git source can have its own SSH key.** `sources.<name>.auth.ssh_key_secret`
+  names the stack secret that holds a private key, such as a deploy key.
+  Every git and jj command angee runs for that source (its cache's clone and
+  fetch, `source pull` and `source push`, and its workspace slots' creation,
+  fetch, pull, push, publish and sync-base, jj slots included) then runs with
+  `GIT_SSH_COMMAND="ssh -o IdentityFile=<root>/run/ssh/<source> -o
+  IdentitiesOnly=yes -o BatchMode=yes -o
+  UserKnownHostsFile=<root>/run/ssh/known_hosts -o
+  StrictHostKeyChecking=accept-new"`, so two private repositories on one host
+  need no `~/.ssh/config` aliases. The key file is the secret, written with
+  mode `0600` and a final newline before the remote is reached, and
+  rewritten only when the secret changes; a bring-up removes the key files
+  no source has any more. A key that is not set stops the operation before
+  git runs (`PRECONDITION_FAILED`, new cause `source_key_missing`), on
+  `angee up` before any source is cloned. The secret cannot be declared
+  `generated`. A source without `auth` behaves as before.
+
+### Changed
+
+- **An answers file may hold mappings inside a list.** Copier records a
+  `type: json` answer, such as a repository list, as a YAML sequence of
+  mappings. `angee stack update --template` and `--answers <file>` refused
+  such a file (`only scalars and lists are supported`); they now read a list
+  that holds a mapping as the JSON it was, with its booleans, numbers and
+  nulls. A list of scalars keeps the text of its members, as before, and a
+  mapping as an answer itself is still refused.
+
 ### Removed
 
+- **`sources.<name>.auth.mode` is removed.** It was declared and never read.
+  An `angee.yaml` that still sets it now fails strict loading; delete the
+  line. `auth.token_secret` stays declared and is still not read.
 - **Manual backups are removed.** `POST /backups/preview`, `POST /backups` and
   `GET /backups/{id}/archive`; `jobs.<name>.capture` and
   `persist.<name>.backup`; the `BACKUP` job-run node kind; and
@@ -28,6 +88,12 @@ latest tag.
   uncertainty, event-stream failures and removals that cannot be confirmed are
   reported. A cancelled local transient job has its whole process group killed
   after the grace period, so child processes do not remain behind.
+- **A multi-line secret no longer breaks `run/secrets.env`.** With the
+  OpenBao backend, resolved secrets are written to `run/secrets.env` one
+  `KEY=value` line each; a value holding a line break, such as a private
+  key, spilled over several lines. It is now written quoted, as the env-file
+  backend writes its values, and reads back whole. One-line values are
+  written as before.
 
 ## v0.27.3 — 2026-10-30
 

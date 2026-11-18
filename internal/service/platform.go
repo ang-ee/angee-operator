@@ -353,14 +353,27 @@ func (p *Platform) writeRuntimeEnv(stack *manifest.Stack, resolved map[string]st
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	return os.WriteFile(path, runtimeSecretsEnv(resolved), 0o600)
+}
+
+// runtimeSecretsEnv is the content of run/secrets.env, the env file the
+// runtimes read a stack's resolved OpenBao secrets from: one KEY=value line
+// per secret, sorted by name. A value that holds a line break, as a private
+// key does, is written quoted, as the env-file backend writes its values, so
+// it stays one entry; any other is written as it is.
+func runtimeSecretsEnv(resolved map[string]string) []byte {
 	var out strings.Builder
 	for _, key := range sortedKeys(resolved) {
+		value := resolved[key]
+		if strings.ContainsAny(value, "\n\r") {
+			value = strconv.Quote(value)
+		}
 		out.WriteString(substitute.SecretEnvName(key))
 		out.WriteByte('=')
-		out.WriteString(resolved[key])
+		out.WriteString(value)
 		out.WriteByte('\n')
 	}
-	return os.WriteFile(path, []byte(out.String()), 0o600)
+	return []byte(out.String())
 }
 
 func (p *Platform) retainActiveEnvFile(stack *manifest.Stack, openAbsolute func(string) (*copierx.GuardedPath, error)) (func() error, func() error, error) {
@@ -496,14 +509,7 @@ func (p *Platform) runtimeArtifactDocuments(renderTarget string, stack *manifest
 	}
 	openBaoPath := filepath.Join(p.root, "run", "secrets.env")
 	if stack.SecretsBackend.Type == "openbao" && len(resolved) != 0 {
-		var out strings.Builder
-		for _, key := range sortedKeys(resolved) {
-			out.WriteString(substitute.SecretEnvName(key))
-			out.WriteByte('=')
-			out.WriteString(resolved[key])
-			out.WriteByte('\n')
-		}
-		if err := add(openBaoPath, []byte(out.String()), 0o600); err != nil {
+		if err := add(openBaoPath, runtimeSecretsEnv(resolved), 0o600); err != nil {
 			return nil, nil, nil, err
 		}
 	} else if !p.activeEnvFileUsesPath(stack, openBaoPath) {

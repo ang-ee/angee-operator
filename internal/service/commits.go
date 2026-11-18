@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ang-ee/angee-operator/api"
+	gitx "github.com/ang-ee/angee-operator/internal/git"
 	"github.com/ang-ee/angee-operator/internal/logctx"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -26,7 +27,7 @@ import (
 // SourceState.State="missing"). A repository go-git refuses to open, such as
 // a cache a jj slot was added to (extensions.relativeWorktrees), is read
 // with the git CLI instead (sourceCommitsCLI).
-func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int) ([]api.CommitRef, error) {
+func (p *Platform) sourceCommits(ctx context.Context, client gitx.Client, repoPath string, limit int) ([]api.CommitRef, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -45,7 +46,7 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 		return nil, nil
 	}
 	if err != nil {
-		commits, cliErr := p.sourceCommitsCLI(ctx, repoPath, limit)
+		commits, cliErr := sourceCommitsCLI(ctx, client, repoPath, limit)
 		if cliErr != nil {
 			return nil, fmt.Errorf("%w (go-git: %v)", cliErr, err)
 		}
@@ -110,8 +111,7 @@ func (p *Platform) sourceCommits(ctx context.Context, repoPath string, limit int
 // order. That is the go-git walk's order except among commits with the same
 // committer time, which each orders its own way, so with a limit the last of
 // them in the window can differ too.
-func (p *Platform) sourceCommitsCLI(ctx context.Context, repoPath string, limit int) ([]api.CommitRef, error) {
-	client := p.gitClient()
+func sourceCommitsCLI(ctx context.Context, client gitx.Client, repoPath string, limit int) ([]api.CommitRef, error) {
 	refIndex, err := client.RefTargets(ctx, repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("build ref index for %s: %w", repoPath, err)

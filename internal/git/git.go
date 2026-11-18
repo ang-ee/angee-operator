@@ -38,6 +38,13 @@ const EndOfOptions = "--end-of-options"
 type Client struct {
 	Bin            string
 	NonInteractive bool
+	// Env is set in the environment of every command the client runs, over
+	// the process's own and over what RunIsolated passes on: what the
+	// repository's source says of its transport, such as the GIT_SSH_COMMAND
+	// that pins the source's SSH key (SSHKeyCommand). An entry replaces the
+	// variable of the same name. The jj driver gives its jj runs the same
+	// entries, since jj runs git for its fetches and pushes.
+	Env []string
 }
 
 const (
@@ -103,8 +110,56 @@ func IsolatedEnv(extra ...string) []string {
 		}
 	}
 	env = append(env, "GIT_TERMINAL_PROMPT=0")
-	env = append(env, extra...)
-	return NonInteractiveEnv(env)
+	return NonInteractiveEnv(WithEnv(env, extra...))
+}
+
+// WithEnv returns env with each of entries ("KEY=value") set: an entry
+// replaces the variable of the same name, and a later entry an earlier one.
+func WithEnv(env []string, entries ...string) []string {
+	for _, entry := range entries {
+		key, value, _ := strings.Cut(entry, "=")
+		env = setEnv(env, key, value)
+	}
+	return env
+}
+
+// SSHKeyCommand is the GIT_SSH_COMMAND value that makes git, and the git jj
+// runs, reach an SSH remote with the private key in keyFile and no other:
+// IdentitiesOnly keeps ssh from offering the agent's keys, since a host that
+// knows one of them accepts it and then refuses the repository (a GitHub
+// deploy key opens one repository only). The host keys it meets are recorded
+// in knownHosts, and a host it has not met is trusted on first use.
+// BatchMode keeps ssh from prompting. For the usual paths the value reads
+//
+//	ssh -o IdentityFile=<keyFile> -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<knownHosts> -o StrictHostKeyChecking=accept-new
+//
+// The key is named by the IdentityFile option, not by -i: ssh looks for -i's
+// file when it reads its arguments, and without it warns, drops the argument
+// and offers the user's default keys instead, so a key file that is missing
+// would silently lift the pin. A missing IdentityFile fails the
+// authentication.
+func SSHKeyCommand(keyFile, knownHosts string) string {
+	return "ssh " + sshPathOption("IdentityFile", keyFile) +
+		" -o IdentitiesOnly=yes -o BatchMode=yes " +
+		sshPathOption("UserKnownHostsFile", knownHosts) +
+		" -o StrictHostKeyChecking=accept-new"
+}
+
+// sshPathOption is `-o name=path` for GIT_SSH_COMMAND. git hands the command
+// to the shell, and ssh then reads the option's value as its configuration:
+// it splits it on spaces, expands % tokens in it and reads quotes. A path of
+// plain characters is written as it is. Any other is double-quoted for ssh,
+// with its backslashes and double quotes escaped and each % doubled, and the
+// whole option single-quoted for the shell.
+func sshPathOption(name, path string) string {
+	plain := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+=:@", r)
+	}
+	if path != "" && !strings.ContainsFunc(path, func(r rune) bool { return !plain(r) }) {
+		return "-o " + name + "=" + path
+	}
+	value := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(path)
+	return "-o '" + strings.ReplaceAll(name+`="`+value+`"`, "'", `'\''`) + "'"
 }
 
 // RunIsolated runs git in dir in IsolatedEnv(extraEnv...), so it never
@@ -128,7 +183,8 @@ func (c Client) RunIsolated(ctx context.Context, dir string, extraEnv []string, 
 
 // command builds the git command for args in dir, and its trace. A nil env
 // inherits the environment, made non-interactive when c.NonInteractive is
-// set; otherwise env is the whole environment.
+// set; otherwise env is the whole environment. Either way c.Env is set over
+// it, so every command the client runs has it.
 func (c Client) command(ctx context.Context, dir string, env, args []string) (*exec.Cmd, func([]byte, error)) {
 	bin := c.Bin
 	if bin == "" {
@@ -140,11 +196,15 @@ func (c Client) command(ctx context.Context, dir string, env, args []string) (*e
 		cmd.Dir = dir
 	}
 	if env != nil {
-		cmd.Env = env
-		return cmd, logctx.TraceExec(ctx, bin, args, dir, slog.Any("env", logctx.EnvKeys(env)))
+		cmd.Env = WithEnv(env, c.Env...)
+		return cmd, logctx.TraceExec(ctx, bin, args, dir, slog.Any("env", logctx.EnvKeys(cmd.Env)))
 	}
-	if c.NonInteractive {
-		cmd.Env = NonInteractiveEnv(os.Environ())
+	if c.NonInteractive || len(c.Env) > 0 {
+		inherited := os.Environ()
+		if c.NonInteractive {
+			inherited = NonInteractiveEnv(inherited)
+		}
+		cmd.Env = WithEnv(inherited, c.Env...)
 	}
 	return cmd, logctx.TraceExec(ctx, bin, args, dir)
 }

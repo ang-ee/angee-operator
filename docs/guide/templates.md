@@ -174,6 +174,104 @@ itself: it renders a templated default (`default: "{{ name|lower }}"`), and on
 When the same name is declared as a question and under `_angee.inputs`,
 the question wins.
 
+### Repositories as inputs
+
+A stack template can take the repositories a stack is made of as inputs,
+instead of naming them. It declares one or both of two list inputs as
+`type: json` questions and loops over their entries:
+
+```yaml
+# copier.yml
+repositories:
+  type: json
+  default: "[]"
+  help: Repositories whose addons the stack runs.
+extra_sources:
+  type: json
+  default: "[]"
+  help: Repositories the stack only checks out.
+```
+
+```jinja
+# template/angee.yaml.jinja
+sources:
+{% for repository in repositories %}  {{ repository.name }}:
+    kind: git
+    repo: {{ repository.repo|to_json }}
+    default_ref: {{ repository.ref|default:"main"|to_json }}
+    slot: true
+{% if repository.ssh %}    auth:
+      ssh_key_secret: deploy-key-{{ repository.name }}
+{% endif %}{% endfor %}
+```
+
+`angee init`, `angee stack init` and `angee stack update --template` fill
+them with `--repository <repo>[@<ref>]` and `--extra-source <repo>[@<ref>]`,
+both repeatable. A flag is sugar for `--input <name>=<JSON array>`: the two
+cannot be given for the same input, and a flag whose input the template does
+not declare is refused. What the two lists mean is the template's: angee
+reads both the same way.
+
+`<repo>` is one of, in the order tried:
+
+| Form | Example | Cloned from |
+| --- | --- | --- |
+| A URL with a scheme | `https://gitlab.example.com/group/addons.git`, `ssh://git@host/owner/name.git` | the URL |
+| The scp-like form | `git@github.com:ang-ee/angee-arp.git` | the URL |
+| An absolute path | `/srv/git/addons.git` | the path |
+| A GitHub `owner/name` | `ang-ee/angee-arp` | `https://github.com/ang-ee/angee-arp.git` |
+
+`@<ref>` is what follows the first `@` of the repository's path, so a ref
+may hold a `/`: `ang-ee/angee-arp@feature/arp-ap`. (A template ref's own
+`@<pin>` takes no `/`.) The `@` of `git@host:…` is the URL's, and a path
+that itself holds an `@` cannot be given. A scheme is recorded in lowercase.
+
+Whatever way a list is given (a flag, `--input`, `--answers`, the REST or
+GraphQL API), angee reads its entries, checks them and passes the template
+one canonical value: a JSON array sorted by `name`, each entry an object
+with these keys in this order.
+
+| Key | Value |
+| --- | --- |
+| `name` | The last element of the repository's path, without `.git`. It must match `^[a-z0-9][a-z0-9-]*$`: the template uses it as the source's name, and so as its slot and its directories. |
+| `ref` | The ref given after `@`, or `""`. |
+| `repo` | The URL to clone from, as it is written to `sources.<name>.repo`. |
+| `ssh` | `true` for the scp-like form and for `ssh://` URLs (`git+ssh://`, `ssh+git://`), else `false`. A template gives such a source a key. |
+
+```json
+[{"name":"angee-arp","ref":"","repo":"git@github.com:ang-ee/angee-arp.git","ssh":true}]
+```
+
+An entry of the JSON array given through `--input` or the API is a
+`"<repo>[@<ref>]"` string or an object `{"repo": …, "ref": …}`. An object may
+carry the `name` and the boolean `ssh` of the canonical form too, when they
+are the ones its `repo` gives; any other key is refused.
+
+A list is refused, before anything renders, when:
+
+- an entry is none of the forms above, holds a space or a control
+  character, or starts with `-`;
+- a name does not match the pattern (uppercase letters, `.` and `_` are
+  out), or is listed twice in one list, or once in each;
+- a ref is empty or `@`, holds a space, a control character, `..`, `//`,
+  `@{` or one of `~ ^ : ? * [ \`, starts with `-` or `/`, ends with `/` or
+  `.`, or has an element that starts with `.` or ends with `.lock`;
+- a URL carries credentials, which would be written to `angee.yaml` and the
+  answers file: a password (`https://user:token@host/…`) under any scheme,
+  and any user name under a scheme other than ssh (`https://token@host/…`),
+  where it is often a token. No refusal quotes them. Give the URL without
+  them and the credential through the source's
+  [`auth`](./manifest.md#a-key-of-its-own).
+
+copier records a `type: json` answer as YAML, so the answers file holds each
+list as a sequence of mappings. `angee stack update --template` reads that
+back to the same canonical value, so replaying it changes nothing, and
+`--answers <file>` passes it on to a new stack. A list given on an update
+replaces the recorded one, even a recorded one that no longer reads as a
+list; a source the template no longer renders stays in the manifest, as any
+source it holds alone. An empty list is accepted by a template that declares
+no such input, so an answers file recorded under another template replays.
+
 Answers recorded by a render (`.copier-answers.stack.yml` for stacks,
 `.copier-answers.yml` for workspaces and services) can be replayed with
 `--answers <file>` on the create commands, and `angee stack update
@@ -224,6 +322,46 @@ the template (for example `mode: "${inputs.slot_mode}"`). The resolved
 `mode` must be `worktree`, `clone` or empty; anything else fails the
 create before any source is materialized. A worktree source whose
 `branch` resolves to empty starts on a detached HEAD at `ref`.
+
+### A slot per marked source
+
+`sources:` is a fixed list. A template that should also check out whatever
+repositories its stack is made of declares a prototype for them:
+
+```yaml
+_angee:
+  kind: workspace
+  name: src
+  sources:
+    angee:
+      source: angee
+      mode: "${inputs.slot_mode}"
+      branch: "${inputs.branch_prefix}/${name | slug}"
+      subpath: angee
+  # One slot per stack source marked `slot: true`.
+  source_slot:
+    mode: "${inputs.slot_mode}"
+    branch: "${inputs.branch_prefix}/${name | slug}"
+```
+
+A workspace created from it gets the slots under `sources:` and one slot for
+every source the stack marks [`slot: true`](./manifest.md#a-slot-in-every-workspace).
+Each such slot is named after its source and checked out at that subpath,
+and is otherwise cut, recorded and rolled back as a declared slot is.
+
+- `source_slot` takes `mode`, `branch`, `ref` and `optional`, with the same
+  substitutions as a declared source. It names no `source` or `subpath`,
+  which are the marked source's name, and declares no source of its own; a
+  template that sets one of those is refused.
+- With `optional: true`, a marked source whose slot cannot be cut is skipped
+  with a warning, as an optional declared slot is.
+- A marked source that a slot under `sources:` already checks out, whatever
+  the slot's name, keeps that slot: it is cut once, by the declared slot's
+  own rule. Otherwise a declared slot that has the source's name checks out
+  another source, which is an error, and so is a declared slot at the path
+  the marked source's slot would take.
+- The slots are cut when the workspace is created. `angee workspace update`
+  and `angee workspace repair` do not add a slot for a source marked since.
 
 Stack templates use the same Copier rendering path and must produce an
 `angee.yaml` under the initialized stack root. They are typically much

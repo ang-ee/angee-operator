@@ -231,14 +231,14 @@ func TestSourceCommitsCLIMatchesGoGit(t *testing.T) {
 
 	p, _ := New(filepath.Join(base, ".angee"))
 	for _, limit := range []int{1, 3, 10} {
-		want, err := p.sourceCommits(ctx, cache, limit)
+		want, err := p.sourceCommits(ctx, p.gitClient(), cache, limit)
 		if err != nil {
 			t.Fatalf("sourceCommits(%d) error = %v", limit, err)
 		}
 		if n := min(limit, 4); len(want) != n {
 			t.Fatalf("sourceCommits(%d) = %d commits, want %d", limit, len(want), n)
 		}
-		got, err := p.sourceCommitsCLI(ctx, cache, limit)
+		got, err := sourceCommitsCLI(ctx, p.gitClient(), cache, limit)
 		if err != nil {
 			t.Fatalf("sourceCommitsCLI(%d) error = %v", limit, err)
 		}
@@ -256,7 +256,7 @@ func TestSourceCommitsOfADirectoryThatIsNotARepository(t *testing.T) {
 	dir := filepath.Join(cache, "sub")
 	must(t, os.Mkdir(dir, 0o755))
 	p, _ := New(t.TempDir())
-	if commits, err := p.sourceCommits(context.Background(), dir, 5); err != nil || commits != nil {
+	if commits, err := p.sourceCommits(context.Background(), p.gitClient(), dir, 5); err != nil || commits != nil {
 		t.Fatalf("sourceCommits(not a repository) = %+v, %v; want none", commits, err)
 	}
 }

@@ -190,14 +190,19 @@ type Source struct {
 	// PushDefault names the declared remote a push goes to when nothing more
 	// specific (a branch's pushRemote) says otherwise. It becomes the cache's
 	// remote.pushDefault.
-	PushDefault string     `yaml:"push_default,omitempty" json:"push_default,omitempty"`
-	URL         string     `yaml:"url,omitempty" json:"url,omitempty"`
-	Path        string     `yaml:"path,omitempty" json:"path,omitempty"`
-	DefaultRef  string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
-	CachePath   string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
-	Auth        SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
-	Git         SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
-	Checksum    string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+	PushDefault string `yaml:"push_default,omitempty" json:"push_default,omitempty"`
+	URL         string `yaml:"url,omitempty" json:"url,omitempty"`
+	Path        string `yaml:"path,omitempty" json:"path,omitempty"`
+	DefaultRef  string `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
+	CachePath   string `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
+	// Slot marks a source that every workspace whose template declares
+	// `_angee.source_slot` checks out: such a workspace gets one slot per
+	// marked source, named after the source and at that subpath, beside its
+	// template's own slots.
+	Slot     bool       `yaml:"slot,omitempty" json:"slot,omitempty"`
+	Auth     SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Git      SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
+	Checksum string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
 }
 
 // DefaultRemote is the remote a source's `repo:` declares.
@@ -370,7 +375,8 @@ func checkRemoteURL(url string) error {
 	return nil
 }
 
-// ValidateSource checks a source's remotes:
+// ValidateSource checks a source's remotes and its auth:
+//   - `auth.ssh_key_secret` is set on a git source only, and is a secret name;
 //   - `repo:` and `remotes:` are not both set;
 //   - every URL, `repo:` included, has no control character or surrounding
 //     spaces;
@@ -385,6 +391,19 @@ func ValidateSource(name string, s Source) error {
 	}
 	if (len(s.Remotes) > 0 || s.PushDefault != "") && s.Kind != "git" {
 		return fmt.Errorf("source %q: remotes and push_default require kind: git", name)
+	}
+	if key := s.Auth.SSHKeySecret; key != "" {
+		if s.Kind != "git" {
+			return fmt.Errorf("source %q: auth.ssh_key_secret requires kind: git", name)
+		}
+		if !SecretNamePattern.MatchString(key) || !SecretNameAlphaNum.MatchString(key) {
+			return fmt.Errorf("source %q: auth.ssh_key_secret %q is not a secret name (letters, digits, '.', '_' and '-')", name, key)
+		}
+		// The key is kept in a file named after the source, beside the
+		// known-hosts file, on a file system that may fold case.
+		if name == "." || name == ".." || strings.EqualFold(name, SourceKnownHostsName) {
+			return fmt.Errorf("source %q: a source with auth.ssh_key_secret cannot have this name, which its key file would take; rename the source", name)
+		}
 	}
 	if err := checkRemoteURL(s.Repo); err != nil {
 		return fmt.Errorf("source %q: repo %w", name, err)
@@ -444,11 +463,38 @@ func ValidateSource(name string, s Source) error {
 	return nil
 }
 
+// SourceAuth is how the operator authenticates to a git source's remotes.
+// Without it git and jj use what the operator's environment gives them: the
+// user's ssh agent, keys and credential helpers.
 type SourceAuth struct {
-	Mode         string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// SSHKeySecret names the stack secret that holds the source's SSH private
+	// key, such as a deploy key. Every git and jj command the operator runs
+	// for the source, on its cache and on the workspace slots cut from it,
+	// then reaches its remotes with that key and no other.
 	SSHKeySecret string `yaml:"ssh_key_secret,omitempty" json:"ssh_key_secret,omitempty"`
-	TokenSecret  string `yaml:"token_secret,omitempty" json:"token_secret,omitempty"`
+	// TokenSecret is reserved: it is declared, and nothing reads it yet.
+	TokenSecret string `yaml:"token_secret,omitempty" json:"token_secret,omitempty"`
 }
+
+// SecretNamePattern bounds the names a stack secret can have, as the
+// operator's secrets API accepts them and as a source names its key
+// (auth.ssh_key_secret). Same charset env-file's validateKey accepts;
+// rejects path-traversal, shell metacharacters, and anything OpenBao would
+// surprise on. Length cap (256) keeps the request body bounded.
+var SecretNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,256}$`)
+
+// SecretNameAlphaNum enforces "at least one alphanumeric character"
+// independently of SecretNamePattern. Without this, names like `..`,
+// `--`, `_`, etc. all map through substitute.SecretEnvName (which
+// rewrites non-alphanum to `_` and trims trailing underscores) to the
+// same storage key `ANGEE_SECRET`, silently colliding distinct
+// manifest entries on env-file backends.
+var SecretNameAlphaNum = regexp.MustCompile(`[A-Za-z0-9]`)
+
+// SourceKnownHostsName is the file, beside the key files of the sources that
+// name an SSH key, in which their connections record host keys. Each key
+// file is named after its source, so no such source has this name.
+const SourceKnownHostsName = "known_hosts"
 
 type SourceGit struct {
 	UserName  string `yaml:"user_name,omitempty" json:"user_name,omitempty"`
@@ -1044,6 +1090,11 @@ func (s *Stack) ValidateExtended() error {
 	for _, name := range slices.Sorted(maps.Keys(s.Sources)) {
 		if err := ValidateSource(name, s.Sources[name]); err != nil {
 			return err
+		}
+		// A generated secret is a random string, which is no key: wherever
+		// the stack's secrets are resolved it would be made and kept as one.
+		if key := s.Sources[name].Auth.SSHKeySecret; key != "" && s.Secrets[key].Generated {
+			return fmt.Errorf("secret %q is the SSH key of source %q (auth.ssh_key_secret), so it cannot be generated: set it to the private key, and declare it required", key, name)
 		}
 	}
 	for name, workspace := range s.Workspaces {

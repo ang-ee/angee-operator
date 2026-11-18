@@ -21,9 +21,16 @@ import (
 	"github.com/ang-ee/angee-operator/internal/vcs/gitdriver"
 )
 
+// materializeReferencedSources brings the cache of every source of stack up
+// to date (materializeSource). The key of every source that names one is
+// written first (ensureSourceKeys), so a key that is not set refuses the
+// bring-up before any source is cloned.
 func (p *Platform) materializeReferencedSources(ctx context.Context, stack *manifest.Stack) error {
 	seen, err := referencedSourceNames(stack)
 	if err != nil {
+		return err
+	}
+	if err := p.ensureSourceKeys(ctx, stack); err != nil {
 		return err
 	}
 	for _, name := range seen {
@@ -288,6 +295,9 @@ func (p *Platform) SourceFetch(ctx context.Context, name string) (state api.Sour
 	if !ok {
 		return api.SourceState{}, &NotFoundError{Kind: "source", Name: name}
 	}
+	if err := p.ensureSourceKey(ctx, stack, name); err != nil {
+		return api.SourceState{}, err
+	}
 	if err := p.materializeSource(ctx, name, source, false); err != nil {
 		return api.SourceState{}, err
 	}
@@ -323,12 +333,15 @@ func (p *Platform) SourcePull(ctx context.Context, name string) (state api.Sourc
 	if source.Kind != "git" {
 		return api.SourceState{}, fmt.Errorf("source %q is not a git source", name)
 	}
+	if err := p.ensureSourceKey(ctx, stack, name); err != nil {
+		return api.SourceState{}, err
+	}
 	path := p.sourcePath(name, source)
 	if err := withPrimaryLock(ctx, path, func() error {
 		if err := p.materializeSourceLocked(ctx, name, source, false); err != nil {
 			return err
 		}
-		if err := p.gitClient().Pull(ctx, path); err != nil {
+		if err := p.sourceGitClient(name, source).Pull(ctx, path); err != nil {
 			return gitFailure(err, gitStep{action: "pulling", object: fmt.Sprintf("source %q", name), remote: source.CloneURL(), cause: CauseFetchFailed, source: name})
 		}
 		return nil
@@ -371,7 +384,10 @@ func (p *Platform) SourcePush(ctx context.Context, name, ref string) (state api.
 	} else if err != nil {
 		return api.SourceState{}, err
 	}
-	client := p.gitClient()
+	if err := p.ensureSourceKey(ctx, stack, name); err != nil {
+		return api.SourceState{}, err
+	}
+	client := p.sourceGitClient(name, source)
 	// A cache is not a slot, but the git driver reads any git checkout.
 	cache, cacheSlot := gitdriver.New(client), vcs.Slot{Path: path}
 	if err := withPrimaryLock(ctx, path, func() error {
@@ -416,7 +432,7 @@ func (p *Platform) materializeSourceLocked(ctx context.Context, name string, sou
 	path := p.sourcePath(name, source)
 	switch source.Kind {
 	case "git":
-		client := p.gitClient()
+		client := p.sourceGitClient(name, source)
 		cloneRemote, remote, _ := source.CloneRemote()
 		holder := cacheRemotes(name)
 		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
@@ -620,7 +636,7 @@ func (p *Platform) reportCloneSlotRemotes(ctx context.Context, workspace, slot, 
 		return
 	}
 	holder := cloneSlotRemotes(workspace, slot, wsSource.Source, path)
-	if err := syncSourceRemotes(ctx, p.gitClient(), holder, path, source, remoteSyncReport); err != nil {
+	if err := syncSourceRemotes(ctx, p.sourceGitClient(wsSource.Source, source), holder, path, source, remoteSyncReport); err != nil {
 		logctx.From(ctx).Warn(fmt.Sprintf("could not check the remotes of %s: %v", holder.label, err))
 	}
 }
@@ -871,7 +887,7 @@ func (p *Platform) sourceState(ctx context.Context, stack *manifest.Stack, name 
 		// A cache is not a slot, but the git driver reads any git checkout, so
 		// the cache and its slots share one status rule, and one mapping to
 		// the API (setSlotStatus).
-		read, err := gitdriver.New(p.gitClient()).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef, BaseRemote: sourceBaseRemote(source)})
+		read, err := gitdriver.New(p.sourceGitClient(name, source)).Status(ctx, vcs.Slot{Path: path, BaseRef: source.DefaultRef, BaseRemote: sourceBaseRemote(source)})
 		if err != nil {
 			return state, err
 		}
@@ -885,7 +901,7 @@ func (p *Platform) sourceState(ctx context.Context, stack *manifest.Stack, name 
 	if !info.IsDir() {
 		return state, nil
 	}
-	workspaces, err := p.sourceJJWorkspaces(ctx, stack, path)
+	workspaces, err := p.sourceJJWorkspaces(ctx, stack, path, p.sourceSSHCommand(name, source))
 	switch {
 	case err == nil:
 		state.Workspaces = workspaces

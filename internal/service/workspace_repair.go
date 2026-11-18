@@ -201,6 +201,9 @@ func (p *Platform) repairMissingWorkspaceSlot(ctx context.Context, stack *manife
 	if err := checkWorkspaceSlotBase(workspaceName, slot, source, ws, stack.EffectiveSourceMode(ws)); err != nil {
 		return err
 	}
+	if err := p.ensureSourceKey(ctx, stack, ws.Source); err != nil {
+		return err
+	}
 	cleanup := &workspaceSourceCleanup{}
 	defer func() {
 		if retErr == nil {

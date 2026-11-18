@@ -334,6 +334,53 @@ func TestReadTemplateAnswersPreservesFormValues(t *testing.T) {
 	}
 }
 
+// copier records a `type: json` answer as YAML. A list that holds a mapping
+// reads back as the JSON it was, with its booleans, numbers and nulls; a
+// list of plain members keeps their text, the form's multiselect encoding;
+// and a mapping as an answer itself is still refused.
+func TestReadTemplateAnswersReadsStructuredLists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "answers.yml")
+	data := `repositories:
+    - name: angee-arp
+      ref: ""
+      repo: git@github.com:ang-ee/angee-arp.git
+      ssh: true
+    - name: angee-odoo
+      ref: feature/arp-ap
+      repo: https://github.com/ang-ee/angee-odoo.git
+      ssh: false
+settings: [{enabled: false, count: 3, ratio: 0.5, label: "007", none: null, tags: [a, 1]}]
+choices: [one, 2, true]
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, answers, err := readTemplateAnswers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"repositories": `[{"name":"angee-arp","ref":"","repo":"git@github.com:ang-ee/angee-arp.git","ssh":true},{"name":"angee-odoo","ref":"feature/arp-ap","repo":"https://github.com/ang-ee/angee-odoo.git","ssh":false}]`,
+		"settings":     `[{"count":3,"enabled":false,"label":"007","none":null,"ratio":0.5,"tags":["a",1]}]`,
+		"choices":      `["one","2","true"]`,
+	}
+	if !reflect.DeepEqual(map[string]string(answers), want) {
+		t.Fatalf("answers = %#v, want %#v", answers, want)
+	}
+	for body, wantErr := range map[string]string{
+		"config: {key: value}\n":      "key config: only scalars and lists are supported",
+		"config: [{[a, b]: value}]\n": "key config: a mapping in a list takes plain keys only",
+		"config: [{ratio: .nan}]\n":   "key config: json: unsupported value: NaN",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := readTemplateAnswers(path); err == nil || !strings.HasSuffix(err.Error(), wantErr) {
+			t.Fatalf("readTemplateAnswers(%q) error = %v, want %q", body, err, wantErr)
+		}
+	}
+}
+
 // sameTemplatePath compares a template reference read from an answers file's
 // _src_path with the template's path. copier records the real path, so a
 // temporary directory behind a symlink (macOS's /var) reads back resolved.

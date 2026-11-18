@@ -120,8 +120,9 @@ func (p *Platform) jjWorkspaceNames(stack *manifest.Stack, workspaceName string,
 //
 // It runs one workspace list, and one `jj log` per candidate path whose name
 // the list has. A path that cannot be read only leaves its slot not owned;
-// the slot's status reports why.
-func (p *Platform) sourceJJWorkspaces(ctx context.Context, stack *manifest.Stack, primary string) ([]api.SourceWorkspace, error) {
+// the slot's status reports why. jj runs with sshCommand, the source's
+// (sourceSSHCommand).
+func (p *Platform) sourceJJWorkspaces(ctx context.Context, stack *manifest.Stack, primary, sshCommand string) ([]api.SourceWorkspace, error) {
 	if info, err := os.Lstat(filepath.Join(primary, ".jj")); errors.Is(err, fs.ErrNotExist) || err == nil && !info.IsDir() {
 		return nil, nil
 	} else if err != nil {
@@ -130,7 +131,7 @@ func (p *Platform) sourceJJWorkspaces(ctx context.Context, stack *manifest.Stack
 	if p.probeJJ(ctx).JJ == "" {
 		return nil, nil
 	}
-	jj, ok := p.slotDriver(vcs.Slot{Mode: vcs.ModeJJ}).(jjLifecycle)
+	jj, ok := p.slotDriver(vcs.Slot{Mode: vcs.ModeJJ, SSHCommand: sshCommand}).(jjLifecycle)
 	if !ok {
 		return nil, fmt.Errorf("the jj driver cannot list the workspaces of %s", primary)
 	}
@@ -284,7 +285,7 @@ func (p *Platform) recordedJJSlotTarget(ctx context.Context, stack *manifest.Sta
 	} else if err != nil {
 		return jjSlotTarget{}, err
 	}
-	jj, ok := p.slotDriver(vcs.Slot{Mode: vcs.ModeJJ}).(jjLifecycle)
+	jj, ok := p.slotDriver(vcs.Slot{Mode: vcs.ModeJJ, SSHCommand: p.sourceSSHCommand(ws.Source, source)}).(jjLifecycle)
 	if !ok {
 		return target, nil
 	}

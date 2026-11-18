@@ -42,8 +42,20 @@ func TestLoadAnswersFile(t *testing.T) {
 		},
 		{name: "nested lists preserve JSON structure", yaml: "nested: [[a, b], [1]]\n", want: map[string]string{"nested": `[["a","b"],["1"]]`}},
 		{name: "mapping", yaml: "config:\n  key: value\n", err: "key config is a mapping; only scalars and lists are supported"},
-		{name: "mapping in list", yaml: "config: [{key: value}]\n", err: "key config is a mapping; only scalars and lists are supported"},
-		{name: "mapping in nested list", yaml: "config: [[{key: value}]]\n", err: "key config is a mapping; only scalars and lists are supported"},
+		{
+			// Copier records a `type: json` answer, such as a repository list,
+			// as a list of mappings: it is passed on as the JSON it was, with
+			// its booleans, numbers and nulls, and keys sorted.
+			name: "a list that holds a mapping is a structured answer",
+			yaml: "repositories:\n- name: app\n  ref: \"\"\n  repo: git@example.com:acme/app.git\n  ssh: true\nnested: [[{b: 1, a: [x, 2.5, null, false], c: \"3\"}], [plain]]\n",
+			want: map[string]string{
+				"repositories": `[{"name":"app","ref":"","repo":"git@example.com:acme/app.git","ssh":true}]`,
+				"nested":       `[[{"a":["x",2.5,null,false],"b":1,"c":"3"}],["plain"]]`,
+			},
+		},
+		{name: "mapping in a mapping in a list", yaml: "config: [{key: {inner: value}}]\n", want: map[string]string{"config": `[{"key":{"inner":"value"}}]`}},
+		{name: "mapping with a non-scalar key in a list", yaml: "config: [{[a]: value}]\n", err: "key config holds a mapping whose keys are not plain scalars"},
+		{name: "a number JSON cannot hold, in a structured answer", yaml: "config: [{ratio: .inf}]\n", err: "key config json: unsupported value: +Inf"},
 		{name: "sequence document", yaml: "- a\n- b\n", err: "expected a YAML mapping"},
 		{name: "scalar document", yaml: "hello\n", err: "expected a YAML mapping"},
 		{name: "null document", yaml: "null\n", err: "expected a YAML mapping"},

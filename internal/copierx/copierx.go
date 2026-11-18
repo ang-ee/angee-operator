@@ -175,17 +175,23 @@ type CopyRequest struct {
 }
 
 type Metadata struct {
-	Kind           string                          `yaml:"kind"`
-	Name           string                          `yaml:"name"`
-	NamePattern    string                          `yaml:"name_pattern"`
-	InstanceNaming InstanceNaming                  `yaml:"instance_naming"`
-	Inputs         map[string]Input                `yaml:"inputs"`
-	Sources        map[string]TemplateSource       `yaml:"sources"`
-	IncludeRoot    string                          `yaml:"include_root"`
-	ChainRoot      string                          `yaml:"chain_root"`
-	Chain          []ChainEntry                    `yaml:"chain"`
-	Ensure         map[string]any                  `yaml:"ensure"`
-	Persist        map[string]manifest.PersistPath `yaml:"persist"`
+	Kind           string                    `yaml:"kind"`
+	Name           string                    `yaml:"name"`
+	NamePattern    string                    `yaml:"name_pattern"`
+	InstanceNaming InstanceNaming            `yaml:"instance_naming"`
+	Inputs         map[string]Input          `yaml:"inputs"`
+	Sources        map[string]TemplateSource `yaml:"sources"`
+	// SourceSlot is a workspace template's prototype for the stack sources
+	// marked `slot: true`: a workspace cut from the template gets, beside the
+	// slots Sources declares, one slot per marked source, named after the
+	// source and at that subpath. It gives the slots' mode, branch and ref,
+	// and names no source or subpath of its own.
+	SourceSlot  *TemplateSource                 `yaml:"source_slot"`
+	IncludeRoot string                          `yaml:"include_root"`
+	ChainRoot   string                          `yaml:"chain_root"`
+	Chain       []ChainEntry                    `yaml:"chain"`
+	Ensure      map[string]any                  `yaml:"ensure"`
+	Persist     map[string]manifest.PersistPath `yaml:"persist"`
 }
 
 type InstanceNaming struct {

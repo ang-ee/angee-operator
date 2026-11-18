@@ -86,7 +86,7 @@ secrets:
     generated: true
     length: 48
   github-token:
-    import: GITHUB_TOKEN
+    import: env:GITHUB_TOKEN
 ```
 
 OpenBao backend:
@@ -470,7 +470,107 @@ sources:
     cache_path: sources/library
 ```
 
-Git commands use the host git environment.
+Git commands use the host git environment: the ssh agent, keys and credential
+helpers of the user who runs angee, or of the operator's container. A source
+that names [a key of its own](#a-key-of-its-own) uses that key instead.
+
+### A slot in every workspace
+
+`slot: true` marks a source that workspaces check out without their template
+naming it:
+
+```yaml
+sources:
+  angee-arp:
+    kind: git
+    repo: https://github.com/ang-ee/angee-arp.git
+    default_ref: main
+    slot: true
+```
+
+A workspace whose template declares a slot prototype
+([`_angee.source_slot`](./templates.md#a-slot-per-marked-source)) gets one slot
+per marked source, beside the slots the template declares itself. The slot is
+named after the source and checked out at that subpath
+(`workspaces/<workspace>/angee-arp`), in the mode and on the branch the
+prototype gives. A template without the prototype ignores the mark.
+
+The slots are cut when the workspace is created: by `angee workspace create`,
+or on the first `angee up` or `angee dev` for a workspace the stack declares.
+A source marked afterwards is not added to workspaces that already exist.
+
+A stack template renders such sources from its `repositories` and
+`extra_sources` inputs, which `angee init --repository` and `--extra-source`
+fill ([Repositories as inputs](./templates.md#repositories-as-inputs)).
+
+### A key of its own
+
+A private repository reached over ssh can have its own key, such as a GitHub
+deploy key, held in a stack secret:
+
+```yaml
+sources:
+  angee-omelas:
+    kind: git
+    repo: git@github.com:phro-gg/angee-omelas.git   # the plain URL, no host alias
+    default_ref: main
+    auth:
+      ssh_key_secret: deploy-key-angee-omelas
+
+secrets:
+  deploy-key-angee-omelas:
+    required: true
+```
+
+```sh
+angee secret set deploy-key-angee-omelas --stdin < ~/keys/omelas
+```
+
+Every git and jj command angee runs for that source then reaches its remotes
+with that key, and not with the ssh agent's keys or the user's default ones:
+cloning and fetching its cache, `source pull` and `source push`, and cutting,
+fetching, pulling, pushing, publishing and syncing the workspace slots cut
+from it. Each command runs with
+
+```text
+GIT_SSH_COMMAND="ssh -o IdentityFile=<root>/run/ssh/<source> -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<root>/run/ssh/known_hosts -o StrictHostKeyChecking=accept-new"
+```
+
+where `<root>` is the stack root. A path that holds a space or another
+character the shell or ssh would read is quoted for both.
+
+- **`IdentitiesOnly`** is why two private repositories on one host need no
+  `~/.ssh/config` aliases. A host accepts the first key it knows, and GitHub
+  then refuses the repository when that key is another repository's deploy
+  key. With it, ssh offers the source's own key, and not the agent's.
+- **`IdentityFile`**, not `-i`, names the key: ssh drops an `-i` whose file is
+  missing and offers the user's default keys instead, which would lift the
+  pin without a word. A missing `IdentityFile` fails the authentication.
+- **The key file** `run/ssh/<source>` is a copy of the secret, written with
+  mode `0600` in a directory of mode `0700`, with the final newline ssh
+  requires. angee writes it before it reaches the source's remote, and
+  rewrites it only when the secret has changed, so a key set again with
+  `angee secret set` is used from the next fetch on. The stack root is at the
+  same path for the CLI and for the operator's container, so both use the
+  same file. A source name that is no plain file name is escaped as a URL
+  path segment is (`team/app` is `team%2Fapp`). A bring-up removes the key
+  files no source has any more, and a key file whose secret was deleted goes
+  at the next operation that asks for it.
+- **Host keys** are recorded in the stack's own `run/ssh/known_hosts`. A host
+  met for the first time is trusted and recorded (`accept-new`); a host whose
+  key has changed since is refused.
+- **A key that is not set** stops the operation before git runs, with code
+  `PRECONDITION_FAILED` and cause `source_key_missing`, naming the source and
+  the secret. On `angee up` that is before any source is cloned.
+- The secret is read as the stack's other secrets are (an `import: env:NAME`
+  is taken from the environment). It cannot be declared `generated`, which
+  the manifest refuses: a random string is no key. It holds the private key
+  as its file has it, and the key must have no passphrase, since ssh runs
+  without a prompt (`BatchMode`).
+
+A source without `auth` is unchanged. `auth.ssh_key_secret` is for git
+sources, and a source that has it cannot be named `known_hosts`.
+`auth.token_secret` is reserved and not read yet.
 
 ### Remotes
 

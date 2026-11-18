@@ -85,6 +85,10 @@ type runner struct {
 	// identity, when set, resolves that fallback once per runner; a runner
 	// without one passes the operator's identity on as it is.
 	identity *identity
+	// env is the driver's git client's Env, which every jj run gets too: the
+	// git that jj runs to fetch and push reads the source's GIT_SSH_COMMAND
+	// from jj's environment.
+	env []string
 }
 
 // snapshot runs a jj command in the slot that snapshots its working copy
@@ -208,9 +212,9 @@ func (r runner) run(ctx context.Context, dir string, args []string) ([]byte, err
 	return out, err
 }
 
-// exec runs jj with globalArgs and args in dir, with extraEnv after the
-// environment every run gets, and returns its standard output and standard
-// error. A failure is a *CommandError carrying standard error. Only
+// exec runs jj with globalArgs and args in dir, with r.env and extraEnv after
+// the environment every run gets, and returns its standard output and
+// standard error. A failure is a *CommandError carrying standard error. Only
 // environment key names are traced, never values.
 func (r runner) exec(ctx context.Context, dir string, args, extraEnv []string) ([]byte, []byte, error) {
 	bin := r.bin
@@ -218,7 +222,7 @@ func (r runner) exec(ctx context.Context, dir string, args, extraEnv []string) (
 		bin = "jj"
 	}
 	argv := append(append([]string(nil), globalArgs...), args...)
-	env := git.IsolatedEnv(append(jjEnv(), extraEnv...)...)
+	env := git.IsolatedEnv(append(append(jjEnv(), r.env...), extraEnv...)...)
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = dir
 	cmd.Env = env

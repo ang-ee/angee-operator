@@ -140,6 +140,10 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 			if err != nil {
 				return err
 			}
+			parsedInputs, err = repositoryFlagInputs(cmd, parsedInputs)
+			if err != nil {
+				return err
+			}
 			platform, err := initPlatform(cmd.Context(), root, operatorURL, cmd.ErrOrStderr())
 			if err != nil {
 				return err
@@ -161,6 +165,7 @@ func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Com
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
 	cmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
+	addRepositoryFlags(cmd, "")
 	return cmd
 }
 
@@ -185,6 +190,10 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			inputs, err = repositoryFlagInputs(cmd, inputs)
+			if err != nil {
+				return err
+			}
 			platform, err := initPlatform(cmd.Context(), root, operatorURL, cmd.ErrOrStderr())
 			if err != nil {
 				return err
@@ -205,6 +214,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively (no form)")
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
 	initCmd.Flags().StringArray("answers", nil, "template answers YAML file (repeatable; later files override earlier ones)")
+	addRepositoryFlags(initCmd, "")
 	cmd.AddCommand(initCmd)
 	var updateTemplate, updateDryRun, updateOverwrite, updateInteractive bool
 	var updateInputs, updateSkip []string
@@ -223,6 +233,9 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			}
 			if !updateTemplate && (updateInteractive || len(updateInputs) > 0 || cmd.Flags().Changed("answers")) {
 				return fmt.Errorf("--interactive, --input, and --answers only apply with --template")
+			}
+			if !updateTemplate && repositoryFlagsGiven(cmd) {
+				return fmt.Errorf("--repository and --extra-source only apply with --template")
 			}
 			if updateDryRun && !updateTemplate {
 				return fmt.Errorf("--dry-run only applies with --template")
@@ -246,6 +259,10 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 					return err
 				}
 				inputs, err := parseKeyValues(updateInputs)
+				if err != nil {
+					return err
+				}
+				inputs, err = repositoryFlagInputs(cmd, inputs)
 				if err != nil {
 					return err
 				}
@@ -302,6 +319,7 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	updateCmd.Flags().BoolVarP(&updateInteractive, "interactive", "i", false, "with --template, review recorded template inputs before re-rendering")
 	updateCmd.Flags().StringArrayVar(&updateInputs, "input", nil, "with --template, override template input K=V")
 	updateCmd.Flags().StringArray("answers", nil, "with --template, load template answers YAML (repeatable)")
+	addRepositoryFlags(updateCmd, "with --template, replace the recorded list: ")
 	cmd.AddCommand(updateCmd)
 	var purge bool
 	destroyCmd := &cobra.Command{

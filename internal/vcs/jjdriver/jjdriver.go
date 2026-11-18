@@ -51,9 +51,10 @@ var _ vcs.Driver = Driver{}
 
 // New returns a driver that runs jj from PATH, and git through client, for
 // one slot operation: the identity it gives jj commits for a user with none
-// configured (identity) is resolved once for the driver.
+// configured (identity) is resolved once for the driver. jj runs with
+// client.Env too, so the git it runs reaches the remote as client does.
 func New(client git.Client) Driver {
-	return Driver{jj: runner{identity: &identity{git: client}}, git: client}
+	return Driver{jj: runner{identity: &identity{git: client}, env: client.Env}, git: client}
 }
 
 // target is a revision Status counts against: its revset, and the name a

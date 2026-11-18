@@ -105,6 +105,7 @@ their diagnostics, and their words are passed through.
 | `branch_moved` | `PRECONDITION_FAILED` | A publish or push of a jj slot would move its branch past work the slot does not have: a commit on the remote branch whose change is none of the slot's (a collaborator's, fetched since the slot published), or a bookmark target off the slot's history (a collaborator's new version of one of its commits); the message names them, and the hint names the merge that takes them in. Nothing is pushed or changed. |
 | `immutable_commits` | `PRECONDITION_FAILED` | A rebase of a jj slot would rewrite commits jj holds immutable (a tag's, an untracked remote bookmark's); the message names them. Nothing is rebased. |
 | `source_cache_missing` | `PRECONDITION_FAILED` | A source has no cache to push from. |
+| `source_key_missing` | `PRECONDITION_FAILED` | A source names the secret that holds its SSH key (`auth.ssh_key_secret`), and the secret is not set; the message names both, and the hint the `angee secret set` that sets it. Nothing is cloned, fetched or pushed. |
 | `stack_root_exists` | `CONFLICT` | `stack init` would overwrite a non-empty root; `paths` names it. |
 | `template_too_new` | `PRECONDITION_FAILED` | The template's `_min_copier_version` is newer than the Copier angee implements. |
 | `merge_conflict` | `GIT_FAILED` | A merge or rebase stopped on conflicts (from git's index); `paths` lists them. |
